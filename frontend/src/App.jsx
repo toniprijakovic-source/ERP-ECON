@@ -623,7 +623,7 @@ function LoginScreen({ onLogin }) {
           </div>
           <div>
             <div className="f-mono" style={{ fontSize: 10, letterSpacing: "0.08em", color: "var(--ink-faint)", textTransform: "uppercase" }}>ERP prijava</div>
-            <div className="f-display" style={{ fontSize: 18, fontWeight: 600 }}>ČELIK-MONT</div>
+            <div className="f-display" style={{ fontSize: 18, fontWeight: 600 }}>ECON D.O.O.</div>
           </div>
         </div>
         {ucitavanje ? (
@@ -848,7 +848,7 @@ export default function App() {
         <div style={{ padding: "14px 24px", borderBottom: "1px solid var(--line)", background: "var(--surface)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <div className="f-mono" style={{ fontSize: 10.5, letterSpacing: "0.08em", color: "var(--ink-faint)", textTransform: "uppercase" }}>ERP · Proizvodnja čeličnih konstrukcija</div>
-            <div className="f-display" style={{ fontSize: 15, fontWeight: 600 }}>{db.postavkeTvrtke?.naziv || "ČELIK-MONT"}</div>
+            <div className="f-display" style={{ fontSize: 15, fontWeight: 600 }}>{db.postavkeTvrtke?.naziv || "ECON D.O.O."}</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
             <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>{new Date().toLocaleDateString("hr-HR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
@@ -2559,7 +2559,7 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
 const posaljiObavijestVoditelju = (projekt, zaposlenik) => {
   if (!zaposlenik?.email) return false;
   const subject = `Dodijeljen/a si kao voditelj projekta ${projekt.sifra} — ${projekt.naziv}`;
-  const body = `Pozdrav ${zaposlenik.ime},\n\nDodijeljen/a si kao voditelj/ica projekta:\n\nŠifra: ${projekt.sifra}\nNaziv: ${projekt.naziv}\nRok završetka: ${fmtDate(projekt.rokZavrsetka)}\nVrijednost: ${fmtCur(projekt.vrijednost)}\n\nPrijavi se u ERP za popis zadataka i detalje.\n\nLijep pozdrav,\nČELIK-MONT ERP`;
+  const body = `Pozdrav ${zaposlenik.ime},\n\nDodijeljen/a si kao voditelj/ica projekta:\n\nŠifra: ${projekt.sifra}\nNaziv: ${projekt.naziv}\nRok završetka: ${fmtDate(projekt.rokZavrsetka)}\nVrijednost: ${fmtCur(projekt.vrijednost)}\n\nPrijavi se u ERP za popis zadataka i detalje.\n\nLijep pozdrav,\nECON D.O.O. ERP`;
   window.open(`mailto:${zaposlenik.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, "_blank");
   return true;
 };
