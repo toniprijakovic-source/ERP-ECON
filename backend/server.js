@@ -52,8 +52,8 @@ const MODUL_ZA_KLJUC = {
   upitiNabave: ["nabava"],
   radniCentri: ["proizvodnja"],
   evidencijaRada: [],
-  narudzbe: ["proizvodnja"],
-  otpremnice: ["proizvodnja"],
+  narudzbe: ["projekti"],
+  otpremnice: ["projekti"],
   podlogeZaFakturu: ["fakturiranje"],
 };
 
@@ -69,8 +69,8 @@ const MODUL_ZA_CITANJE = {
   dashboard: ["cjenikRada", "fakture", "materijali", "ponude", "projekti", "radniNalozi"],
   skladiste: ["katalogProfila", "materijali"],
   nabava: ["dobavljaci", "katalogProfila", "materijali", "narudzbenice", "upitiNabave"],
-  proizvodnja: ["kapacitetiDana", "katalogProfila", "materijali", "programiRezanja", "projekti", "radniCentri", "radniNalozi", "narudzbe", "otpremnice"],
-  projekti: ["cjenikRada", "katalogProfila", "kupci", "materijali", "ponude", "projekti", "radniNalozi", "standardniZadaci"],
+  proizvodnja: ["kapacitetiDana", "katalogProfila", "materijali", "programiRezanja", "projekti", "radniCentri", "radniNalozi"],
+  projekti: ["cjenikRada", "katalogProfila", "kupci", "materijali", "ponude", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice"],
   fakturiranje: ["fakture", "kupci", "materijali", "projekti", "narudzbe", "otpremnice", "podlogeZaFakturu"],
   partneri: ["kupci", "dobavljaci"],
   zaposlenici: ["evidencijaRada"],

@@ -73,10 +73,18 @@ const sljedeciBrojOtpremnice = (otpremnice, datumISO) => {
   return `${prefiks}${sljedeci}`;
 };
 
-// Sljedeći broj podloge za fakturu, format PDR-<broj radnog naloga>/N (N = redni broj obračuna za taj radni nalog)
-const sljedeciBrojPodloge = (podloge, radniNalogBroj) => {
-  const prefiks = `PDR-${radniNalogBroj}/`;
+// Sljedeći broj podloge za fakturu, format PDR-<šifra projekta>/N (N = redni broj obračuna za taj projekt)
+const sljedeciBrojPodloge = (podloge, projektSifra) => {
+  const prefiks = `PDR-${projektSifra}/`;
   const brojevi = (podloge || []).map((p) => p?.broj).filter((b) => b && b.startsWith(prefiks)).map((b) => parseInt(b.slice(prefiks.length), 10)).filter((n) => !isNaN(n));
+  const sljedeci = (brojevi.length ? Math.max(...brojevi) : 0) + 1;
+  return `${prefiks}${sljedeci}`;
+};
+
+// Sljedeći broj radnog naloga, format <šifra projekta>/N (N = redni broj naloga unutar tog projekta)
+const sljedeciBrojRadnogNaloga = (radniNalozi, projektSifra) => {
+  const prefiks = `${projektSifra}/`;
+  const brojevi = (radniNalozi || []).map((r) => r?.broj).filter((b) => b && b.startsWith(prefiks)).map((b) => parseInt(b.slice(prefiks.length), 10)).filter((n) => !isNaN(n));
   const sljedeci = (brojevi.length ? Math.max(...brojevi) : 0) + 1;
   return `${prefiks}${sljedeci}`;
 };
@@ -505,7 +513,7 @@ const MODULI_APLIKACIJE = [
   { key: "nabava", label: "Nabava", icon: Truck },
   { key: "proizvodnja", label: "Proizvodnja", icon: Factory },
   { key: "projekti", label: "Projekti i ponude", icon: Building2 },
-  { key: "fakturiranje", label: "Fakturiranje", icon: Receipt },
+  { key: "fakturiranje", label: "Otpremnice i fakturiranje", icon: Receipt },
   { key: "partneri", label: "Kupci i dobavljači", icon: Users },
   { key: "zaposlenici", label: "Zaposlenici", icon: UserCog },
 ];
@@ -2166,8 +2174,8 @@ function PlanRezanjaView({ db, update, showToast }) {
 /* ============================== NARUDŽBA KUPCA / OTPREMNICE ============================== */
 // "Narudžba" ovdje = narudžba KOJU ŠALJE KUPAC Econu (s dogovorenim cijenama po stavci), za
 // razliku od postojećih "Narudžbenica" koje su Econova narudžba DOBAVLJAČU.
-function NarudzbaModal({ narudzba, radniNalog, projekt, db, update, showToast, onClose }) {
-  const emptyForm = () => ({ id: null, radniNalogId: radniNalog.id, kupacId: projekt?.kupacId || db.kupci[0]?.id || "", broj: "", datum: todayISO(), napomena: "", stavke: [] });
+function NarudzbaModal({ narudzba, projekt, db, update, showToast, onClose }) {
+  const emptyForm = () => ({ id: null, projektId: projekt.id, kupacId: projekt?.kupacId || db.kupci[0]?.id || "", broj: "", datum: todayISO(), napomena: "", stavke: [] });
   const [form, setForm] = useState(narudzba ? JSON.parse(JSON.stringify(narudzba)) : emptyForm());
 
   const dodajStavku = () => setForm({ ...form, stavke: [...form.stavke, { id: uid("nst"), sifra: "", naziv: "", jm: "Stk", cijena: 0 }] });
@@ -2213,10 +2221,10 @@ function NarudzbaModal({ narudzba, radniNalog, projekt, db, update, showToast, o
   );
 }
 
-function OtpremnicaFormModal({ radniNalog, narudzba, projekt, db, update, showToast, onClose }) {
+function OtpremnicaFormModal({ narudzba, projekt, db, update, showToast, onClose }) {
   const emptyForm = () => ({
     broj: sljedeciBrojOtpremnice(db.otpremnice, todayISO()), datum: todayISO(), mjesto: "Prelog",
-    radniNalogId: radniNalog.id, kupacId: projekt?.kupacId || "", narudzbaId: narudzba?.id || null, izdaoId: "", napomena: "",
+    projektId: projekt.id, kupacId: projekt?.kupacId || "", narudzbaId: narudzba?.id || null, izdaoId: "", napomena: "",
     stavke: (narudzba?.stavke || []).map((s) => ({ id: uid("ost"), narudzbaStavkaId: s.id, naziv: s.naziv, jm: s.jm, kolicina: "" })),
   });
   const [form, setForm] = useState(emptyForm());
@@ -2267,7 +2275,7 @@ function OtpremnicaFormModal({ radniNalog, narudzba, projekt, db, update, showTo
   );
 }
 
-function OtpremnicaPrintModal({ otpremnica, kupac, radniNalog, narudzba, izdao, postavkeTvrtke, onClose }) {
+function OtpremnicaPrintModal({ otpremnica, kupac, projekt, narudzba, izdao, postavkeTvrtke, onClose }) {
   const t = postavkeTvrtke || {};
   const PRAZNI_REDOVI = Math.max(0, 20 - otpremnica.stavke.length);
   return (
@@ -2297,7 +2305,7 @@ function OtpremnicaPrintModal({ otpremnica, kupac, radniNalog, narudzba, izdao, 
           <tbody>
             <tr><td style={{ paddingRight: 10, color: "#555" }}>Kupac / Kunde :</td><td style={{ fontWeight: 600 }}>{kupac?.naziv || "—"}</td></tr>
             <tr><td style={{ paddingRight: 10, color: "#555" }}>Narudžba / Bestellung :</td><td style={{ fontWeight: 600 }}>{narudzba?.broj || "—"}</td></tr>
-            <tr><td style={{ paddingRight: 10, color: "#555" }}>Radni nalog / Arbeitsauftrag :</td><td style={{ fontWeight: 600 }}>{radniNalog?.broj}{radniNalog?.naziv ? ` — ${radniNalog.naziv}` : ""}</td></tr>
+            <tr><td style={{ paddingRight: 10, color: "#555" }}>Projekt :</td><td style={{ fontWeight: 600 }}>{projekt?.sifra}{projekt?.naziv ? ` — ${projekt.naziv}` : ""}</td></tr>
           </tbody>
         </table>
 
@@ -2337,67 +2345,39 @@ function OtpremnicaPrintModal({ otpremnica, kupac, radniNalog, narudzba, izdao, 
   );
 }
 
-function IsporukeModal({ radniNalog, db, update, showToast, onClose }) {
-  const projekt = db.projekti.find((p) => p.id === radniNalog.projektId);
+function OtpremniceListModal({ projekt, narudzba, db, update, showToast, onClose }) {
   const kupac = db.kupci.find((k) => k.id === projekt?.kupacId);
-  const narudzba = db.narudzbe.find((n) => n.radniNalogId === radniNalog.id);
-  const otpremnice = db.otpremnice.filter((o) => o.radniNalogId === radniNalog.id).sort((a, b) => b.datum.localeCompare(a.datum));
-  const [narudzbaModal, setNarudzbaModal] = useState(false);
+  const otpremnice = db.otpremnice.filter((o) => o.projektId === projekt.id).sort((a, b) => b.datum.localeCompare(a.datum));
   const [otpModal, setOtpModal] = useState(false);
   const [printOtp, setPrintOtp] = useState(null);
   const [delOtp, setDelOtp] = useState(null);
 
   return (
     <>
-      <Modal wide title={`Isporuke — Radni nalog ${radniNalog.broj}`} onClose={onClose} footer={<Btn onClick={onClose}>Zatvori</Btn>}>
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-            <div className="label" style={{ marginBottom: 0 }}>Narudžba kupca</div>
-            <Btn variant="ghost" size="sm" icon={narudzba ? Pencil : Plus} onClick={() => setNarudzbaModal(true)}>{narudzba ? "Uredi" : "Unesi narudžbu"}</Btn>
-          </div>
-          {narudzba ? (
-            <div className="card" style={{ padding: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 8 }}>
-                <span><strong className="f-mono">{narudzba.broj}</strong> · {kupac?.naziv || "—"}</span>
-                <span style={{ color: "var(--ink-soft)" }}>{fmtDate(narudzba.datum)}</span>
-              </div>
-              <table className="erp-table">
-                <thead><tr><th>Šifra</th><th>Naziv</th><th>JM</th><th>Cijena</th></tr></thead>
-                <tbody>{narudzba.stavke.map((s) => <tr key={s.id}><td className="f-mono">{s.sifra}</td><td>{s.naziv}</td><td>{s.jm}</td><td className="f-mono">{fmtCurDec(s.cijena)}</td></tr>)}</tbody>
-              </table>
-            </div>
-          ) : <EmptyState text="Nema unesene narudžbe kupca za ovaj radni nalog." />}
-        </div>
-
-        <div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-            <div className="label" style={{ marginBottom: 0 }}>Otpremnice</div>
-            <Btn variant="ghost" size="sm" icon={Plus} onClick={() => setOtpModal(true)} disabled={!narudzba}>Nova otpremnica</Btn>
-          </div>
-          {otpremnice.length === 0 ? <EmptyState text="Nema izdanih otpremnica." /> : (
-            <table className="erp-table">
-              <thead><tr><th>Broj</th><th>Datum</th><th>Stavki</th><th></th></tr></thead>
-              <tbody>
-                {otpremnice.map((o) => (
-                  <tr key={o.id}>
-                    <td className="f-mono">{o.broj}</td>
-                    <td>{fmtDate(o.datum)}</td>
-                    <td className="f-mono">{o.stavke.length}</td>
-                    <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                      <Btn size="sm" icon={Eye} onClick={() => setPrintOtp(o)}>PDF</Btn>
-                      <button className="btn btn-icon btn-ghost" onClick={() => setDelOtp(o)}><Trash2 size={14} color="var(--rust)" /></button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+      <Modal wide title={`Otpremnice — ${projekt.sifra}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Plus} onClick={() => setOtpModal(true)} disabled={!narudzba}>Nova otpremnica</Btn></>}>
+        {!narudzba && <div style={{ fontSize: 12.5, color: "var(--rust)", marginBottom: 12 }}>Ovaj projekt nema unesenu narudžbu kupca — prvo je unesi (gumb "Narudžba" u detaljima projekta).</div>}
+        {otpremnice.length === 0 ? <EmptyState text="Nema izdanih otpremnica." /> : (
+          <table className="erp-table">
+            <thead><tr><th>Broj</th><th>Datum</th><th>Stavki</th><th></th></tr></thead>
+            <tbody>
+              {otpremnice.map((o) => (
+                <tr key={o.id}>
+                  <td className="f-mono">{o.broj}</td>
+                  <td>{fmtDate(o.datum)}</td>
+                  <td className="f-mono">{o.stavke.length}</td>
+                  <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                    <Btn size="sm" icon={Eye} onClick={() => setPrintOtp(o)}>PDF</Btn>
+                    <button className="btn btn-icon btn-ghost" onClick={() => setDelOtp(o)}><Trash2 size={14} color="var(--rust)" /></button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </Modal>
 
-      {narudzbaModal && <NarudzbaModal narudzba={narudzba} radniNalog={radniNalog} projekt={projekt} db={db} update={update} showToast={showToast} onClose={() => setNarudzbaModal(false)} />}
-      {otpModal && <OtpremnicaFormModal radniNalog={radniNalog} narudzba={narudzba} projekt={projekt} db={db} update={update} showToast={showToast} onClose={() => setOtpModal(false)} />}
-      {printOtp && <OtpremnicaPrintModal otpremnica={printOtp} kupac={kupac} radniNalog={radniNalog} narudzba={narudzba} izdao={db.zaposlenici.find((z) => z.id === printOtp.izdaoId)} postavkeTvrtke={db.postavkeTvrtke} onClose={() => setPrintOtp(null)} />}
+      {otpModal && <OtpremnicaFormModal narudzba={narudzba} projekt={projekt} db={db} update={update} showToast={showToast} onClose={() => setOtpModal(false)} />}
+      {printOtp && <OtpremnicaPrintModal otpremnica={printOtp} kupac={kupac} projekt={projekt} narudzba={narudzba} izdao={db.zaposlenici.find((z) => z.id === printOtp.izdaoId)} postavkeTvrtke={db.postavkeTvrtke} onClose={() => setPrintOtp(null)} />}
       {delOtp && <ConfirmDelete label={delOtp.broj} onCancel={() => setDelOtp(null)} onConfirm={() => { update("otpremnice", db.otpremnice.filter((o) => o.id !== delOtp.id)); setDelOtp(null); showToast("Otpremnica obrisana."); }} />}
     </>
   );
@@ -2407,8 +2387,10 @@ function ProizvodnjaPage({ db, update, showToast }) {
   const [prikaz, setPrikaz] = useState("tablica");
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
-  const [isporukeNalog, setIsporukeNalog] = useState(null);
-  const emptyForm = () => ({ id: null, broj: sljedeciBroj(db.radniNalozi, "broj", "RN-2026-"), projektId: db.projekti[0]?.id || "", naziv: "", faza: FAZE[0], zaduzenTim: "", status: "Planiran", planiranoSati: 0, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: todayISO(), stavke: [], materijalIzdan: false, ovisiONalogId: null });
+  const emptyForm = () => {
+    const projekt = db.projekti[0];
+    return { id: null, broj: projekt ? sljedeciBrojRadnogNaloga(db.radniNalozi, projekt.sifra) : "", projektId: projekt?.id || "", naziv: "", faza: FAZE[0], zaduzenTim: "", status: "Planiran", planiranoSati: 0, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: todayISO(), stavke: [], materijalIzdan: false, ovisiONalogId: null };
+  };
   const [form, setForm] = useState(emptyForm());
 
   const openAdd = () => { setForm(emptyForm()); setModal("edit"); };
@@ -2459,15 +2441,13 @@ function ProizvodnjaPage({ db, update, showToast }) {
           { key: "sati", label: "Sati (utr./plan.)", render: (r) => <span className="f-mono">{r.utrosenoSati} / {r.planiranoSati}</span> },
           { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
           { key: "materijal", label: "", render: (r) => r.stavke.length > 0 && !r.materijalIzdan ? <Btn size="sm" icon={PackageMinus} onClick={() => izdaj(r)}>Izdaj materijal</Btn> : (r.materijalIzdan ? <span style={{ fontSize: 11, color: "var(--green)" }}>Materijal izdan ✓</span> : null) },
-          { key: "isporuke", label: "", render: (r) => <Btn size="sm" icon={FolderInput} onClick={() => setIsporukeNalog(r)}>Isporuke</Btn> },
         ]}
       />
       )}
-      {isporukeNalog && <IsporukeModal radniNalog={isporukeNalog} db={db} update={update} showToast={showToast} onClose={() => setIsporukeNalog(null)} />}
 
       {modal && (
         <Modal wide title={form.id ? `Radni nalog ${form.broj}` : "Novi radni nalog"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={save}>Spremi</Btn></>}>
-          <Field label="Projekt"><select className="select" value={form.projektId} onChange={(e) => setForm({ ...form, projektId: e.target.value })}>{db.projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}</select></Field>
+          <Field label="Projekt"><select className="select" value={form.projektId} onChange={(e) => { const noviProjekt = db.projekti.find((p) => p.id === e.target.value); setForm({ ...form, projektId: e.target.value, broj: !form.id && noviProjekt ? sljedeciBrojRadnogNaloga(db.radniNalozi, noviProjekt.sifra) : form.broj }); }}>{db.projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}</select></Field>
           <Field label="Opis radnog naloga"><input className="input" value={form.naziv} onChange={(e) => setForm({ ...form, naziv: e.target.value })} /></Field>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
             <Field label="Faza proizvodnje"><select className="select" value={form.faza} onChange={(e) => setForm({ ...form, faza: e.target.value })}>{FAZE.map((f) => <option key={f}>{f}</option>)}</select></Field>
@@ -2667,6 +2647,10 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
   const zadaciDone = zadaci.filter((z) => z.izvrseno).length;
   const [noviZadatak, setNoviZadatak] = useState("");
   const [noviZadatakDatum, setNoviZadatakDatum] = useState("");
+  const [narudzbaModal, setNarudzbaModal] = useState(false);
+  const [otpremniceModal, setOtpremniceModal] = useState(false);
+  const narudzba = db.narudzbe.find((n) => n.projektId === projekt.id);
+  const brojOtpremnica = db.otpremnice.filter((o) => o.projektId === projekt.id).length;
 
   const azurirajZadatke = (noviZadaci) => update("projekti", db.projekti.map((p) => (p.id === projekt.id ? { ...p, zadaci: noviZadaci } : p)));
   const azurirajMaterijal = (noveStavke) => update("projekti", db.projekti.map((p) => (p.id === projekt.id ? { ...p, materijalStavke: noveStavke } : p)));
@@ -2687,6 +2671,7 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
   };
 
   return (
+    <>
     <Modal wide title={`Detalji projekta — ${projekt.sifra}`} onClose={onClose} footer={<Btn onClick={onClose}>Zatvori</Btn>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
         <div>
@@ -2712,6 +2697,11 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
         <div style={{ height: 8, background: "var(--line)", borderRadius: 4, overflow: "hidden" }}>
           <div style={{ height: "100%", width: `${postotak}%`, background: postotak >= 100 ? "var(--green)" : "var(--steel)" }} />
         </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <Btn variant="ghost" icon={narudzba ? Pencil : Plus} onClick={() => setNarudzbaModal(true)}>{narudzba ? `Narudžba ${narudzba.broj}` : "Narudžba"}</Btn>
+        <Btn variant="ghost" icon={Truck} onClick={() => setOtpremniceModal(true)}>Otpremnice{brojOtpremnica > 0 ? ` (${brojOtpremnica})` : ""}</Btn>
       </div>
 
       <div style={{ marginBottom: 16 }}>
@@ -2814,6 +2804,10 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
         )}
       </div>
     </Modal>
+
+    {narudzbaModal && <NarudzbaModal narudzba={narudzba} projekt={projekt} db={db} update={update} showToast={showToast} onClose={() => setNarudzbaModal(false)} />}
+    {otpremniceModal && <OtpremniceListModal projekt={projekt} narudzba={narudzba} db={db} update={update} showToast={showToast} onClose={() => setOtpremniceModal(false)} />}
+    </>
   );
 }
 
@@ -2975,9 +2969,8 @@ function ProjektiPage({ db, update, showToast, setPage }) {
       izvorPonudaId: ponuda.id, pozicije: ponuda.pozicije || [], materijalStavke: ponuda.materijalStavke || [], ostaleStavke: ponuda.ostaleStavke || [],
       voditeljId: "", zadaci: noviZadaciIzStandarda(),
     };
-    const rnPrefiks = "RN-2026-";
-    let rnBrojac = parseInt(sljedeciBroj(db.radniNalozi, "broj", rnPrefiks).slice(rnPrefiks.length), 10);
-    const sljedeciRnBroj = () => `${rnPrefiks}${String(rnBrojac++).padStart(3, "0")}`;
+    let rnBrojac = parseInt(sljedeciBrojRadnogNaloga(db.radniNalozi, noviProjekt.sifra).split("/").pop(), 10);
+    const sljedeciRnBroj = () => `${noviProjekt.sifra}/${rnBrojac++}`;
     let noviNalozi = OPERACIJE.filter((o) => calc.satiPoOperaciji[o.key] > 0).map((o) => ({
       id: uid("rn"), broj: sljedeciRnBroj(), projektId: noviProjekt.id,
       naziv: `${o.label} — ${ponuda.naziv}`, faza: o.label, zaduzenTim: "", status: "Planiran",
@@ -3230,15 +3223,15 @@ const izracunajStavkePodloge = (otpremniceOdabrane, narudzba) => {
 };
 
 function PodlogaZaFakturuFormModal({ db, update, showToast, onClose }) {
-  const [radniNalogId, setRadniNalogId] = useState("");
+  const [projektId, setProjektId] = useState("");
   const [odabraneOtpId, setOdabraneOtpId] = useState([]);
   const [vorkasa, setVorkasa] = useState(0);
   const [datum, setDatum] = useState(todayISO());
 
-  const otpremniceZaNalog = db.otpremnice.filter((o) => o.radniNalogId === radniNalogId);
-  const radniNalog = db.radniNalozi.find((r) => r.id === radniNalogId);
-  const narudzba = db.narudzbe.find((n) => n.radniNalogId === radniNalogId);
-  const odabraneOtp = otpremniceZaNalog.filter((o) => odabraneOtpId.includes(o.id));
+  const otpremniceZaProjekt = db.otpremnice.filter((o) => o.projektId === projektId);
+  const projekt = db.projekti.find((p) => p.id === projektId);
+  const narudzba = db.narudzbe.find((n) => n.projektId === projektId);
+  const odabraneOtp = otpremniceZaProjekt.filter((o) => odabraneOtpId.includes(o.id));
   const stavke = izracunajStavkePodloge(odabraneOtp, narudzba);
   const zbroj = stavke.reduce((s, x) => s + x.ukupno, 0);
   const zaPlatiti = zbroj - (Number(vorkasa) || 0);
@@ -3246,11 +3239,11 @@ function PodlogaZaFakturuFormModal({ db, update, showToast, onClose }) {
   const toggleOtp = (id) => setOdabraneOtpId((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   const spremi = () => {
-    if (!radniNalog) { showToast("Odaberi radni nalog."); return; }
+    if (!projekt) { showToast("Odaberi projekt."); return; }
     if (odabraneOtp.length === 0) { showToast("Odaberi barem jednu otpremnicu."); return; }
     const nova = {
-      id: uid("pdf"), broj: sljedeciBrojPodloge(db.podlogeZaFakturu, radniNalog.broj),
-      radniNalogId, otpremniceIds: odabraneOtpId, narudzbaId: narudzba?.id || null,
+      id: uid("pdf"), broj: sljedeciBrojPodloge(db.podlogeZaFakturu, projekt.sifra),
+      projektId, otpremniceIds: odabraneOtpId, narudzbaId: narudzba?.id || null,
       datum, vorkasa: Number(vorkasa) || 0, stavke, zbroj, zaPlatiti,
     };
     update("podlogeZaFakturu", [...db.podlogeZaFakturu, nova]);
@@ -3261,24 +3254,24 @@ function PodlogaZaFakturuFormModal({ db, update, showToast, onClose }) {
   return (
     <Modal wide title="Nova podloga za fakturu" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi}>Kreiraj podlogu</Btn></>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <Field label="Radni nalog">
-          <select className="select" value={radniNalogId} onChange={(e) => { setRadniNalogId(e.target.value); setOdabraneOtpId([]); }}>
+        <Field label="Projekt">
+          <select className="select" value={projektId} onChange={(e) => { setProjektId(e.target.value); setOdabraneOtpId([]); }}>
             <option value="">— Odaberi —</option>
-            {db.radniNalozi.filter((r) => db.otpremnice.some((o) => o.radniNalogId === r.id)).map((r) => <option key={r.id} value={r.id}>{r.broj} — {r.naziv}</option>)}
+            {db.projekti.filter((p) => db.otpremnice.some((o) => o.projektId === p.id)).map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
           </select>
         </Field>
         <Field label="Datum obračuna"><input className="input" type="date" value={datum} onChange={(e) => setDatum(e.target.value)} /></Field>
       </div>
 
-      {radniNalogId && (
+      {projektId && (
         <>
-          {!narudzba && <div style={{ fontSize: 12.5, color: "var(--rust)", marginBottom: 10 }}>Ovaj radni nalog nema narudžbu kupca — cijene neće biti dostupne.</div>}
+          {!narudzba && <div style={{ fontSize: 12.5, color: "var(--rust)", marginBottom: 10 }}>Ovaj projekt nema narudžbu kupca — cijene neće biti dostupne.</div>}
           <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Otpremnice za uključiti u obračun</div>
-          {otpremniceZaNalog.length === 0 ? <EmptyState text="Nema otpremnica za ovaj radni nalog." /> : (
+          {otpremniceZaProjekt.length === 0 ? <EmptyState text="Nema otpremnica za ovaj projekt." /> : (
             <table className="erp-table">
               <thead><tr><th style={{ width: 30 }}></th><th>Broj</th><th>Datum</th><th>Stavki</th></tr></thead>
               <tbody>
-                {otpremniceZaNalog.map((o) => (
+                {otpremniceZaProjekt.map((o) => (
                   <tr key={o.id}>
                     <td><input type="checkbox" checked={odabraneOtpId.includes(o.id)} onChange={() => toggleOtp(o.id)} /></td>
                     <td className="f-mono">{o.broj}</td>
@@ -3313,7 +3306,7 @@ function PodlogaZaFakturuFormModal({ db, update, showToast, onClose }) {
   );
 }
 
-function PodlogaZaFakturuPrintModal({ podloga, radniNalog, narudzba, kupac, otpremnice, postavkeTvrtke, onClose }) {
+function PodlogaZaFakturuPrintModal({ podloga, projekt, narudzba, kupac, otpremnice, postavkeTvrtke, onClose }) {
   const t = postavkeTvrtke || {};
   return (
     <Modal wide title={`Pregled za ispis — Podloga za fakturu ${podloga.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => window.print()}>Ispis / Spremi kao PDF</Btn></>}>
@@ -3333,7 +3326,7 @@ function PodlogaZaFakturuPrintModal({ podloga, radniNalog, narudzba, kupac, otpr
             <div>
               <div><strong>Bestellung Nr.:</strong> {narudzba?.broj || "—"}</div>
               <div><strong>Bestelldatum:</strong> {narudzba ? fmtDate(narudzba.datum) : "—"}</div>
-              <div><strong>Radni nalog:</strong> {radniNalog?.broj}{radniNalog?.naziv ? ` — ${radniNalog.naziv}` : ""}</div>
+              <div><strong>Projekt:</strong> {projekt?.sifra}{projekt?.naziv ? ` — ${projekt.naziv}` : ""}</div>
             </div>
           </div>
         </div>
@@ -3381,7 +3374,7 @@ function PodlogeZaFakturuTab({ db, update, showToast }) {
   const [formOpen, setFormOpen] = useState(false);
   const [printPodloga, setPrintPodloga] = useState(null);
   const [del, setDel] = useState(null);
-  const radniNalogInfo = (id) => db.radniNalozi.find((r) => r.id === id);
+  const projektInfo = (id) => db.projekti.find((p) => p.id === id);
 
   return (
     <div>
@@ -3390,12 +3383,12 @@ function PodlogeZaFakturuTab({ db, update, showToast }) {
       </div>
       {db.podlogeZaFakturu.length === 0 ? <EmptyState text="Nema izrađenih podloga za fakturu." /> : (
         <table className="erp-table">
-          <thead><tr><th>Broj</th><th>Radni nalog</th><th>Datum</th><th>Za platiti</th><th></th></tr></thead>
+          <thead><tr><th>Broj</th><th>Projekt</th><th>Datum</th><th>Za platiti</th><th></th></tr></thead>
           <tbody>
             {[...db.podlogeZaFakturu].sort((a, b) => b.datum.localeCompare(a.datum)).map((p) => (
               <tr key={p.id}>
                 <td className="f-mono">{p.broj}</td>
-                <td>{radniNalogInfo(p.radniNalogId)?.broj || "—"}</td>
+                <td>{projektInfo(p.projektId)?.sifra || "—"}</td>
                 <td>{fmtDate(p.datum)}</td>
                 <td className="f-mono">{fmtCurDec(p.zaPlatiti)}</td>
                 <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
@@ -3411,7 +3404,7 @@ function PodlogeZaFakturuTab({ db, update, showToast }) {
       {printPodloga && (
         <PodlogaZaFakturuPrintModal
           podloga={printPodloga}
-          radniNalog={radniNalogInfo(printPodloga.radniNalogId)}
+          projekt={projektInfo(printPodloga.projektId)}
           narudzba={db.narudzbe.find((n) => n.id === printPodloga.narudzbaId)}
           kupac={db.kupci.find((k) => k.id === db.narudzbe.find((n) => n.id === printPodloga.narudzbaId)?.kupacId)}
           otpremnice={db.otpremnice.filter((o) => printPodloga.otpremniceIds.includes(o.id))}
@@ -3420,6 +3413,53 @@ function PodlogeZaFakturuTab({ db, update, showToast }) {
         />
       )}
       {del && <ConfirmDelete label={del.broj} onCancel={() => setDel(null)} onConfirm={() => { update("podlogeZaFakturu", db.podlogeZaFakturu.filter((p) => p.id !== del.id)); setDel(null); showToast("Podloga obrisana."); }} />}
+    </div>
+  );
+}
+
+function OtpremniceTab({ db, update, showToast }) {
+  const [printOtp, setPrintOtp] = useState(null);
+  const [del, setDel] = useState(null);
+  const projektInfo = (id) => db.projekti.find((p) => p.id === id);
+  const kupacInfo = (id) => db.kupci.find((k) => k.id === id);
+
+  return (
+    <div>
+      {db.otpremnice.length === 0 ? <EmptyState text="Nema izdanih otpremnica. Otpremnice se kreiraju u Projekti i ponude → detalji projekta." /> : (
+        <table className="erp-table">
+          <thead><tr><th>Broj</th><th>Projekt</th><th>Kupac</th><th>Datum</th><th>Stavki</th><th></th></tr></thead>
+          <tbody>
+            {[...db.otpremnice].sort((a, b) => b.datum.localeCompare(a.datum)).map((o) => {
+              const projekt = projektInfo(o.projektId);
+              return (
+                <tr key={o.id}>
+                  <td className="f-mono">{o.broj}</td>
+                  <td>{projekt?.sifra}{projekt?.naziv ? ` — ${projekt.naziv}` : ""}</td>
+                  <td>{kupacInfo(o.kupacId)?.naziv || "—"}</td>
+                  <td>{fmtDate(o.datum)}</td>
+                  <td className="f-mono">{o.stavke.length}</td>
+                  <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                    <Btn size="sm" icon={Eye} onClick={() => setPrintOtp(o)}>PDF</Btn>
+                    <button className="btn btn-icon btn-ghost" onClick={() => setDel(o)}><Trash2 size={14} color="var(--rust)" /></button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {printOtp && (
+        <OtpremnicaPrintModal
+          otpremnica={printOtp}
+          kupac={kupacInfo(printOtp.kupacId)}
+          projekt={projektInfo(printOtp.projektId)}
+          narudzba={db.narudzbe.find((n) => n.id === printOtp.narudzbaId)}
+          izdao={db.zaposlenici.find((z) => z.id === printOtp.izdaoId)}
+          postavkeTvrtke={db.postavkeTvrtke}
+          onClose={() => setPrintOtp(null)}
+        />
+      )}
+      {del && <ConfirmDelete label={del.broj} onCancel={() => setDel(null)} onConfirm={() => { update("otpremnice", db.otpremnice.filter((o) => o.id !== del.id)); setDel(null); showToast("Otpremnica obrisana."); }} />}
     </div>
   );
 }
@@ -3446,12 +3486,14 @@ function FakturiranjePage({ db, update, showToast }) {
 
   return (
     <div>
-      <PageHeader title="Fakturiranje" icon={Receipt} subtitle="Izlazne fakture i naplata po projektima" />
+      <PageHeader title="Otpremnice i fakturiranje" icon={Receipt} subtitle="Otpremnice, izlazne fakture i naplata po projektima" />
       <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
         <div className={`nav-tab ${tab === "fakture" ? "active" : ""}`} onClick={() => setTab("fakture")}>Fakture</div>
+        <div className={`nav-tab ${tab === "otpremnice" ? "active" : ""}`} onClick={() => setTab("otpremnice")}>Otpremnice</div>
         <div className={`nav-tab ${tab === "podloge" ? "active" : ""}`} onClick={() => setTab("podloge")}>Podloge za fakturu</div>
       </div>
 
+      {tab === "otpremnice" && <OtpremniceTab db={db} update={update} showToast={showToast} />}
       {tab === "podloge" && <PodlogeZaFakturuTab db={db} update={update} showToast={showToast} />}
 
       {tab === "fakture" && (
