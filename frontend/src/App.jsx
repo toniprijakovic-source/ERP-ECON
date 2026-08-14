@@ -6,6 +6,7 @@ import {
   ChevronDown, ChevronUp, FolderInput, Eye, UserCog, CalendarRange,
   Database, Download, Upload, AlertCircle
 } from "lucide-react";
+import logoEcon from "./assets/logo-econ.jpg";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
@@ -171,7 +172,7 @@ const GlobalStyle = () => (
 
     @media print{
       body *{ visibility:hidden; }
-      .print-doc, .print-doc *{ visibility:visible; }
+      .print-doc, .print-doc *{ visibility:visible; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
       .print-doc{ position:fixed; inset:0; background:#fff; padding:28px 34px; z-index:99999; overflow:visible; }
       .no-print{ display:none !important; }
     }
@@ -2266,47 +2267,47 @@ function OtpremnicaFormModal({ radniNalog, narudzba, projekt, db, update, showTo
   );
 }
 
-function OtpremnicaPrintModal({ otpremnica, kupac, radniNalog, narudzba, postavkeTvrtke, onClose }) {
+function OtpremnicaPrintModal({ otpremnica, kupac, radniNalog, narudzba, izdao, postavkeTvrtke, onClose }) {
   const t = postavkeTvrtke || {};
+  const PRAZNI_REDOVI = Math.max(0, 20 - otpremnica.stavke.length);
   return (
     <Modal wide title={`Pregled za ispis — Otpremnica ${otpremnica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => window.print()}>Ispis / Spremi kao PDF</Btn></>}>
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-          <div style={{ maxWidth: 260, fontSize: 10.5, lineHeight: 1.5 }}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>{t.naziv}</div>
-            <div style={{ color: "#555", marginBottom: 4 }}>{t.djelatnost}</div>
-            <div>{t.adresa}</div>
-            <div>{t.telefon}</div>
-            <div>{t.email}</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+          <div style={{ maxWidth: 250 }}>
+            <img src={logoEcon} alt="Econ" style={{ width: 190, display: "block", marginBottom: 4 }} />
+            <div style={{ fontSize: 9, color: "#555", lineHeight: 1.3 }}>Projektiranje, izrada i montaža metalnih<br />konstrukcija i ventiliranih fasada</div>
           </div>
           <div style={{ textAlign: "right" }}>
-            <div style={{ fontWeight: 700, fontSize: 17 }}>OTPREMNICA / <span style={{ fontStyle: "italic" }}>LIEFERSCHEIN</span> :</div>
-            <div className="f-mono" style={{ fontSize: 14, fontWeight: 700, marginTop: 4 }}>{otpremnica.broj}</div>
+            <div style={{ fontWeight: 700, fontSize: 20 }}>OTPREMNICA / <span style={{ fontStyle: "italic" }}>LIEFERSCHEIN</span> :&nbsp;<span className="f-mono">{otpremnica.broj}</span></div>
+            <table style={{ fontSize: 11.5, marginTop: 10, marginLeft: "auto", borderCollapse: "collapse" }}>
+              <tbody>
+                <tr><td style={{ paddingRight: 10, color: "#555", textAlign: "right" }}>Datum :</td><td style={{ fontWeight: 600, textAlign: "left" }}>{fmtDate(otpremnica.datum)}</td></tr>
+                <tr><td style={{ paddingRight: 10, color: "#555", textAlign: "right" }}>Mjesto / Ort :</td><td style={{ fontWeight: 600, textAlign: "left" }}>{otpremnica.mjesto}</td></tr>
+              </tbody>
+            </table>
           </div>
         </div>
 
-        <table style={{ fontSize: 11.5, marginBottom: 14, borderCollapse: "collapse" }}>
-          <tbody>
-            <tr><td style={{ paddingRight: 10, color: "#555" }}>Datum:</td><td style={{ fontWeight: 600 }}>{fmtDate(otpremnica.datum)}</td></tr>
-            <tr><td style={{ paddingRight: 10, color: "#555" }}>Mjesto / Ort:</td><td style={{ fontWeight: 600 }}>{otpremnica.mjesto}</td></tr>
-          </tbody>
-        </table>
+        <div style={{ fontSize: 9.5, color: "#333", lineHeight: 1.6, marginBottom: 18, borderTop: "1px solid #ddd", borderBottom: "1px solid #ddd", padding: "8px 0" }}>
+          {t.adresa} &nbsp;·&nbsp; {t.telefon} &nbsp;·&nbsp; {t.email}
+        </div>
 
-        <table style={{ fontSize: 11.5, marginBottom: 14, borderCollapse: "collapse" }}>
+        <table style={{ fontSize: 11.5, marginBottom: 18, borderCollapse: "collapse" }}>
           <tbody>
-            <tr><td style={{ paddingRight: 10, color: "#555" }}>Kupac / Kunde:</td><td style={{ fontWeight: 600 }}>{kupac?.naziv || "—"}</td></tr>
-            <tr><td style={{ paddingRight: 10, color: "#555" }}>Narudžba / Bestellung:</td><td style={{ fontWeight: 600 }}>{narudzba?.broj || "—"}</td></tr>
-            <tr><td style={{ paddingRight: 10, color: "#555" }}>Radni nalog / Arbeitsauftrag:</td><td style={{ fontWeight: 600 }}>{radniNalog?.broj}{radniNalog?.naziv ? ` — ${radniNalog.naziv}` : ""}</td></tr>
+            <tr><td style={{ paddingRight: 10, color: "#555" }}>Kupac / Kunde :</td><td style={{ fontWeight: 600 }}>{kupac?.naziv || "—"}</td></tr>
+            <tr><td style={{ paddingRight: 10, color: "#555" }}>Narudžba / Bestellung :</td><td style={{ fontWeight: 600 }}>{narudzba?.broj || "—"}</td></tr>
+            <tr><td style={{ paddingRight: 10, color: "#555" }}>Radni nalog / Arbeitsauftrag :</td><td style={{ fontWeight: 600 }}>{radniNalog?.broj}{radniNalog?.naziv ? ` — ${radniNalog.naziv}` : ""}</td></tr>
           </tbody>
         </table>
 
         <table className="doc-table" style={{ marginBottom: 20 }}>
           <thead>
-            <tr>
-              <th style={{ width: 50 }}>Red.br. / RmNr</th>
-              <th>Naziv / Name</th>
-              <th style={{ width: 90 }}>Jed. Mjere / Maße</th>
-              <th style={{ width: 80 }}>Količina / Menge</th>
+            <tr style={{ background: "var(--steel)" }}>
+              <th style={{ width: 50, background: "var(--steel)", color: "#fff" }}>Red.br. / RmNr</th>
+              <th style={{ background: "var(--steel)", color: "#fff" }}>Naziv / Name</th>
+              <th style={{ width: 90, background: "var(--steel)", color: "#fff" }}>Jed. Mjere / Maße</th>
+              <th style={{ width: 80, background: "var(--steel)", color: "#fff" }}>Količina / Menge</th>
             </tr>
           </thead>
           <tbody>
@@ -2315,11 +2316,14 @@ function OtpremnicaPrintModal({ otpremnica, kupac, radniNalog, narudzba, postavk
                 <td>{i + 1}.</td><td>{s.naziv}</td><td>{s.jm}</td><td className="f-mono">{s.kolicina}</td>
               </tr>
             ))}
+            {Array.from({ length: PRAZNI_REDOVI }).map((_, i) => (
+              <tr key={`prazno-${i}`}><td>{otpremnica.stavke.length + i + 1}.</td><td>&nbsp;</td><td></td><td></td></tr>
+            ))}
           </tbody>
         </table>
 
-        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 40, marginBottom: 16, fontSize: 10.5 }}>
-          <div style={{ textAlign: "center", width: "30%" }}><div style={{ borderTop: "1px solid #333", paddingTop: 4 }}>Izdao / Ausgestellt von</div></div>
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 30, marginBottom: 16, fontSize: 10.5 }}>
+          <div style={{ textAlign: "center", width: "30%" }}><div style={{ borderTop: "1px solid #333", paddingTop: 4 }}>Izdao / Ausgestellt von {izdao ? `— ${izdao.prezime} ${izdao.ime}` : ""}</div></div>
           <div style={{ textAlign: "center", width: "30%" }}><div style={{ borderTop: "1px solid #333", paddingTop: 4 }}>Otpremio / Versendet von</div></div>
           <div style={{ textAlign: "center", width: "30%" }}><div style={{ borderTop: "1px solid #333", paddingTop: 4 }}>Zaprimio / Empfangen von</div></div>
         </div>
@@ -2393,7 +2397,7 @@ function IsporukeModal({ radniNalog, db, update, showToast, onClose }) {
 
       {narudzbaModal && <NarudzbaModal narudzba={narudzba} radniNalog={radniNalog} projekt={projekt} db={db} update={update} showToast={showToast} onClose={() => setNarudzbaModal(false)} />}
       {otpModal && <OtpremnicaFormModal radniNalog={radniNalog} narudzba={narudzba} projekt={projekt} db={db} update={update} showToast={showToast} onClose={() => setOtpModal(false)} />}
-      {printOtp && <OtpremnicaPrintModal otpremnica={printOtp} kupac={kupac} radniNalog={radniNalog} narudzba={narudzba} postavkeTvrtke={db.postavkeTvrtke} onClose={() => setPrintOtp(null)} />}
+      {printOtp && <OtpremnicaPrintModal otpremnica={printOtp} kupac={kupac} radniNalog={radniNalog} narudzba={narudzba} izdao={db.zaposlenici.find((z) => z.id === printOtp.izdaoId)} postavkeTvrtke={db.postavkeTvrtke} onClose={() => setPrintOtp(null)} />}
       {delOtp && <ConfirmDelete label={delOtp.broj} onCancel={() => setDelOtp(null)} onConfirm={() => { update("otpremnice", db.otpremnice.filter((o) => o.id !== delOtp.id)); setDelOtp(null); showToast("Otpremnica obrisana."); }} />}
     </>
   );
