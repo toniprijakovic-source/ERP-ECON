@@ -26,6 +26,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika",
   "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana",
   "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada",
+  "narudzbe", "otpremnice", "podlogeZaFakturu",
 ];
 
 // Koji modul (isti "moduli" popis kao u pozicijeZaposlenika) smije MIJENJATI koji ključ.
@@ -51,6 +52,9 @@ const MODUL_ZA_KLJUC = {
   upitiNabave: ["nabava"],
   radniCentri: ["proizvodnja"],
   evidencijaRada: [],
+  narudzbe: ["proizvodnja"],
+  otpremnice: ["proizvodnja"],
+  podlogeZaFakturu: ["fakturiranje"],
 };
 
 // Ključevi koje App.jsx čita na najvišoj razini (zaglavlje, navigacija, prijava) —
@@ -65,9 +69,9 @@ const MODUL_ZA_CITANJE = {
   dashboard: ["cjenikRada", "fakture", "materijali", "ponude", "projekti", "radniNalozi"],
   skladiste: ["katalogProfila", "materijali"],
   nabava: ["dobavljaci", "katalogProfila", "materijali", "narudzbenice", "upitiNabave"],
-  proizvodnja: ["kapacitetiDana", "katalogProfila", "materijali", "programiRezanja", "projekti", "radniCentri", "radniNalozi"],
+  proizvodnja: ["kapacitetiDana", "katalogProfila", "materijali", "programiRezanja", "projekti", "radniCentri", "radniNalozi", "narudzbe", "otpremnice"],
   projekti: ["cjenikRada", "katalogProfila", "kupci", "materijali", "ponude", "projekti", "radniNalozi", "standardniZadaci"],
-  fakturiranje: ["fakture", "kupci", "materijali", "projekti"],
+  fakturiranje: ["fakture", "kupci", "materijali", "projekti", "narudzbe", "otpremnice", "podlogeZaFakturu"],
   partneri: ["kupci", "dobavljaci"],
   zaposlenici: ["evidencijaRada"],
 };

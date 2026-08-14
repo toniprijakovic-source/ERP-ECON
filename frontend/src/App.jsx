@@ -60,6 +60,26 @@ const sljedeciBroj = (lista, polje, prefiks, sirina = 3) => {
   return `${prefiks}${String(sljedeci).padStart(sirina, "0")}`;
 };
 
+// Sljedeći broj otpremnice, format OTP-DD-MM-YY/N — N raste ako je isti dan već izdana otpremnica
+const sljedeciBrojOtpremnice = (otpremnice, datumISO) => {
+  const d = new Date(datumISO);
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yy = String(d.getFullYear()).slice(-2);
+  const prefiks = `OTP-${dd}-${mm}-${yy}/`;
+  const brojevi = (otpremnice || []).map((o) => o?.broj).filter((b) => b && b.startsWith(prefiks)).map((b) => parseInt(b.slice(prefiks.length), 10)).filter((n) => !isNaN(n));
+  const sljedeci = (brojevi.length ? Math.max(...brojevi) : 0) + 1;
+  return `${prefiks}${sljedeci}`;
+};
+
+// Sljedeći broj podloge za fakturu, format PDR-<broj radnog naloga>/N (N = redni broj obračuna za taj radni nalog)
+const sljedeciBrojPodloge = (podloge, radniNalogBroj) => {
+  const prefiks = `PDR-${radniNalogBroj}/`;
+  const brojevi = (podloge || []).map((p) => p?.broj).filter((b) => b && b.startsWith(prefiks)).map((b) => parseInt(b.slice(prefiks.length), 10)).filter((n) => !isNaN(n));
+  const sljedeci = (brojevi.length ? Math.max(...brojevi) : 0) + 1;
+  return `${prefiks}${sljedeci}`;
+};
+
 // Izračun ponude: sati po operaciji (zbroj svih pozicija), trošak rada, materijala i ostalog
 const izracunPonude = (ponuda, materijali, cjenikRada) => {
   const satiPoOperaciji = praznaOperacijaSati();
@@ -206,7 +226,7 @@ const generirajRfidKod = (ime, prezime, postojeciKodovi) => {
   return kod;
 };
 
-const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada"];
+const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu"];
 
 /* ============================== SMALL UI PRIMITIVES ============================== */
 const Btn = ({ variant = "ghost", size, icon: Icon, children, className = "", ...rest }) => (
@@ -2142,10 +2162,248 @@ function PlanRezanjaView({ db, update, showToast }) {
   );
 }
 
+/* ============================== NARUDŽBA KUPCA / OTPREMNICE ============================== */
+// "Narudžba" ovdje = narudžba KOJU ŠALJE KUPAC Econu (s dogovorenim cijenama po stavci), za
+// razliku od postojećih "Narudžbenica" koje su Econova narudžba DOBAVLJAČU.
+function NarudzbaModal({ narudzba, radniNalog, projekt, db, update, showToast, onClose }) {
+  const emptyForm = () => ({ id: null, radniNalogId: radniNalog.id, kupacId: projekt?.kupacId || db.kupci[0]?.id || "", broj: "", datum: todayISO(), napomena: "", stavke: [] });
+  const [form, setForm] = useState(narudzba ? JSON.parse(JSON.stringify(narudzba)) : emptyForm());
+
+  const dodajStavku = () => setForm({ ...form, stavke: [...form.stavke, { id: uid("nst"), sifra: "", naziv: "", jm: "Stk", cijena: 0 }] });
+  const azurirajStavku = (i, patch) => setForm({ ...form, stavke: form.stavke.map((s, idx) => (idx === i ? { ...s, ...patch } : s)) });
+  const obrisiStavku = (i) => setForm({ ...form, stavke: form.stavke.filter((_, idx) => idx !== i) });
+
+  const spremi = () => {
+    if (!form.broj.trim()) { showToast("Unesi broj narudžbe kupca."); return; }
+    const payload = { ...form, stavke: form.stavke.map((s) => ({ ...s, cijena: Number(s.cijena) || 0 })) };
+    if (form.id) update("narudzbe", db.narudzbe.map((n) => (n.id === form.id ? payload : n)));
+    else update("narudzbe", [...db.narudzbe, { ...payload, id: uid("nar") }]);
+    showToast("Narudžba spremljena.");
+    onClose();
+  };
+
+  return (
+    <Modal wide title={narudzba ? `Narudžba ${narudzba.broj}` : "Nova narudžba kupca"} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi}>Spremi</Btn></>}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+        <Field label="Broj narudžbe kupca"><input className="input f-mono" value={form.broj} onChange={(e) => setForm({ ...form, broj: e.target.value })} placeholder="npr. E-BEST-2026-106" /></Field>
+        <Field label="Datum narudžbe"><input className="input" type="date" value={form.datum} onChange={(e) => setForm({ ...form, datum: e.target.value })} /></Field>
+        <Field label="Kupac"><select className="select" value={form.kupacId} onChange={(e) => setForm({ ...form, kupacId: e.target.value })}>{db.kupci.map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}</select></Field>
+      </div>
+      <Field label="Napomena"><input className="input" value={form.napomena} onChange={(e) => setForm({ ...form, napomena: e.target.value })} /></Field>
+
+      <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Stavke (cijene se koriste kasnije u podlozi za fakturu)</div>
+      <table className="erp-table">
+        <thead><tr><th style={{ width: 110 }}>Šifra</th><th>Naziv</th><th style={{ width: 80 }}>JM</th><th style={{ width: 110 }}>Cijena (€)</th><th style={{ width: 36 }}></th></tr></thead>
+        <tbody>
+          {form.stavke.length === 0 && <tr><td colSpan={5}><EmptyState text="Nema stavki. Dodaj stavku." /></td></tr>}
+          {form.stavke.map((s, i) => (
+            <tr key={s.id}>
+              <td><input className="input f-mono" style={{ padding: "5px 8px" }} value={s.sifra} onChange={(e) => azurirajStavku(i, { sifra: e.target.value })} /></td>
+              <td><input className="input" style={{ padding: "5px 8px" }} value={s.naziv} onChange={(e) => azurirajStavku(i, { naziv: e.target.value })} /></td>
+              <td><input className="input" style={{ padding: "5px 8px" }} value={s.jm} onChange={(e) => azurirajStavku(i, { jm: e.target.value })} /></td>
+              <td><input className="input f-mono" type="number" step="0.01" style={{ padding: "5px 8px" }} value={s.cijena} onChange={(e) => azurirajStavku(i, { cijena: e.target.value })} /></td>
+              <td><button className="btn btn-icon btn-ghost" onClick={() => obrisiStavku(i)}><Trash2 size={14} color="var(--rust)" /></button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajStavku} style={{ marginTop: 8 }}>Dodaj stavku</Btn>
+    </Modal>
+  );
+}
+
+function OtpremnicaFormModal({ radniNalog, narudzba, projekt, db, update, showToast, onClose }) {
+  const emptyForm = () => ({
+    broj: sljedeciBrojOtpremnice(db.otpremnice, todayISO()), datum: todayISO(), mjesto: "Prelog",
+    radniNalogId: radniNalog.id, kupacId: projekt?.kupacId || "", narudzbaId: narudzba?.id || null, izdaoId: "", napomena: "",
+    stavke: (narudzba?.stavke || []).map((s) => ({ id: uid("ost"), narudzbaStavkaId: s.id, naziv: s.naziv, jm: s.jm, kolicina: "" })),
+  });
+  const [form, setForm] = useState(emptyForm());
+
+  const azurirajKolicinu = (i, val) => setForm({ ...form, stavke: form.stavke.map((s, idx) => (idx === i ? { ...s, kolicina: val } : s)) });
+
+  const spremi = () => {
+    const stavke = form.stavke.filter((s) => Number(s.kolicina) > 0).map((s) => ({ ...s, kolicina: Number(s.kolicina) }));
+    if (stavke.length === 0) { showToast("Unesi količinu za barem jednu stavku."); return; }
+    update("otpremnice", [...db.otpremnice, { ...form, id: uid("otp"), stavke }]);
+    showToast("Otpremnica kreirana.");
+    onClose();
+  };
+
+  return (
+    <Modal wide title="Nova otpremnica" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi}>Kreiraj otpremnicu</Btn></>}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+        <Field label="Broj otpremnice"><input className="input f-mono" value={form.broj} disabled /></Field>
+        <Field label="Datum"><input className="input" type="date" value={form.datum} onChange={(e) => setForm({ ...form, datum: e.target.value, broj: sljedeciBrojOtpremnice(db.otpremnice, e.target.value) })} /></Field>
+        <Field label="Mjesto"><input className="input" value={form.mjesto} onChange={(e) => setForm({ ...form, mjesto: e.target.value })} /></Field>
+      </div>
+      <Field label="Izdao (zaposlenik)">
+        <select className="select" value={form.izdaoId} onChange={(e) => setForm({ ...form, izdaoId: e.target.value })}>
+          <option value="">—</option>
+          {[...db.zaposlenici].sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+        </select>
+      </Field>
+
+      {form.stavke.length === 0 && <EmptyState text="Narudžba kupca nema stavki — prvo dodaj stavke u narudžbu." />}
+      {form.stavke.length > 0 && (
+        <>
+          <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Stavke za isporuku (upiši količinu koja se sada šalje)</div>
+          <table className="erp-table">
+            <thead><tr><th>Naziv</th><th style={{ width: 80 }}>JM</th><th style={{ width: 130 }}>Količina</th></tr></thead>
+            <tbody>
+              {form.stavke.map((s, i) => (
+                <tr key={s.id}>
+                  <td>{s.naziv}</td>
+                  <td className="f-mono">{s.jm}</td>
+                  <td><input className="input f-mono" type="number" min="0" style={{ padding: "5px 8px" }} value={s.kolicina} onChange={(e) => azurirajKolicinu(i, e.target.value)} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function OtpremnicaPrintModal({ otpremnica, kupac, radniNalog, narudzba, postavkeTvrtke, onClose }) {
+  const t = postavkeTvrtke || {};
+  return (
+    <Modal wide title={`Pregled za ispis — Otpremnica ${otpremnica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => window.print()}>Ispis / Spremi kao PDF</Btn></>}>
+      <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+          <div style={{ maxWidth: 260, fontSize: 10.5, lineHeight: 1.5 }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>{t.naziv}</div>
+            <div style={{ color: "#555", marginBottom: 4 }}>{t.djelatnost}</div>
+            <div>{t.adresa}</div>
+            <div>{t.telefon}</div>
+            <div>{t.email}</div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontWeight: 700, fontSize: 17 }}>OTPREMNICA / <span style={{ fontStyle: "italic" }}>LIEFERSCHEIN</span> :</div>
+            <div className="f-mono" style={{ fontSize: 14, fontWeight: 700, marginTop: 4 }}>{otpremnica.broj}</div>
+          </div>
+        </div>
+
+        <table style={{ fontSize: 11.5, marginBottom: 14, borderCollapse: "collapse" }}>
+          <tbody>
+            <tr><td style={{ paddingRight: 10, color: "#555" }}>Datum:</td><td style={{ fontWeight: 600 }}>{fmtDate(otpremnica.datum)}</td></tr>
+            <tr><td style={{ paddingRight: 10, color: "#555" }}>Mjesto / Ort:</td><td style={{ fontWeight: 600 }}>{otpremnica.mjesto}</td></tr>
+          </tbody>
+        </table>
+
+        <table style={{ fontSize: 11.5, marginBottom: 14, borderCollapse: "collapse" }}>
+          <tbody>
+            <tr><td style={{ paddingRight: 10, color: "#555" }}>Kupac / Kunde:</td><td style={{ fontWeight: 600 }}>{kupac?.naziv || "—"}</td></tr>
+            <tr><td style={{ paddingRight: 10, color: "#555" }}>Narudžba / Bestellung:</td><td style={{ fontWeight: 600 }}>{narudzba?.broj || "—"}</td></tr>
+            <tr><td style={{ paddingRight: 10, color: "#555" }}>Radni nalog / Arbeitsauftrag:</td><td style={{ fontWeight: 600 }}>{radniNalog?.broj}{radniNalog?.naziv ? ` — ${radniNalog.naziv}` : ""}</td></tr>
+          </tbody>
+        </table>
+
+        <table className="doc-table" style={{ marginBottom: 20 }}>
+          <thead>
+            <tr>
+              <th style={{ width: 50 }}>Red.br. / RmNr</th>
+              <th>Naziv / Name</th>
+              <th style={{ width: 90 }}>Jed. Mjere / Maße</th>
+              <th style={{ width: 80 }}>Količina / Menge</th>
+            </tr>
+          </thead>
+          <tbody>
+            {otpremnica.stavke.map((s, i) => (
+              <tr key={s.id || i}>
+                <td>{i + 1}.</td><td>{s.naziv}</td><td>{s.jm}</td><td className="f-mono">{s.kolicina}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 40, marginBottom: 16, fontSize: 10.5 }}>
+          <div style={{ textAlign: "center", width: "30%" }}><div style={{ borderTop: "1px solid #333", paddingTop: 4 }}>Izdao / Ausgestellt von</div></div>
+          <div style={{ textAlign: "center", width: "30%" }}><div style={{ borderTop: "1px solid #333", paddingTop: 4 }}>Otpremio / Versendet von</div></div>
+          <div style={{ textAlign: "center", width: "30%" }}><div style={{ borderTop: "1px solid #333", paddingTop: 4 }}>Zaprimio / Empfangen von</div></div>
+        </div>
+
+        <div style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
+          <strong>OIB</strong>: {t.oib} | <strong>MB</strong>: {t.mb} | <strong>VAT-ID:</strong> {t.vatId} | <strong>Žiro račun:</strong> {t.ziroRacun}<br />
+          <strong>IBAN:</strong> {t.iban} | <strong>SWIFT:</strong> {t.swift} | Poduzeće je upisano na {t.sud}, <strong>MBS:</strong> {t.mbs} | <strong>Temeljni kapital:</strong> {t.temeljniKapital} | <strong>Uprava:</strong> {t.uprava}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function IsporukeModal({ radniNalog, db, update, showToast, onClose }) {
+  const projekt = db.projekti.find((p) => p.id === radniNalog.projektId);
+  const kupac = db.kupci.find((k) => k.id === projekt?.kupacId);
+  const narudzba = db.narudzbe.find((n) => n.radniNalogId === radniNalog.id);
+  const otpremnice = db.otpremnice.filter((o) => o.radniNalogId === radniNalog.id).sort((a, b) => b.datum.localeCompare(a.datum));
+  const [narudzbaModal, setNarudzbaModal] = useState(false);
+  const [otpModal, setOtpModal] = useState(false);
+  const [printOtp, setPrintOtp] = useState(null);
+  const [delOtp, setDelOtp] = useState(null);
+
+  return (
+    <>
+      <Modal wide title={`Isporuke — Radni nalog ${radniNalog.broj}`} onClose={onClose} footer={<Btn onClick={onClose}>Zatvori</Btn>}>
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <div className="label" style={{ marginBottom: 0 }}>Narudžba kupca</div>
+            <Btn variant="ghost" size="sm" icon={narudzba ? Pencil : Plus} onClick={() => setNarudzbaModal(true)}>{narudzba ? "Uredi" : "Unesi narudžbu"}</Btn>
+          </div>
+          {narudzba ? (
+            <div className="card" style={{ padding: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 8 }}>
+                <span><strong className="f-mono">{narudzba.broj}</strong> · {kupac?.naziv || "—"}</span>
+                <span style={{ color: "var(--ink-soft)" }}>{fmtDate(narudzba.datum)}</span>
+              </div>
+              <table className="erp-table">
+                <thead><tr><th>Šifra</th><th>Naziv</th><th>JM</th><th>Cijena</th></tr></thead>
+                <tbody>{narudzba.stavke.map((s) => <tr key={s.id}><td className="f-mono">{s.sifra}</td><td>{s.naziv}</td><td>{s.jm}</td><td className="f-mono">{fmtCurDec(s.cijena)}</td></tr>)}</tbody>
+              </table>
+            </div>
+          ) : <EmptyState text="Nema unesene narudžbe kupca za ovaj radni nalog." />}
+        </div>
+
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <div className="label" style={{ marginBottom: 0 }}>Otpremnice</div>
+            <Btn variant="ghost" size="sm" icon={Plus} onClick={() => setOtpModal(true)} disabled={!narudzba}>Nova otpremnica</Btn>
+          </div>
+          {otpremnice.length === 0 ? <EmptyState text="Nema izdanih otpremnica." /> : (
+            <table className="erp-table">
+              <thead><tr><th>Broj</th><th>Datum</th><th>Stavki</th><th></th></tr></thead>
+              <tbody>
+                {otpremnice.map((o) => (
+                  <tr key={o.id}>
+                    <td className="f-mono">{o.broj}</td>
+                    <td>{fmtDate(o.datum)}</td>
+                    <td className="f-mono">{o.stavke.length}</td>
+                    <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                      <Btn size="sm" icon={Eye} onClick={() => setPrintOtp(o)}>PDF</Btn>
+                      <button className="btn btn-icon btn-ghost" onClick={() => setDelOtp(o)}><Trash2 size={14} color="var(--rust)" /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </Modal>
+
+      {narudzbaModal && <NarudzbaModal narudzba={narudzba} radniNalog={radniNalog} projekt={projekt} db={db} update={update} showToast={showToast} onClose={() => setNarudzbaModal(false)} />}
+      {otpModal && <OtpremnicaFormModal radniNalog={radniNalog} narudzba={narudzba} projekt={projekt} db={db} update={update} showToast={showToast} onClose={() => setOtpModal(false)} />}
+      {printOtp && <OtpremnicaPrintModal otpremnica={printOtp} kupac={kupac} radniNalog={radniNalog} narudzba={narudzba} postavkeTvrtke={db.postavkeTvrtke} onClose={() => setPrintOtp(null)} />}
+      {delOtp && <ConfirmDelete label={delOtp.broj} onCancel={() => setDelOtp(null)} onConfirm={() => { update("otpremnice", db.otpremnice.filter((o) => o.id !== delOtp.id)); setDelOtp(null); showToast("Otpremnica obrisana."); }} />}
+    </>
+  );
+}
+
 function ProizvodnjaPage({ db, update, showToast }) {
   const [prikaz, setPrikaz] = useState("tablica");
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
+  const [isporukeNalog, setIsporukeNalog] = useState(null);
   const emptyForm = () => ({ id: null, broj: sljedeciBroj(db.radniNalozi, "broj", "RN-2026-"), projektId: db.projekti[0]?.id || "", naziv: "", faza: FAZE[0], zaduzenTim: "", status: "Planiran", planiranoSati: 0, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: todayISO(), stavke: [], materijalIzdan: false, ovisiONalogId: null });
   const [form, setForm] = useState(emptyForm());
 
@@ -2197,9 +2455,11 @@ function ProizvodnjaPage({ db, update, showToast }) {
           { key: "sati", label: "Sati (utr./plan.)", render: (r) => <span className="f-mono">{r.utrosenoSati} / {r.planiranoSati}</span> },
           { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
           { key: "materijal", label: "", render: (r) => r.stavke.length > 0 && !r.materijalIzdan ? <Btn size="sm" icon={PackageMinus} onClick={() => izdaj(r)}>Izdaj materijal</Btn> : (r.materijalIzdan ? <span style={{ fontSize: 11, color: "var(--green)" }}>Materijal izdan ✓</span> : null) },
+          { key: "isporuke", label: "", render: (r) => <Btn size="sm" icon={FolderInput} onClick={() => setIsporukeNalog(r)}>Isporuke</Btn> },
         ]}
       />
       )}
+      {isporukeNalog && <IsporukeModal radniNalog={isporukeNalog} db={db} update={update} showToast={showToast} onClose={() => setIsporukeNalog(null)} />}
 
       {modal && (
         <Modal wide title={form.id ? `Radni nalog ${form.broj}` : "Novi radni nalog"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={save}>Spremi</Btn></>}>
@@ -2949,7 +3209,219 @@ function FakturaPrintModal({ faktura, kupac, projekt, postavkeTvrtke, onClose })
   );
 }
 
+/* ============================== PODLOGA ZA FAKTURU ============================== */
+// Spaja stavke odabranih otpremnica po istoj stavci narudžbe (zbraja količine ako se
+// ista stavka isporučuje kroz više otpremnica) i množi s cijenom iz narudžbe kupca.
+const izracunajStavkePodloge = (otpremniceOdabrane, narudzba) => {
+  const mapa = {};
+  otpremniceOdabrane.forEach((o) => {
+    o.stavke.forEach((s) => {
+      const nst = narudzba?.stavke?.find((n) => n.id === s.narudzbaStavkaId);
+      const key = s.narudzbaStavkaId || s.naziv;
+      if (!mapa[key]) mapa[key] = { naziv: s.naziv, sifra: nst?.sifra || "", jm: s.jm, cijena: Number(nst?.cijena) || 0, kolicina: 0 };
+      mapa[key].kolicina += Number(s.kolicina) || 0;
+    });
+  });
+  return Object.values(mapa).map((s) => ({ ...s, ukupno: s.kolicina * s.cijena }));
+};
+
+function PodlogaZaFakturuFormModal({ db, update, showToast, onClose }) {
+  const [radniNalogId, setRadniNalogId] = useState("");
+  const [odabraneOtpId, setOdabraneOtpId] = useState([]);
+  const [vorkasa, setVorkasa] = useState(0);
+  const [datum, setDatum] = useState(todayISO());
+
+  const otpremniceZaNalog = db.otpremnice.filter((o) => o.radniNalogId === radniNalogId);
+  const radniNalog = db.radniNalozi.find((r) => r.id === radniNalogId);
+  const narudzba = db.narudzbe.find((n) => n.radniNalogId === radniNalogId);
+  const odabraneOtp = otpremniceZaNalog.filter((o) => odabraneOtpId.includes(o.id));
+  const stavke = izracunajStavkePodloge(odabraneOtp, narudzba);
+  const zbroj = stavke.reduce((s, x) => s + x.ukupno, 0);
+  const zaPlatiti = zbroj - (Number(vorkasa) || 0);
+
+  const toggleOtp = (id) => setOdabraneOtpId((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  const spremi = () => {
+    if (!radniNalog) { showToast("Odaberi radni nalog."); return; }
+    if (odabraneOtp.length === 0) { showToast("Odaberi barem jednu otpremnicu."); return; }
+    const nova = {
+      id: uid("pdf"), broj: sljedeciBrojPodloge(db.podlogeZaFakturu, radniNalog.broj),
+      radniNalogId, otpremniceIds: odabraneOtpId, narudzbaId: narudzba?.id || null,
+      datum, vorkasa: Number(vorkasa) || 0, stavke, zbroj, zaPlatiti,
+    };
+    update("podlogeZaFakturu", [...db.podlogeZaFakturu, nova]);
+    showToast("Podloga za fakturu kreirana.");
+    onClose();
+  };
+
+  return (
+    <Modal wide title="Nova podloga za fakturu" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi}>Kreiraj podlogu</Btn></>}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <Field label="Radni nalog">
+          <select className="select" value={radniNalogId} onChange={(e) => { setRadniNalogId(e.target.value); setOdabraneOtpId([]); }}>
+            <option value="">— Odaberi —</option>
+            {db.radniNalozi.filter((r) => db.otpremnice.some((o) => o.radniNalogId === r.id)).map((r) => <option key={r.id} value={r.id}>{r.broj} — {r.naziv}</option>)}
+          </select>
+        </Field>
+        <Field label="Datum obračuna"><input className="input" type="date" value={datum} onChange={(e) => setDatum(e.target.value)} /></Field>
+      </div>
+
+      {radniNalogId && (
+        <>
+          {!narudzba && <div style={{ fontSize: 12.5, color: "var(--rust)", marginBottom: 10 }}>Ovaj radni nalog nema narudžbu kupca — cijene neće biti dostupne.</div>}
+          <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Otpremnice za uključiti u obračun</div>
+          {otpremniceZaNalog.length === 0 ? <EmptyState text="Nema otpremnica za ovaj radni nalog." /> : (
+            <table className="erp-table">
+              <thead><tr><th style={{ width: 30 }}></th><th>Broj</th><th>Datum</th><th>Stavki</th></tr></thead>
+              <tbody>
+                {otpremniceZaNalog.map((o) => (
+                  <tr key={o.id}>
+                    <td><input type="checkbox" checked={odabraneOtpId.includes(o.id)} onChange={() => toggleOtp(o.id)} /></td>
+                    <td className="f-mono">{o.broj}</td>
+                    <td>{fmtDate(o.datum)}</td>
+                    <td className="f-mono">{o.stavke.length}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          {stavke.length > 0 && (
+            <>
+              <div className="label" style={{ marginTop: 14, marginBottom: 6 }}>Pregled stavki</div>
+              <table className="erp-table">
+                <thead><tr><th>Naziv</th><th style={{ width: 70 }}>JM</th><th style={{ width: 80 }}>Kol.</th><th style={{ width: 100 }}>Cijena</th><th style={{ width: 110 }}>Ukupno</th></tr></thead>
+                <tbody>{stavke.map((s, i) => <tr key={i}><td>{s.sifra ? `${s.sifra} — ` : ""}{s.naziv}</td><td className="f-mono">{s.jm}</td><td className="f-mono">{s.kolicina}</td><td className="f-mono">{fmtCurDec(s.cijena)}</td><td className="f-mono">{fmtCurDec(s.ukupno)}</td></tr>)}</tbody>
+              </table>
+
+              <div className="card" style={{ padding: 12, background: "var(--surface-alt)", marginTop: 12 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, alignItems: "end" }}>
+                  <div><div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Zbroj</div><div className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(zbroj)}</div></div>
+                  <Field label="Predujam (Vorkasse)"><input className="input f-mono" type="number" step="0.01" value={vorkasa} onChange={(e) => setVorkasa(e.target.value)} /></Field>
+                  <div><div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Za platiti</div><div className="f-mono" style={{ fontWeight: 700, color: "var(--steel)", fontSize: 16 }}>{fmtCurDec(zaPlatiti)}</div></div>
+                </div>
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function PodlogaZaFakturuPrintModal({ podloga, radniNalog, narudzba, kupac, otpremnice, postavkeTvrtke, onClose }) {
+  const t = postavkeTvrtke || {};
+  return (
+    <Modal wide title={`Pregled za ispis — Podloga za fakturu ${podloga.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => window.print()}>Ispis / Spremi kao PDF</Btn></>}>
+      <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
+        <div style={{ marginBottom: 16, fontSize: 10.5 }}>
+          <strong>{t.naziv}</strong><div>{t.adresa}</div>
+        </div>
+
+        <div style={{ border: "1px solid #333", padding: "10px 14px", marginBottom: 16 }}>
+          <div style={{ textAlign: "center", fontSize: 20, fontWeight: 700, marginBottom: 10 }}>PODLOGA ZA FAKTURU / <span style={{ fontStyle: "italic" }}>ABRECHNUNG</span></div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 11 }}>
+            <div>
+              <div style={{ fontWeight: 700 }}>AG / Kupac:</div>
+              <div>{kupac?.naziv}</div>
+              <div>{kupac?.adresa}</div>
+            </div>
+            <div>
+              <div><strong>Bestellung Nr.:</strong> {narudzba?.broj || "—"}</div>
+              <div><strong>Bestelldatum:</strong> {narudzba ? fmtDate(narudzba.datum) : "—"}</div>
+              <div><strong>Radni nalog:</strong> {radniNalog?.broj}{radniNalog?.naziv ? ` — ${radniNalog.naziv}` : ""}</div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ fontSize: 11, marginBottom: 12 }}>
+          <strong>Lieferscheine:</strong> {otpremnice.map((o) => o.broj).join(", ") || "—"}
+        </div>
+
+        <table className="doc-table" style={{ marginBottom: 16 }}>
+          <thead><tr><th style={{ width: 30 }}>Nr.</th><th>Leistungsbeschreibung</th><th style={{ width: 60 }}>Menge</th><th style={{ width: 60 }}>Einheit</th><th style={{ width: 80 }}>E.P (€)</th><th style={{ width: 90 }}>G.P. (€)</th></tr></thead>
+          <tbody>
+            {podloga.stavke.map((s, i) => (
+              <tr key={i}>
+                <td>{i + 1}.</td>
+                <td>{s.sifra && <div style={{ fontWeight: 700 }}>{s.sifra}</div>}<div>{s.naziv}</div></td>
+                <td className="f-mono">{s.kolicina}</td>
+                <td>{s.jm}</td>
+                <td className="f-mono">{fmtCurDec(s.cijena)}</td>
+                <td className="f-mono">{fmtCurDec(s.ukupno)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <table style={{ marginLeft: "auto", fontSize: 12, borderCollapse: "collapse", minWidth: 260 }}>
+          <tbody>
+            <tr><td style={{ padding: "4px 10px", border: "1px solid #333" }}>Summe:</td><td style={{ padding: "4px 10px", border: "1px solid #333", textAlign: "right", fontWeight: 700 }} className="f-mono">{fmtCurDec(podloga.zbroj)}</td></tr>
+            <tr><td style={{ padding: "4px 10px", border: "1px solid #333" }}>Vorkasse:</td><td style={{ padding: "4px 10px", border: "1px solid #333", textAlign: "right" }} className="f-mono">{fmtCurDec(podloga.vorkasa)}</td></tr>
+            <tr><td style={{ padding: "4px 10px", border: "1px solid #333", fontWeight: 700 }}>Gesamt zu Zahlen:</td><td style={{ padding: "4px 10px", border: "1px solid #333", textAlign: "right", fontWeight: 700 }} className="f-mono">{fmtCurDec(podloga.zaPlatiti)}</td></tr>
+          </tbody>
+        </table>
+
+        <div style={{ marginTop: 20, fontSize: 11 }}>DATUM: {fmtDate(podloga.datum)}</div>
+
+        <div style={{ borderTop: "1px solid #999", paddingTop: 8, marginTop: 24, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
+          <strong>OIB</strong>: {t.oib} | <strong>MB</strong>: {t.mb} | <strong>VAT-ID:</strong> {t.vatId} | <strong>Žiro račun:</strong> {t.ziroRacun}<br />
+          <strong>IBAN:</strong> {t.iban} | <strong>SWIFT:</strong> {t.swift} | Poduzeće je upisano na {t.sud}, <strong>MBS:</strong> {t.mbs} | <strong>Temeljni kapital:</strong> {t.temeljniKapital} | <strong>Uprava:</strong> {t.uprava}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function PodlogeZaFakturuTab({ db, update, showToast }) {
+  const [formOpen, setFormOpen] = useState(false);
+  const [printPodloga, setPrintPodloga] = useState(null);
+  const [del, setDel] = useState(null);
+  const radniNalogInfo = (id) => db.radniNalozi.find((r) => r.id === id);
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+        <Btn variant="primary" icon={Plus} onClick={() => setFormOpen(true)}>Nova podloga za fakturu</Btn>
+      </div>
+      {db.podlogeZaFakturu.length === 0 ? <EmptyState text="Nema izrađenih podloga za fakturu." /> : (
+        <table className="erp-table">
+          <thead><tr><th>Broj</th><th>Radni nalog</th><th>Datum</th><th>Za platiti</th><th></th></tr></thead>
+          <tbody>
+            {[...db.podlogeZaFakturu].sort((a, b) => b.datum.localeCompare(a.datum)).map((p) => (
+              <tr key={p.id}>
+                <td className="f-mono">{p.broj}</td>
+                <td>{radniNalogInfo(p.radniNalogId)?.broj || "—"}</td>
+                <td>{fmtDate(p.datum)}</td>
+                <td className="f-mono">{fmtCurDec(p.zaPlatiti)}</td>
+                <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                  <Btn size="sm" icon={Eye} onClick={() => setPrintPodloga(p)}>PDF</Btn>
+                  <button className="btn btn-icon btn-ghost" onClick={() => setDel(p)}><Trash2 size={14} color="var(--rust)" /></button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {formOpen && <PodlogaZaFakturuFormModal db={db} update={update} showToast={showToast} onClose={() => setFormOpen(false)} />}
+      {printPodloga && (
+        <PodlogaZaFakturuPrintModal
+          podloga={printPodloga}
+          radniNalog={radniNalogInfo(printPodloga.radniNalogId)}
+          narudzba={db.narudzbe.find((n) => n.id === printPodloga.narudzbaId)}
+          kupac={db.kupci.find((k) => k.id === db.narudzbe.find((n) => n.id === printPodloga.narudzbaId)?.kupacId)}
+          otpremnice={db.otpremnice.filter((o) => printPodloga.otpremniceIds.includes(o.id))}
+          postavkeTvrtke={db.postavkeTvrtke}
+          onClose={() => setPrintPodloga(null)}
+        />
+      )}
+      {del && <ConfirmDelete label={del.broj} onCancel={() => setDel(null)} onConfirm={() => { update("podlogeZaFakturu", db.podlogeZaFakturu.filter((p) => p.id !== del.id)); setDel(null); showToast("Podloga obrisana."); }} />}
+    </div>
+  );
+}
+
 function FakturiranjePage({ db, update, showToast }) {
+  const [tab, setTab] = useState("fakture");
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
   const [printFaktura, setPrintFaktura] = useState(null);
@@ -2970,9 +3442,17 @@ function FakturiranjePage({ db, update, showToast }) {
 
   return (
     <div>
+      <PageHeader title="Fakturiranje" icon={Receipt} subtitle="Izlazne fakture i naplata po projektima" />
+      <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
+        <div className={`nav-tab ${tab === "fakture" ? "active" : ""}`} onClick={() => setTab("fakture")}>Fakture</div>
+        <div className={`nav-tab ${tab === "podloge" ? "active" : ""}`} onClick={() => setTab("podloge")}>Podloge za fakturu</div>
+      </div>
+
+      {tab === "podloge" && <PodlogeZaFakturuTab db={db} update={update} showToast={showToast} />}
+
+      {tab === "fakture" && (
       <EntityPage
-        title="Fakturiranje" icon={Receipt} subtitle="Izlazne fakture i naplata po projektima"
-        data={db.fakture} onAdd={openAdd} onEdit={openEdit} onDelete={(r) => setDel(r)}
+        title="" data={db.fakture} onAdd={openAdd} onEdit={openEdit} onDelete={(r) => setDel(r)}
         addLabel="Nova faktura" searchKeys={["broj"]}
         rowClass={(r) => (isOverdue(r) ? "row-warn" : "")}
         columns={[
@@ -2986,6 +3466,7 @@ function FakturiranjePage({ db, update, showToast }) {
           { key: "print", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrintFaktura(r)}>PDF</Btn> },
         ]}
       />
+      )}
 
       {modal && (
         <Modal wide title={form.id ? `Faktura ${form.broj}` : "Nova faktura"} onClose={() => setModal(false)} footer={<><Btn onClick={() => setModal(false)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={save}>Spremi</Btn></>}>
