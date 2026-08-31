@@ -3855,6 +3855,14 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc }) {
             <Field label="Telefon"><input className="input" value={zapForm.telefon} onChange={(e) => setZapForm({ ...zapForm, telefon: e.target.value })} /></Field>
             <Field label="Status"><select className="select" value={zapForm.status} onChange={(e) => setZapForm({ ...zapForm, status: e.target.value })}><option>Aktivan</option><option>Neaktivan</option></select></Field>
             <Field label="Zaposlen od"><input className="input" type="date" value={zapForm.datumZaposlenja} onChange={(e) => setZapForm({ ...zapForm, datumZaposlenja: e.target.value })} /></Field>
+            {zapForm.id && (
+              <Field label="Lozinka za prijavu">
+                <div style={{ display: "flex", alignItems: "center", gap: 8, height: 36 }}>
+                  <span style={{ fontSize: 11.5, color: zapForm.lozinkaHash ? "var(--green)" : "var(--rust)" }}>{zapForm.lozinkaHash ? "✓ Postavljena" : "Stari/nema PIN"}</span>
+                  <Btn variant="ghost" size="sm" onClick={() => setLozinkaZa(zapForm)}>Promijeni lozinku</Btn>
+                </div>
+              </Field>
+            )}
             <Field label="RFID/kiosk kod (za NFC karticu)">
               <div style={{ display: "flex", gap: 6 }}>
                 <input className="input f-mono" style={{ textTransform: "uppercase" }} value={zapForm.rfidKod || ""} onChange={(e) => setZapForm({ ...zapForm, rfidKod: e.target.value.toUpperCase() })} />
