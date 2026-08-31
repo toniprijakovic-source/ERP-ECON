@@ -600,7 +600,7 @@ function KioskView() {
 function LoginScreen({ onLogin }) {
   const [zaposlenici, setZaposlenici] = useState([]);
   const [zapId, setZapId] = useState("");
-  const [pin, setPin] = useState("");
+  const [lozinka, setLozinka] = useState("");
   const [greska, setGreska] = useState("");
   const [ucitavanje, setUcitavanje] = useState(true);
   const [saljem, setSaljem] = useState(false);
@@ -623,14 +623,14 @@ function LoginScreen({ onLogin }) {
 
   const prijavi = async () => {
     if (!zapId) { setGreska("Odaberite zaposlenika."); return; }
-    if (pin.length !== 4) { setGreska("Unesite 4-znamenkasti PIN."); return; }
+    if (!lozinka) { setGreska("Unesite lozinku."); return; }
     setSaljem(true);
     setGreska("");
     try {
       const res = await fetch(`${API_URL}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ zaposlenikId: zapId, pin }),
+        body: JSON.stringify({ zaposlenikId: zapId, lozinka }),
       });
       const data = await res.json();
       if (!res.ok) { setGreska(data.error || "Prijava nije uspjela."); return; }
@@ -664,10 +664,10 @@ function LoginScreen({ onLogin }) {
                 {zaposlenici.map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
               </select>
             </Field>
-            <Field label="PIN">
+            <Field label="Lozinka">
               <input
-                className="input f-mono" type="password" maxLength={4} placeholder="••••" value={pin}
-                onChange={(e) => { setPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setGreska(""); }}
+                className="input f-mono" type="password" placeholder="Lozinka" value={lozinka}
+                onChange={(e) => { setLozinka(e.target.value); setGreska(""); }}
                 onKeyDown={(e) => { if (e.key === "Enter") prijavi(); }}
               />
             </Field>
@@ -803,6 +803,17 @@ export default function App() {
     }).catch(() => showToast("Greška pri spremanju — provjeri internetsku vezu."));
   };
 
+  // Ponovno učitava jedan ključ s backenda i osvježava lokalni state BEZ ponovnog PUT-a —
+  // koristi se nakon promjena koje backend napravi izravno (npr. hashiranje lozinke), gdje
+  // bi obični update() prepisao stvarni hash lokalnom (nepotpunom) kopijom podataka.
+  const refetchKljuc = async (key) => {
+    const token = localStorage.getItem("erp_token");
+    const res = await fetch(`${API_URL}/api/data/${key}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return;
+    const vrijednost = await res.json();
+    setDb((prev) => ({ ...prev, [key]: vrijednost }));
+  };
+
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2600); };
 
   const urlParametri = new URLSearchParams(window.location.search);
@@ -899,7 +910,7 @@ export default function App() {
           {aktivnaStranica === "projekti" && <ProjektiPage db={db} update={update} showToast={showToast} setPage={setPage} />}
           {aktivnaStranica === "fakturiranje" && <FakturiranjePage db={db} update={update} showToast={showToast} />}
           {aktivnaStranica === "partneri" && <PartneriPage db={db} update={update} showToast={showToast} />}
-          {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} />}
+          {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} />}
         </div>
 
       </div>
@@ -3601,12 +3612,67 @@ function PartneriPage({ db, update, showToast }) {
 }
 
 /* ============================== ZAPOSLENICI ============================== */
-function ZaposleniciPage({ db, update, showToast }) {
+// Provjera zahtjeva za lozinku — isto pravilo kao na backendu (server je taj koji ga stvarno provodi,
+// ovo je samo trenutna povratna informacija korisniku dok tipka).
+const lozinkaZahtjevi = (lozinka) => ([
+  { ok: lozinka.length >= 8, tekst: "najmanje 8 znakova" },
+  { ok: /[A-Za-z]/.test(lozinka), tekst: "barem jedno slovo" },
+  { ok: /[0-9]/.test(lozinka), tekst: "barem jedan broj" },
+  { ok: /[^A-Za-z0-9]/.test(lozinka), tekst: "barem jedan poseban znak (npr. ! ? # -)" },
+]);
+
+function PostaviLozinkuModal({ zaposlenik, onClose, showToast, refetchKljuc }) {
+  const [nova, setNova] = useState("");
+  const [potvrda, setPotvrda] = useState("");
+  const [greska, setGreska] = useState("");
+  const [saljem, setSaljem] = useState(false);
+  const zahtjevi = lozinkaZahtjevi(nova);
+  const sviIspunjeni = zahtjevi.every((z) => z.ok);
+
+  const spremi = async () => {
+    if (!sviIspunjeni) { setGreska("Lozinka ne zadovoljava sve uvjete."); return; }
+    if (nova !== potvrda) { setGreska("Lozinke se ne podudaraju."); return; }
+    setSaljem(true);
+    setGreska("");
+    try {
+      const res = await fetch(`${API_URL}/api/zaposlenici/${zaposlenik.id}/lozinka`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` },
+        body: JSON.stringify({ lozinka: nova }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setGreska(data.error || "Greška pri spremanju lozinke."); return; }
+      await refetchKljuc("zaposlenici");
+      showToast(`Lozinka za ${zaposlenik.ime} ${zaposlenik.prezime} je postavljena.`);
+      onClose();
+    } catch {
+      setGreska("Greška pri povezivanju s poslužiteljem.");
+    } finally {
+      setSaljem(false);
+    }
+  };
+
+  return (
+    <Modal title={`Postavi lozinku — ${zaposlenik.ime} ${zaposlenik.prezime}`} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi} disabled={saljem}>{saljem ? "Spremanje…" : "Postavi lozinku"}</Btn></>}>
+      <Field label="Nova lozinka"><input className="input f-mono" type="password" value={nova} onChange={(e) => { setNova(e.target.value); setGreska(""); }} /></Field>
+      <Field label="Potvrdi lozinku"><input className="input f-mono" type="password" value={potvrda} onChange={(e) => { setPotvrda(e.target.value); setGreska(""); }} onKeyDown={(e) => { if (e.key === "Enter") spremi(); }} /></Field>
+      <ul style={{ margin: "8px 0 12px 18px", padding: 0, fontSize: 12.5 }}>
+        {zahtjevi.map((z) => (
+          <li key={z.tekst} style={{ color: z.ok ? "var(--green)" : "var(--ink-faint)" }}>{z.ok ? "✓" : "—"} {z.tekst}</li>
+        ))}
+      </ul>
+      {greska && <div style={{ color: "var(--rust)", fontSize: 12.5, marginBottom: 10 }}>{greska}</div>}
+    </Modal>
+  );
+}
+
+function ZaposleniciPage({ db, update, showToast, refetchKljuc }) {
   const [tab, setTab] = useState("zaposlenici");
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
+  const [lozinkaZa, setLozinkaZa] = useState(null);
 
-  const emptyZap = { ime: "", prezime: "", pozicijaId: db.pozicijeZaposlenika[0]?.id || "", email: "", telefon: "", status: "Aktivan", datumZaposlenja: todayISO(), pin: "1234", kompetencije: [], rfidKod: "" };
+  const emptyZap = { ime: "", prezime: "", pozicijaId: db.pozicijeZaposlenika[0]?.id || "", email: "", telefon: "", status: "Aktivan", datumZaposlenja: todayISO(), kompetencije: [], rfidKod: "" };
   const [zapForm, setZapForm] = useState(emptyZap);
 
   const emptyPoz = { naziv: "", opis: "", moduli: [] };
@@ -3617,10 +3683,16 @@ function ZaposleniciPage({ db, update, showToast }) {
 
   const saveZap = () => {
     if (!zapForm.ime.trim() || !zapForm.prezime.trim()) return;
-    if (zapForm.id) update("zaposlenici", db.zaposlenici.map((z) => (z.id === zapForm.id ? zapForm : z)));
-    else update("zaposlenici", [...db.zaposlenici, { ...zapForm, id: uid("zap") }]);
-    setModal(null);
-    showToast("Zaposlenik spremljen.");
+    if (zapForm.id) {
+      update("zaposlenici", db.zaposlenici.map((z) => (z.id === zapForm.id ? zapForm : z)));
+      setModal(null);
+      showToast("Zaposlenik spremljen.");
+    } else {
+      const noviId = uid("zap");
+      update("zaposlenici", [...db.zaposlenici, { ...zapForm, id: noviId }]);
+      setModal(null);
+      showToast("Zaposlenik dodan — postavi mu lozinku za prijavu (gumb \"Lozinka\" u tablici).");
+    }
   };
   const savePoz = () => {
     if (!pozForm.naziv.trim()) return;
@@ -3644,10 +3716,10 @@ function ZaposleniciPage({ db, update, showToast }) {
 
       {tab === "zaposlenici" && (
         <>
-          {db.zaposlenici.some((z) => z.pin === "1234") && (
+          {db.zaposlenici.some((z) => !z.lozinkaHash) && (
             <div className="card" style={{ padding: "10px 14px", marginBottom: 14, background: "#FDF6E3", borderColor: "#F0C36B", display: "flex", alignItems: "center", gap: 8 }}>
               <AlertTriangle size={15} color="#8A6100" />
-              <span style={{ fontSize: 12.5, color: "#6b5511" }}><strong>{db.zaposlenici.filter((z) => z.pin === "1234").length}</strong> zaposlenika još ima zadani PIN <strong className="f-mono">1234</strong> — promijeni ih pojedinačno (Uredi → PIN) prije nego podijeliš pristup.</span>
+              <span style={{ fontSize: 12.5, color: "#6b5511" }}><strong>{db.zaposlenici.filter((z) => !z.lozinkaHash).length}</strong> zaposlenika još nema postavljenu jaku lozinku (koriste stari PIN ili nemaju nikakvu) — postavi im lozinku gumbom "Lozinka" u tablici.</span>
             </div>
           )}
           <EntityPage
@@ -3661,7 +3733,12 @@ function ZaposleniciPage({ db, update, showToast }) {
               { key: "pozicija", label: "Pozicija", render: (r) => pozicijaNaziv(r.pozicijaId) },
               { key: "email", label: "E-mail" },
               { key: "telefon", label: "Telefon" },
-              { key: "pin", label: "PIN", render: (r) => <span className="f-mono" style={{ color: r.pin === "1234" ? "var(--rust)" : "inherit" }}>{r.pin || "—"}</span> },
+              { key: "lozinka", label: "Lozinka", render: (r) => (
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 11.5, color: r.lozinkaHash ? "var(--green)" : "var(--rust)" }}>{r.lozinkaHash ? "✓ Postavljena" : "Stari/nema PIN"}</span>
+                  <Btn variant="ghost" size="sm" onClick={() => setLozinkaZa(r)}>Lozinka</Btn>
+                </div>
+              ) },
               { key: "kompetencije", label: "Kompetencije", render: (r) => (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 3, maxWidth: 220 }}>
                   {(r.kompetencije || []).length === 0 ? <span style={{ color: "var(--ink-faint)", fontSize: 12 }}>—</span> : r.kompetencije.map((k) => <span key={k} className="badge badge-muted" style={{ fontSize: 9.5 }}>{k}</span>)}
@@ -3778,7 +3855,6 @@ function ZaposleniciPage({ db, update, showToast }) {
             <Field label="Telefon"><input className="input" value={zapForm.telefon} onChange={(e) => setZapForm({ ...zapForm, telefon: e.target.value })} /></Field>
             <Field label="Status"><select className="select" value={zapForm.status} onChange={(e) => setZapForm({ ...zapForm, status: e.target.value })}><option>Aktivan</option><option>Neaktivan</option></select></Field>
             <Field label="Zaposlen od"><input className="input" type="date" value={zapForm.datumZaposlenja} onChange={(e) => setZapForm({ ...zapForm, datumZaposlenja: e.target.value })} /></Field>
-            <Field label="PIN za prijavu u aplikaciju (4 znamenke)"><input className="input f-mono" maxLength={4} value={zapForm.pin || ""} onChange={(e) => setZapForm({ ...zapForm, pin: e.target.value.replace(/\D/g, "").slice(0, 4) })} /></Field>
             <Field label="RFID/kiosk kod (za NFC karticu)">
               <div style={{ display: "flex", gap: 6 }}>
                 <input className="input f-mono" style={{ textTransform: "uppercase" }} value={zapForm.rfidKod || ""} onChange={(e) => setZapForm({ ...zapForm, rfidKod: e.target.value.toUpperCase() })} />
@@ -3844,6 +3920,7 @@ function ZaposleniciPage({ db, update, showToast }) {
           }}
         />
       )}
+      {lozinkaZa && <PostaviLozinkuModal zaposlenik={lozinkaZa} showToast={showToast} refetchKljuc={refetchKljuc} onClose={() => setLozinkaZa(null)} />}
     </div>
   );
 }

@@ -142,13 +142,15 @@ app.get("/api/auth/zaposlenici", async (req, res) => {
   res.json(lista);
 });
 
-// ---------- LOGIN (zamjenjuje PIN-provjeru koja je bila u frontend kodu) ----------
-// NAPOMENA: 4-znamenkasti PIN je slab (10.000 kombinacija) čak i hashiran —
-// donji rate-limit je minimalna zaštita. Za pravu produkciju razmisli o
-// pravoj lozinci (min. 8 znakova) ili duljem PIN-u + 2FA za osjetljivije uloge.
+// ---------- LOGIN ----------
+// Podržava tri razine unatrag: novi lozinkaHash (jaka lozinka), stari pinHash
+// (hashirani 4-znamenkasti PIN), i legacy plaintext pin — tim redom prioriteta.
+// Ovo omogućuje postupnu migraciju zaposlenika na jače lozinke bez trenutnog
+// zaključavanja svih dok im netko ne postavi novu lozinku (vidi PUT .../lozinka).
 const pokusajiLogina = new Map(); // zaposlenikId -> [timestamps]
 app.post("/api/auth/login", async (req, res) => {
-  const { zaposlenikId, pin } = req.body;
+  const { zaposlenikId } = req.body;
+  const lozinka = req.body.lozinka ?? req.body.pin;
   const zaposlenici = (await ucitajKljuc("zaposlenici")) || [];
   const zaposlenik = zaposlenici.find((z) => z.id === zaposlenikId);
   if (!zaposlenik) return res.status(401).json({ error: "Nepoznat zaposlenik." });
@@ -157,16 +159,47 @@ app.post("/api/auth/login", async (req, res) => {
   const pokusaji = (pokusajiLogina.get(zaposlenikId) || []).filter((t) => sada - t < 5 * 60 * 1000);
   if (pokusaji.length >= 5) return res.status(429).json({ error: "Previše pokušaja. Pokušaj ponovno za 5 minuta." });
 
-  const ispravan = zaposlenik.pinHash ? await bcrypt.compare(pin, zaposlenik.pinHash) : pin === zaposlenik.pin; // podržava i stare, još nehashirane zapise
+  const ispravan = zaposlenik.lozinkaHash ? await bcrypt.compare(lozinka, zaposlenik.lozinkaHash)
+    : zaposlenik.pinHash ? await bcrypt.compare(lozinka, zaposlenik.pinHash)
+    : lozinka === zaposlenik.pin;
   await pool.query("INSERT INTO login_log (zaposlenik_id, uspjesno) VALUES ($1,$2)", [zaposlenikId, ispravan]);
   if (!ispravan) {
     pokusaji.push(sada);
     pokusajiLogina.set(zaposlenikId, pokusaji);
-    return res.status(401).json({ error: "Pogrešan PIN." });
+    return res.status(401).json({ error: "Pogrešna lozinka." });
   }
   pokusajiLogina.delete(zaposlenikId);
   const token = jwt.sign({ zaposlenikId }, JWT_SECRET, { expiresIn: "12h" });
   res.json({ token, zaposlenik: { id: zaposlenik.id, ime: zaposlenik.ime, prezime: zaposlenik.prezime, pozicijaId: zaposlenik.pozicijaId } });
+});
+
+// ---------- Postavljanje lozinke (zamjenjuje stari PIN) ----------
+// Zasebna, autorizirana ruta — lozinka se hashira na backendu i NIKAD se ne
+// sprema/vraća u čistom tekstu (za razliku od stare prakse gdje se PIN mijenjao
+// kroz opću PUT /api/data/zaposlenici formu kao obično polje).
+function lozinkaJeValjana(lozinka) {
+  return typeof lozinka === "string" && lozinka.length >= 8
+    && /[A-Za-z]/.test(lozinka) && /[0-9]/.test(lozinka) && /[^A-Za-z0-9]/.test(lozinka);
+}
+app.put("/api/zaposlenici/:id/lozinka", autentikacija, async (req, res) => {
+  const moduli = await mojiModuli(req.zaposlenikId);
+  if (!moduli.includes("zaposlenici")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za promjenu lozinki." });
+
+  const { lozinka } = req.body;
+  if (!lozinkaJeValjana(lozinka)) {
+    return res.status(400).json({ error: "Lozinka mora imati najmanje 8 znakova te sadržavati slovo, broj i poseban znak." });
+  }
+  const zaposlenici = (await ucitajKljuc("zaposlenici")) || [];
+  if (!zaposlenici.some((z) => z.id === req.params.id)) return res.status(404).json({ error: "Zaposlenik nije pronađen." });
+
+  const lozinkaHash = await bcrypt.hash(lozinka, 10);
+  const novi = zaposlenici.map((z) => {
+    if (z.id !== req.params.id) return z;
+    const { pin, pinHash, ...ostalo } = z;
+    return { ...ostalo, lozinkaHash };
+  });
+  await spremiKljuc("zaposlenici", novi);
+  res.json({ ok: true });
 });
 
 // ---------- KIOSK prijava dolaska/odlaska (bez potrebe za login/PIN) ----------
