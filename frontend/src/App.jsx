@@ -31,11 +31,12 @@ const OPERACIJE = [
   { key: "kutnoSavijanje", label: "Kutno savijanje" },
   { key: "strojnaObrada", label: "Strojna obrada" },
   { key: "pripremaPozicija", label: "Priprema pozicija za sklapanje" },
-  { key: "sklapanje", label: "Sklapanje" },
+  { key: "sklapanjeKonstrukcije", label: "Sklapanje - konstrukcije" },
+  { key: "sklapanjeKupaonice", label: "Sklapanje - kupaonice" },
   { key: "zavarivanje", label: "Zavarivanje" },
   { key: "brusenje", label: "Brušenje" },
   { key: "ravnanje", label: "Ravnanje" },
-  { key: "akz", label: "Antikorozivna zaštita" },
+  { key: "akz", label: "Bojanje" },
 ];
 const praznaOperacijaSati = () => Object.fromEntries(OPERACIJE.map((o) => [o.key, 0]));
 
