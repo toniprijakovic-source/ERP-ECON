@@ -114,37 +114,44 @@ const izracunPonude = (ponuda, materijali, cjenikRada) => {
    "pod" (podna konstrukcija) i "komplet" (stranice + krov + spojni profili). */
 const zbrojRaspodjele = (raspodjela) => OPERACIJE.reduce((s, o) => s + (Number(raspodjela?.[o.key]) || 0), 0);
 
-const izracunTipa = (tip, normativi) => {
-  const grupa = (kljuc) => (normativi?.grupe || []).find((g) => g.kljuc === kljuc);
-  const pod = grupa("pod");
-  const komplet = grupa("komplet");
-  const kom = Number(tip.komada) || 0;
-  const masaUkPod = (Number(tip.masaPod) || 0) * kom;
-  const masaUkKomplet = (Number(tip.masaKomplet) || 0) * kom;
-
-  const vrijednost = masaUkPod * (Number(pod?.cijenaKg) || 0) + masaUkKomplet * (Number(komplet?.cijenaKg) || 0);
-  const satiPod = Number(pod?.ucinakKgH) > 0 ? masaUkPod / Number(pod.ucinakKgH) : 0;
-  const satiKomplet = Number(komplet?.ucinakKgH) > 0 ? masaUkKomplet / Number(komplet.ucinakKgH) : 0;
-
+// Pod i komplet naručuju se kao potpuno nezavisne stavke (različite oznake tipova i
+// različite količine u narudžbenici — npr. "Pod Typ A1 EG" nema par u stranicama jer
+// dijeli isti dizajn stranica kao "Pod Typ A1"), zato se svaka grupa unosi zasebno.
+const izracunStavke = (stavka, grupa) => {
+  const kom = Number(stavka.komada) || 0;
+  const masaUk = (Number(stavka.masaJed) || 0) * kom;
+  const vrijednost = masaUk * (Number(grupa?.cijenaKg) || 0);
+  const sati = Number(grupa?.ucinakKgH) > 0 ? masaUk / Number(grupa.ucinakKgH) : 0;
   const satiPoOperaciji = praznaOperacijaSati();
-  OPERACIJE.forEach((o) => {
-    satiPoOperaciji[o.key] = satiPod * ((Number(pod?.raspodjela?.[o.key]) || 0) / 100) + satiKomplet * ((Number(komplet?.raspodjela?.[o.key]) || 0) / 100);
-  });
-
-  return { masaUkPod, masaUkKomplet, masaUk: masaUkPod + masaUkKomplet, vrijednost, satiPod, satiKomplet, sati: satiPod + satiKomplet, satiPoOperaciji };
+  OPERACIJE.forEach((o) => { satiPoOperaciji[o.key] = sati * ((Number(grupa?.raspodjela?.[o.key]) || 0) / 100); });
+  return { masaUk, vrijednost, sati, satiPoOperaciji };
 };
 
-const izracunTipskogProjekta = (projekt, normativi) => {
-  const poTipu = (projekt.tipovi || []).map((t) => ({ tip: t, ...izracunTipa(t, normativi) }));
+const izracunSkupine = (stavke, grupa) => {
+  const poStavci = (stavke || []).map((s) => ({ stavka: s, ...izracunStavke(s, grupa) }));
   const ukupno = { komada: 0, masaUk: 0, vrijednost: 0, sati: 0, satiPoOperaciji: praznaOperacijaSati() };
-  poTipu.forEach((r) => {
-    ukupno.komada += Number(r.tip.komada) || 0;
+  poStavci.forEach((r) => {
+    ukupno.komada += Number(r.stavka.komada) || 0;
     ukupno.masaUk += r.masaUk;
     ukupno.vrijednost += r.vrijednost;
     ukupno.sati += r.sati;
     OPERACIJE.forEach((o) => { ukupno.satiPoOperaciji[o.key] += r.satiPoOperaciji[o.key]; });
   });
-  return { poTipu, ukupno };
+  return { poStavci, ukupno };
+};
+
+const izracunTipskogProjekta = (projekt, normativi) => {
+  const grupa = (kljuc) => (normativi?.grupe || []).find((g) => g.kljuc === kljuc);
+  const pod = izracunSkupine(projekt.stavkePod, grupa("pod"));
+  const komplet = izracunSkupine(projekt.stavkeKomplet, grupa("komplet"));
+  const ukupno = {
+    masaUk: pod.ukupno.masaUk + komplet.ukupno.masaUk,
+    vrijednost: pod.ukupno.vrijednost + komplet.ukupno.vrijednost,
+    sati: pod.ukupno.sati + komplet.ukupno.sati,
+    satiPoOperaciji: praznaOperacijaSati(),
+  };
+  OPERACIJE.forEach((o) => { ukupno.satiPoOperaciji[o.key] = pod.ukupno.satiPoOperaciji[o.key] + komplet.ukupno.satiPoOperaciji[o.key]; });
+  return { pod, komplet, ukupno };
 };
 
 /* ============================== STYLE TOKENS ============================== */
@@ -2684,6 +2691,58 @@ function StandardniZadaciModal({ standardniZadaci, update, showToast, onClose })
   );
 }
 
+// Tablica stavki jedne grupe normativa (Pod ili Komplet) unutar detalja projekta — svaka
+// grupa ima svoju listu tipova jer se pod i komplet naručuju kao nezavisne stavke (različite
+// oznake i količine u narudžbenici, npr. varijanta poda za prizemlje bez para u stranicama).
+function StavkeNormativaTablica({ naslov, rezultat, onDodaj, onAzuriraj, onObrisi }) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div className="label" style={{ marginBottom: 6 }}>{naslov}</div>
+      <table className="erp-table" style={{ marginBottom: 8 }}>
+        <thead>
+          <tr>
+            <th>Oznaka tipa</th>
+            <th style={{ width: 110 }}>Masa (kg/kom)</th>
+            <th style={{ width: 80 }}>Komada</th>
+            <th style={{ width: 100 }}>Ukupno kg</th>
+            <th style={{ width: 110 }}>Vrijednost</th>
+            <th style={{ width: 90 }}>Sati</th>
+            <th style={{ width: 40 }}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {rezultat.poStavci.length === 0 && (
+            <tr><td colSpan={7}><EmptyState text="Nema unesenih stavki." /></td></tr>
+          )}
+          {rezultat.poStavci.map((r) => (
+            <tr key={r.stavka.id}>
+              <td><input className="input" placeholder="npr. Typ A1" value={r.stavka.oznaka} onChange={(e) => onAzuriraj(r.stavka.id, { oznaka: e.target.value })} /></td>
+              <td><input className="input f-mono" type="number" min="0" step="1" value={r.stavka.masaJed} onChange={(e) => onAzuriraj(r.stavka.id, { masaJed: e.target.value })} /></td>
+              <td><input className="input f-mono" type="number" min="0" step="1" value={r.stavka.komada} onChange={(e) => onAzuriraj(r.stavka.id, { komada: e.target.value })} /></td>
+              <td className="f-mono">{Math.round(r.masaUk).toLocaleString("hr-HR")}</td>
+              <td className="f-mono">{fmtCur(r.vrijednost)}</td>
+              <td className="f-mono">{r.sati.toFixed(1)} h</td>
+              <td><button className="btn btn-icon btn-ghost" onClick={() => onObrisi(r.stavka.id)}><Trash2 size={14} /></button></td>
+            </tr>
+          ))}
+          {rezultat.poStavci.length > 0 && (
+            <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
+              <td>UKUPNO</td>
+              <td></td>
+              <td className="f-mono">{rezultat.ukupno.komada}</td>
+              <td className="f-mono">{Math.round(rezultat.ukupno.masaUk).toLocaleString("hr-HR")}</td>
+              <td className="f-mono">{fmtCur(rezultat.ukupno.vrijednost)}</td>
+              <td className="f-mono">{rezultat.ukupno.sati.toFixed(1)} h</td>
+              <td></td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+      <Btn variant="ghost" size="sm" icon={Plus} onClick={onDodaj}>Dodaj stavku</Btn>
+    </div>
+  );
+}
+
 /* ============================== NORMATIV TIPSKIH PROJEKATA — UREĐIVANJE ============================== */
 function NormativiModal({ db, update, showToast, onClose }) {
   const [form, setForm] = useState(() => JSON.parse(JSON.stringify(db.normativi || { naziv: "", grupe: [] })));
@@ -2761,20 +2820,18 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
   const brojOtpremnica = db.otpremnice.filter((o) => o.projektId === projekt.id).length;
 
   const [normativOtvoren, setNormativOtvoren] = useState(false);
-  const tipovi = projekt.tipovi || [];
+  const stavkePod = projekt.stavkePod || [];
+  const stavkeKomplet = projekt.stavkeKomplet || [];
   const isporuke = projekt.isporuke || [];
   const koristiNormativ = !!projekt.koristiNormativ;
-  const izracunTip = useMemo(() => izracunTipskogProjekta({ tipovi }, db.normativi), [tipovi, db.normativi]);
+  const izracunNorm = useMemo(() => izracunTipskogProjekta({ stavkePod, stavkeKomplet }, db.normativi), [stavkePod, stavkeKomplet, db.normativi]);
   const patchProjekt = (patch) => update("projekti", db.projekti.map((p) => (p.id === projekt.id ? { ...p, ...patch } : p)));
-  const azurirajTipove = (novi) => patchProjekt({ tipovi: novi });
-  const azurirajIsporuke = (nove) => patchProjekt({ isporuke: nove });
-  const dodajTip = () => azurirajTipove([...tipovi, { id: uid("tip"), oznaka: `Tip ${String.fromCharCode(65 + tipovi.length)}`, masaPod: 0, masaKomplet: 0, komada: 0 }]);
-  const azurirajTip = (id, patch) => azurirajTipove(tipovi.map((t) => (t.id === id ? { ...t, ...patch } : t)));
-  const obrisiTip = (id) => patchProjekt({ tipovi: tipovi.filter((t) => t.id !== id), isporuke: isporuke.filter((i) => i.tipId !== id) });
-  const dodajIsporuku = () => azurirajIsporuke([...isporuke, { id: uid("isp"), redniBroj: isporuke.length + 1, tipId: tipovi[0]?.id || "", datum: "", isporuceno: false }]);
-  const azurirajIsporuku = (id, patch) => azurirajIsporuke(isporuke.map((i) => (i.id === id ? { ...i, ...patch } : i)));
-  const obrisiIsporuku = (id) => azurirajIsporuke(isporuke.filter((i) => i.id !== id));
-  const rasporedjenoPoTipu = (tipId) => isporuke.filter((i) => i.tipId === tipId).length;
+  const dodajStavku = (grupa) => patchProjekt({ [grupa]: [...(projekt[grupa] || []), { id: uid("stv"), oznaka: "", masaJed: 0, komada: 0 }] });
+  const azurirajStavku = (grupa, id, patch) => patchProjekt({ [grupa]: (projekt[grupa] || []).map((s) => (s.id === id ? { ...s, ...patch } : s)) });
+  const obrisiStavku = (grupa, id) => patchProjekt({ [grupa]: (projekt[grupa] || []).filter((s) => s.id !== id) });
+  const dodajIsporuku = () => patchProjekt({ isporuke: [...isporuke, { id: uid("isp"), redniBroj: isporuke.length + 1, naziv: "", datum: "", isporuceno: false }] });
+  const azurirajIsporuku = (id, patch) => patchProjekt({ isporuke: isporuke.map((i) => (i.id === id ? { ...i, ...patch } : i)) });
+  const obrisiIsporuku = (id) => patchProjekt({ isporuke: isporuke.filter((i) => i.id !== id) });
 
   const azurirajZadatke = (noviZadaci) => update("projekti", db.projekti.map((p) => (p.id === projekt.id ? { ...p, zadaci: noviZadaci } : p)));
   const azurirajMaterijal = (noveStavke) => update("projekti", db.projekti.map((p) => (p.id === projekt.id ? { ...p, materijalStavke: noveStavke } : p)));
@@ -2833,73 +2890,42 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
           {koristiNormativ && <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setNormativOtvoren(true)}>Uredi normativ</Btn>}
         </div>
 
-        {!koristiNormativ && <p style={{ fontSize: 12, color: "var(--ink-faint)" }}>Uključi ako se projekt obračunava po ugovorenoj cijeni €/kg (npr. tipske kupaonice) — tada se vrijednost i sati računaju iz mase, a ne unose ručno po poziciji.</p>}
+        {!koristiNormativ && <p style={{ fontSize: 12, color: "var(--ink-faint)" }}>Uključi ako se projekt obračunava po ugovorenoj cijeni €/kg (npr. tipske kupaonice) — tada se vrijednost i sati računaju iz mase, a ne unose ručno po poziciji. Pod i komplet unose se odvojeno, kao zasebne stavke narudžbenice.</p>}
 
         {koristiNormativ && (
           <>
             <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 10 }}>
               Normativ: <strong>{db.normativi?.naziv}</strong> · {(db.normativi?.grupe || []).map((g) => `${g.naziv.split(" (")[0]}: ${g.cijenaKg} €/kg, ${g.ucinakKgH} kg/h`).join(" · ")}
             </div>
-            <table className="erp-table" style={{ marginBottom: 8 }}>
-              <thead>
-                <tr>
-                  <th style={{ width: 90 }}>Tip</th>
-                  <th style={{ width: 110 }}>Masa pod (kg/kom)</th>
-                  <th style={{ width: 130 }}>Masa komplet (kg/kom)</th>
-                  <th style={{ width: 80 }}>Komada</th>
-                  <th style={{ width: 100 }}>Ukupno kg</th>
-                  <th style={{ width: 110 }}>Vrijednost</th>
-                  <th style={{ width: 90 }}>Sati</th>
-                  <th style={{ width: 100 }}>U rasporedu</th>
-                  <th style={{ width: 40 }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {izracunTip.poTipu.map((r) => {
-                  const rasp = rasporedjenoPoTipu(r.tip.id);
-                  const kom = Number(r.tip.komada) || 0;
-                  return (
-                    <tr key={r.tip.id}>
-                      <td><input className="input" style={{ width: 78 }} value={r.tip.oznaka} onChange={(e) => azurirajTip(r.tip.id, { oznaka: e.target.value })} /></td>
-                      <td><input className="input f-mono" type="number" min="0" step="1" value={r.tip.masaPod} onChange={(e) => azurirajTip(r.tip.id, { masaPod: e.target.value })} /></td>
-                      <td><input className="input f-mono" type="number" min="0" step="1" value={r.tip.masaKomplet} onChange={(e) => azurirajTip(r.tip.id, { masaKomplet: e.target.value })} /></td>
-                      <td><input className="input f-mono" type="number" min="0" step="1" value={r.tip.komada} onChange={(e) => azurirajTip(r.tip.id, { komada: e.target.value })} /></td>
-                      <td className="f-mono">{Math.round(r.masaUk).toLocaleString("hr-HR")}</td>
-                      <td className="f-mono">{fmtCur(r.vrijednost)}</td>
-                      <td className="f-mono">{r.sati.toFixed(1)} h</td>
-                      <td className="f-mono" style={{ color: rasp === kom ? "var(--green)" : "var(--rust)" }}>{rasp}/{kom}</td>
-                      <td><button className="btn btn-icon btn-ghost" onClick={() => obrisiTip(r.tip.id)}><Trash2 size={14} /></button></td>
-                    </tr>
-                  );
-                })}
-                {tipovi.length > 0 && (
-                  <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
-                    <td colSpan={3}>UKUPNO</td>
-                    <td className="f-mono">{izracunTip.ukupno.komada}</td>
-                    <td className="f-mono">{Math.round(izracunTip.ukupno.masaUk).toLocaleString("hr-HR")}</td>
-                    <td className="f-mono">{fmtCur(izracunTip.ukupno.vrijednost)}</td>
-                    <td className="f-mono">{izracunTip.ukupno.sati.toFixed(1)} h</td>
-                    <td className="f-mono">{isporuke.length}/{izracunTip.ukupno.komada}</td>
-                    <td></td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-              <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajTip}>Dodaj tip</Btn>
-              {tipovi.length > 0 && izracunTip.ukupno.vrijednost > 0 && Math.abs(izracunTip.ukupno.vrijednost - (Number(projekt.vrijednost) || 0)) > 1 && (
-                <Btn variant="ghost" size="sm" onClick={() => patchProjekt({ vrijednost: Math.round(izracunTip.ukupno.vrijednost) })}>Prepiši vrijednost projekta ({fmtCur(izracunTip.ukupno.vrijednost)})</Btn>
-              )}
+
+            <StavkeNormativaTablica naslov="Pod (podna konstrukcija)" rezultat={izracunNorm.pod} onDodaj={() => dodajStavku("stavkePod")} onAzuriraj={(id, patch) => azurirajStavku("stavkePod", id, patch)} onObrisi={(id) => obrisiStavku("stavkePod", id)} />
+            <StavkeNormativaTablica naslov="Komplet (stranice + krov + spojni profili)" rezultat={izracunNorm.komplet} onDodaj={() => dodajStavku("stavkeKomplet")} onAzuriraj={(id, patch) => azurirajStavku("stavkeKomplet", id, patch)} onObrisi={(id) => obrisiStavku("stavkeKomplet", id)} />
+
+            {izracunNorm.pod.ukupno.komada > 0 && izracunNorm.komplet.ukupno.komada > 0 && izracunNorm.pod.ukupno.komada !== izracunNorm.komplet.ukupno.komada && (
+              <p style={{ fontSize: 11.5, color: "var(--rust)", marginTop: -6, marginBottom: 14 }}>
+                Napomena: ukupno komada poda ({izracunNorm.pod.ukupno.komada}) i kompleta ({izracunNorm.komplet.ukupno.komada}) se ne poklapaju.
+              </p>
+            )}
+
+            <div className="card" style={{ padding: "10px 14px", marginBottom: 14, background: "var(--surface-alt)", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+              <strong style={{ fontSize: 13 }}>UKUPNO PROJEKT</strong>
+              <span className="f-mono" style={{ fontSize: 13 }}>{Math.round(izracunNorm.ukupno.masaUk).toLocaleString("hr-HR")} kg · {fmtCur(izracunNorm.ukupno.vrijednost)} · {izracunNorm.ukupno.sati.toFixed(1)} h</span>
             </div>
 
-            {izracunTip.ukupno.sati > 0 && (
+            {izracunNorm.ukupno.vrijednost > 0 && Math.abs(izracunNorm.ukupno.vrijednost - (Number(projekt.vrijednost) || 0)) > 1 && (
+              <div style={{ marginBottom: 14 }}>
+                <Btn variant="ghost" size="sm" onClick={() => patchProjekt({ vrijednost: Math.round(izracunNorm.ukupno.vrijednost) })}>Prepiši vrijednost projekta ({fmtCur(izracunNorm.ukupno.vrijednost)})</Btn>
+              </div>
+            )}
+
+            {izracunNorm.ukupno.sati > 0 && (
               <>
                 <div className="label" style={{ marginBottom: 6 }}>Planirani sati po operacijama (izračunato iz normativa)</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 6 }}>
-                  {OPERACIJE.filter((o) => izracunTip.ukupno.satiPoOperaciji[o.key] > 0.01).map((o) => (
+                  {OPERACIJE.filter((o) => izracunNorm.ukupno.satiPoOperaciji[o.key] > 0.01).map((o) => (
                     <div key={o.key} style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, padding: "3px 8px", background: "var(--surface-alt)", borderRadius: 3 }}>
                       <span style={{ color: "var(--ink-soft)" }}>{o.label}</span>
-                      <span className="f-mono" style={{ fontWeight: 600 }}>{izracunTip.ukupno.satiPoOperaciji[o.key].toFixed(1)} h</span>
+                      <span className="f-mono" style={{ fontWeight: 600 }}>{izracunNorm.ukupno.satiPoOperaciji[o.key].toFixed(1)} h</span>
                     </div>
                   ))}
                 </div>
@@ -2914,24 +2940,20 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
         <div className="card" style={{ padding: 14, marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
             <strong className="f-display" style={{ fontSize: 14 }}>Raspored isporuka ({isporuke.length})</strong>
-            <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajIsporuku} disabled={tipovi.length === 0}>Dodaj isporuku</Btn>
+            <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajIsporuku}>Dodaj isporuku</Btn>
           </div>
           {isporuke.length === 0 ? (
-            <p style={{ fontSize: 12, color: "var(--ink-faint)" }}>{tipovi.length === 0 ? "Prvo dodaj barem jedan tip." : "Dodaj redak po komadu — svaki sa svojim tipom i datumom isporuke. Redoslijed tipova može biti miješan."}</p>
+            <p style={{ fontSize: 12, color: "var(--ink-faint)" }}>Dodaj redak po fizički isporučenoj jedinici (npr. gotovoj kupaonici) — slobodan naziv i datum isporuke, neovisno o unesenim stavkama poda/kompleta.</p>
           ) : (
             <table className="erp-table">
-              <thead><tr><th style={{ width: 50 }}>Br.</th><th style={{ width: 130 }}>Tip</th><th style={{ width: 150 }}>Datum isporuke</th><th style={{ width: 100 }}>Isporučeno</th><th></th><th style={{ width: 40 }}></th></tr></thead>
+              <thead><tr><th style={{ width: 50 }}>Br.</th><th>Naziv</th><th style={{ width: 150 }}>Datum isporuke</th><th style={{ width: 100 }}>Isporučeno</th><th></th><th style={{ width: 40 }}></th></tr></thead>
               <tbody>
                 {[...isporuke].sort((a, b) => (a.datum || "9999").localeCompare(b.datum || "9999")).map((i) => {
                   const kasni = i.datum && !i.isporuceno && i.datum < todayISO();
                   return (
                     <tr key={i.id}>
                       <td className="f-mono">{i.redniBroj}</td>
-                      <td>
-                        <select className="select" value={i.tipId} onChange={(e) => azurirajIsporuku(i.id, { tipId: e.target.value })}>
-                          {tipovi.map((t) => <option key={t.id} value={t.id}>{t.oznaka}</option>)}
-                        </select>
-                      </td>
+                      <td><input className="input" value={i.naziv} onChange={(e) => azurirajIsporuku(i.id, { naziv: e.target.value })} placeholder="npr. Tip A1" /></td>
                       <td><input className="input" type="date" value={i.datum || ""} onChange={(e) => azurirajIsporuku(i.id, { datum: e.target.value })} /></td>
                       <td><input type="checkbox" checked={!!i.isporuceno} onChange={(e) => azurirajIsporuku(i.id, { isporuceno: e.target.checked })} /></td>
                       <td>{kasni && <span style={{ fontSize: 11, color: "var(--rust)", fontWeight: 600 }}>Kasni</span>}</td>
