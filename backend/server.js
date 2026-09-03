@@ -26,7 +26,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika",
   "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana",
   "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada",
-  "narudzbe", "otpremnice", "podlogeZaFakturu",
+  "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
 ];
 
 // Koji modul (isti "moduli" popis kao u pozicijeZaposlenika) smije MIJENJATI koji ključ.
@@ -55,6 +55,7 @@ const MODUL_ZA_KLJUC = {
   narudzbe: ["projekti"],
   otpremnice: ["projekti"],
   podlogeZaFakturu: ["fakturiranje"],
+  normativi: ["projekti"],
 };
 
 // Ključevi koje App.jsx čita na najvišoj razini (zaglavlje, navigacija, prijava) —
@@ -70,14 +71,14 @@ const MODUL_ZA_CITANJE = {
   skladiste: ["katalogProfila", "materijali"],
   nabava: ["dobavljaci", "katalogProfila", "materijali", "narudzbenice", "upitiNabave"],
   proizvodnja: ["kapacitetiDana", "katalogProfila", "materijali", "programiRezanja", "projekti", "radniCentri", "radniNalozi"],
-  projekti: ["cjenikRada", "katalogProfila", "kupci", "materijali", "ponude", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice"],
+  projekti: ["cjenikRada", "katalogProfila", "kupci", "materijali", "ponude", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice", "normativi"],
   fakturiranje: ["fakture", "kupci", "materijali", "projekti", "narudzbe", "otpremnice", "podlogeZaFakturu"],
   partneri: ["kupci", "dobavljaci"],
   zaposlenici: ["evidencijaRada"],
 };
 
 // Ključevi čija je vrijednost objekt (ne niz) — koristi se za ispravan "prazan" placeholder.
-const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke"]);
+const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi"]);
 
 async function mojiModuli(zaposlenikId) {
   const [zaposlenici, pozicije] = await Promise.all([ucitajKljuc("zaposlenici"), ucitajKljuc("pozicijeZaposlenika")]);

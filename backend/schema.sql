@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS app_data (
                 'radniNalozi','fakture','cjenikRada','katalogProfila','pozicijeZaposlenika',
                 'zaposlenici','standardniZadaci','programiRezanja','kapacitetiDana',
                 'postavkeTvrtke','upitiNabave','radniCentri','evidencijaRada',
-                'narudzbe','otpremnice','podlogeZaFakturu'
+                'narudzbe','otpremnice','podlogeZaFakturu','normativi'
               )),
   value       JSONB NOT NULL,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
