@@ -1062,6 +1062,22 @@ const TIPOVI_KATALOGA = ["HEA", "HEB", "HEM", "IPE", "IPN", "UPN", "SHS", "RHS",
 const katalogPoTipu = (katalog) => TIPOVI_KATALOGA.map((tip) => ({ tip, stavke: katalog.filter((k) => k.tip === tip) })).filter((g) => g.stavke.length);
 const masaIzKataloga = (entry, dimenzija) => (entry ? (Number(entry.vrijednost) || 0) * (Number(dimenzija) || 0) : 0);
 
+// Pozicija se sastoji od više stavki (profila i/ili limova) — masa/kom jedne stavke, pa masa cijele pozicije
+// (zbroj svih stavki × njihovi komadi, pomnoženo s količinom pozicije).
+const masaStavkePozicije = (s, katalog) => {
+  const faktor = KVALITETE_MATERIJALA.find((k) => k.key === (s.kvaliteta || "celik"))?.faktor || 1;
+  if (s.nacinMase === "katalog") {
+    const entry = katalog.find((k) => k.id === s.katalogId);
+    if (entry?.jedinica === "kg/m2") {
+      const povrsinaM2 = ((Number(s.sirinaMM) || 0) * (Number(s.duzinaMM) || 0)) / 1e6;
+      return (Number(entry.vrijednost) || 0) * povrsinaM2 * faktor;
+    }
+    return masaIzKataloga(entry, s.dimenzija) * faktor;
+  }
+  return Number(s.masaJed) || 0;
+};
+const masaPozicije = (p, katalog) => (p.stavke || []).reduce((sum, s) => sum + masaStavkePozicije(s, katalog) * (Number(s.komada) || 1), 0);
+
 function SkladistePage({ db, update, showToast }) {
   const [tab, setTab] = useState("zalihe");
   const [modal, setModal] = useState(null); // {mode:'add'|'edit', item}
@@ -2579,38 +2595,112 @@ function ProizvodnjaPage({ db, update, showToast }) {
 }
 
 /* ============================== POZICIJE PONUDE (kalkulacija sati po operaciji) ============================== */
+// Pozicija (npr. "P1 — nosač") sastoji se od više stavki materijala (profili i/ili limovi) — svaka
+// stavka ima svoj način unosa mase, a limovi (kataloške stavke s jedinicom kg/m²) unose se preko
+// širine i dužine (mm) iz kojih se površina i masa računaju automatski.
+function StavkaPozicijeRedak({ stavka: s, katalog, grupe, onAzuriraj, onObrisi }) {
+  const nacinMase = s.nacinMase || "rucno";
+  const katEntry = katalog.find((k) => k.id === s.katalogId);
+  const jeLim = katEntry?.jedinica === "kg/m2";
+  const masaJedEfektivna = masaStavkePozicije(s, katalog);
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap", padding: "8px 0", borderBottom: "1px dashed var(--line)" }}>
+      <div style={{ width: 130 }}>
+        <label className="label">Način unosa mase</label>
+        <select className="select" value={nacinMase} onChange={(e) => onAzuriraj({ nacinMase: e.target.value })}>
+          <option value="rucno">Ručni unos</option>
+          <option value="katalog">Iz kataloga profila</option>
+        </select>
+      </div>
+      {nacinMase === "katalog" ? (
+        <>
+          <div style={{ flex: "1 1 200px" }}>
+            <label className="label">Profil / lim</label>
+            <select className="select" value={s.katalogId} onChange={(e) => onAzuriraj({ katalogId: e.target.value })}>
+              <option value="">Odaberi iz kataloga…</option>
+              {grupe.map((g) => (
+                <optgroup key={g.tip} label={g.tip}>
+                  {g.stavke.map((k) => <option key={k.id} value={k.id}>{k.oznaka} ({k.vrijednost} {k.jedinica})</option>)}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+          {jeLim ? (
+            <>
+              <div style={{ width: 100 }}>
+                <label className="label">Širina (mm)</label>
+                <input className="input f-mono" type="number" min="0" step="1" value={s.sirinaMM || 0} onChange={(e) => onAzuriraj({ sirinaMM: e.target.value })} />
+              </div>
+              <div style={{ width: 100 }}>
+                <label className="label">Dužina (mm)</label>
+                <input className="input f-mono" type="number" min="0" step="1" value={s.duzinaMM || 0} onChange={(e) => onAzuriraj({ duzinaMM: e.target.value })} />
+              </div>
+            </>
+          ) : (
+            <div style={{ width: 120 }}>
+              <label className="label">Dužina/kom (m)</label>
+              <input className="input f-mono" type="number" min="0" step="0.01" value={s.dimenzija} onChange={(e) => onAzuriraj({ dimenzija: e.target.value })} />
+            </div>
+          )}
+          <div style={{ width: 160 }}>
+            <label className="label">Kvaliteta materijala</label>
+            <select className="select" value={s.kvaliteta || "celik"} onChange={(e) => onAzuriraj({ kvaliteta: e.target.value })}>
+              {KVALITETE_MATERIJALA.map((k) => <option key={k.key} value={k.key}>{k.label}</option>)}
+            </select>
+          </div>
+        </>
+      ) : (
+        <div style={{ width: 120 }}>
+          <label className="label">Masa/kom (kg)</label>
+          <input className="input f-mono" type="number" min="0" value={s.masaJed} onChange={(e) => onAzuriraj({ masaJed: e.target.value })} />
+        </div>
+      )}
+      <div style={{ width: 80 }}>
+        <label className="label">Komada</label>
+        <input className="input f-mono" type="number" min="0" step="1" value={s.komada ?? 1} onChange={(e) => onAzuriraj({ komada: e.target.value })} />
+      </div>
+      <div style={{ width: 110 }}>
+        <label className="label">Masa/kom</label>
+        <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{masaJedEfektivna.toFixed(2)} kg</div>
+      </div>
+      <button className="btn btn-icon btn-ghost" onClick={onObrisi}><Trash2 size={14} color="var(--rust)" /></button>
+    </div>
+  );
+}
+
 function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [] }) {
   const [otvorene, setOtvorene] = useState(() => Object.fromEntries(pozicije.map((p) => [p.id, true])));
   const toggle = (id) => setOtvorene((o) => ({ ...o, [id]: !o[id] }));
   const grupe = katalogPoTipu(katalog);
 
+  const praznaStavka = () => ({ id: uid("pst"), nacinMase: "rucno", masaJed: 0, komada: 1, katalogId: "", dimenzija: 0, sirinaMM: 0, duzinaMM: 0, kvaliteta: "celik" });
   const addPoz = () => {
     const id = uid("poz");
-    setPozicije([...pozicije, { id, oznaka: `P${pozicije.length + 1}`, naziv: "", kolicina: 1, nacinMase: "rucno", masaJed: 0, katalogId: "", dimenzija: 0, kvaliteta: "celik", operacije: praznaOperacijaSati() }]);
+    setPozicije([...pozicije, { id, oznaka: `P${pozicije.length + 1}`, naziv: "", kolicina: 1, stavke: [praznaStavka()], operacije: praznaOperacijaSati() }]);
     setOtvorene((o) => ({ ...o, [id]: true }));
   };
   const updatePoz = (id, patch) => setPozicije(pozicije.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   const updateOp = (id, key, val) => setPozicije(pozicije.map((p) => (p.id === id ? { ...p, operacije: { ...p.operacije, [key]: val } } : p)));
   const removePoz = (id) => setPozicije(pozicije.filter((p) => p.id !== id));
 
+  const addStavka = (pozId) => updatePoz(pozId, { stavke: [...((pozicije.find((p) => p.id === pozId) || {}).stavke || []), praznaStavka()] });
+  const updateStavka = (pozId, stavkaId, patch) => {
+    const poz = pozicije.find((p) => p.id === pozId);
+    updatePoz(pozId, { stavke: (poz.stavke || []).map((s) => (s.id === stavkaId ? { ...s, ...patch } : s)) });
+  };
+  const removeStavka = (pozId, stavkaId) => {
+    const poz = pozicije.find((p) => p.id === pozId);
+    updatePoz(pozId, { stavke: (poz.stavke || []).filter((s) => s.id !== stavkaId) });
+  };
+
   const satiPoz = (p) => OPERACIJE.reduce((s, o) => s + (Number(p.operacije?.[o.key]) || 0), 0);
   const trosakPoz = (p) => OPERACIJE.reduce((s, o) => s + (Number(p.operacije?.[o.key]) || 0) * (Number(cjenikRada?.[o.key]) || 0), 0);
-  const masaPoz = (p) => {
-    if (p.nacinMase === "katalog") {
-      const entry = katalog.find((k) => k.id === p.katalogId);
-      const faktor = KVALITETE_MATERIJALA.find((k) => k.key === (p.kvaliteta || "celik"))?.faktor || 1;
-      return masaIzKataloga(entry, p.dimenzija) * faktor;
-    }
-    return Number(p.masaJed) || 0;
-  };
 
   return (
     <div>
       {pozicije.length === 0 && <div style={{ textAlign: "center", color: "var(--ink-faint)", padding: "16px 0", fontSize: 13 }}>Nema pozicija. Dodajte prvu poziciju konstrukcije.</div>}
       {pozicije.map((p) => {
-        const nacinMase = p.nacinMase || "rucno";
-        const katEntry = katalog.find((k) => k.id === p.katalogId);
-        const masaJedEfektivna = masaPoz(p);
+        const masaJedEfektivna = masaPozicije(p, katalog);
         return (
           <div key={p.id} className="card" style={{ padding: 12, marginBottom: 10, background: "var(--surface-alt)" }}>
             <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
@@ -2621,48 +2711,16 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [] }
               <button className="btn btn-icon btn-ghost" onClick={() => removePoz(p.id)}><Trash2 size={14} color="var(--rust)" /></button>
             </div>
 
-            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line-strong)", display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
-              <div style={{ width: 150 }}>
-                <label className="label">Način unosa mase</label>
-                <select className="select" value={nacinMase} onChange={(e) => updatePoz(p.id, { nacinMase: e.target.value })}>
-                  <option value="rucno">Ručni unos</option>
-                  <option value="katalog">Iz kataloga profila</option>
-                </select>
-              </div>
-              {nacinMase === "katalog" ? (
-                <>
-                  <div style={{ flex: "1 1 220px" }}>
-                    <label className="label">Profil / lim</label>
-                    <select className="select" value={p.katalogId} onChange={(e) => updatePoz(p.id, { katalogId: e.target.value })}>
-                      <option value="">Odaberi iz kataloga…</option>
-                      {grupe.map((g) => (
-                        <optgroup key={g.tip} label={g.tip}>
-                          {g.stavke.map((k) => <option key={k.id} value={k.id}>{k.oznaka} ({k.vrijednost} {k.jedinica})</option>)}
-                        </optgroup>
-                      ))}
-                    </select>
-                  </div>
-                  <div style={{ width: 150 }}>
-                    <label className="label">{katEntry?.jedinica === "kg/m2" ? "Površina/kom (m²)" : "Dužina/kom (m)"}</label>
-                    <input className="input f-mono" type="number" min="0" step="0.01" value={p.dimenzija} onChange={(e) => updatePoz(p.id, { dimenzija: e.target.value })} />
-                  </div>
-                  <div style={{ width: 170 }}>
-                    <label className="label">Kvaliteta materijala</label>
-                    <select className="select" value={p.kvaliteta || "celik"} onChange={(e) => updatePoz(p.id, { kvaliteta: e.target.value })}>
-                      {KVALITETE_MATERIJALA.map((k) => <option key={k.key} value={k.key}>{k.label}</option>)}
-                    </select>
-                  </div>
-                  <div style={{ width: 130 }}>
-                    <label className="label">Masa/kom (izračunato)</label>
-                    <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{masaJedEfektivna.toFixed(2)} kg</div>
-                  </div>
-                </>
-              ) : (
-                <div style={{ width: 150 }}>
-                  <label className="label">Masa/kom (kg)</label>
-                  <input className="input f-mono" type="number" min="0" value={p.masaJed} onChange={(e) => updatePoz(p.id, { masaJed: e.target.value })} />
-                </div>
-              )}
+            <div style={{ marginTop: 10, paddingTop: 6, borderTop: "1px dashed var(--line-strong)" }}>
+              <div className="label" style={{ marginBottom: 2 }}>Stavke materijala (profili / limovi) u jednoj poziciji</div>
+              {(p.stavke || []).map((s) => (
+                <StavkaPozicijeRedak
+                  key={s.id} stavka={s} katalog={katalog} grupe={grupe}
+                  onAzuriraj={(patch) => updateStavka(p.id, s.id, patch)}
+                  onObrisi={() => removeStavka(p.id, s.id)}
+                />
+              ))}
+              <Btn variant="ghost" size="sm" icon={Plus} onClick={() => addStavka(p.id)} style={{ marginTop: 8 }}>Dodaj stavku</Btn>
             </div>
 
             {otvorene[p.id] && (
@@ -2680,6 +2738,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [] }
             )}
 
             <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end", gap: 18, fontSize: 12.5 }}>
+              <span style={{ color: "var(--ink-soft)" }}>Masa/kom pozicije: <strong className="f-mono" style={{ color: "var(--ink)" }}>{masaJedEfektivna.toFixed(2)} kg</strong></span>
               <span style={{ color: "var(--ink-soft)" }}>Ukupno masa: <strong className="f-mono" style={{ color: "var(--ink)" }}>{(Number(p.kolicina) * masaJedEfektivna || 0).toLocaleString("hr-HR", { maximumFractionDigits: 1 })} kg</strong></span>
               <span style={{ color: "var(--ink-soft)" }}>Ukupno sati: <strong className="f-mono" style={{ color: "var(--ink)" }}>{satiPoz(p)} h</strong></span>
               <span style={{ color: "var(--ink-soft)" }}>Trošak rada: <strong className="f-mono" style={{ color: "var(--ink)" }}>{fmtCurDec(trosakPoz(p))}</strong></span>
@@ -3157,7 +3216,7 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
             <thead><tr><th>Oz.</th><th>Naziv</th><th>Kom</th><th>Masa/kom</th><th>Ukupno masa</th><th>Sati</th></tr></thead>
             <tbody>
               {pozicije.map((p) => {
-                const masaJed = p.nacinMase === "katalog" ? masaIzKataloga(db.katalogProfila.find((k) => k.id === p.katalogId), p.dimenzija) : Number(p.masaJed) || 0;
+                const masaJed = masaPozicije(p, db.katalogProfila);
                 const sati = OPERACIJE.reduce((s, o) => s + (Number(p.operacije?.[o.key]) || 0), 0);
                 return (
                   <tr key={p.id}>
@@ -3283,7 +3342,7 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
               <thead><tr><th style={{ width: 34 }}>Poz.</th><th>Naziv</th><th style={{ width: 55 }}>Kom.</th><th style={{ width: 80 }}>Masa (kg)</th></tr></thead>
               <tbody>
                 {ponuda.pozicije.map((p) => {
-                  const masaJed = p.nacinMase === "katalog" ? masaIzKataloga(db.katalogProfila.find((k) => k.id === p.katalogId), p.dimenzija) : Number(p.masaJed) || 0;
+                  const masaJed = masaPozicije(p, db.katalogProfila);
                   return <tr key={p.id}><td>{p.oznaka}</td><td>{p.naziv}</td><td>{p.kolicina}</td><td>{(masaJed * Number(p.kolicina)).toFixed(1)}</td></tr>;
                 })}
               </tbody>
