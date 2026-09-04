@@ -90,8 +90,78 @@ const sljedeciBrojRadnogNaloga = (radniNalozi, projektSifra) => {
   return `${prefiks}${sljedeci}`;
 };
 
-// Izračun ponude: sati po operaciji (zbroj svih pozicija), trošak rada, materijala i ostalog
-const izracunPonude = (ponuda, materijali, cjenikRada) => {
+// Standardne dužine šipki (m) za optimizaciju rezanja profila i zadani postotak otpada za limove
+const DULJINE_SIPKI_M = [6, 12];
+const OTPAD_LIM_ZADANO = 10;
+
+// Raspoređuje potrebne komade profila (po dužini) u standardne šipke: komadi se slažu od
+// najdužeg prema najkraćem, svaki ide u prvu već otvorenu šipku u koju stane. Kad se mora
+// otvoriti nova šipka, bira se ona standardna dužina (6/12 m) koja unaprijed najbolje pokrije
+// i preostale komade (najviše ih upakira / ostavlja najmanje otpada) — ne uvijek najkraća
+// koja stane trenutni komad, jer bi to npr. za pet komada od 4 m otvorilo pet šipki od 6 m
+// (10 m otpada) umjesto dvije šipke od 12 m (4 m otpada, jer u 12 m stanu tri komada od 4 m).
+const optimizirajProfile = (duljineKomada) => {
+  const preostali = [...duljineKomada].sort((a, b) => b - a);
+  const sipke = [];
+  while (preostali.length) {
+    const trenutni = preostali[0];
+    const otvorena = sipke.find((s) => s.preostalo + 1e-9 >= trenutni);
+    if (otvorena) { otvorena.preostalo -= trenutni; preostali.shift(); continue; }
+    let najboljaDuljina = null, najboljiBrojKomada = -1, najboljiOtpad = Infinity;
+    DULJINE_SIPKI_M.filter((d) => d + 1e-9 >= trenutni).forEach((kandidat) => {
+      let preostaloProba = kandidat, brojKomada = 0;
+      preostali.forEach((d) => { if (preostaloProba + 1e-9 >= d) { preostaloProba -= d; brojKomada++; } });
+      if (brojKomada > najboljiBrojKomada || (brojKomada === najboljiBrojKomada && preostaloProba < najboljiOtpad)) {
+        najboljaDuljina = kandidat; najboljiBrojKomada = brojKomada; najboljiOtpad = preostaloProba;
+      }
+    });
+    sipke.push({ duljinaSipke: najboljaDuljina, preostalo: najboljaDuljina });
+  }
+  const brojPo6 = sipke.filter((s) => s.duljinaSipke === 6).length;
+  const brojPo12 = sipke.filter((s) => s.duljinaSipke === 12).length;
+  const ukupnoNabavljeno = sipke.reduce((s, x) => s + x.duljinaSipke, 0);
+  const ukupnoPotrebno = duljineKomada.reduce((s, d) => s + d, 0);
+  return { brojPo6, brojPo12, ukupnoNabavljeno, ukupnoPotrebno, otpadM: ukupnoNabavljeno - ukupnoPotrebno };
+};
+
+// Potreban sirovi materijal iz pozicija ponude: profili se optimiziraju u standardne šipke (6/12 m);
+// limovi se ne slažu (2D nesting), nego se procjenjuje ukupna masa iz zbroja površina po debljini + otpad %.
+const izracunPotrebnogMaterijala = (pozicije, katalog, otpadLimPostotak = OTPAD_LIM_ZADANO) => {
+  const profiliPoTipu = new Map();
+  const limoviPoTipu = new Map();
+
+  (pozicije || []).forEach((p) => {
+    const kolicina = Number(p.kolicina) || 0;
+    (p.stavke || []).forEach((s) => {
+      if (s.nacinMase !== "katalog" || !s.katalogId) return;
+      const entry = katalog.find((k) => k.id === s.katalogId);
+      if (!entry) return;
+      const ukupnoKomada = (Number(s.komada) || 1) * kolicina;
+      if (entry.jedinica === "kg/m2") {
+        const povrsinaJed = ((Number(s.sirinaMM) || 0) * (Number(s.duzinaMM) || 0)) / 1e6;
+        if (!limoviPoTipu.has(entry.id)) limoviPoTipu.set(entry.id, { oznaka: entry.oznaka, povrsinaM2: 0, kgPoM2: Number(entry.vrijednost) || 0 });
+        limoviPoTipu.get(entry.id).povrsinaM2 += povrsinaJed * ukupnoKomada;
+      } else {
+        const duljinaM = Number(s.dimenzija) || 0;
+        if (duljinaM <= 0) return;
+        if (!profiliPoTipu.has(entry.id)) profiliPoTipu.set(entry.id, { oznaka: entry.oznaka, komadi: [] });
+        for (let i = 0; i < ukupnoKomada; i++) profiliPoTipu.get(entry.id).komadi.push(duljinaM);
+      }
+    });
+  });
+
+  const profili = [...profiliPoTipu.entries()].map(([id, v]) => ({ katalogId: id, oznaka: v.oznaka, brojKomada: v.komadi.length, ...optimizirajProfile(v.komadi) }));
+  const limovi = [...limoviPoTipu.entries()].map(([id, v]) => {
+    const povrsinaSOtpadom = v.povrsinaM2 * (1 + (Number(otpadLimPostotak) || 0) / 100);
+    return { katalogId: id, oznaka: v.oznaka, povrsinaM2: v.povrsinaM2, masaKg: povrsinaSOtpadom * v.kgPoM2 };
+  });
+  return { profili, limovi };
+};
+
+// Izračun ponude: sati po operaciji (zbroj svih pozicija), trošak rada/materijala/ostalog,
+// montaža po poziciji (broj montera × planirani sati × količina × satnica montaže — satnica je
+// fiksna za cijelu ponudu), AKZ po ukupnoj masi konstrukcije, te konačna cijena s maržom.
+const izracunPonude = (ponuda, materijali, cjenikRada, katalog = []) => {
   const satiPoOperaciji = praznaOperacijaSati();
   (ponuda.pozicije || []).forEach((p) => {
     OPERACIJE.forEach((o) => { satiPoOperaciji[o.key] += Number(p.operacije?.[o.key] || 0); });
@@ -104,7 +174,27 @@ const izracunPonude = (ponuda, materijali, cjenikRada) => {
   }, 0);
   const trosakOstalo = (ponuda.ostaleStavke || []).reduce((s, st) => s + (Number(st.kolicina) || 0) * (Number(st.cijenaJed) || 0), 0);
   const ukupnoSati = OPERACIJE.reduce((s, o) => s + satiPoOperaciji[o.key], 0);
-  return { satiPoOperaciji, trosakRada, trosakMaterijala, trosakOstalo, ukupno: trosakRada + trosakMaterijala + trosakOstalo, ukupnoSati };
+
+  const satnicaMontaza = Number(ponuda.satnicaMontaza) || 0;
+  const satiMontaze = (ponuda.pozicije || []).reduce((s, p) => s + (Number(p.brojMontera) || 0) * (Number(p.planiraniSatiMontaza) || 0) * (Number(p.kolicina) || 0), 0);
+  const trosakMontaze = satiMontaze * satnicaMontaza;
+
+  const ukupnaMasaKonstrukcije = (ponuda.pozicije || []).reduce((s, p) => s + masaPozicije(p, katalog) * (Number(p.kolicina) || 0), 0);
+  const cijenaAKZ = Number(ponuda.cijenaAKZ) || 0;
+  const iznosAKZ = ukupnaMasaKonstrukcije * cijenaAKZ;
+
+  const ukupno = trosakRada + trosakMaterijala + trosakOstalo + trosakMontaze + iznosAKZ;
+  const postotakMarze = Number(ponuda.postotakMarze) || 0;
+  const iznosMarze = ukupno * (postotakMarze / 100);
+  const cijenaKonacna = ukupno + iznosMarze;
+
+  const potrebanMaterijal = izracunPotrebnogMaterijala(ponuda.pozicije || [], katalog, ponuda.otpadLimPostotak);
+
+  return {
+    satiPoOperaciji, trosakRada, trosakMaterijala, trosakOstalo, ukupnoSati,
+    satiMontaze, trosakMontaze, ukupnaMasaKonstrukcije, iznosAKZ,
+    ukupno, postotakMarze, iznosMarze, cijenaKonacna, potrebanMaterijal,
+  };
 };
 
 /* ============================== NORMATIV TIPSKIH PROJEKATA ==============================
@@ -1148,7 +1238,7 @@ export default function App() {
 function Dashboard({ db, setPage }) {
   const aktivniProjekti = db.projekti.filter((p) => ["U izradi", "Montaža"].includes(p.status));
   const otvorenePonude = db.ponude.filter((p) => p.status === "Poslana" || p.status === "U izradi");
-  const vrijednostPonuda = otvorenePonude.reduce((s, p) => s + izracunPonude(p, db.materijali, db.cjenikRada).ukupno, 0);
+  const vrijednostPonuda = otvorenePonude.reduce((s, p) => s + izracunPonude(p, db.materijali, db.cjenikRada, db.katalogProfila).cijenaKonacna, 0);
   const radniNaloziUTijeku = db.radniNalozi.filter((r) => r.status === "U tijeku");
   const niskaZaliha = db.materijali.filter((m) => m.kolicina < m.minZaliha);
   const neplaceneFakture = db.fakture.filter((f) => f.status !== "Plaćeno");
@@ -2838,7 +2928,7 @@ function StavkaPozicijeRedak({ stavka: s, katalog, grupe, onAzuriraj, onObrisi }
   );
 }
 
-function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [] }) {
+function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], satnicaMontaza = 0 }) {
   const [otvorene, setOtvorene] = useState(() => Object.fromEntries(pozicije.map((p) => [p.id, true])));
   const toggle = (id) => setOtvorene((o) => ({ ...o, [id]: !o[id] }));
   const grupe = katalogPoTipu(katalog);
@@ -2846,7 +2936,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [] }
   const praznaStavka = () => ({ id: uid("pst"), nacinMase: "rucno", masaJed: 0, komada: 1, katalogId: "", dimenzija: 0, sirinaMM: 0, duzinaMM: 0, kvaliteta: "celik" });
   const addPoz = () => {
     const id = uid("poz");
-    setPozicije([...pozicije, { id, oznaka: `P${pozicije.length + 1}`, naziv: "", kolicina: 1, stavke: [praznaStavka()], operacije: praznaOperacijaSati() }]);
+    setPozicije([...pozicije, { id, oznaka: `P${pozicije.length + 1}`, naziv: "", kolicina: 1, stavke: [praznaStavka()], operacije: praznaOperacijaSati(), brojMontera: 0, planiraniSatiMontaza: 0 }]);
     setOtvorene((o) => ({ ...o, [id]: true }));
   };
   const updatePoz = (id, patch) => setPozicije(pozicije.map((p) => (p.id === id ? { ...p, ...patch } : p)));
@@ -2906,6 +2996,26 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [] }
                 </div>
               </div>
             )}
+
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line-strong)", display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+              <div className="label" style={{ width: "100%", marginBottom: 0 }}>Montaža</div>
+              <div style={{ width: 120 }}>
+                <label className="label">Broj montera</label>
+                <input className="input f-mono" type="number" min="0" step="1" value={p.brojMontera ?? 0} onChange={(e) => updatePoz(p.id, { brojMontera: e.target.value })} />
+              </div>
+              <div style={{ width: 150 }}>
+                <label className="label">Planirani sati/poz.</label>
+                <input className="input f-mono" type="number" min="0" step="0.5" value={p.planiraniSatiMontaza ?? 0} onChange={(e) => updatePoz(p.id, { planiraniSatiMontaza: e.target.value })} />
+              </div>
+              <div style={{ width: 130 }}>
+                <label className="label">Sati montaže (uk.)</label>
+                <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{((Number(p.brojMontera) || 0) * (Number(p.planiraniSatiMontaza) || 0) * (Number(p.kolicina) || 0)).toFixed(1)} h</div>
+              </div>
+              <div style={{ width: 140 }}>
+                <label className="label">Trošak montaže</label>
+                <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{fmtCurDec((Number(p.brojMontera) || 0) * (Number(p.planiraniSatiMontaza) || 0) * (Number(p.kolicina) || 0) * (Number(satnicaMontaza) || 0))}</div>
+              </div>
+            </div>
 
             <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end", gap: 18, fontSize: 12.5 }}>
               <span style={{ color: "var(--ink-soft)" }}>Masa/kom pozicije: <strong className="f-mono" style={{ color: "var(--ink)" }}>{masaJedEfektivna.toFixed(2)} kg</strong></span>
@@ -3464,11 +3574,18 @@ const posaljiObavijestVoditelju = (projekt, zaposlenik) => {
 
 function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
   const t = db.postavkeTvrtke || {};
-  const calc = izracunPonude(ponuda, db.materijali, db.cjenikRada);
+  const calc = izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila);
   const pdvStopa = Number(t.pdvStopa ?? 25);
   const izradaIznos = calc.trosakRada + calc.trosakMaterijala;
-  const komercijalneStavke = [{ opis: "Izrada i isporuka čelične konstrukcije (materijal i rad)", iznos: izradaIznos }, ...(ponuda.ostaleStavke || []).map((s) => ({ opis: s.opis, iznos: (Number(s.kolicina) || 0) * (Number(s.cijenaJed) || 0) }))];
-  const osnovica = komercijalneStavke.reduce((s, r) => s + r.iznos, 0);
+  const komercijalneStavke = [
+    { opis: "Izrada i isporuka čelične konstrukcije (materijal i rad)", iznos: izradaIznos },
+    ...(ponuda.ostaleStavke || []).map((s) => ({ opis: s.opis, iznos: (Number(s.kolicina) || 0) * (Number(s.cijenaJed) || 0) })),
+    ...(calc.trosakMontaze > 0 ? [{ opis: "Montaža konstrukcije", iznos: calc.trosakMontaze }] : []),
+    ...(calc.iznosAKZ > 0 ? [{ opis: "Antikorozivna zaštita (AKZ)", iznos: calc.iznosAKZ }] : []),
+  ];
+  const podzbroj = komercijalneStavke.reduce((s, r) => s + r.iznos, 0);
+  const iznosMarze = podzbroj * (calc.postotakMarze / 100);
+  const osnovica = podzbroj + iznosMarze;
   const pdvIznos = osnovica * (pdvStopa / 100);
   const ukupno = osnovica + pdvIznos;
 
@@ -3529,6 +3646,8 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 20 }}>
           <table style={{ borderCollapse: "collapse", fontSize: 12, minWidth: 240 }}>
             <tbody>
+              {calc.postotakMarze > 0 && <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Podzbroj:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(podzbroj)}</td></tr>}
+              {calc.postotakMarze > 0 && <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Uvećanje ({calc.postotakMarze}%):</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(iznosMarze)}</td></tr>}
               <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Osnovica:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(osnovica)}</td></tr>
               <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>PDV ({pdvStopa}%):</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(pdvIznos)}</td></tr>
               <tr style={{ borderTop: "1px solid #333" }}><td style={{ padding: "6px 14px 0 0", fontWeight: 700 }}>UKUPNO:</td><td style={{ textAlign: "right", fontWeight: 700, paddingTop: 6, fontSize: 14 }}>{fmtCurDec(ukupno)}</td></tr>
@@ -3561,7 +3680,7 @@ function ProjektiPage({ db, update, showToast, setPage }) {
   const emptyProj = () => ({ sifra: "", naziv: "", kupacId: db.kupci[0]?.id || "", status: "Ponuda", vrijednost: 0, rokPocetka: todayISO(), rokZavrsetka: todayISO(), opis: "", voditeljId: "", zadaci: noviZadaciIzStandarda() });
   const [projForm, setProjForm] = useState(emptyProj());
 
-  const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, pozicije: [], materijalStavke: [], ostaleStavke: [] });
+  const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, pozicije: [], materijalStavke: [], ostaleStavke: [], satnicaMontaza: 0, cijenaAKZ: 0, otpadLimPostotak: OTPAD_LIM_ZADANO, postotakMarze: 0 });
   const [ponForm, setPonForm] = useState(emptyPon());
   const [cjenikOpen, setCjenikOpen] = useState(false);
   const [zadaciOpen, setZadaciOpen] = useState(false);
@@ -3601,10 +3720,10 @@ function ProjektiPage({ db, update, showToast, setPage }) {
     showToast("Cjenik rada ažuriran.");
   };
   const pretvoriUProjekt = (ponuda) => {
-    const calc = izracunPonude(ponuda, db.materijali, db.cjenikRada);
+    const calc = izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila);
     const noviProjekt = {
       id: uid("proj"), sifra: sljedeciBroj(db.projekti, "sifra", "PRJ-2026-"), naziv: ponuda.naziv, kupacId: ponuda.kupacId,
-      status: "Odobren", vrijednost: Math.round(calc.ukupno), rokPocetka: todayISO(), rokZavrsetka: addDays(todayISO(), 60),
+      status: "Odobren", vrijednost: Math.round(calc.cijenaKonacna), rokPocetka: todayISO(), rokZavrsetka: addDays(todayISO(), 60),
       opis: `Kreirano iz ponude ${ponuda.broj}.`,
       izvorPonudaId: ponuda.id, pozicije: ponuda.pozicije || [], materijalStavke: ponuda.materijalStavke || [], ostaleStavke: ponuda.ostaleStavke || [],
       voditeljId: "", zadaci: noviZadaciIzStandarda(),
@@ -3625,6 +3744,14 @@ function ProjektiPage({ db, update, showToast, setPage }) {
         naziv: `Priprema materijala — ${ponuda.naziv}`, faza: "Priprema pozicija za sklapanje", zaduzenTim: "", status: "Planiran",
         planiranoSati: 0, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: addDays(todayISO(), 14),
         stavke: ponuda.materijalStavke || [], materijalIzdan: false,
+      }];
+    }
+    if (calc.satiMontaze > 0) {
+      noviNalozi = [...noviNalozi, {
+        id: uid("rn"), broj: sljedeciRnBroj(), projektId: noviProjekt.id,
+        naziv: `Montaža — ${ponuda.naziv}`, faza: "Montaža (teren)", zaduzenTim: "", status: "Planiran",
+        planiranoSati: calc.satiMontaze, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: addDays(todayISO(), 14),
+        stavke: [], materijalIzdan: false,
       }];
     }
     update("projekti", [...db.projekti, noviProjekt]);
@@ -3678,8 +3805,8 @@ function ProjektiPage({ db, update, showToast, setPage }) {
             { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
             { key: "naziv", label: "Naziv posla" },
             { key: "kupac", label: "Kupac", render: (r) => kupacNaziv(r.kupacId) },
-            { key: "sati", label: "Sati", render: (r) => <span className="f-mono">{izracunPonude(r, db.materijali, db.cjenikRada).ukupnoSati} h</span> },
-            { key: "ukupno", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCurDec(izracunPonude(r, db.materijali, db.cjenikRada).ukupno)}</span> },
+            { key: "sati", label: "Sati", render: (r) => <span className="f-mono">{izracunPonude(r, db.materijali, db.cjenikRada, db.katalogProfila).ukupnoSati} h</span> },
+            { key: "ukupno", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCurDec(izracunPonude(r, db.materijali, db.cjenikRada, db.katalogProfila).cijenaKonacna)}</span> },
             { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
             { key: "pdf", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrintPonuda(r)}>PDF ponude</Btn> },
             {
@@ -3717,7 +3844,7 @@ function ProjektiPage({ db, update, showToast, setPage }) {
       )}
 
       {modal === "pon" && (() => {
-        const calc = izracunPonude(ponForm, db.materijali, db.cjenikRada);
+        const calc = izracunPonude(ponForm, db.materijali, db.cjenikRada, db.katalogProfila);
         return (
           <Modal wide title={ponForm.id ? `Ponuda ${ponForm.broj}` : "Nova ponuda"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={savePon}>Spremi</Btn></>}>
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
@@ -3732,19 +3859,78 @@ function ProjektiPage({ db, update, showToast, setPage }) {
               <span style={{ fontSize: 11, color: "var(--ink-faint)" }}>Satnice se uređuju putem gumba "Cjenik rada"</span>
             </div>
             <div style={{ marginTop: 8, marginBottom: 16 }}>
-              <PozicijeEditor pozicije={ponForm.pozicije} setPozicije={(rows) => setPonForm({ ...ponForm, pozicije: rows })} cjenikRada={db.cjenikRada} katalog={db.katalogProfila} />
+              <PozicijeEditor pozicije={ponForm.pozicije} setPozicije={(rows) => setPonForm({ ...ponForm, pozicije: rows })} cjenikRada={db.cjenikRada} katalog={db.katalogProfila} satnicaMontaza={ponForm.satnicaMontaza} />
             </div>
 
             <Field label="Materijal (iz skladišta)"><LineItemsEditor mode="materijal" rows={ponForm.materijalStavke} setRows={(rows) => setPonForm({ ...ponForm, materijalStavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} /></Field>
-            <Field label="Ostale stavke (transport, montaža na terenu, projektiranje…)"><LineItemsEditor mode="custom" rows={ponForm.ostaleStavke} setRows={(rows) => setPonForm({ ...ponForm, ostaleStavke: rows })} materijali={db.materijali} /></Field>
+            <Field label="Ostale stavke (transport, projektiranje…)"><LineItemsEditor mode="custom" rows={ponForm.ostaleStavke} setRows={(rows) => setPonForm({ ...ponForm, ostaleStavke: rows })} materijali={db.materijali} /></Field>
             <Field label="Napomena"><textarea className="textarea" rows={2} value={ponForm.napomena} onChange={(e) => setPonForm({ ...ponForm, napomena: e.target.value })} /></Field>
 
+            <div className="label" style={{ marginTop: 6 }}>Montaža, AKZ i uvećanje cijene</div>
+            <div className="card" style={{ padding: 14, background: "var(--surface-alt)", marginBottom: 16 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+                <Field label="Satnica montaže (€/h, fiksna za ovu ponudu)"><input className="input f-mono" type="number" min="0" step="0.5" value={ponForm.satnicaMontaza ?? 0} onChange={(e) => setPonForm({ ...ponForm, satnicaMontaza: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
+                <Field label="Cijena AKZ (€/kg)"><input className="input f-mono" type="number" min="0" step="0.01" value={ponForm.cijenaAKZ ?? 0} onChange={(e) => setPonForm({ ...ponForm, cijenaAKZ: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
+                <Field label="Otpad kod limova (%)"><input className="input f-mono" type="number" min="0" step="1" value={ponForm.otpadLimPostotak ?? OTPAD_LIM_ZADANO} onChange={(e) => setPonForm({ ...ponForm, otpadLimPostotak: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
+                <Field label="Uvećanje cijene / marža (%)"><input className="input f-mono" type="number" min="0" step="0.5" value={ponForm.postotakMarze ?? 0} onChange={(e) => setPonForm({ ...ponForm, postotakMarze: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
+              </div>
+              <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>
+                Ukupna masa konstrukcije: <strong className="f-mono">{calc.ukupnaMasaKonstrukcije.toFixed(1)} kg</strong> · Sati montaže: <strong className="f-mono">{calc.satiMontaze.toFixed(1)} h</strong>
+              </div>
+            </div>
+
+            {(calc.potrebanMaterijal.profili.length > 0 || calc.potrebanMaterijal.limovi.length > 0) && (
+              <>
+                <div className="label" style={{ marginTop: 6 }}>Potreban sirovi materijal (izračunato iz pozicija)</div>
+                {calc.potrebanMaterijal.profili.length > 0 && (
+                  <table className="erp-table" style={{ marginBottom: 10 }}>
+                    <thead><tr><th>Profil</th><th style={{ width: 70 }}>Komada</th><th style={{ width: 90 }}>Potrebno (m)</th><th style={{ width: 80 }}>Šipki 6m</th><th style={{ width: 80 }}>Šipki 12m</th><th style={{ width: 80 }}>Otpad (m)</th></tr></thead>
+                    <tbody>
+                      {calc.potrebanMaterijal.profili.map((p) => (
+                        <tr key={p.katalogId}>
+                          <td>{p.oznaka}</td>
+                          <td className="f-mono">{p.brojKomada}</td>
+                          <td className="f-mono">{p.ukupnoPotrebno.toFixed(2)}</td>
+                          <td className="f-mono">{p.brojPo6}</td>
+                          <td className="f-mono">{p.brojPo12}</td>
+                          <td className="f-mono" style={{ color: "var(--ink-faint)" }}>{p.otpadM.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                {calc.potrebanMaterijal.limovi.length > 0 && (
+                  <table className="erp-table" style={{ marginBottom: 16 }}>
+                    <thead><tr><th>Lim</th><th style={{ width: 110 }}>Površina (m²)</th><th style={{ width: 110 }}>Masa s otpadom (kg)</th></tr></thead>
+                    <tbody>
+                      {calc.potrebanMaterijal.limovi.map((l) => (
+                        <tr key={l.katalogId}>
+                          <td>{l.oznaka}</td>
+                          <td className="f-mono">{l.povrsinaM2.toFixed(2)}</td>
+                          <td className="f-mono">{l.masaKg.toFixed(1)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            )}
+
             <div className="card" style={{ padding: 14, background: "var(--surface-alt)", marginTop: 4 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, fontSize: 12.5 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, fontSize: 12.5, marginBottom: 12 }}>
                 <div><div style={{ color: "var(--ink-soft)" }}>Trošak rada ({calc.ukupnoSati} h)</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.trosakRada)}</div></div>
                 <div><div style={{ color: "var(--ink-soft)" }}>Trošak materijala</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.trosakMaterijala)}</div></div>
                 <div><div style={{ color: "var(--ink-soft)" }}>Ostalo</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.trosakOstalo)}</div></div>
-                <div><div style={{ color: "var(--ink-soft)" }}>Ukupna vrijednost ponude</div><div className="f-mono" style={{ fontSize: 17, fontWeight: 700, color: "var(--steel)" }}>{fmtCurDec(calc.ukupno)}</div></div>
+                <div><div style={{ color: "var(--ink-soft)" }}>Montaža ({calc.satiMontaze.toFixed(1)} h)</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.trosakMontaze)}</div></div>
+                <div><div style={{ color: "var(--ink-soft)" }}>AKZ ({calc.ukupnaMasaKonstrukcije.toFixed(0)} kg)</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.iznosAKZ)}</div></div>
+                <div><div style={{ color: "var(--ink-soft)" }}>Ukupno (bez marže)</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.ukupno)}</div></div>
+              </div>
+              <div style={{ borderTop: "1px solid var(--line-strong)", paddingTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Uvećanje / marža ({calc.postotakMarze}%): <strong className="f-mono">{fmtCurDec(calc.iznosMarze)}</strong></span>
+                <div>
+                  <div style={{ fontSize: 12, color: "var(--ink-soft)", textAlign: "right" }}>Konačna cijena ponude</div>
+                  <div className="f-mono" style={{ fontSize: 19, fontWeight: 700, color: "var(--steel)", textAlign: "right" }}>{fmtCurDec(calc.cijenaKonacna)}</div>
+                </div>
               </div>
             </div>
           </Modal>
