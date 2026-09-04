@@ -2237,7 +2237,7 @@ function NarudzbaModal({ narudzba, projekt, db, update, showToast, onClose }) {
   const emptyForm = () => ({ id: null, projektId: projekt.id, kupacId: projekt?.kupacId || db.kupci[0]?.id || "", broj: "", datum: todayISO(), napomena: "", stavke: [] });
   const [form, setForm] = useState(narudzba ? JSON.parse(JSON.stringify(narudzba)) : emptyForm());
 
-  const dodajStavku = () => setForm({ ...form, stavke: [...form.stavke, { id: uid("nst"), sifra: "", naziv: "", jm: "Stk", cijena: 0 }] });
+  const dodajStavku = () => setForm({ ...form, stavke: [...form.stavke, { id: uid("nst"), sifra: "", naziv: "", jm: "Stk", kolicina: 0, masaJed: 0, cijena: 0 }] });
   const azurirajStavku = (i, patch) => setForm({ ...form, stavke: form.stavke.map((s, idx) => (idx === i ? { ...s, ...patch } : s)) });
   const obrisiStavku = (i) => setForm({ ...form, stavke: form.stavke.filter((_, idx) => idx !== i) });
 
@@ -2259,16 +2259,18 @@ function NarudzbaModal({ narudzba, projekt, db, update, showToast, onClose }) {
       </div>
       <Field label="Napomena"><input className="input" value={form.napomena} onChange={(e) => setForm({ ...form, napomena: e.target.value })} /></Field>
 
-      <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Stavke (cijene se koriste kasnije u podlozi za fakturu)</div>
+      <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Stavke (cijene se koriste kasnije u podlozi za fakturu; količina i masa mogu se iskoristiti za uvoz u normativ)</div>
       <table className="erp-table">
-        <thead><tr><th style={{ width: 110 }}>Šifra</th><th>Naziv</th><th style={{ width: 80 }}>JM</th><th style={{ width: 110 }}>Cijena (€)</th><th style={{ width: 36 }}></th></tr></thead>
+        <thead><tr><th style={{ width: 100 }}>Šifra</th><th>Naziv</th><th style={{ width: 60 }}>JM</th><th style={{ width: 80 }}>Količina</th><th style={{ width: 100 }}>Masa (kg/kom)</th><th style={{ width: 100 }}>Cijena (€)</th><th style={{ width: 36 }}></th></tr></thead>
         <tbody>
-          {form.stavke.length === 0 && <tr><td colSpan={5}><EmptyState text="Nema stavki. Dodaj stavku." /></td></tr>}
+          {form.stavke.length === 0 && <tr><td colSpan={7}><EmptyState text="Nema stavki. Dodaj stavku." /></td></tr>}
           {form.stavke.map((s, i) => (
             <tr key={s.id}>
               <td><input className="input f-mono" style={{ padding: "5px 8px" }} value={s.sifra} onChange={(e) => azurirajStavku(i, { sifra: e.target.value })} /></td>
               <td><input className="input" style={{ padding: "5px 8px" }} value={s.naziv} onChange={(e) => azurirajStavku(i, { naziv: e.target.value })} /></td>
               <td><input className="input" style={{ padding: "5px 8px" }} value={s.jm} onChange={(e) => azurirajStavku(i, { jm: e.target.value })} /></td>
+              <td><input className="input f-mono" type="number" step="1" style={{ padding: "5px 8px" }} value={s.kolicina || 0} onChange={(e) => azurirajStavku(i, { kolicina: e.target.value })} /></td>
+              <td><input className="input f-mono" type="number" step="0.1" style={{ padding: "5px 8px" }} value={s.masaJed || 0} onChange={(e) => azurirajStavku(i, { masaJed: e.target.value })} /></td>
               <td><input className="input f-mono" type="number" step="0.01" style={{ padding: "5px 8px" }} value={s.cijena} onChange={(e) => azurirajStavku(i, { cijena: e.target.value })} /></td>
               <td><button className="btn btn-icon btn-ghost" onClick={() => obrisiStavku(i)}><Trash2 size={14} color="var(--rust)" /></button></td>
             </tr>
@@ -2694,6 +2696,52 @@ function StandardniZadaciModal({ standardniZadaci, update, showToast, onClose })
 // Tablica stavki jedne grupe normativa (Pod ili Komplet) unutar detalja projekta — svaka
 // grupa ima svoju listu tipova jer se pod i komplet naručuju kao nezavisne stavke (različite
 // oznake i količine u narudžbenici, npr. varijanta poda za prizemlje bez para u stranicama).
+// Uvoz stavki iz vec unesene Narudzbe kupca (koja vec ima sifru/naziv/kolicinu/masu po stavci)
+// u Pod/Komplet tablice normativa, da se iste stavke ne moraju upisivati dvaput. Svaka uvezena
+// stavka pamti izNarudzbeId pa ponovni uvoz azurira postojeci redak umjesto da ga duplicira.
+function NarudzbaUvozModal({ narudzba, stavkePod, stavkeKomplet, onUvezi, onClose }) {
+  const pocetniIzbor = () => {
+    const vecPod = new Set(stavkePod.map((s) => s.izNarudzbeId).filter(Boolean));
+    const vecKomplet = new Set(stavkeKomplet.map((s) => s.izNarudzbeId).filter(Boolean));
+    return Object.fromEntries((narudzba.stavke || []).map((s) => [s.id, vecPod.has(s.id) ? "stavkePod" : vecKomplet.has(s.id) ? "stavkeKomplet" : ""]));
+  };
+  const [izbor, setIzbor] = useState(pocetniIzbor);
+
+  const spremi = () => {
+    const odabrano = (narudzba.stavke || []).filter((s) => izbor[s.id]);
+    if (odabrano.length > 0) onUvezi(odabrano.map((s) => ({ narudzbaStavka: s, grupa: izbor[s.id] })));
+    onClose();
+  };
+
+  return (
+    <Modal wide title="Uvezi stavke iz narudžbe" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Download} onClick={spremi}>Uvezi odabrano</Btn></>}>
+      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 12 }}>
+        Za svaku stavku iz narudžbe {narudzba.broj} odaberi ide li u Pod ili Komplet tablicu normativa. Ponovni uvoz iste stavke ažurira već uvezeni redak (oznaku, masu, komade) umjesto da ga duplicira.
+      </p>
+      <table className="erp-table">
+        <thead><tr><th>Naziv</th><th style={{ width: 80 }}>Kom</th><th style={{ width: 110 }}>Masa (kg/kom)</th><th style={{ width: 160 }}>Uvezi u</th></tr></thead>
+        <tbody>
+          {(narudzba.stavke || []).length === 0 && <tr><td colSpan={4}><EmptyState text="Narudžba nema unesenih stavki." /></td></tr>}
+          {(narudzba.stavke || []).map((s) => (
+            <tr key={s.id}>
+              <td>{s.sifra ? `${s.sifra} — ` : ""}{s.naziv || "(bez naziva)"}</td>
+              <td className="f-mono">{s.kolicina || 0}</td>
+              <td className="f-mono">{s.masaJed || 0}</td>
+              <td>
+                <select className="select" value={izbor[s.id] || ""} onChange={(e) => setIzbor({ ...izbor, [s.id]: e.target.value })}>
+                  <option value="">Preskoči</option>
+                  <option value="stavkePod">Pod</option>
+                  <option value="stavkeKomplet">Komplet</option>
+                </select>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Modal>
+  );
+}
+
 function StavkeNormativaTablica({ naslov, rezultat, rasporedjeno, onDodaj, onAzuriraj, onObrisi }) {
   return (
     <div style={{ marginBottom: 14 }}>
@@ -2843,6 +2891,20 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
   ];
   const nadjiStavku = (grupa, stavkaId) => (grupa === "stavkePod" ? stavkePod : stavkeKomplet).find((s) => s.id === stavkaId);
   const rasporedjenoZaStavku = (grupa, stavkaId) => isporuke.filter((i) => i.grupa === grupa && i.stavkaId === stavkaId).reduce((s, i) => s + (Number(i.komada) || 0), 0);
+  const [uvozOtvoren, setUvozOtvoren] = useState(false);
+  const uveziIzNarudzbe = (odabrane) => {
+    const noviPod = [...stavkePod];
+    const noviKomplet = [...stavkeKomplet];
+    odabrane.forEach(({ narudzbaStavka, grupa }) => {
+      const cilj = grupa === "stavkePod" ? noviPod : noviKomplet;
+      const patch = { izNarudzbeId: narudzbaStavka.id, oznaka: narudzbaStavka.naziv, masaJed: Number(narudzbaStavka.masaJed) || 0, komada: Number(narudzbaStavka.kolicina) || 0 };
+      const idx = cilj.findIndex((s) => s.izNarudzbeId === narudzbaStavka.id);
+      if (idx >= 0) cilj[idx] = { ...cilj[idx], ...patch };
+      else cilj.push({ id: uid("stv"), ...patch });
+    });
+    patchProjekt({ stavkePod: noviPod, stavkeKomplet: noviKomplet });
+    showToast && showToast("Stavke uvezene iz narudžbe.");
+  };
   const dodajIsporuku = () => {
     const prva = sveStavke[0];
     patchProjekt({ isporuke: [...isporuke, { id: uid("isp"), redniBroj: isporuke.length + 1, grupa: prva?.grupa || "stavkePod", stavkaId: prva?.stavka.id || "", komada: 1, datum: "", isporuceno: false }] });
@@ -2904,7 +2966,12 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
             <input type="checkbox" checked={koristiNormativ} onChange={(e) => patchProjekt({ koristiNormativ: e.target.checked })} />
             <strong className="f-display" style={{ fontSize: 14 }}>Tipski projekt po normativu</strong>
           </label>
-          {koristiNormativ && <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setNormativOtvoren(true)}>Uredi normativ</Btn>}
+          {koristiNormativ && (
+            <div style={{ display: "flex", gap: 8 }}>
+              <Btn variant="ghost" size="sm" icon={Download} onClick={() => setUvozOtvoren(true)} disabled={!narudzba}>Uvezi iz narudžbe</Btn>
+              <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setNormativOtvoren(true)}>Uredi normativ</Btn>
+            </div>
+          )}
         </div>
 
         {!koristiNormativ && <p style={{ fontSize: 12, color: "var(--ink-faint)" }}>Uključi ako se projekt obračunava po ugovorenoj cijeni €/kg (npr. tipske kupaonice) — tada se vrijednost i sati računaju iz mase, a ne unose ručno po poziciji. Pod i komplet unose se odvojeno, kao zasebne stavke narudžbenice.</p>}
@@ -2913,6 +2980,7 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
           <>
             <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 10 }}>
               Normativ: <strong>{db.normativi?.naziv}</strong> · {(db.normativi?.grupe || []).map((g) => `${g.naziv.split(" (")[0]}: ${g.cijenaKg} €/kg, ${g.ucinakKgH} kg/h`).join(" · ")}
+              {!narudzba && <span> · Za uvoz stavki iz narudžbe prvo kreiraj narudžbu kupca za ovaj projekt.</span>}
             </div>
 
             <StavkeNormativaTablica naslov="Pod (podna konstrukcija)" rezultat={izracunNorm.pod} rasporedjeno={(id) => rasporedjenoZaStavku("stavkePod", id)} onDodaj={() => dodajStavku("stavkePod")} onAzuriraj={(id, patch) => azurirajStavku("stavkePod", id, patch)} onObrisi={(id) => obrisiStavku("stavkePod", id)} />
@@ -3106,6 +3174,7 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
     {narudzbaModal && <NarudzbaModal narudzba={narudzba} projekt={projekt} db={db} update={update} showToast={showToast} onClose={() => setNarudzbaModal(false)} />}
     {otpremniceModal && <OtpremniceListModal projekt={projekt} narudzba={narudzba} db={db} update={update} showToast={showToast} onClose={() => setOtpremniceModal(false)} />}
     {normativOtvoren && <NormativiModal db={db} update={update} showToast={showToast} onClose={() => setNormativOtvoren(false)} />}
+    {uvozOtvoren && narudzba && <NarudzbaUvozModal narudzba={narudzba} stavkePod={stavkePod} stavkeKomplet={stavkeKomplet} onUvezi={uveziIzNarudzbe} onClose={() => setUvozOtvoren(false)} />}
     </>
   );
 }
