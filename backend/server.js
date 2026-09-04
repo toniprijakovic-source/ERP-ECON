@@ -27,11 +27,12 @@ const DOZVOLJENI_KLJUCEVI = [
   "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana",
   "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada",
   "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
+  "postavkePlaca", "praznici",
 ];
 
 // Koji modul (isti "moduli" popis kao u pozicijeZaposlenika) smije MIJENJATI koji ključ.
-// evidencijaRada nema dopušten modul jer je trenutno piše isključivo kiosk endpoint, ne
-// korisničko sučelje.
+// evidencijaRada: kiosk endpoint (bez logina) uvijek smije pisati bez obzira na ovo —
+// modul "zaposlenici" dodatno smije i ručno urediti/ispraviti evidenciju kroz sučelje.
 const MODUL_ZA_KLJUC = {
   kupci: ["partneri"],
   dobavljaci: ["partneri"],
@@ -51,11 +52,13 @@ const MODUL_ZA_KLJUC = {
   postavkeTvrtke: ["nabava"],
   upitiNabave: ["nabava"],
   radniCentri: ["proizvodnja"],
-  evidencijaRada: [],
+  evidencijaRada: ["zaposlenici"],
   narudzbe: ["projekti"],
   otpremnice: ["projekti"],
   podlogeZaFakturu: ["fakturiranje"],
   normativi: ["projekti"],
+  postavkePlaca: ["zaposlenici"],
+  praznici: ["zaposlenici"],
 };
 
 // Ključevi koje App.jsx čita na najvišoj razini (zaglavlje, navigacija, prijava) —
@@ -74,11 +77,11 @@ const MODUL_ZA_CITANJE = {
   projekti: ["cjenikRada", "katalogProfila", "kupci", "materijali", "ponude", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice", "normativi"],
   fakturiranje: ["fakture", "kupci", "materijali", "projekti", "narudzbe", "otpremnice", "podlogeZaFakturu"],
   partneri: ["kupci", "dobavljaci"],
-  zaposlenici: ["evidencijaRada"],
+  zaposlenici: ["evidencijaRada", "postavkePlaca", "praznici"],
 };
 
 // Ključevi čija je vrijednost objekt (ne niz) — koristi se za ispravan "prazan" placeholder.
-const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi"]);
+const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi", "postavkePlaca"]);
 
 async function mojiModuli(zaposlenikId) {
   const [zaposlenici, pozicije] = await Promise.all([ucitajKljuc("zaposlenici"), ucitajKljuc("pozicijeZaposlenika")]);
@@ -219,7 +222,7 @@ app.post("/api/kiosk/scan", async (req, res) => {
     await spremiKljuc("evidencijaRada", nova);
     return res.json({ tip: "odlazak", ime: zaposlenik.ime, prezime: zaposlenik.prezime, vrijeme: sada, dolazak: otvorena.vrijemeDolaska });
   }
-  nova = [...evidencija, { id: `evr-${Date.now()}`, zaposlenikId: zaposlenik.id, vrijemeDolaska: sada, vrijemeOdlaska: null }];
+  nova = [...evidencija, { id: `evr-${Date.now()}`, zaposlenikId: zaposlenik.id, vrijemeDolaska: sada, vrijemeOdlaska: null, vrsta: "rad", autoOdjava: false, potvrdenoRacunovodstvo: false, unioRucnoId: null }];
   await spremiKljuc("evidencijaRada", nova);
   res.json({ tip: "dolazak", ime: zaposlenik.ime, prezime: zaposlenik.prezime, vrijeme: sada });
 });
