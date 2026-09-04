@@ -2237,13 +2237,23 @@ function NarudzbaModal({ narudzba, projekt, db, update, showToast, onClose }) {
   const emptyForm = () => ({ id: null, projektId: projekt.id, kupacId: projekt?.kupacId || db.kupci[0]?.id || "", broj: "", datum: todayISO(), napomena: "", stavke: [] });
   const [form, setForm] = useState(narudzba ? JSON.parse(JSON.stringify(narudzba)) : emptyForm());
 
-  const dodajStavku = () => setForm({ ...form, stavke: [...form.stavke, { id: uid("nst"), sifra: "", naziv: "", jm: "Stk", kolicina: 0, masaJed: 0, cijena: 0 }] });
-  const azurirajStavku = (i, patch) => setForm({ ...form, stavke: form.stavke.map((s, idx) => (idx === i ? { ...s, ...patch } : s)) });
+  const dodajStavku = () => setForm({ ...form, stavke: [...form.stavke, { id: uid("nst"), sifra: "", naziv: "", jm: "Stk", kolicina: 0, masaJed: 0, nacinCijene: "rucno", cijenaKg: 0, cijena: 0 }] });
+  // Cijena se ili upisuje ručno po komadu, ili se izvodi iz mase × €/kg (isti princip kao normativ) —
+  // u drugom slučaju cijena se drži uvijek sinkroniziranom da otpremnica/podloga za fakturu rade nepromijenjeno.
+  const azurirajStavku = (i, patch) => setForm({
+    ...form,
+    stavke: form.stavke.map((s, idx) => {
+      if (idx !== i) return s;
+      const novo = { ...s, ...patch };
+      if ((novo.nacinCijene || "rucno") === "izMase") novo.cijena = (Number(novo.masaJed) || 0) * (Number(novo.cijenaKg) || 0);
+      return novo;
+    }),
+  });
   const obrisiStavku = (i) => setForm({ ...form, stavke: form.stavke.filter((_, idx) => idx !== i) });
 
   const spremi = () => {
     if (!form.broj.trim()) { showToast("Unesi broj narudžbe kupca."); return; }
-    const payload = { ...form, stavke: form.stavke.map((s) => ({ ...s, cijena: Number(s.cijena) || 0 })) };
+    const payload = { ...form, stavke: form.stavke.map((s) => ({ ...s, cijena: Number(s.cijena) || 0, cijenaKg: Number(s.cijenaKg) || 0 })) };
     if (form.id) update("narudzbe", db.narudzbe.map((n) => (n.id === form.id ? payload : n)));
     else update("narudzbe", [...db.narudzbe, { ...payload, id: uid("nar") }]);
     showToast("Narudžba spremljena.");
@@ -2261,20 +2271,36 @@ function NarudzbaModal({ narudzba, projekt, db, update, showToast, onClose }) {
 
       <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Stavke (cijene se koriste kasnije u podlozi za fakturu; količina i masa mogu se iskoristiti za uvoz u normativ)</div>
       <table className="erp-table">
-        <thead><tr><th style={{ width: 100 }}>Šifra</th><th>Naziv</th><th style={{ width: 60 }}>JM</th><th style={{ width: 80 }}>Količina</th><th style={{ width: 100 }}>Masa (kg/kom)</th><th style={{ width: 100 }}>Cijena (€)</th><th style={{ width: 36 }}></th></tr></thead>
+        <thead><tr><th style={{ width: 90 }}>Šifra</th><th>Naziv</th><th style={{ width: 55 }}>JM</th><th style={{ width: 75 }}>Količina</th><th style={{ width: 95 }}>Masa (kg/kom)</th><th style={{ width: 155 }}>Cijena</th><th style={{ width: 36 }}></th></tr></thead>
         <tbody>
           {form.stavke.length === 0 && <tr><td colSpan={7}><EmptyState text="Nema stavki. Dodaj stavku." /></td></tr>}
-          {form.stavke.map((s, i) => (
-            <tr key={s.id}>
-              <td><input className="input f-mono" style={{ padding: "5px 8px" }} value={s.sifra} onChange={(e) => azurirajStavku(i, { sifra: e.target.value })} /></td>
-              <td><input className="input" style={{ padding: "5px 8px" }} value={s.naziv} onChange={(e) => azurirajStavku(i, { naziv: e.target.value })} /></td>
-              <td><input className="input" style={{ padding: "5px 8px" }} value={s.jm} onChange={(e) => azurirajStavku(i, { jm: e.target.value })} /></td>
-              <td><input className="input f-mono" type="number" step="1" style={{ padding: "5px 8px" }} value={s.kolicina || 0} onChange={(e) => azurirajStavku(i, { kolicina: e.target.value })} /></td>
-              <td><input className="input f-mono" type="number" step="0.1" style={{ padding: "5px 8px" }} value={s.masaJed || 0} onChange={(e) => azurirajStavku(i, { masaJed: e.target.value })} /></td>
-              <td><input className="input f-mono" type="number" step="0.01" style={{ padding: "5px 8px" }} value={s.cijena} onChange={(e) => azurirajStavku(i, { cijena: e.target.value })} /></td>
-              <td><button className="btn btn-icon btn-ghost" onClick={() => obrisiStavku(i)}><Trash2 size={14} color="var(--rust)" /></button></td>
-            </tr>
-          ))}
+          {form.stavke.map((s, i) => {
+            const izMase = (s.nacinCijene || "rucno") === "izMase";
+            return (
+              <tr key={s.id}>
+                <td><input className="input f-mono" style={{ padding: "5px 8px" }} value={s.sifra} onChange={(e) => azurirajStavku(i, { sifra: e.target.value })} /></td>
+                <td><input className="input" style={{ padding: "5px 8px" }} value={s.naziv} onChange={(e) => azurirajStavku(i, { naziv: e.target.value })} /></td>
+                <td><input className="input" style={{ padding: "5px 8px" }} value={s.jm} onChange={(e) => azurirajStavku(i, { jm: e.target.value })} /></td>
+                <td><input className="input f-mono" type="number" step="1" style={{ padding: "5px 8px" }} value={s.kolicina || 0} onChange={(e) => azurirajStavku(i, { kolicina: e.target.value })} /></td>
+                <td><input className="input f-mono" type="number" step="0.1" style={{ padding: "5px 8px" }} value={s.masaJed || 0} onChange={(e) => azurirajStavku(i, { masaJed: e.target.value })} /></td>
+                <td>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <select className="select" style={{ padding: "5px 2px", fontSize: 11, width: 58 }} value={s.nacinCijene || "rucno"} onChange={(e) => azurirajStavku(i, { nacinCijene: e.target.value })}>
+                      <option value="rucno">€/kom</option>
+                      <option value="izMase">€/kg</option>
+                    </select>
+                    {izMase ? (
+                      <input className="input f-mono" type="number" step="0.01" style={{ padding: "5px 8px" }} value={s.cijenaKg || 0} onChange={(e) => azurirajStavku(i, { cijenaKg: e.target.value })} />
+                    ) : (
+                      <input className="input f-mono" type="number" step="0.01" style={{ padding: "5px 8px" }} value={s.cijena} onChange={(e) => azurirajStavku(i, { cijena: e.target.value })} />
+                    )}
+                  </div>
+                  {izMase && <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 2 }}>= {fmtCurDec(s.cijena)} / kom</div>}
+                </td>
+                <td><button className="btn btn-icon btn-ghost" onClick={() => obrisiStavku(i)}><Trash2 size={14} color="var(--rust)" /></button></td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajStavku} style={{ marginTop: 8 }}>Dodaj stavku</Btn>
