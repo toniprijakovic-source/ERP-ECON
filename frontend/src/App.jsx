@@ -1632,7 +1632,7 @@ const izracunajRasporedProizvodnje = (radniNalozi, radniCentri, kapaciteti) => {
     if (n.ovisiONalogId && rezultati[n.ovisiONalogId]) {
       const ovisnost = rezultati[n.ovisiONalogId];
       if (n.ovisnostTip === "paralelno") najranije = ovisnost.pocetak;
-      else if (n.ovisnostTip === "odmak") najranije = addDays(ovisnost.zavrsetak, Math.floor((Number(n.ovisnostSati) || 0) / 24));
+      else if (n.ovisnostTip === "odmak") najranije = addDays(ovisnost.pocetak, Math.floor((Number(n.ovisnostSati) || 0) / 24));
       else najranije = addDays(ovisnost.zavrsetak, 1);
     }
 
@@ -2558,12 +2558,12 @@ function ProizvodnjaPage({ db, update, showToast }) {
                 <select className="select" value={form.ovisnostTip || "zavrsetak"} onChange={(e) => setForm({ ...form, ovisnostTip: e.target.value })}>
                   <option value="paralelno">Paralelno (isti početak kao nalog o kojem ovisi)</option>
                   <option value="zavrsetak">Po završetku (sljedeći radni dan)</option>
-                  <option value="odmak">S vremenskim odmakom (sati nakon završetka)</option>
+                  <option value="odmak">S vremenskim odmakom (sati nakon početka)</option>
                 </select>
               </Field>
             )}
             {form.ovisiONalogId && form.ovisnostTip === "odmak" && (
-              <Field label="Odmak (sati nakon završetka)"><input className="input f-mono" type="number" min="0" step="1" value={form.ovisnostSati ?? 8} onChange={(e) => setForm({ ...form, ovisnostSati: e.target.value })} /></Field>
+              <Field label="Odmak (sati nakon početka)"><input className="input f-mono" type="number" min="0" step="1" value={form.ovisnostSati ?? 8} onChange={(e) => setForm({ ...form, ovisnostSati: e.target.value })} /></Field>
             )}
             <Field label="Datum početka"><input className="input" type="date" value={form.datumPocetka} onChange={(e) => setForm({ ...form, datumPocetka: e.target.value })} /></Field>
             <Field label="Datum završetka"><input className="input" type="date" value={form.datumZavrsetka} onChange={(e) => setForm({ ...form, datumZavrsetka: e.target.value })} /></Field>
