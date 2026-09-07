@@ -30,35 +30,49 @@ const DOZVOLJENI_KLJUCEVI = [
   "postavkePlaca", "praznici",
 ];
 
-// Koji modul (isti "moduli" popis kao u pozicijeZaposlenika) smije MIJENJATI koji ključ.
-// evidencijaRada: kiosk endpoint (bez logina) uvijek smije pisati bez obzira na ovo —
-// modul "zaposlenici" dodatno smije i ručno urediti/ispraviti evidenciju kroz sučelje.
-const MODUL_ZA_KLJUC = {
-  kupci: ["partneri"],
-  dobavljaci: ["partneri"],
-  materijali: ["skladiste", "nabava", "proizvodnja", "projekti"],
-  projekti: ["projekti", "proizvodnja"],
-  narudzbenice: ["nabava"],
-  ponude: ["projekti"],
-  radniNalozi: ["proizvodnja", "projekti"],
-  fakture: ["fakturiranje"],
-  cjenikRada: ["projekti"],
-  katalogProfila: ["skladiste"],
-  pozicijeZaposlenika: ["zaposlenici"],
-  zaposlenici: ["zaposlenici"],
-  standardniZadaci: ["projekti"],
-  programiRezanja: ["proizvodnja"],
-  kapacitetiDana: ["proizvodnja"],
-  postavkeTvrtke: ["nabava"],
-  upitiNabave: ["nabava"],
-  radniCentri: ["proizvodnja"],
-  evidencijaRada: ["zaposlenici"],
-  narudzbe: ["projekti"],
-  otpremnice: ["projekti"],
-  podlogeZaFakturu: ["fakturiranje"],
-  normativi: ["projekti"],
-  postavkePlaca: ["zaposlenici"],
-  praznici: ["zaposlenici"],
+// Svaki modul (isti "moduli" popis kao u pozicijeZaposlenika) dijeli se na kartice — iste
+// kartice/tabove koje App.jsx prikazuje unutar tog modula. Za svaku karticu je popisano koje
+// ključeve ta kartica čita i koje smije mijenjati. Pozicija po zadanom ima puni pristup (čitanje
+// i izmjene) svakoj kartici modula koji joj je dodijeljen — vidi dozvolaZaKarticu() — a admin to
+// može suziti po poziciji preko pozicija.karticeDozvole (postavljeno kroz "Pozicije" ekran).
+const KARTICE_MODULA = {
+  dashboard: {
+    pregled: { citanje: ["cjenikRada", "fakture", "materijali", "ponude", "projekti", "radniNalozi"], pisanje: [] },
+  },
+  skladiste: {
+    zalihe: { citanje: ["materijali", "katalogProfila"], pisanje: ["materijali"] },
+    katalog: { citanje: ["katalogProfila"], pisanje: ["katalogProfila"] },
+  },
+  nabava: {
+    narudzbenice: { citanje: ["narudzbenice", "dobavljaci", "katalogProfila", "materijali"], pisanje: ["narudzbenice", "materijali"] },
+    upiti: { citanje: ["upitiNabave", "dobavljaci", "materijali"], pisanje: ["upitiNabave", "narudzbenice", "materijali"] },
+    postavke: { citanje: ["postavkeTvrtke"], pisanje: ["postavkeTvrtke"] },
+  },
+  proizvodnja: {
+    tablica: { citanje: ["radniNalozi", "projekti", "materijali", "katalogProfila"], pisanje: ["radniNalozi", "materijali"] },
+    gantogram: { citanje: ["radniNalozi", "radniCentri", "kapacitetiDana", "projekti", "zaposlenici"], pisanje: ["radniNalozi", "radniCentri", "kapacitetiDana"] },
+    rezanje: { citanje: ["programiRezanja", "katalogProfila", "materijali", "radniNalozi"], pisanje: ["programiRezanja", "kapacitetiDana"] },
+    isporuke: { citanje: ["projekti"], pisanje: ["projekti"] },
+  },
+  projekti: {
+    projekti: { citanje: ["cjenikRada", "katalogProfila", "kupci", "materijali", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "zaposlenici", "upitiNabave"], pisanje: ["projekti", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "materijali", "radniNalozi", "upitiNabave"] },
+    ponude: { citanje: ["cjenikRada", "katalogProfila", "materijali", "ponude", "kupci"], pisanje: ["ponude", "cjenikRada", "materijali", "projekti", "radniNalozi"] },
+  },
+  fakturiranje: {
+    fakture: { citanje: ["fakture", "kupci", "projekti"], pisanje: ["fakture"] },
+    otpremnice: { citanje: ["otpremnice", "projekti", "kupci", "narudzbe"], pisanje: ["otpremnice"] },
+    podloge: { citanje: ["podlogeZaFakturu", "projekti", "materijali"], pisanje: ["podlogeZaFakturu"] },
+  },
+  partneri: {
+    kupci: { citanje: ["kupci"], pisanje: ["kupci"] },
+    dobavljaci: { citanje: ["dobavljaci"], pisanje: ["dobavljaci"] },
+  },
+  zaposlenici: {
+    zaposlenici: { citanje: ["zaposlenici"], pisanje: ["zaposlenici"] },
+    pozicije: { citanje: ["pozicijeZaposlenika"], pisanje: ["pozicijeZaposlenika"] },
+    evidencija: { citanje: ["evidencijaRada", "postavkePlaca", "praznici"], pisanje: ["evidencijaRada"] },
+    obracun: { citanje: ["evidencijaRada", "postavkePlaca", "praznici", "zaposlenici"], pisanje: ["postavkePlaca", "praznici"] },
+  },
 };
 
 // Ključevi koje App.jsx čita na najvišoj razini (zaglavlje, navigacija, prijava) —
@@ -66,34 +80,39 @@ const MODUL_ZA_KLJUC = {
 // uopće ne može ispravno prikazati (ime tvrtke, vlastita pozicija/navigacija).
 const UVIJEK_CITLJIVO = ["zaposlenici", "pozicijeZaposlenika", "postavkeTvrtke"];
 
-// Koje dodatne ključeve pojedini modul čita (uključujući unakrsne reference — npr. ime
-// kupca na projektu, materijal na radnom nalogu) — izračunato analizom App.jsx (koje
-// db.<ključ> vrijednosti svaka stranica i njeni modali stvarno koriste).
-const MODUL_ZA_CITANJE = {
-  dashboard: ["cjenikRada", "fakture", "materijali", "ponude", "projekti", "radniNalozi"],
-  skladiste: ["katalogProfila", "materijali"],
-  nabava: ["dobavljaci", "katalogProfila", "materijali", "narudzbenice", "upitiNabave"],
-  proizvodnja: ["kapacitetiDana", "katalogProfila", "materijali", "programiRezanja", "projekti", "radniCentri", "radniNalozi"],
-  projekti: ["cjenikRada", "katalogProfila", "kupci", "materijali", "ponude", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice", "normativi"],
-  fakturiranje: ["fakture", "kupci", "materijali", "projekti", "narudzbe", "otpremnice", "podlogeZaFakturu"],
-  partneri: ["kupci", "dobavljaci"],
-  zaposlenici: ["evidencijaRada", "postavkePlaca", "praznici"],
-};
-
 // Ključevi čija je vrijednost objekt (ne niz) — koristi se za ispravan "prazan" placeholder.
 const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi", "postavkePlaca"]);
 
-async function mojiModuli(zaposlenikId) {
+async function ucitajPozicijuZaposlenika(zaposlenikId) {
   const [zaposlenici, pozicije] = await Promise.all([ucitajKljuc("zaposlenici"), ucitajKljuc("pozicijeZaposlenika")]);
   const zaposlenik = (zaposlenici || []).find((z) => z.id === zaposlenikId);
-  const pozicija = (pozicije || []).find((p) => p.id === zaposlenik?.pozicijaId);
-  return pozicija?.moduli?.length ? pozicija.moduli : ["dashboard"];
+  return (pozicije || []).find((p) => p.id === zaposlenik?.pozicijaId) || null;
 }
 
-function citljiviKljucevi(moduli) {
-  const set = new Set(UVIJEK_CITLJIVO);
-  moduli.forEach((m) => (MODUL_ZA_CITANJE[m] || []).forEach((k) => set.add(k)));
-  return set;
+// Dozvola za jednu karticu jednog modula — po zadanom TRUE (naslijeđeno od dodjele modula),
+// osim ako je admin za tu točno tu poziciju/modul/karticu eksplicitno postavio false.
+function dozvolaZaKarticu(pozicija, modulKey, karticaKey) {
+  const eksplicitno = pozicija?.karticeDozvole?.[modulKey]?.[karticaKey];
+  return { pristup: eksplicitno?.pristup !== false, izmjene: eksplicitno?.izmjene !== false };
+}
+
+// Za danu poziciju izračunava skup ključeva koje smije ČITATI i skup koje smije MIJENJATI,
+// obilazeći module pozicije i unutar svakog module njegove kartice (uz gornju dozvolu).
+function izracunajDozvoljeneKljuceve(pozicija) {
+  const moduli = pozicija?.moduli?.length ? pozicija.moduli : ["dashboard"];
+  const citljivo = new Set(UVIJEK_CITLJIVO);
+  const pisivo = new Set();
+  moduli.forEach((modulKey) => {
+    const kartice = KARTICE_MODULA[modulKey];
+    if (!kartice) return;
+    Object.entries(kartice).forEach(([karticaKey, def]) => {
+      const { pristup, izmjene } = dozvolaZaKarticu(pozicija, modulKey, karticaKey);
+      if (!pristup) return;
+      def.citanje.forEach((k) => citljivo.add(k));
+      def.pisanje.forEach((k) => { citljivo.add(k); if (izmjene) pisivo.add(k); });
+    });
+  });
+  return { citljivo, pisivo };
 }
 
 // ---------- pomoćne funkcije ----------
@@ -122,15 +141,13 @@ function autentikacija(req, res, next) {
   }
 }
 
-// Provjerava smije li prijavljeni zaposlenik MIJENJATI zadani ključ, prema modulima
-// njegove pozicije (ista logika kao "dopusteniKljucevi" u frontendu, App.jsx).
+// Provjerava smije li prijavljeni zaposlenik MIJENJATI zadani ključ, prema karticama
+// njegove pozicije (vidi izracunajDozvoljeneKljuceve/KARTICE_MODULA gore).
 async function autorizacijaPisanja(req, res, next) {
   const key = req.params.key;
-  const dopusteniModuli = MODUL_ZA_KLJUC[key] || [];
-  if (dopusteniModuli.length === 0) return res.status(403).json({ error: "Ovaj ključ nije moguće mijenjati preko API-ja." });
-
-  const moduli = await mojiModuli(req.zaposlenikId);
-  if (!dopusteniModuli.some((m) => moduli.includes(m))) {
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  const { pisivo } = izracunajDozvoljeneKljuceve(pozicija);
+  if (!pisivo.has(key)) {
     return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za mijenjanje ovih podataka." });
   }
   next();
@@ -186,8 +203,8 @@ function lozinkaJeValjana(lozinka) {
     && /[A-Za-z]/.test(lozinka) && /[0-9]/.test(lozinka) && /[^A-Za-z0-9]/.test(lozinka);
 }
 app.put("/api/zaposlenici/:id/lozinka", autentikacija, async (req, res) => {
-  const moduli = await mojiModuli(req.zaposlenikId);
-  if (!moduli.includes("zaposlenici")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za promjenu lozinki." });
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  if (!dozvolaZaKarticu(pozicija, "zaposlenici", "zaposlenici").izmjene) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za promjenu lozinki." });
 
   const { lozinka } = req.body;
   if (!lozinkaJeValjana(lozinka)) {
@@ -247,11 +264,11 @@ app.post("/api/kiosk/scan", async (req, res) => {
 
 // ---------- podaci (sve zaštićeno loginom) ----------
 // Vraća SVE ključeve odjednom — koristi se pri pokretanju aplikacije. Ključevi izvan
-// zaposlenikovih dopuštenih modula vraćaju se kao prazan placeholder (a ne izostavljeni)
-// da frontend ne padne na db.<kljuc>.find/.filter — vidi citljiviKljucevi().
+// zaposlenikovih dopuštenih kartica vraćaju se kao prazan placeholder (a ne izostavljeni)
+// da frontend ne padne na db.<kljuc>.find/.filter — vidi izracunajDozvoljeneKljuceve().
 app.get("/api/data", autentikacija, async (req, res) => {
-  const moduli = await mojiModuli(req.zaposlenikId);
-  const citljivo = citljiviKljucevi(moduli);
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  const { citljivo } = izracunajDozvoljeneKljuceve(pozicija);
 
   const r = await pool.query("SELECT key, value FROM app_data");
   const stvarno = {};
@@ -267,8 +284,9 @@ app.get("/api/data", autentikacija, async (req, res) => {
 app.get("/api/data/:key", autentikacija, async (req, res) => {
   const key = req.params.key;
   if (!DOZVOLJENI_KLJUCEVI.includes(key)) return res.status(400).json({ error: "Nepoznat ključ." });
-  const moduli = await mojiModuli(req.zaposlenikId);
-  if (!citljiviKljucevi(moduli).has(key)) return res.status(403).json({ error: "Vaša pozicija nema pristup ovim podacima." });
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  const { citljivo } = izracunajDozvoljeneKljuceve(pozicija);
+  if (!citljivo.has(key)) return res.status(403).json({ error: "Vaša pozicija nema pristup ovim podacima." });
   res.json(await ucitajKljuc(key));
 });
 

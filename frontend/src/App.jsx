@@ -808,7 +808,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
 }
 
 /* ============================== GENERIC ENTITY TABLE PAGE ============================== */
-function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete, columns, searchKeys, addLabel, rowClass }) {
+function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete, columns, searchKeys, addLabel, rowClass, readOnly = false }) {
   const [q, setQ] = useState("");
   const filtered = useMemo(() => {
     if (!q.trim()) return data;
@@ -818,7 +818,7 @@ function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete
 
   return (
     <div>
-      <PageHeader title={title} subtitle={subtitle} icon={Icon} action={<Btn variant="primary" icon={Plus} onClick={onAdd}>{addLabel}</Btn>} />
+      <PageHeader title={title} subtitle={subtitle} icon={Icon} action={readOnly ? null : <Btn variant="primary" icon={Plus} onClick={onAdd}>{addLabel}</Btn>} />
       <div className="card" style={{ marginBottom: 14, padding: "8px 10px", display: "flex", alignItems: "center", gap: 8, maxWidth: 320 }}>
         <Search size={15} color="var(--ink-faint)" />
         <input className="input" style={{ border: "none", padding: "4px 0" }} placeholder="Pretraži…" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -826,17 +826,19 @@ function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete
       <div className="card" style={{ overflowX: "auto" }}>
         {filtered.length === 0 ? <EmptyState text="Nema podataka." /> : (
           <table className="erp-table">
-            <thead><tr>{columns.map((c) => <th key={c.key} style={c.width ? { width: c.width } : undefined}>{c.label}</th>)}<th style={{ width: 90 }}></th></tr></thead>
+            <thead><tr>{columns.map((c) => <th key={c.key} style={c.width ? { width: c.width } : undefined}>{c.label}</th>)}{!readOnly && <th style={{ width: 90 }}></th>}</tr></thead>
             <tbody>
               {filtered.map((row) => (
                 <tr key={row.id} className={rowClass ? rowClass(row) : ""}>
                   {columns.map((c) => <td key={c.key}>{c.render ? c.render(row) : row[c.key]}</td>)}
-                  <td>
-                    <div style={{ display: "flex", gap: 4 }}>
-                      <button className="btn btn-icon btn-ghost" onClick={() => onEdit(row)}><Pencil size={14} /></button>
-                      <button className="btn btn-icon btn-ghost" onClick={() => onDelete(row)}><Trash2 size={14} color="var(--rust)" /></button>
-                    </div>
-                  </td>
+                  {!readOnly && (
+                    <td>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <button className="btn btn-icon btn-ghost" onClick={() => onEdit(row)}><Pencil size={14} /></button>
+                        <button className="btn btn-icon btn-ghost" onClick={() => onDelete(row)}><Trash2 size={14} color="var(--rust)" /></button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -871,6 +873,31 @@ const MODULI_APLIKACIJE = [
   { key: "partneri", label: "Kupci i dobavljači", icon: Users },
   { key: "zaposlenici", label: "Zaposlenici", icon: UserCog },
 ];
+
+// Kartice (tabovi) unutar svakog modula — isti popis kao stvarni nav-tabovi svake stranice.
+// Koristi se za "Pozicije" ekran (dodjela pristupa/izmjena po kartici, ne samo po cijelom
+// modulu) i za skrivanje tabova u samim stranicama kad pozicija nema pristup. Stvarna provjera
+// (koji ključevi se smiju čitati/mijenjati) živi na backendu — vidi KARTICE_MODULA u server.js.
+const KARTICE_MODULA = {
+  dashboard: { kartice: [{ key: "pregled", naziv: "Pregled" }] },
+  skladiste: { kartice: [{ key: "zalihe", naziv: "Zalihe" }, { key: "katalog", naziv: "Katalog profila i limova" }] },
+  nabava: { kartice: [{ key: "narudzbenice", naziv: "Narudžbenice" }, { key: "upiti", naziv: "Upiti materijala" }, { key: "postavke", naziv: "Postavke tvrtke" }] },
+  proizvodnja: { kartice: [{ key: "tablica", naziv: "Tablica" }, { key: "gantogram", naziv: "Gantogram" }, { key: "rezanje", naziv: "Plan rezanja" }, { key: "isporuke", naziv: "Isporuke kupaonica" }] },
+  projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "ponude", naziv: "Ponude" }] },
+  fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "otpremnice", naziv: "Otpremnice" }, { key: "podloge", naziv: "Podloge za fakturu" }] },
+  partneri: { kartice: [{ key: "kupci", naziv: "Kupci" }, { key: "dobavljaci", naziv: "Dobavljači" }] },
+  zaposlenici: { kartice: [{ key: "zaposlenici", naziv: "Zaposlenici" }, { key: "pozicije", naziv: "Pozicije" }, { key: "evidencija", naziv: "Evidencija rada" }, { key: "obracun", naziv: "Obračun plaća" }] },
+};
+
+// Dozvola za jednu karticu — po zadanom TRUE (naslijeđeno od dodjele modula), osim ako je
+// admin za tu poziciju eksplicitno postavio false. Ista logika kao dozvolaZaKarticu u server.js.
+const dozvolaZaKarticu = (pozicija, modulKey, karticaKey) => {
+  const eksplicitno = pozicija?.karticeDozvole?.[modulKey]?.[karticaKey];
+  return { pristup: eksplicitno?.pristup !== false, izmjene: eksplicitno?.izmjene !== false };
+};
+
+// Popis kartica modula na koje pozicija ima pristup (za skrivanje tabova u stranicama).
+const dozvoljeneKarticeModula = (pozicija, modulKey) => (KARTICE_MODULA[modulKey]?.kartice || []).filter((k) => dozvolaZaKarticu(pozicija, modulKey, k.key).pristup);
 
 function KioskView({ onPrijava }) {
   const [unos, setUnos] = useState("");
@@ -1280,13 +1307,13 @@ export default function App() {
 
         <div style={{ padding: 24, flex: 1, overflowY: "auto" }}>
           {aktivnaStranica === "dashboard" && <Dashboard db={db} setPage={setPage} />}
-          {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} />}
-          {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} showToast={showToast} />}
-          {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage db={db} update={update} showToast={showToast} />}
-          {aktivnaStranica === "projekti" && <ProjektiPage db={db} update={update} showToast={showToast} setPage={setPage} />}
-          {aktivnaStranica === "fakturiranje" && <FakturiranjePage db={db} update={update} showToast={showToast} />}
-          {aktivnaStranica === "partneri" && <PartneriPage db={db} update={update} showToast={showToast} />}
-          {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} />}
+          {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
+          {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
+          {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
+          {aktivnaStranica === "projekti" && <ProjektiPage db={db} update={update} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} />}
+          {aktivnaStranica === "fakturiranje" && <FakturiranjePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
+          {aktivnaStranica === "partneri" && <PartneriPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
+          {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} mojaPozicija={mojaPozicija} />}
         </div>
 
       </div>
@@ -1406,8 +1433,12 @@ const masaStavkePozicije = (s, katalog) => {
 };
 const masaPozicije = (p, katalog) => (p.stavke || []).reduce((sum, s) => sum + masaStavkePozicije(s, katalog) * (Number(s.komada) || 1), 0);
 
-function SkladistePage({ db, update, showToast }) {
-  const [tab, setTab] = useState("zalihe");
+function SkladistePage({ db, update, showToast, mojaPozicija }) {
+  const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "skladiste");
+  const [tab, setTab] = useState(dozvKartice[0]?.key || "zalihe");
+  useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "zalihe"); }, [dozvKartice, tab]);
+  const mozeZalihe = dozvolaZaKarticu(mojaPozicija, "skladiste", "zalihe").izmjene;
+  const mozeKatalog = dozvolaZaKarticu(mojaPozicija, "skladiste", "katalog").izmjene;
   const [modal, setModal] = useState(null); // {mode:'add'|'edit', item}
   const [del, setDel] = useState(null);
   const empty = { sifra: "", naziv: "", tip: TIPOVI_MATERIJALA[0], dimenzije: "", jm: "kg", cijena: 0, kolicina: 0, minZaliha: 0, lokacija: "", kgPoM: 0 };
@@ -1445,14 +1476,14 @@ function SkladistePage({ db, update, showToast }) {
     <div>
       <PageHeader title="Skladište" icon={Package} subtitle="Zalihe materijala i katalog standardnih profila/limova za izračun mase" />
       <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
-        <div className={`nav-tab ${tab === "zalihe" ? "active" : ""}`} onClick={() => setTab("zalihe")}>Zalihe</div>
-        <div className={`nav-tab ${tab === "katalog" ? "active" : ""}`} onClick={() => setTab("katalog")}>Katalog profila i limova</div>
+        {dozvKartice.some((k) => k.key === "zalihe") && <div className={`nav-tab ${tab === "zalihe" ? "active" : ""}`} onClick={() => setTab("zalihe")}>Zalihe</div>}
+        {dozvKartice.some((k) => k.key === "katalog") && <div className={`nav-tab ${tab === "katalog" ? "active" : ""}`} onClick={() => setTab("katalog")}>Katalog profila i limova</div>}
       </div>
 
       {tab === "zalihe" && (
         <EntityPage
           title="" data={db.materijali} onAdd={openAdd} onEdit={openEdit} onDelete={(row) => setDel(row)}
-          addLabel="Novi materijal" searchKeys={["sifra", "naziv", "tip"]}
+          addLabel="Novi materijal" searchKeys={["sifra", "naziv", "tip"]} readOnly={!mozeZalihe}
           rowClass={(row) => (row.kolicina < row.minZaliha ? "row-warn" : "")}
           columns={[
             { key: "sifra", label: "Šifra", render: (r) => <span className="f-mono">{r.sifra}</span> },
@@ -1475,7 +1506,7 @@ function SkladistePage({ db, update, showToast }) {
           <div style={{ marginBottom: 12, fontSize: 12, color: "var(--ink-faint)" }}>Ukupno stavki u katalogu: <strong className="f-mono">{db.katalogProfila.length}</strong></div>
           <EntityPage
             title="" data={db.katalogProfila} onAdd={openKatAdd} onEdit={openKatEdit} onDelete={(row) => setKatDel(row)}
-            addLabel="Nova stavka kataloga" searchKeys={["oznaka", "tip"]}
+            addLabel="Nova stavka kataloga" searchKeys={["oznaka", "tip"]} readOnly={!mozeKatalog}
             columns={[
               { key: "tip", label: "Tip", render: (r) => <span className="badge badge-muted">{r.tip}</span> },
               { key: "oznaka", label: "Oznaka", render: (r) => <span className="f-mono">{r.oznaka}</span> },
@@ -1760,8 +1791,13 @@ function UpitDetaljModal({ upit, db, update, showToast, onClose, onOtvoriPrint }
   );
 }
 
-function NabavaPage({ db, update, showToast }) {
-  const [tab, setTab] = useState("narudzbenice");
+function NabavaPage({ db, update, showToast, mojaPozicija }) {
+  const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "nabava");
+  const [tab, setTab] = useState(dozvKartice[0]?.key || "narudzbenice");
+  useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "narudzbenice"); }, [dozvKartice, tab]);
+  const mozeNarudzbenice = dozvolaZaKarticu(mojaPozicija, "nabava", "narudzbenice").izmjene;
+  const mozeUpiti = dozvolaZaKarticu(mojaPozicija, "nabava", "upiti").izmjene;
+  const imaPostavke = dozvolaZaKarticu(mojaPozicija, "nabava", "postavke").pristup;
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
   const [postavkeOpen, setPostavkeOpen] = useState(false);
@@ -1821,16 +1857,16 @@ function NabavaPage({ db, update, showToast }) {
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 20 }}>
-          <div className={`nav-tab ${tab === "narudzbenice" ? "active" : ""}`} onClick={() => setTab("narudzbenice")}>Narudžbenice</div>
-          <div className={`nav-tab ${tab === "upiti" ? "active" : ""}`} onClick={() => setTab("upiti")}>Upiti materijala</div>
+          {dozvKartice.some((k) => k.key === "narudzbenice") && <div className={`nav-tab ${tab === "narudzbenice" ? "active" : ""}`} onClick={() => setTab("narudzbenice")}>Narudžbenice</div>}
+          {dozvKartice.some((k) => k.key === "upiti") && <div className={`nav-tab ${tab === "upiti" ? "active" : ""}`} onClick={() => setTab("upiti")}>Upiti materijala</div>}
         </div>
-        <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setPostavkeOpen(true)}>Postavke tvrtke</Btn>
+        {imaPostavke && <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setPostavkeOpen(true)}>Postavke tvrtke</Btn>}
       </div>
 
       {tab === "narudzbenice" && (
         <EntityPage
           title="" data={db.narudzbenice} onAdd={openAdd} onEdit={openEdit} onDelete={(r) => setDel(r)}
-          addLabel="Nova narudžbenica" searchKeys={["broj"]}
+          addLabel="Nova narudžbenica" searchKeys={["broj"]} readOnly={!mozeNarudzbenice}
           columns={[
             { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
             { key: "dobavljac", label: "Dobavljač", render: (r) => dobNaziv(r.dobavljacId) },
@@ -1847,7 +1883,7 @@ function NabavaPage({ db, update, showToast }) {
       {tab === "upiti" && (
         <EntityPage
           title="" data={db.upitiNabave} onAdd={openUpitAdd} onEdit={openUpitEdit} onDelete={(r) => setDel({ type: "upit", row: r })}
-          addLabel="Novi upit" searchKeys={["broj"]}
+          addLabel="Novi upit" searchKeys={["broj"]} readOnly={!mozeUpiti}
           columns={[
             { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
             { key: "datum", label: "Datum", render: (r) => fmtDate(r.datum) },
@@ -2860,7 +2896,7 @@ function OtpremniceListModal({ projekt, narudzba, db, update, showToast, onClose
 // kvačica "Spremno za otpremu" uvijek ista na oba mjesta (nema odvojene kopije podataka).
 // Kad je isporuka već uključena u otpremnicu (uOtpremniciId), kvačica se zaključava — status
 // se tada mijenja samo brisanjem/izmjenom te otpremnice, ne ovdje.
-function IsporukeKupaonicaView({ db, update }) {
+function IsporukeKupaonicaView({ db, update, mozeMijenjati = true }) {
   const redovi = [];
   db.projekti.forEach((p) => {
     if (!p.koristiNormativ) return;
@@ -2896,7 +2932,7 @@ function IsporukeKupaonicaView({ db, update }) {
                   <td className="f-mono">{i.komada}</td>
                   <td>{fmtDate(i.datum) || "—"}</td>
                   <td>
-                    <input type="checkbox" checked={!!i.isporuceno} disabled={!!i.uOtpremniciId} title={otpremnica ? `Uključeno u otpremnicu ${otpremnica.broj} — status se mijenja preko te otpremnice` : ""} onChange={(e) => azurirajIsporuku(projekt.id, i.id, { isporuceno: e.target.checked })} />
+                    <input type="checkbox" checked={!!i.isporuceno} disabled={!!i.uOtpremniciId || !mozeMijenjati} title={otpremnica ? `Uključeno u otpremnicu ${otpremnica.broj} — status se mijenja preko te otpremnice` : ""} onChange={(e) => azurirajIsporuku(projekt.id, i.id, { isporuceno: e.target.checked })} />
                   </td>
                   <td style={{ fontSize: 11 }}>
                     {otpremnica ? <span style={{ color: "var(--ink-soft)" }}>U otpremnici {otpremnica.broj}</span> : kasni ? <span style={{ color: "var(--rust)", fontWeight: 600 }}>Kasni</span> : null}
@@ -2911,8 +2947,12 @@ function IsporukeKupaonicaView({ db, update }) {
   );
 }
 
-function ProizvodnjaPage({ db, update, showToast }) {
-  const [prikaz, setPrikaz] = useState("tablica");
+function ProizvodnjaPage({ db, update, showToast, mojaPozicija }) {
+  const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "proizvodnja");
+  const [prikaz, setPrikaz] = useState(dozvKartice[0]?.key || "tablica");
+  useEffect(() => { if (!dozvKartice.some((k) => k.key === prikaz)) setPrikaz(dozvKartice[0]?.key || "tablica"); }, [dozvKartice, prikaz]);
+  const mozeTablica = dozvolaZaKarticu(mojaPozicija, "proizvodnja", "tablica").izmjene;
+  const mozeIsporuke = dozvolaZaKarticu(mojaPozicija, "proizvodnja", "isporuke").izmjene;
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
   const emptyForm = () => {
@@ -2948,20 +2988,20 @@ function ProizvodnjaPage({ db, update, showToast }) {
         <PageHeader title="Proizvodnja" icon={Factory} subtitle="Radni nalozi po fazama izrade i montaže" />
       </div>
       <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
-        <div className={`nav-tab ${prikaz === "tablica" ? "active" : ""}`} onClick={() => setPrikaz("tablica")}>Tablica</div>
-        <div className={`nav-tab ${prikaz === "gantogram" ? "active" : ""}`} onClick={() => setPrikaz("gantogram")}><CalendarRange size={13} style={{ verticalAlign: -2, marginRight: 4 }} />Gantogram</div>
-        <div className={`nav-tab ${prikaz === "rezanje" ? "active" : ""}`} onClick={() => setPrikaz("rezanje")}>Plan rezanja</div>
-        <div className={`nav-tab ${prikaz === "isporuke" ? "active" : ""}`} onClick={() => setPrikaz("isporuke")}><PackageCheck size={13} style={{ verticalAlign: -2, marginRight: 4 }} />Isporuke kupaonica</div>
+        {dozvKartice.some((k) => k.key === "tablica") && <div className={`nav-tab ${prikaz === "tablica" ? "active" : ""}`} onClick={() => setPrikaz("tablica")}>Tablica</div>}
+        {dozvKartice.some((k) => k.key === "gantogram") && <div className={`nav-tab ${prikaz === "gantogram" ? "active" : ""}`} onClick={() => setPrikaz("gantogram")}><CalendarRange size={13} style={{ verticalAlign: -2, marginRight: 4 }} />Gantogram</div>}
+        {dozvKartice.some((k) => k.key === "rezanje") && <div className={`nav-tab ${prikaz === "rezanje" ? "active" : ""}`} onClick={() => setPrikaz("rezanje")}>Plan rezanja</div>}
+        {dozvKartice.some((k) => k.key === "isporuke") && <div className={`nav-tab ${prikaz === "isporuke" ? "active" : ""}`} onClick={() => setPrikaz("isporuke")}><PackageCheck size={13} style={{ verticalAlign: -2, marginRight: 4 }} />Isporuke kupaonica</div>}
       </div>
 
       {prikaz === "gantogram" && <PlanProizvodnjeView db={db} update={update} showToast={showToast} />}
       {prikaz === "rezanje" && <PlanRezanjaView db={db} update={update} showToast={showToast} />}
-      {prikaz === "isporuke" && <IsporukeKupaonicaView db={db} update={update} />}
+      {prikaz === "isporuke" && <IsporukeKupaonicaView db={db} update={update} mozeMijenjati={mozeIsporuke} />}
 
       {prikaz === "tablica" && (
       <EntityPage
         title="" data={db.radniNalozi} onAdd={openAdd} onEdit={openEdit} onDelete={(r) => setDel(r)}
-        addLabel="Novi radni nalog" searchKeys={["broj", "naziv", "zaduzenTim"]}
+        addLabel="Novi radni nalog" searchKeys={["broj", "naziv", "zaduzenTim"]} readOnly={!mozeTablica}
         columns={[
           { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
           { key: "naziv", label: "Opis" },
@@ -3872,8 +3912,12 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
   );
 }
 
-function ProjektiPage({ db, update, showToast, setPage }) {
-  const [tab, setTab] = useState("projekti");
+function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
+  const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "projekti");
+  const [tab, setTab] = useState(dozvKartice[0]?.key || "projekti");
+  useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "projekti"); }, [dozvKartice, tab]);
+  const mozeProjekti = dozvolaZaKarticu(mojaPozicija, "projekti", "projekti").izmjene;
+  const mozePonude = dozvolaZaKarticu(mojaPozicija, "projekti", "ponude").izmjene;
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
 
@@ -3967,8 +4011,8 @@ function ProjektiPage({ db, update, showToast, setPage }) {
       <PageHeader title="Projekti i ponude" subtitle="Praćenje projekata od ponude do realizacije" icon={Building2} />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 20 }}>
-          <div className={`nav-tab ${tab === "projekti" ? "active" : ""}`} onClick={() => setTab("projekti")}>Projekti</div>
-          <div className={`nav-tab ${tab === "ponude" ? "active" : ""}`} onClick={() => setTab("ponude")}>Ponude</div>
+          {dozvKartice.some((k) => k.key === "projekti") && <div className={`nav-tab ${tab === "projekti" ? "active" : ""}`} onClick={() => setTab("projekti")}>Projekti</div>}
+          {dozvKartice.some((k) => k.key === "ponude") && <div className={`nav-tab ${tab === "ponude" ? "active" : ""}`} onClick={() => setTab("ponude")}>Ponude</div>}
         </div>
         {tab === "ponude" && <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setCjenikOpen(true)}>Cjenik rada</Btn>}
         {tab === "projekti" && <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setZadaciOpen(true)}>Standardni zadaci</Btn>}
@@ -3980,7 +4024,7 @@ function ProjektiPage({ db, update, showToast, setPage }) {
           onAdd={() => { setProjForm(emptyProj()); setModal("proj"); }}
           onEdit={(row) => { setProjForm({ ...emptyProj(), ...row, zadaci: row.zadaci || noviZadaciIzStandarda(), voditeljId: row.voditeljId || "" }); setModal("proj"); }}
           onDelete={(r) => setDel({ type: "proj", row: r })}
-          addLabel="Novi projekt" searchKeys={["sifra", "naziv"]}
+          addLabel="Novi projekt" searchKeys={["sifra", "naziv"]} readOnly={!mozeProjekti}
           columns={[
             { key: "sifra", label: "Šifra", render: (r) => <span className="f-mono">{r.sifra}</span> },
             { key: "naziv", label: "Naziv" },
@@ -4001,7 +4045,7 @@ function ProjektiPage({ db, update, showToast, setPage }) {
           onAdd={() => { setPonForm(emptyPon()); setModal("pon"); }}
           onEdit={(row) => { setPonForm({ ...emptyPon(), ...JSON.parse(JSON.stringify(row)), pozicije: row.pozicije || [], materijalStavke: row.materijalStavke || [], ostaleStavke: row.ostaleStavke || [] }); setModal("pon"); }}
           onDelete={(r) => setDel({ type: "pon", row: r })}
-          addLabel="Nova ponuda" searchKeys={["broj", "naziv"]}
+          addLabel="Nova ponuda" searchKeys={["broj", "naziv"]} readOnly={!mozePonude}
           columns={[
             { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
             { key: "naziv", label: "Naziv posla" },
@@ -4439,7 +4483,7 @@ function PodlogaZaFakturuPrintModal({ podloga, projekt, narudzba, kupac, otpremn
   );
 }
 
-function PodlogeZaFakturuTab({ db, update, showToast }) {
+function PodlogeZaFakturuTab({ db, update, showToast, mozeMijenjati = true }) {
   const [formOpen, setFormOpen] = useState(false);
   const [printPodloga, setPrintPodloga] = useState(null);
   const [del, setDel] = useState(null);
@@ -4447,9 +4491,11 @@ function PodlogeZaFakturuTab({ db, update, showToast }) {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
-        <Btn variant="primary" icon={Plus} onClick={() => setFormOpen(true)}>Nova podloga za fakturu</Btn>
-      </div>
+      {mozeMijenjati && (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+          <Btn variant="primary" icon={Plus} onClick={() => setFormOpen(true)}>Nova podloga za fakturu</Btn>
+        </div>
+      )}
       {db.podlogeZaFakturu.length === 0 ? <EmptyState text="Nema izrađenih podloga za fakturu." /> : (
         <table className="erp-table">
           <thead><tr><th>Broj</th><th>Projekt</th><th>Datum</th><th>Za platiti</th><th></th></tr></thead>
@@ -4462,7 +4508,7 @@ function PodlogeZaFakturuTab({ db, update, showToast }) {
                 <td className="f-mono">{fmtCurDec(p.zaPlatiti)}</td>
                 <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                   <Btn size="sm" icon={Eye} onClick={() => setPrintPodloga(p)}>PDF</Btn>
-                  <button className="btn btn-icon btn-ghost" onClick={() => setDel(p)}><Trash2 size={14} color="var(--rust)" /></button>
+                  {mozeMijenjati && <button className="btn btn-icon btn-ghost" onClick={() => setDel(p)}><Trash2 size={14} color="var(--rust)" /></button>}
                 </td>
               </tr>
             ))}
@@ -4486,7 +4532,7 @@ function PodlogeZaFakturuTab({ db, update, showToast }) {
   );
 }
 
-function OtpremniceTab({ db, update, showToast }) {
+function OtpremniceTab({ db, update, showToast, mozeMijenjati = true }) {
   const [printOtp, setPrintOtp] = useState(null);
   const [del, setDel] = useState(null);
   const projektInfo = (id) => db.projekti.find((p) => p.id === id);
@@ -4509,7 +4555,7 @@ function OtpremniceTab({ db, update, showToast }) {
                   <td className="f-mono">{o.stavke.length}</td>
                   <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                     <Btn size="sm" icon={Eye} onClick={() => setPrintOtp(o)}>PDF</Btn>
-                    <button className="btn btn-icon btn-ghost" onClick={() => setDel(o)}><Trash2 size={14} color="var(--rust)" /></button>
+                    {mozeMijenjati && <button className="btn btn-icon btn-ghost" onClick={() => setDel(o)}><Trash2 size={14} color="var(--rust)" /></button>}
                   </td>
                 </tr>
               );
@@ -4533,8 +4579,13 @@ function OtpremniceTab({ db, update, showToast }) {
   );
 }
 
-function FakturiranjePage({ db, update, showToast }) {
-  const [tab, setTab] = useState("fakture");
+function FakturiranjePage({ db, update, showToast, mojaPozicija }) {
+  const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "fakturiranje");
+  const [tab, setTab] = useState(dozvKartice[0]?.key || "fakture");
+  useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "fakture"); }, [dozvKartice, tab]);
+  const mozeFakture = dozvolaZaKarticu(mojaPozicija, "fakturiranje", "fakture").izmjene;
+  const mozeOtpremnice = dozvolaZaKarticu(mojaPozicija, "fakturiranje", "otpremnice").izmjene;
+  const mozePodloge = dozvolaZaKarticu(mojaPozicija, "fakturiranje", "podloge").izmjene;
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
   const [printFaktura, setPrintFaktura] = useState(null);
@@ -4557,18 +4608,18 @@ function FakturiranjePage({ db, update, showToast }) {
     <div>
       <PageHeader title="Otpremnice i fakturiranje" icon={Receipt} subtitle="Otpremnice, izlazne fakture i naplata po projektima" />
       <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
-        <div className={`nav-tab ${tab === "fakture" ? "active" : ""}`} onClick={() => setTab("fakture")}>Fakture</div>
-        <div className={`nav-tab ${tab === "otpremnice" ? "active" : ""}`} onClick={() => setTab("otpremnice")}>Otpremnice</div>
-        <div className={`nav-tab ${tab === "podloge" ? "active" : ""}`} onClick={() => setTab("podloge")}>Podloge za fakturu</div>
+        {dozvKartice.some((k) => k.key === "fakture") && <div className={`nav-tab ${tab === "fakture" ? "active" : ""}`} onClick={() => setTab("fakture")}>Fakture</div>}
+        {dozvKartice.some((k) => k.key === "otpremnice") && <div className={`nav-tab ${tab === "otpremnice" ? "active" : ""}`} onClick={() => setTab("otpremnice")}>Otpremnice</div>}
+        {dozvKartice.some((k) => k.key === "podloge") && <div className={`nav-tab ${tab === "podloge" ? "active" : ""}`} onClick={() => setTab("podloge")}>Podloge za fakturu</div>}
       </div>
 
-      {tab === "otpremnice" && <OtpremniceTab db={db} update={update} showToast={showToast} />}
-      {tab === "podloge" && <PodlogeZaFakturuTab db={db} update={update} showToast={showToast} />}
+      {tab === "otpremnice" && <OtpremniceTab db={db} update={update} showToast={showToast} mozeMijenjati={mozeOtpremnice} />}
+      {tab === "podloge" && <PodlogeZaFakturuTab db={db} update={update} showToast={showToast} mozeMijenjati={mozePodloge} />}
 
       {tab === "fakture" && (
       <EntityPage
         title="" data={db.fakture} onAdd={openAdd} onEdit={openEdit} onDelete={(r) => setDel(r)}
-        addLabel="Nova faktura" searchKeys={["broj"]}
+        addLabel="Nova faktura" searchKeys={["broj"]} readOnly={!mozeFakture}
         rowClass={(r) => (isOverdue(r) ? "row-warn" : "")}
         columns={[
           { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
@@ -4611,8 +4662,11 @@ function FakturiranjePage({ db, update, showToast }) {
 }
 
 /* ============================== PARTNERI (KUPCI / DOBAVLJAČI) ============================== */
-function PartneriPage({ db, update, showToast }) {
-  const [tab, setTab] = useState("kupci");
+function PartneriPage({ db, update, showToast, mojaPozicija }) {
+  const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "partneri");
+  const [tab, setTab] = useState(dozvKartice[0]?.key || "kupci");
+  useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "kupci"); }, [dozvKartice, tab]);
+  const mozeMijenjatiTab = dozvolaZaKarticu(mojaPozicija, "partneri", tab).izmjene;
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
   const emptyKupac = { naziv: "", oib: "", kontaktOsoba: "", telefon: "", email: "", adresa: "" };
@@ -4644,13 +4698,13 @@ function PartneriPage({ db, update, showToast }) {
     <div>
       <PageHeader title="Kupci i dobavljači" subtitle="Poslovni partneri" icon={Users} />
       <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
-        <div className={`nav-tab ${tab === "kupci" ? "active" : ""}`} onClick={() => setTab("kupci")}>Kupci</div>
-        <div className={`nav-tab ${tab === "dobavljaci" ? "active" : ""}`} onClick={() => setTab("dobavljaci")}>Dobavljači</div>
+        {dozvKartice.some((k) => k.key === "kupci") && <div className={`nav-tab ${tab === "kupci" ? "active" : ""}`} onClick={() => setTab("kupci")}>Kupci</div>}
+        {dozvKartice.some((k) => k.key === "dobavljaci") && <div className={`nav-tab ${tab === "dobavljaci" ? "active" : ""}`} onClick={() => setTab("dobavljaci")}>Dobavljači</div>}
       </div>
       <EntityPage
         title="" data={db[key]} onAdd={openAdd} onEdit={openEdit} onDelete={(r) => setDel(r)}
         addLabel={tab === "kupci" ? "Novi kupac" : "Novi dobavljač"} searchKeys={["naziv", "oib", "kontaktOsoba"]}
-        columns={cols}
+        columns={cols} readOnly={!mozeMijenjatiTab}
       />
       {modal && (
         <Modal title={modal === "add" ? "Novi partner" : "Uredi partnera"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={save}>Spremi</Btn></>}>
@@ -4809,7 +4863,7 @@ function PostavkePlacaModal({ db, update, showToast, onClose }) {
 }
 
 /* ============================== EVIDENCIJA RADA — MJESEČNA MREŽA ============================== */
-function EvidencijaTab({ db, update, showToast }) {
+function EvidencijaTab({ db, update, showToast, mozeMijenjati = true }) {
   const [mjesec, setMjesec] = useState(todayISO().slice(0, 7));
   const [urediCeliju, setUrediCeliju] = useState(null); // { zaposlenikId, datum, vrsta, od, do, postojeciId }
 
@@ -4849,6 +4903,7 @@ function EvidencijaTab({ db, update, showToast }) {
   const kooperantiSort = useMemo(() => aktivniSort.filter((z) => jeKooperant(z, db.pozicijeZaposlenika)), [aktivniSort, db.pozicijeZaposlenika]);
 
   const otvoriCeliju = (zaposlenikId, datum) => {
+    if (!mozeMijenjati) return;
     const zapis = zapisiMapa.get(`${zaposlenikId}|${datum}`);
     setUrediCeliju({
       zaposlenikId, datum,
@@ -4879,7 +4934,7 @@ function EvidencijaTab({ db, update, showToast }) {
     showToast("Zapis obrisan.");
   };
 
-  const potvrdiAutoOdjavu = (id) => update("evidencijaRada", db.evidencijaRada.map((e) => (e.id === id ? { ...e, potvrdenoRacunovodstvo: true } : e)));
+  const potvrdiAutoOdjavu = (id) => { if (mozeMijenjati) update("evidencijaRada", db.evidencijaRada.map((e) => (e.id === id ? { ...e, potvrdenoRacunovodstvo: true } : e))); };
   const zaposlenikIme = (id) => { const z = db.zaposlenici.find((zz) => zz.id === id); return z ? `${z.prezime} ${z.ime}` : "—"; };
 
   // Sadržaj jedne ćelije
@@ -5053,7 +5108,7 @@ function EvidencijaTab({ db, update, showToast }) {
 }
 
 /* ============================== OBRAČUN PLAĆA — TAB ============================== */
-function ObracunPlacaTab({ db, update, showToast }) {
+function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
   const [mjesec, setMjesec] = useState(todayISO().slice(0, 7));
   const [postavkeOtvorene, setPostavkeOtvorene] = useState(false);
   const [detalj, setDetalj] = useState(null);
@@ -5089,7 +5144,7 @@ function ObracunPlacaTab({ db, update, showToast }) {
           <span className="label">Mjesec</span>
           <input className="input f-mono" type="month" style={{ width: 160 }} value={mjesec} onChange={(e) => setMjesec(e.target.value)} />
         </div>
-        <Btn variant="ghost" icon={Settings} onClick={() => setPostavkeOtvorene(true)}>Postavke plaća</Btn>
+        {mozeMijenjati && <Btn variant="ghost" icon={Settings} onClick={() => setPostavkeOtvorene(true)}>Postavke plaća</Btn>}
       </div>
 
       {imaBolovanje && (
@@ -5244,8 +5299,12 @@ function ObracunPlacaTab({ db, update, showToast }) {
   );
 }
 
-function ZaposleniciPage({ db, update, showToast, refetchKljuc }) {
-  const [tab, setTab] = useState("zaposlenici");
+function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija }) {
+  const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "zaposlenici");
+  const [tab, setTab] = useState(dozvKartice[0]?.key || "zaposlenici");
+  useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "zaposlenici"); }, [dozvKartice, tab]);
+  const mozeZaposlenici = dozvolaZaKarticu(mojaPozicija, "zaposlenici", "zaposlenici").izmjene;
+  const mozePozicije = dozvolaZaKarticu(mojaPozicija, "zaposlenici", "pozicije").izmjene;
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
   const [lozinkaZa, setLozinkaZa] = useState(null);
@@ -5253,7 +5312,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc }) {
   const emptyZap = { ime: "", prezime: "", pozicijaId: db.pozicijeZaposlenika[0]?.id || "", email: "", telefon: "", status: "Aktivan", datumZaposlenja: todayISO(), kompetencije: [], rfidKod: "", bodovi: 0, udaljenostKm: 0, koristiPrehranuUTvrtki: false, satnicaKooperant: 0 };
   const [zapForm, setZapForm] = useState(emptyZap);
 
-  const emptyPoz = { naziv: "", opis: "", moduli: [] };
+  const emptyPoz = { naziv: "", opis: "", moduli: [], karticeDozvole: {} };
   const [pozForm, setPozForm] = useState(emptyPoz);
 
   const pozicijaNaziv = (id) => db.pozicijeZaposlenika.find((p) => p.id === id)?.naziv || "—";
@@ -5282,15 +5341,25 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc }) {
   const toggleModul = (key) => {
     setPozForm((f) => ({ ...f, moduli: f.moduli.includes(key) ? f.moduli.filter((m) => m !== key) : [...f.moduli, key] }));
   };
+  // Po zadanom (kad admin ništa ne dira) modul dodijeljen poziciji daje pun pristup i pravo
+  // izmjene svim svojim karticama — karticeDozvole ovdje samo bilježi eksplicitna SUŽENJA.
+  const postaviKarticu = (modulKey, karticaKey, polje, vrijednost) => {
+    setPozForm((f) => {
+      const trenutno = f.karticeDozvole?.[modulKey]?.[karticaKey] || {};
+      const nova = { ...trenutno, [polje]: vrijednost };
+      if (polje === "pristup" && !vrijednost) nova.izmjene = false;
+      return { ...f, karticeDozvole: { ...(f.karticeDozvole || {}), [modulKey]: { ...(f.karticeDozvole?.[modulKey] || {}), [karticaKey]: nova } } };
+    });
+  };
 
   return (
     <div>
       <PageHeader title="Zaposlenici" icon={UserCog} subtitle="Zaposlenici, pozicije u tvrtki i ograničenja pristupa aplikaciji" />
       <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
-        <div className={`nav-tab ${tab === "zaposlenici" ? "active" : ""}`} onClick={() => setTab("zaposlenici")}>Zaposlenici</div>
-        <div className={`nav-tab ${tab === "pozicije" ? "active" : ""}`} onClick={() => setTab("pozicije")}>Pozicije</div>
-        <div className={`nav-tab ${tab === "evidencija" ? "active" : ""}`} onClick={() => setTab("evidencija")}>Evidencija rada</div>
-        <div className={`nav-tab ${tab === "obracun" ? "active" : ""}`} onClick={() => setTab("obracun")}>Obračun plaća</div>
+        {dozvKartice.some((k) => k.key === "zaposlenici") && <div className={`nav-tab ${tab === "zaposlenici" ? "active" : ""}`} onClick={() => setTab("zaposlenici")}>Zaposlenici</div>}
+        {dozvKartice.some((k) => k.key === "pozicije") && <div className={`nav-tab ${tab === "pozicije" ? "active" : ""}`} onClick={() => setTab("pozicije")}>Pozicije</div>}
+        {dozvKartice.some((k) => k.key === "evidencija") && <div className={`nav-tab ${tab === "evidencija" ? "active" : ""}`} onClick={() => setTab("evidencija")}>Evidencija rada</div>}
+        {dozvKartice.some((k) => k.key === "obracun") && <div className={`nav-tab ${tab === "obracun" ? "active" : ""}`} onClick={() => setTab("obracun")}>Obračun plaća</div>}
       </div>
 
       {tab === "zaposlenici" && (
@@ -5306,7 +5375,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc }) {
             onAdd={() => { setZapForm(emptyZap); setModal("zap"); }}
             onEdit={(row) => { setZapForm({ ...emptyZap, ...row, kompetencije: row.kompetencije || [], rfidKod: row.rfidKod || "" }); setModal("zap"); }}
             onDelete={(r) => setDel({ type: "zap", row: r })}
-            addLabel="Novi zaposlenik" searchKeys={["ime", "prezime", "email"]}
+            addLabel="Novi zaposlenik" searchKeys={["ime", "prezime", "email"]} readOnly={!mozeZaposlenici}
             columns={[
               { key: "prezime", label: "Prezime i ime", render: (r) => <strong>{r.prezime} {r.ime}</strong> },
               { key: "pozicija", label: "Pozicija", render: (r) => pozicijaNaziv(r.pozicijaId) },
@@ -5334,14 +5403,14 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc }) {
       {tab === "pozicije" && (
         <>
           <div style={{ marginBottom: 12, fontSize: 13, color: "var(--ink-soft)" }}>
-            Svaka pozicija određuje kojim modulima aplikacije zaposlenik na toj poziciji smije pristupiti. Napomena: ovo je planska evidencija ograničenja — stvarno tehničko ograničavanje pristupa zahtijeva korisničke račune s prijavom (login), što ovaj prototip trenutno ne implementira.
+            Svaka pozicija određuje kojim modulima i karticama unutar njih zaposlenik na toj poziciji smije pristupiti, te smije li u svakoj kartici i mijenjati podatke ili samo gledati. Ovo je stvarno tehničko ograničenje — provodi ga backend na svakom čitanju i upisu podataka, ne samo sučelje.
           </div>
           <EntityPage
             title="" data={db.pozicijeZaposlenika}
             onAdd={() => { setPozForm(emptyPoz); setModal("poz"); }}
             onEdit={(row) => { setPozForm({ ...emptyPoz, ...row }); setModal("poz"); }}
             onDelete={(r) => setDel({ type: "poz", row: r })}
-            addLabel="Nova pozicija" searchKeys={["naziv"]}
+            addLabel="Nova pozicija" searchKeys={["naziv"]} readOnly={!mozePozicije}
             columns={[
               { key: "naziv", label: "Naziv pozicije" },
               { key: "opis", label: "Opis" },
@@ -5356,9 +5425,9 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc }) {
         </>
       )}
 
-      {tab === "evidencija" && <EvidencijaTab db={db} update={update} showToast={showToast} />}
+      {tab === "evidencija" && <EvidencijaTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "evidencija").izmjene} />}
 
-      {tab === "obracun" && <ObracunPlacaTab db={db} update={update} showToast={showToast} />}
+      {tab === "obracun" && <ObracunPlacaTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "obracun").izmjene} />}
 
       {modal === "zap" && (
         <Modal title={zapForm.id ? "Uredi zaposlenika" : "Novi zaposlenik"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={saveZap}>Spremi</Btn></>}>
@@ -5439,16 +5508,40 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc }) {
         <Modal title={pozForm.id ? "Uredi poziciju" : "Nova pozicija"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={savePoz}>Spremi</Btn></>}>
           <Field label="Naziv pozicije"><input className="input" placeholder="npr. Voditelj proizvodnje" value={pozForm.naziv} onChange={(e) => setPozForm({ ...pozForm, naziv: e.target.value })} /></Field>
           <Field label="Opis"><textarea className="textarea" rows={2} value={pozForm.opis} onChange={(e) => setPozForm({ ...pozForm, opis: e.target.value })} /></Field>
-          <Field label="Ograničenja za aplikaciju — dopušteni moduli">
+          <Field label="Ograničenja za aplikaciju — moduli i kartice">
+            <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: -4, marginBottom: 8 }}>
+              Uključi modul da bude vidljiv poziciji. Svaka kartica unutar modula ima svoju kvačicu za pristup (vidljivost) i posebno za izmjene (upis) — po zadanom su obje uključene čim je modul uključen.
+            </p>
             <div className="card" style={{ padding: 10, background: "var(--surface-alt)" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                {MODULI_APLIKACIJE.map((m) => (
-                  <label key={m.key} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, cursor: "pointer" }}>
-                    <input type="checkbox" checked={pozForm.moduli.includes(m.key)} onChange={() => toggleModul(m.key)} />
-                    <m.icon size={14} color="var(--ink-soft)" /> {m.label}
-                  </label>
-                ))}
-              </div>
+              {MODULI_APLIKACIJE.map((m) => {
+                const otvoren = pozForm.moduli.includes(m.key);
+                return (
+                  <div key={m.key} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid var(--line)" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                      <input type="checkbox" checked={otvoren} onChange={() => toggleModul(m.key)} />
+                      <m.icon size={14} color="var(--ink-soft)" /> {m.label}
+                    </label>
+                    {otvoren && (
+                      <div style={{ marginLeft: 25, marginTop: 8, display: "grid", gap: 6 }}>
+                        {(KARTICE_MODULA[m.key]?.kartice || []).map((k) => {
+                          const { pristup, izmjene } = dozvolaZaKarticu(pozForm, m.key, k.key);
+                          return (
+                            <div key={k.key} style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 12 }}>
+                              <span style={{ flex: 1, color: "var(--ink-soft)" }}>{k.naziv}</span>
+                              <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
+                                <input type="checkbox" checked={pristup} onChange={(e) => postaviKarticu(m.key, k.key, "pristup", e.target.checked)} /> Pristup
+                              </label>
+                              <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: pristup ? "pointer" : "not-allowed", opacity: pristup ? 1 : 0.4 }}>
+                                <input type="checkbox" checked={izmjene} disabled={!pristup} onChange={(e) => postaviKarticu(m.key, k.key, "izmjene", e.target.checked)} /> Izmjene
+                              </label>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </Field>
         </Modal>
