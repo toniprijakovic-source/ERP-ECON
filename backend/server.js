@@ -37,7 +37,7 @@ const MODUL_ZA_KLJUC = {
   kupci: ["partneri"],
   dobavljaci: ["partneri"],
   materijali: ["skladiste", "nabava", "proizvodnja", "projekti"],
-  projekti: ["projekti"],
+  projekti: ["projekti", "proizvodnja"],
   narudzbenice: ["nabava"],
   ponude: ["projekti"],
   radniNalozi: ["proizvodnja", "projekti"],

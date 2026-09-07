@@ -2593,10 +2593,21 @@ function NarudzbaModal({ narudzba, projekt, db, update, showToast, onClose }) {
 }
 
 function OtpremnicaFormModal({ narudzba, projekt, db, update, showToast, onClose }) {
+  const koristiNormativ = !!projekt.koristiNormativ;
+  // Za tipske projekte (kupaonice po normativu) stavke otpremnice dolaze iz rasporeda isporuka,
+  // ne iz narudžbe — smiju se otpremiti samo isporuke koje je proizvodnja označila kao spremne
+  // za otpremu (isporuceno) i koje još nisu uključene ni u jednu drugu otpremnicu.
+  const nazivIsporuke = (i) => {
+    const stavka = (i.grupa === "stavkePod" ? projekt.stavkePod : projekt.stavkeKomplet || []).find((s) => s.id === i.stavkaId);
+    return `${i.grupa === "stavkePod" ? "Pod" : "Komplet"} — ${stavka?.oznaka || "(bez oznake)"}`;
+  };
+  const dostupneIsporuke = koristiNormativ ? (projekt.isporuke || []).filter((i) => i.isporuceno && !i.uOtpremniciId) : [];
   const emptyForm = () => ({
     broj: sljedeciBrojOtpremnice(db.otpremnice, todayISO()), datum: todayISO(), mjesto: "Prelog",
     projektId: projekt.id, kupacId: projekt?.kupacId || "", narudzbaId: narudzba?.id || null, izdaoId: "", napomena: "",
-    stavke: (narudzba?.stavke || []).map((s) => ({ id: uid("ost"), narudzbaStavkaId: s.id, naziv: s.naziv, jm: s.jm, kolicina: "" })),
+    stavke: koristiNormativ
+      ? dostupneIsporuke.map((i) => ({ id: uid("ost"), isporukaId: i.id, naziv: nazivIsporuke(i), jm: "kom", datumPlan: i.datum, kolicina: String(i.komada) }))
+      : (narudzba?.stavke || []).map((s) => ({ id: uid("ost"), narudzbaStavkaId: s.id, naziv: s.naziv, jm: s.jm, kolicina: "" })),
   });
   const [form, setForm] = useState(emptyForm());
 
@@ -2605,7 +2616,14 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, showToast, onClose
   const spremi = () => {
     const stavke = form.stavke.filter((s) => Number(s.kolicina) > 0).map((s) => ({ ...s, kolicina: Number(s.kolicina) }));
     if (stavke.length === 0) { showToast("Unesi količinu za barem jednu stavku."); return; }
-    update("otpremnice", [...db.otpremnice, { ...form, id: uid("otp"), stavke }]);
+    const novaOtpremnica = { ...form, id: uid("otp"), stavke };
+    update("otpremnice", [...db.otpremnice, novaOtpremnica]);
+    if (koristiNormativ) {
+      const ukljucenIds = new Set(stavke.map((s) => s.isporukaId).filter(Boolean));
+      if (ukljucenIds.size > 0) {
+        update("projekti", db.projekti.map((p) => (p.id === projekt.id ? { ...p, isporuke: (p.isporuke || []).map((i) => (ukljucenIds.has(i.id) ? { ...i, uOtpremniciId: novaOtpremnica.id } : i)) } : p)));
+      }
+    }
     showToast("Otpremnica kreirana.");
     onClose();
   };
@@ -2624,18 +2642,23 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, showToast, onClose
         </select>
       </Field>
 
-      {form.stavke.length === 0 && <EmptyState text="Narudžba kupca nema stavki — prvo dodaj stavke u narudžbu." />}
+      {form.stavke.length === 0 && (
+        <EmptyState text={koristiNormativ
+          ? "Nema kupaonica označenih kao spremne za otpremu. Označi ih u modulu Proizvodnja → Isporuke kupaonica ili u rasporedu isporuka u detaljima projekta."
+          : "Narudžba kupca nema stavki — prvo dodaj stavke u narudžbu."} />
+      )}
       {form.stavke.length > 0 && (
         <>
           <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Stavke za isporuku (upiši količinu koja se sada šalje)</div>
           <table className="erp-table">
-            <thead><tr><th>Naziv</th><th style={{ width: 80 }}>JM</th><th style={{ width: 130 }}>Količina</th></tr></thead>
+            <thead><tr><th>Naziv</th>{koristiNormativ && <th style={{ width: 110 }}>Planirano</th>}<th style={{ width: 80 }}>JM</th><th style={{ width: 130 }}>Količina</th></tr></thead>
             <tbody>
               {form.stavke.map((s, i) => (
                 <tr key={s.id}>
                   <td>{s.naziv}</td>
+                  {koristiNormativ && <td className="f-mono">{fmtDate(s.datumPlan) || "—"}</td>}
                   <td className="f-mono">{s.jm}</td>
-                  <td><input className="input f-mono" type="number" min="0" style={{ padding: "5px 8px" }} value={s.kolicina} onChange={(e) => azurirajKolicinu(i, e.target.value)} /></td>
+                  <td><input className="input f-mono" type="number" min="0" max={koristiNormativ ? dostupneIsporuke.find((d) => d.id === s.isporukaId)?.komada : undefined} style={{ padding: "5px 8px" }} value={s.kolicina} onChange={(e) => azurirajKolicinu(i, e.target.value)} /></td>
                 </tr>
               ))}
             </tbody>
@@ -2722,11 +2745,15 @@ function OtpremniceListModal({ projekt, narudzba, db, update, showToast, onClose
   const [otpModal, setOtpModal] = useState(false);
   const [printOtp, setPrintOtp] = useState(null);
   const [delOtp, setDelOtp] = useState(null);
+  const koristiNormativ = !!projekt.koristiNormativ;
+  const spremneZaOtpremu = koristiNormativ ? (projekt.isporuke || []).filter((i) => i.isporuceno && !i.uOtpremniciId).length : 0;
+  const nemaStavki = koristiNormativ ? spremneZaOtpremu === 0 : !narudzba;
 
   return (
     <>
-      <Modal wide title={`Otpremnice — ${projekt.sifra}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Plus} onClick={() => setOtpModal(true)} disabled={!narudzba}>Nova otpremnica</Btn></>}>
-        {!narudzba && <div style={{ fontSize: 12.5, color: "var(--rust)", marginBottom: 12 }}>Ovaj projekt nema unesenu narudžbu kupca — prvo je unesi (gumb "Narudžba" u detaljima projekta).</div>}
+      <Modal wide title={`Otpremnice — ${projekt.sifra}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Plus} onClick={() => setOtpModal(true)} disabled={nemaStavki}>Nova otpremnica</Btn></>}>
+        {!koristiNormativ && !narudzba && <div style={{ fontSize: 12.5, color: "var(--rust)", marginBottom: 12 }}>Ovaj projekt nema unesenu narudžbu kupca — prvo je unesi (gumb "Narudžba" u detaljima projekta).</div>}
+        {koristiNormativ && spremneZaOtpremu === 0 && <div style={{ fontSize: 12.5, color: "var(--rust)", marginBottom: 12 }}>Nema kupaonica označenih kao spremne za otpremu u rasporedu isporuka.</div>}
         {otpremnice.length === 0 ? <EmptyState text="Nema izdanih otpremnica." /> : (
           <table className="erp-table">
             <thead><tr><th>Broj</th><th>Datum</th><th>Stavki</th><th></th></tr></thead>
@@ -2749,8 +2776,69 @@ function OtpremniceListModal({ projekt, narudzba, db, update, showToast, onClose
 
       {otpModal && <OtpremnicaFormModal narudzba={narudzba} projekt={projekt} db={db} update={update} showToast={showToast} onClose={() => setOtpModal(false)} />}
       {printOtp && <OtpremnicaPrintModal otpremnica={printOtp} kupac={kupac} projekt={projekt} narudzba={narudzba} izdao={db.zaposlenici.find((z) => z.id === printOtp.izdaoId)} postavkeTvrtke={db.postavkeTvrtke} onClose={() => setPrintOtp(null)} />}
-      {delOtp && <ConfirmDelete label={delOtp.broj} onCancel={() => setDelOtp(null)} onConfirm={() => { update("otpremnice", db.otpremnice.filter((o) => o.id !== delOtp.id)); setDelOtp(null); showToast("Otpremnica obrisana."); }} />}
+      {delOtp && <ConfirmDelete label={delOtp.broj} onCancel={() => setDelOtp(null)} onConfirm={() => {
+        update("otpremnice", db.otpremnice.filter((o) => o.id !== delOtp.id));
+        if (koristiNormativ) update("projekti", db.projekti.map((p) => (p.id === projekt.id ? { ...p, isporuke: (p.isporuke || []).map((i) => (i.uOtpremniciId === delOtp.id ? { ...i, uOtpremniciId: null } : i)) } : p)));
+        setDelOtp(null);
+        showToast("Otpremnica obrisana.");
+      }} />}
     </>
+  );
+}
+
+// Presjek rasporeda isporuka SVIH tipskih projekata (kupaonice po normativu), po datumima —
+// čita/piše isti projekt.isporuke niz kao "Raspored isporuka" u detaljima projekta, pa je
+// kvačica "Spremno za otpremu" uvijek ista na oba mjesta (nema odvojene kopije podataka).
+// Kad je isporuka već uključena u otpremnicu (uOtpremniciId), kvačica se zaključava — status
+// se tada mijenja samo brisanjem/izmjenom te otpremnice, ne ovdje.
+function IsporukeKupaonicaView({ db, update }) {
+  const redovi = [];
+  db.projekti.forEach((p) => {
+    if (!p.koristiNormativ) return;
+    const stavkePod = p.stavkePod || [];
+    const stavkeKomplet = p.stavkeKomplet || [];
+    (p.isporuke || []).forEach((i) => {
+      const stavka = (i.grupa === "stavkePod" ? stavkePod : stavkeKomplet).find((s) => s.id === i.stavkaId);
+      redovi.push({ projekt: p, isporuka: i, stavka });
+    });
+  });
+  redovi.sort((a, b) => (a.isporuka.datum || "9999").localeCompare(b.isporuka.datum || "9999"));
+
+  const azurirajIsporuku = (projektId, isporukaId, patch) => {
+    update("projekti", db.projekti.map((p) => (p.id === projektId ? { ...p, isporuke: (p.isporuke || []).map((i) => (i.id === isporukaId ? { ...i, ...patch } : i)) } : p)));
+  };
+
+  return (
+    <div>
+      {redovi.length === 0 ? (
+        <EmptyState text="Nema unesenih isporuka na tipskim projektima (kupaonicama). Raspored isporuka uređuje se u detaljima projekta." />
+      ) : (
+        <table className="erp-table">
+          <thead><tr><th>Projekt</th><th>Tip</th><th style={{ width: 90 }}>Grupa</th><th style={{ width: 70 }}>Komada</th><th style={{ width: 130 }}>Datum</th><th style={{ width: 130 }}>Spremno za otpremu</th><th></th></tr></thead>
+          <tbody>
+            {redovi.map(({ projekt, isporuka: i, stavka }) => {
+              const kasni = i.datum && !i.isporuceno && i.datum < todayISO();
+              const otpremnica = i.uOtpremniciId ? db.otpremnice.find((o) => o.id === i.uOtpremniciId) : null;
+              return (
+                <tr key={i.id}>
+                  <td>{projekt.sifra} — {projekt.naziv}</td>
+                  <td>{stavka?.oznaka || "(bez oznake)"}</td>
+                  <td>{i.grupa === "stavkePod" ? "Pod" : "Komplet"}</td>
+                  <td className="f-mono">{i.komada}</td>
+                  <td>{fmtDate(i.datum) || "—"}</td>
+                  <td>
+                    <input type="checkbox" checked={!!i.isporuceno} disabled={!!i.uOtpremniciId} title={otpremnica ? `Uključeno u otpremnicu ${otpremnica.broj} — status se mijenja preko te otpremnice` : ""} onChange={(e) => azurirajIsporuku(projekt.id, i.id, { isporuceno: e.target.checked })} />
+                  </td>
+                  <td style={{ fontSize: 11 }}>
+                    {otpremnica ? <span style={{ color: "var(--ink-soft)" }}>U otpremnici {otpremnica.broj}</span> : kasni ? <span style={{ color: "var(--rust)", fontWeight: 600 }}>Kasni</span> : null}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }
 
@@ -2794,10 +2882,12 @@ function ProizvodnjaPage({ db, update, showToast }) {
         <div className={`nav-tab ${prikaz === "tablica" ? "active" : ""}`} onClick={() => setPrikaz("tablica")}>Tablica</div>
         <div className={`nav-tab ${prikaz === "gantogram" ? "active" : ""}`} onClick={() => setPrikaz("gantogram")}><CalendarRange size={13} style={{ verticalAlign: -2, marginRight: 4 }} />Gantogram</div>
         <div className={`nav-tab ${prikaz === "rezanje" ? "active" : ""}`} onClick={() => setPrikaz("rezanje")}>Plan rezanja</div>
+        <div className={`nav-tab ${prikaz === "isporuke" ? "active" : ""}`} onClick={() => setPrikaz("isporuke")}><PackageCheck size={13} style={{ verticalAlign: -2, marginRight: 4 }} />Isporuke kupaonica</div>
       </div>
 
       {prikaz === "gantogram" && <PlanProizvodnjeView db={db} update={update} showToast={showToast} />}
       {prikaz === "rezanje" && <PlanRezanjaView db={db} update={update} showToast={showToast} />}
+      {prikaz === "isporuke" && <IsporukeKupaonicaView db={db} update={update} />}
 
       {prikaz === "tablica" && (
       <EntityPage
@@ -3427,7 +3517,7 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
                     <tr key={i.id}>
                       <td className="f-mono">{i.redniBroj}</td>
                       <td>
-                        <select className="select" value={`${i.grupa}:${i.stavkaId}`} onChange={(e) => { const [g, id] = e.target.value.split(":"); azurirajIsporuku(i.id, { grupa: g, stavkaId: id }); }}>
+                        <select className="select" disabled={!!i.uOtpremniciId} value={`${i.grupa}:${i.stavkaId}`} onChange={(e) => { const [g, id] = e.target.value.split(":"); azurirajIsporuku(i.id, { grupa: g, stavkaId: id }); }}>
                           <optgroup label="Pod">
                             {stavkePod.map((s) => <option key={s.id} value={`stavkePod:${s.id}`}>{s.oznaka || "(bez oznake)"}</option>)}
                           </optgroup>
@@ -3436,11 +3526,11 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
                           </optgroup>
                         </select>
                       </td>
-                      <td><input className="input f-mono" type="number" min="0" step="1" max={stavka?.komada || undefined} value={i.komada} onChange={(e) => azurirajIsporuku(i.id, { komada: e.target.value })} /></td>
-                      <td><input className="input" type="date" value={i.datum || ""} onChange={(e) => azurirajIsporuku(i.id, { datum: e.target.value })} /></td>
-                      <td><input type="checkbox" checked={!!i.isporuceno} onChange={(e) => azurirajIsporuku(i.id, { isporuceno: e.target.checked })} /></td>
-                      <td>{kasni && <span style={{ fontSize: 11, color: "var(--rust)", fontWeight: 600 }}>Kasni</span>}</td>
-                      <td><button className="btn btn-icon btn-ghost" onClick={() => obrisiIsporuku(i.id)}><Trash2 size={14} /></button></td>
+                      <td><input className="input f-mono" type="number" min="0" step="1" max={stavka?.komada || undefined} disabled={!!i.uOtpremniciId} value={i.komada} onChange={(e) => azurirajIsporuku(i.id, { komada: e.target.value })} /></td>
+                      <td><input className="input" type="date" disabled={!!i.uOtpremniciId} value={i.datum || ""} onChange={(e) => azurirajIsporuku(i.id, { datum: e.target.value })} /></td>
+                      <td><input type="checkbox" checked={!!i.isporuceno} disabled={!!i.uOtpremniciId} title={i.uOtpremniciId ? `Uključeno u otpremnicu ${db.otpremnice.find((o) => o.id === i.uOtpremniciId)?.broj || ""}` : ""} onChange={(e) => azurirajIsporuku(i.id, { isporuceno: e.target.checked })} /></td>
+                      <td style={{ fontSize: 11 }}>{i.uOtpremniciId ? <span style={{ color: "var(--ink-soft)" }}>U otpremnici {db.otpremnice.find((o) => o.id === i.uOtpremniciId)?.broj || ""}</span> : kasni ? <span style={{ color: "var(--rust)", fontWeight: 600 }}>Kasni</span> : null}</td>
+                      <td><button className="btn btn-icon btn-ghost" disabled={!!i.uOtpremniciId} onClick={() => obrisiIsporuku(i.id)}><Trash2 size={14} color={i.uOtpremniciId ? "var(--ink-faint)" : "var(--rust)"} /></button></td>
                     </tr>
                   );
                 })}
