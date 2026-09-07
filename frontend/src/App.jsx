@@ -854,7 +854,7 @@ const MODULI_APLIKACIJE = [
   { key: "zaposlenici", label: "Zaposlenici", icon: UserCog },
 ];
 
-function KioskView() {
+function KioskView({ onPrijava }) {
   const [unos, setUnos] = useState("");
   const [poruka, setPoruka] = useState(null);
   const [sat, setSat] = useState(new Date());
@@ -905,8 +905,9 @@ function KioskView() {
   const bojePoruke = { dolazak: { bg: "#EAF6EF", border: "#B9E3C9", naslov: "#1F6B41" }, odlazak: { bg: "#EAF3F7", border: "#BFE0EC", naslov: "#215C77" }, greska: { bg: "#FBEAE6", border: "#F0C2B5", naslov: "#9A2E1B" } };
 
   return (
-    <div className="erp-root" style={{ minHeight: 640, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--sidebar)", padding: 20 }}>
+    <div className="erp-root" style={{ position: "relative", minHeight: 640, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--sidebar)", padding: 20 }}>
       <GlobalStyle />
+      <div className="f-display" style={{ fontSize: 22, fontWeight: 700, color: "var(--sidebar-ink)", marginBottom: 24, textAlign: "center" }}>ECON Evidencija radnog vremena</div>
       <div className="card" style={{ width: 420, maxWidth: "100%", padding: 32, background: "var(--surface)", textAlign: "center" }}>
         <div className="f-mono" style={{ fontSize: 13, color: "var(--ink-faint)", marginBottom: 6, textTransform: "capitalize" }}>{sat.toLocaleDateString("hr-HR", { weekday: "long", day: "numeric", month: "long" })}</div>
         <div className="f-display" style={{ fontSize: 36, fontWeight: 700, marginBottom: 20 }}>{sat.toLocaleTimeString("hr-HR", { hour: "2-digit", minute: "2-digit" })}</div>
@@ -928,7 +929,11 @@ function KioskView() {
           className="input f-mono" style={{ textAlign: "center", fontSize: 18, padding: "12px 10px" }}
         />
       </div>
-      <button onClick={zatvoriKiosk} style={{ marginTop: 22, background: "none", border: "none", color: "var(--sidebar-ink)", fontSize: 11, cursor: "pointer", opacity: 0.5 }}>Zatvori kiosk način</button>
+      {onPrijava ? (
+        <button onClick={onPrijava} className="btn btn-primary" style={{ position: "fixed", bottom: 20, right: 20 }}>Prijava</button>
+      ) : (
+        <button onClick={zatvoriKiosk} style={{ marginTop: 22, background: "none", border: "none", color: "var(--sidebar-ink)", fontSize: 11, cursor: "pointer", opacity: 0.5 }}>Zatvori kiosk način</button>
+      )}
     </div>
   );
 }
@@ -1155,6 +1160,13 @@ export default function App() {
   const urlParametri = new URLSearchParams(window.location.search);
   const jeKioskNacin = urlParametri.get("kiosk") === "1" || !!urlParametri.get("rfid");
   if (jeKioskNacin) return <KioskView />;
+
+  // Početna stranica (bez prijave) je kiosk zaslon za evidenciju radnog vremena — gumb "Prijava"
+  // u kutu prebacuje na stvarni login (?prijava=1), da uređaj na ulazu ne mora biti posebno adresiran.
+  const zeliPrijavu = urlParametri.get("prijava") === "1";
+  if ((potrebnaPrijava || !prijavljenId) && !zeliPrijavu) {
+    return <KioskView onPrijava={() => { window.location.href = `${window.location.pathname}?prijava=1`; }} />;
+  }
 
   if (potrebnaPrijava || !prijavljenId) {
     return (
