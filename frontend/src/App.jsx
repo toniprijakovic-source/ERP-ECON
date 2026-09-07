@@ -396,6 +396,24 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   return { zaposlenik, satnica, ...osnova, ...zbroj, ukupno, brojDana: dani.length, dani };
 };
 
+// Kooperanti (vanjski suradnici) se ne obračunavaju po formuli plaće (bodovi/staž/topli obrok/
+// putni) nego jednostavno: odrađeni sati (isto obračunsko zaokruživanje kao za zaposlenike) ×
+// njihova ugovorena satnica — zato se posebno prepoznaju po nazivu pozicije i drže odvojeno
+// od redovnog obračuna plaća i od redovne evidencije rada.
+const jeKooperant = (zaposlenik, pozicije) => (pozicije || []).find((p) => p.id === zaposlenik?.pozicijaId)?.naziv?.trim().toLowerCase() === "kooperant";
+
+const obracunMjesecaKooperant = (zaposlenik, mjesec, db) => {
+  const postavke = db.postavkePlaca;
+  const zapisi = (db.evidencijaRada || []).filter((e) => e.zaposlenikId === zaposlenik.id && e.vrijemeDolaska.slice(0, 7) === mjesec && (e.vrsta || "rad") === "rad" && e.vrijemeOdlaska);
+  const dani = zapisi.map((z) => {
+    const smjena = odrediSmjenu(z.vrijemeDolaska, postavke);
+    return { datum: z.vrijemeDolaska.slice(0, 10), odradjeniSati: obracunskiSati(z.vrijemeDolaska, z.vrijemeOdlaska, smjena, postavke) };
+  });
+  const sati = dani.reduce((s, d) => s + d.odradjeniSati, 0);
+  const satnica = Number(zaposlenik.satnicaKooperant) || 0;
+  return { zaposlenik, satnica, sati, ukupno: sati * satnica, brojDana: dani.length, dani };
+};
+
 /* ============================== UPOZORENJA EVIDENCIJE ==============================
    Radnik se treba prijaviti do zadanog sata; ako se ne odjavi, sustav ga automatski
    odjavljuje nakon N sati, ali to ostaje označeno da računovodstvo provjeri. */
@@ -4835,9 +4853,11 @@ function EvidencijaTab({ db, update, showToast }) {
     return m;
   }, [db.evidencijaRada]);
 
-  const zaposleniciSort = useMemo(() => db.zaposlenici
+  const aktivniSort = useMemo(() => db.zaposlenici
     .filter((z) => z.status === "Aktivan")
     .sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")), [db.zaposlenici]);
+  const zaposleniciSort = useMemo(() => aktivniSort.filter((z) => !jeKooperant(z, db.pozicijeZaposlenika)), [aktivniSort, db.pozicijeZaposlenika]);
+  const kooperantiSort = useMemo(() => aktivniSort.filter((z) => jeKooperant(z, db.pozicijeZaposlenika)), [aktivniSort, db.pozicijeZaposlenika]);
 
   const otvoriCeliju = (zaposlenikId, datum) => {
     const zapis = zapisiMapa.get(`${zaposlenikId}|${datum}`);
@@ -4955,43 +4975,54 @@ function EvidencijaTab({ db, update, showToast }) {
         </div>
       </div>
 
-      {zaposleniciSort.length === 0 ? <EmptyState text="Nema aktivnih zaposlenika." /> : (
-        <div className="card" style={{ padding: 0, overflowX: "auto" }}>
-          <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
-            <thead>
-              <tr style={{ background: "var(--surface-alt)" }}>
-                <th style={{ ...stilPrviStupac, background: "var(--surface-alt)", textAlign: "left", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--ink-soft)" }}>Zaposlenik</th>
-                {dani.map((d) => (
-                  <th key={d.datum} style={{ padding: "4px 2px", textAlign: "center", minWidth: 54, borderRight: "1px solid var(--line)", background: d.praznik ? "#FBEAE6" : d.vikend ? "var(--line)" : "var(--surface-alt)" }}>
-                    <div className="f-mono" style={{ fontSize: 12, fontWeight: 700 }}>{d.dan}</div>
-                    <div style={{ fontSize: 9, color: "var(--ink-faint)", textTransform: "uppercase" }}>{["ned", "pon", "uto", "sri", "čet", "pet", "sub"][d.dow]}</div>
-                  </th>
-                ))}
-                <th style={{ padding: "4px 8px", textAlign: "center", minWidth: 64, background: "var(--surface-alt)", fontSize: 11, color: "var(--ink-soft)" }}>Ukupno</th>
-              </tr>
-            </thead>
-            <tbody>
-              {zaposleniciSort.map((z) => {
-                const ukupnoSati = dani.reduce((s, d) => {
-                  const zap = zapisiMapa.get(`${z.id}|${d.datum}`);
-                  if (!zap || zap.vrsta !== "rad") return s;
-                  return s + obracunskiSati(zap.vrijemeDolaska, zap.vrijemeOdlaska, odrediSmjenu(zap.vrijemeDolaska, db.postavkePlaca), db.postavkePlaca);
-                }, 0);
-                return (
-                  <tr key={z.id} style={{ borderTop: "1px solid var(--line)" }}>
-                    <td style={stilPrviStupac}>
-                      <div style={{ fontWeight: 600, fontSize: 12 }}>{z.prezime} {z.ime}</div>
-                      <div style={{ fontSize: 9.5, color: "var(--ink-faint)" }}>{z.rfidKod}</div>
-                    </td>
-                    {dani.map((d) => <Celija key={d.datum} zaposlenik={z} dan={d} />)}
-                    <td className="f-mono" style={{ textAlign: "center", fontWeight: 700, background: "var(--surface-alt)" }}>{ukupnoSati.toFixed(1)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {(() => {
+        const TablicaEvidencije = ({ lista }) => (
+          <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+            <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: "var(--surface-alt)" }}>
+                  <th style={{ ...stilPrviStupac, background: "var(--surface-alt)", textAlign: "left", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--ink-soft)" }}>Zaposlenik</th>
+                  {dani.map((d) => (
+                    <th key={d.datum} style={{ padding: "4px 2px", textAlign: "center", minWidth: 54, borderRight: "1px solid var(--line)", background: d.praznik ? "#FBEAE6" : d.vikend ? "var(--line)" : "var(--surface-alt)" }}>
+                      <div className="f-mono" style={{ fontSize: 12, fontWeight: 700 }}>{d.dan}</div>
+                      <div style={{ fontSize: 9, color: "var(--ink-faint)", textTransform: "uppercase" }}>{["ned", "pon", "uto", "sri", "čet", "pet", "sub"][d.dow]}</div>
+                    </th>
+                  ))}
+                  <th style={{ padding: "4px 8px", textAlign: "center", minWidth: 64, background: "var(--surface-alt)", fontSize: 11, color: "var(--ink-soft)" }}>Ukupno</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lista.map((z) => {
+                  const ukupnoSati = dani.reduce((s, d) => {
+                    const zap = zapisiMapa.get(`${z.id}|${d.datum}`);
+                    if (!zap || zap.vrsta !== "rad") return s;
+                    return s + obracunskiSati(zap.vrijemeDolaska, zap.vrijemeOdlaska, odrediSmjenu(zap.vrijemeDolaska, db.postavkePlaca), db.postavkePlaca);
+                  }, 0);
+                  return (
+                    <tr key={z.id} style={{ borderTop: "1px solid var(--line)" }}>
+                      <td style={stilPrviStupac}>
+                        <div style={{ fontWeight: 600, fontSize: 12 }}>{z.prezime} {z.ime}</div>
+                        <div style={{ fontSize: 9.5, color: "var(--ink-faint)" }}>{z.rfidKod}</div>
+                      </td>
+                      {dani.map((d) => <Celija key={d.datum} zaposlenik={z} dan={d} />)}
+                      <td className="f-mono" style={{ textAlign: "center", fontWeight: 700, background: "var(--surface-alt)" }}>{ukupnoSati.toFixed(1)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        );
+        return (
+          <>
+            <div className="label" style={{ marginBottom: 6 }}>Zaposlenici ({zaposleniciSort.length})</div>
+            {zaposleniciSort.length === 0 ? <EmptyState text="Nema aktivnih zaposlenika." /> : <TablicaEvidencije lista={zaposleniciSort} />}
+
+            <div className="label" style={{ marginTop: 20, marginBottom: 6 }}>Kooperanti ({kooperantiSort.length})</div>
+            {kooperantiSort.length === 0 ? <EmptyState text="Nema aktivnih kooperanata." /> : <TablicaEvidencije lista={kooperantiSort} />}
+          </>
+        );
+      })()}
       <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 8 }}>Klikni bilo koju ćeliju za unos ili izmjenu. Sati su obračunski (zaokruženo na {db.postavkePlaca?.obracunskaJedinicaMin || 30} min, raniji dolazak od početka smjene se ne priznaje).</p>
 
       {urediCeliju && (
@@ -5037,10 +5068,18 @@ function ObracunPlacaTab({ db, update, showToast }) {
   const [mjesec, setMjesec] = useState(todayISO().slice(0, 7));
   const [postavkeOtvorene, setPostavkeOtvorene] = useState(false);
   const [detalj, setDetalj] = useState(null);
+  const [detaljKoop, setDetaljKoop] = useState(null);
 
   const redovi = useMemo(() => db.zaposlenici
-    .filter((z) => z.status === "Aktivan")
+    .filter((z) => z.status === "Aktivan" && !jeKooperant(z, db.pozicijeZaposlenika))
     .map((z) => obracunMjeseca(z, mjesec, db))
+    .filter((r) => r.brojDana > 0)
+    .sort((a, b) => (a.zaposlenik.prezime + a.zaposlenik.ime).localeCompare(b.zaposlenik.prezime + b.zaposlenik.ime, "hr")),
+    [db, mjesec]);
+
+  const redoviKooperanti = useMemo(() => db.zaposlenici
+    .filter((z) => z.status === "Aktivan" && jeKooperant(z, db.pozicijeZaposlenika))
+    .map((z) => obracunMjesecaKooperant(z, mjesec, db))
     .filter((r) => r.brojDana > 0)
     .sort((a, b) => (a.zaposlenik.prezime + a.zaposlenik.ime).localeCompare(b.zaposlenik.prezime + b.zaposlenik.ime, "hr")),
     [db, mjesec]);
@@ -5049,6 +5088,8 @@ function ObracunPlacaTab({ db, update, showToast }) {
     redovni: s.redovni + r.redovni, prekovremeni: s.prekovremeni + r.prekovremeni,
     putni: s.putni + r.putni, topliObrok: s.topliObrok + r.topliObrok, ukupno: s.ukupno + r.ukupno,
   }), { redovni: 0, prekovremeni: 0, putni: 0, topliObrok: 0, ukupno: 0 });
+
+  const ukKooperanti = redoviKooperanti.reduce((s, r) => ({ sati: s.sati + r.sati, ukupno: s.ukupno + r.ukupno }), { sati: 0, ukupno: 0 });
 
   const imaBolovanje = redovi.some((r) => r.dani.some((d) => d.vrsta === "bolovanje"));
 
@@ -5069,6 +5110,7 @@ function ObracunPlacaTab({ db, update, showToast }) {
         </div>
       )}
 
+      <div className="label" style={{ marginBottom: 6 }}>Zaposlenici (obračun plaće)</div>
       {redovi.length === 0 ? <EmptyState text="Nema evidentiranih sati za odabrani mjesec." /> : (
         <>
           <table className="erp-table">
@@ -5115,6 +5157,61 @@ function ObracunPlacaTab({ db, update, showToast }) {
             Iznosi su <strong>neto</strong>, izračunati prema internim pravilima (bodovi, staž, stvarno odrađeni sati). Ovo nije obračun za poreznu prijavu — doprinosi, porezi i JOPPD nisu obuhvaćeni.
           </p>
         </>
+      )}
+
+      <div className="label" style={{ marginTop: 24, marginBottom: 6 }}>Kooperanti (isplata po satnici)</div>
+      {redoviKooperanti.length === 0 ? <EmptyState text="Nema evidentiranih sati kooperanata za odabrani mjesec." /> : (
+        <>
+          <table className="erp-table">
+            <thead>
+              <tr>
+                <th>Kooperant</th>
+                <th style={{ width: 90 }}>Satnica</th>
+                <th style={{ width: 90 }}>Sati</th>
+                <th style={{ width: 110 }}>Za isplatu</th>
+                <th style={{ width: 40 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {redoviKooperanti.map((r) => (
+                <tr key={r.zaposlenik.id}>
+                  <td><strong>{r.zaposlenik.prezime} {r.zaposlenik.ime}</strong></td>
+                  <td className="f-mono">{fmtCurDec(r.satnica)}</td>
+                  <td className="f-mono">{r.sati.toFixed(1)} h</td>
+                  <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(r.ukupno)}</td>
+                  <td><button className="btn btn-icon btn-ghost" title="Detalji po danima" onClick={() => setDetaljKoop(r)}><Eye size={14} /></button></td>
+                </tr>
+              ))}
+              <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
+                <td>UKUPNO ({redoviKooperanti.length})</td>
+                <td></td>
+                <td className="f-mono">{ukKooperanti.sati.toFixed(1)} h</td>
+                <td className="f-mono">{fmtCurDec(ukKooperanti.ukupno)}</td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+          <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 10 }}>
+            Kooperanti se ne obračunavaju po formuli plaće (bodovi/staž/putni/topli obrok) — plaćaju se isključivo po ugovorenoj satnici × stvarno odrađeni sati.
+          </p>
+        </>
+      )}
+
+      {detaljKoop && (
+        <Modal title={`Odrađeni sati — ${detaljKoop.zaposlenik.prezime} ${detaljKoop.zaposlenik.ime} (${mjesec})`} onClose={() => setDetaljKoop(null)} footer={<Btn onClick={() => setDetaljKoop(null)}>Zatvori</Btn>}>
+          <table className="erp-table">
+            <thead><tr><th>Datum</th><th style={{ width: 90 }}>Sati</th></tr></thead>
+            <tbody>
+              {[...detaljKoop.dani].sort((a, b) => a.datum.localeCompare(b.datum)).map((d) => (
+                <tr key={d.datum}><td className="f-mono">{fmtDate(d.datum)}</td><td className="f-mono">{d.odradjeniSati.toFixed(1)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="card" style={{ padding: 12, marginTop: 12, background: "var(--surface-alt)", display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
+            <span>{detaljKoop.sati.toFixed(1)} h × {fmtCurDec(detaljKoop.satnica)}/h</span>
+            <strong className="f-mono">{fmtCurDec(detaljKoop.ukupno)}</strong>
+          </div>
+        </Modal>
       )}
 
       {detalj && (
@@ -5164,7 +5261,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc }) {
   const [del, setDel] = useState(null);
   const [lozinkaZa, setLozinkaZa] = useState(null);
 
-  const emptyZap = { ime: "", prezime: "", pozicijaId: db.pozicijeZaposlenika[0]?.id || "", email: "", telefon: "", status: "Aktivan", datumZaposlenja: todayISO(), kompetencije: [], rfidKod: "", bodovi: 0, udaljenostKm: 0, koristiPrehranuUTvrtki: false };
+  const emptyZap = { ime: "", prezime: "", pozicijaId: db.pozicijeZaposlenika[0]?.id || "", email: "", telefon: "", status: "Aktivan", datumZaposlenja: todayISO(), kompetencije: [], rfidKod: "", bodovi: 0, udaljenostKm: 0, koristiPrehranuUTvrtki: false, satnicaKooperant: 0 };
   const [zapForm, setZapForm] = useState(emptyZap);
 
   const emptyPoz = { naziv: "", opis: "", moduli: [] };
@@ -5295,7 +5392,11 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc }) {
             <Field label="Telefon"><input className="input" value={zapForm.telefon} onChange={(e) => setZapForm({ ...zapForm, telefon: e.target.value })} /></Field>
             <Field label="Status"><select className="select" value={zapForm.status} onChange={(e) => setZapForm({ ...zapForm, status: e.target.value })}><option>Aktivan</option><option>Neaktivan</option></select></Field>
             <Field label="Zaposlen od"><input className="input" type="date" value={zapForm.datumZaposlenja} onChange={(e) => setZapForm({ ...zapForm, datumZaposlenja: e.target.value })} /></Field>
-            <Field label="Bodovi (za satnicu)"><input className="input f-mono" type="number" min="0" value={zapForm.bodovi ?? 0} onChange={(e) => setZapForm({ ...zapForm, bodovi: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
+            {db.pozicijeZaposlenika.find((p) => p.id === zapForm.pozicijaId)?.naziv?.trim().toLowerCase() === "kooperant" ? (
+              <Field label="Satnica kooperanta (€/h)"><input className="input f-mono" type="number" min="0" step="0.5" value={zapForm.satnicaKooperant ?? 0} onChange={(e) => setZapForm({ ...zapForm, satnicaKooperant: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
+            ) : (
+              <Field label="Bodovi (za satnicu)"><input className="input f-mono" type="number" min="0" value={zapForm.bodovi ?? 0} onChange={(e) => setZapForm({ ...zapForm, bodovi: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
+            )}
             <Field label="Udaljenost do posla (km, jedan smjer)"><input className="input f-mono" type="number" min="0" value={zapForm.udaljenostKm ?? 0} onChange={(e) => setZapForm({ ...zapForm, udaljenostKm: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
             <Field label="Prehrana">
               <label style={{ display: "flex", alignItems: "center", gap: 8, height: 36, cursor: "pointer" }}>
