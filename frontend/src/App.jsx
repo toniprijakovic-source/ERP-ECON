@@ -62,16 +62,21 @@ const sljedeciBroj = (lista, polje, prefiks, sirina = 3) => {
   return `${prefiks}${String(sljedeci).padStart(sirina, "0")}`;
 };
 
-// Sljedeći broj otpremnice, format OTP-DD-MM-YY/N — N raste ako je isti dan već izdana otpremnica
+// Sljedeći broj otpremnice, format OTP-DD-MM-N/YY — N raste ako je isti dan već izdana otpremnica
 const sljedeciBrojOtpremnice = (otpremnice, datumISO) => {
   const d = new Date(datumISO);
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const yy = String(d.getFullYear()).slice(-2);
-  const prefiks = `OTP-${dd}-${mm}-${yy}/`;
-  const brojevi = (otpremnice || []).map((o) => o?.broj).filter((b) => b && b.startsWith(prefiks)).map((b) => parseInt(b.slice(prefiks.length), 10)).filter((n) => !isNaN(n));
+  const prefiks = `OTP-${dd}-${mm}-`;
+  const sufiks = `/${yy}`;
+  const brojevi = (otpremnice || [])
+    .map((o) => o?.broj)
+    .filter((b) => b && b.startsWith(prefiks) && b.endsWith(sufiks))
+    .map((b) => parseInt(b.slice(prefiks.length, b.length - sufiks.length), 10))
+    .filter((n) => !isNaN(n));
   const sljedeci = (brojevi.length ? Math.max(...brojevi) : 0) + 1;
-  return `${prefiks}${sljedeci}`;
+  return `${prefiks}${sljedeci}${sufiks}`;
 };
 
 // Sljedeći broj podloge za fakturu, format PDR-<šifra projekta>/N (N = redni broj obračuna za taj projekt)
