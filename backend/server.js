@@ -27,7 +27,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana",
   "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada",
   "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
-  "postavkePlaca", "praznici",
+  "postavkePlaca", "praznici", "kvaliteteMaterijala",
 ];
 
 // Svaki modul (isti "moduli" popis kao u pozicijeZaposlenika) dijeli se na kartice — iste
@@ -40,8 +40,9 @@ const KARTICE_MODULA = {
     pregled: { citanje: ["cjenikRada", "fakture", "materijali", "ponude", "projekti", "radniNalozi"], pisanje: [] },
   },
   skladiste: {
-    zalihe: { citanje: ["materijali", "katalogProfila"], pisanje: ["materijali"] },
+    zalihe: { citanje: ["materijali", "katalogProfila", "kvaliteteMaterijala"], pisanje: ["materijali"] },
     katalog: { citanje: ["katalogProfila"], pisanje: ["katalogProfila"] },
+    kvaliteta: { citanje: ["kvaliteteMaterijala"], pisanje: ["kvaliteteMaterijala"] },
   },
   nabava: {
     narudzbenice: { citanje: ["narudzbenice", "dobavljaci", "katalogProfila", "materijali"], pisanje: ["narudzbenice", "materijali"] },
@@ -55,8 +56,8 @@ const KARTICE_MODULA = {
     isporuke: { citanje: ["projekti"], pisanje: ["projekti"] },
   },
   projekti: {
-    projekti: { citanje: ["cjenikRada", "katalogProfila", "kupci", "materijali", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "zaposlenici", "upitiNabave"], pisanje: ["projekti", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "materijali", "radniNalozi", "upitiNabave"] },
-    ponude: { citanje: ["cjenikRada", "katalogProfila", "materijali", "ponude", "kupci"], pisanje: ["ponude", "cjenikRada", "materijali", "projekti", "radniNalozi"] },
+    projekti: { citanje: ["cjenikRada", "katalogProfila", "kupci", "materijali", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "zaposlenici", "upitiNabave", "kvaliteteMaterijala"], pisanje: ["projekti", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "materijali", "radniNalozi", "upitiNabave"] },
+    ponude: { citanje: ["cjenikRada", "katalogProfila", "materijali", "ponude", "kupci", "kvaliteteMaterijala"], pisanje: ["ponude", "cjenikRada", "materijali", "projekti", "radniNalozi"] },
   },
   fakturiranje: {
     fakture: { citanje: ["fakture", "kupci", "projekti"], pisanje: ["fakture"] },

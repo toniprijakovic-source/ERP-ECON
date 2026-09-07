@@ -170,7 +170,7 @@ const izracunPotrebnogMaterijala = (pozicije, katalog, otpadLimPoTipu = {}) => {
 // montaža po poziciji (broj montera × planirani sati × količina × satnica montaže — satnica je
 // fiksna za cijelu ponudu), AKZ po poziciji (više stavki moguće, svaka = ukupna masa pozicije ×
 // vlastita cijena €/kg), te konačna cijena s maržom.
-const izracunPonude = (ponuda, materijali, cjenikRada, katalog = []) => {
+const izracunPonude = (ponuda, materijali, cjenikRada, katalog = [], kvalitete = []) => {
   const satiPoOperaciji = praznaOperacijaSati();
   (ponuda.pozicije || []).forEach((p) => {
     OPERACIJE.forEach((o) => { satiPoOperaciji[o.key] += Number(p.operacije?.[o.key] || 0); });
@@ -188,11 +188,11 @@ const izracunPonude = (ponuda, materijali, cjenikRada, katalog = []) => {
   const satiMontaze = (ponuda.pozicije || []).reduce((s, p) => s + (Number(p.brojMontera) || 0) * (Number(p.planiraniSatiMontaza) || 0) * (Number(p.kolicina) || 0), 0);
   const trosakMontaze = satiMontaze * satnicaMontaza;
 
-  const ukupnaMasaKonstrukcije = (ponuda.pozicije || []).reduce((s, p) => s + masaPozicije(p, katalog) * (Number(p.kolicina) || 0), 0);
+  const ukupnaMasaKonstrukcije = (ponuda.pozicije || []).reduce((s, p) => s + masaPozicije(p, katalog, kvalitete) * (Number(p.kolicina) || 0), 0);
 
   const akzPoTipu = AKZ_TIPOVI.map((t) => ({ ...t, masa: 0, iznos: 0 }));
   (ponuda.pozicije || []).forEach((p) => {
-    const masaUkupnaPoz = masaPozicije(p, katalog) * (Number(p.kolicina) || 0);
+    const masaUkupnaPoz = masaPozicije(p, katalog, kvalitete) * (Number(p.kolicina) || 0);
     (p.stavkeAKZ || []).forEach((a) => {
       const red = akzPoTipu.find((t) => t.key === a.tip);
       if (!red) return;
@@ -557,13 +557,22 @@ const Badge = ({ status }) => <span className={`badge badge-${STATUS_TONE[status
 
 /* ============================== SEED DATA ============================== */
 
-// Kvaliteta materijala — faktor gustoće u odnosu na konstrukcijski čelik (7.85 kg/dm3)
-const KVALITETE_MATERIJALA = [
-  { key: "celik", label: "Konstrukcijski čelik (S235 / S275 / S355)", faktor: 1 },
-  { key: "inox304", label: "Nehrđajući čelik – Inox 304", faktor: 7.9 / 7.85 },
-  { key: "inox316", label: "Nehrđajući čelik – Inox 316", faktor: 8.0 / 7.85 },
-  { key: "alu", label: "Aluminij (EN AW-6082)", faktor: 2.7 / 7.85 },
+// Kvaliteta materijala — korisnički uređivana lista (Skladište → Kvaliteta materijala), spremljena
+// pod db.kvaliteteMaterijala kao [{ id, naziv, gustoca (kg/dm3) }]. Faktor gustoće relativno na
+// konstrukcijski čelik (7.85 kg/dm3, gustoća na kojoj se temelje sve mase u katalogu profila/limova)
+// računa se iz gustoća pri korištenju — vidi faktorGustoce(). Ovo je samo zadana/početna lista za
+// prvi seed i za slučaj da db.kvaliteteMaterijala još nije učitan.
+const GUSTOCA_CELIKA = 7.85;
+const ZADANE_KVALITETE_MATERIJALA = [
+  { id: "celik", naziv: "Konstrukcijski čelik (S235 / S275 / S355)", gustoca: 7.85 },
+  { id: "inox304", naziv: "Nehrđajući čelik – Inox 304", gustoca: 7.9 },
+  { id: "inox316", naziv: "Nehrđajući čelik – Inox 316", gustoca: 8.0 },
+  { id: "alu", naziv: "Aluminij (EN AW-6082)", gustoca: 2.7 },
 ];
+const faktorGustoce = (kvaliteta, kljuc) => {
+  const entry = (kvaliteta && kvaliteta.length ? kvaliteta : ZADANE_KVALITETE_MATERIJALA).find((k) => k.id === (kljuc || "celik"));
+  return entry ? Number(entry.gustoca) / GUSTOCA_CELIKA : 1;
+};
 
 // Antikorozivna zaštita (AKZ) — po poziciji se može dodati više stavki (npr. sačmarenje pa
 // vruće cinčanje), svaka sa svojom cijenom €/kg koja se množi s UKUPNOM masom te pozicije.
@@ -589,7 +598,7 @@ const generirajRfidKod = (ime, prezime, postojeciKodovi) => {
   return kod;
 };
 
-const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi", "postavkePlaca", "praznici"];
+const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi", "postavkePlaca", "praznici", "kvaliteteMaterijala"];
 
 /* ============================== SMALL UI PRIMITIVES ============================== */
 const Btn = ({ variant = "ghost", size, icon: Icon, children, className = "", ...rest }) => (
@@ -880,7 +889,7 @@ const MODULI_APLIKACIJE = [
 // (koji ključevi se smiju čitati/mijenjati) živi na backendu — vidi KARTICE_MODULA u server.js.
 const KARTICE_MODULA = {
   dashboard: { kartice: [{ key: "pregled", naziv: "Pregled" }] },
-  skladiste: { kartice: [{ key: "zalihe", naziv: "Zalihe" }, { key: "katalog", naziv: "Katalog profila i limova" }] },
+  skladiste: { kartice: [{ key: "zalihe", naziv: "Zalihe" }, { key: "katalog", naziv: "Katalog profila i limova" }, { key: "kvaliteta", naziv: "Kvaliteta materijala" }] },
   nabava: { kartice: [{ key: "narudzbenice", naziv: "Narudžbenice" }, { key: "upiti", naziv: "Upiti materijala" }, { key: "postavke", naziv: "Postavke tvrtke" }] },
   proizvodnja: { kartice: [{ key: "tablica", naziv: "Tablica" }, { key: "gantogram", naziv: "Gantogram" }, { key: "rezanje", naziv: "Plan rezanja" }, { key: "isporuke", naziv: "Isporuke kupaonica" }] },
   projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "ponude", naziv: "Ponude" }] },
@@ -1333,7 +1342,7 @@ export default function App() {
 function Dashboard({ db, setPage }) {
   const aktivniProjekti = db.projekti.filter((p) => ["U izradi", "Montaža"].includes(p.status));
   const otvorenePonude = db.ponude.filter((p) => p.status === "Poslana" || p.status === "U izradi");
-  const vrijednostPonuda = otvorenePonude.reduce((s, p) => s + izracunPonude(p, db.materijali, db.cjenikRada, db.katalogProfila).cijenaKonacna, 0);
+  const vrijednostPonuda = otvorenePonude.reduce((s, p) => s + izracunPonude(p, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala).cijenaKonacna, 0);
   const radniNaloziUTijeku = db.radniNalozi.filter((r) => r.status === "U tijeku");
   const niskaZaliha = db.materijali.filter((m) => m.kolicina < m.minZaliha);
   const neplaceneFakture = db.fakture.filter((f) => f.status !== "Plaćeno");
@@ -1419,8 +1428,8 @@ const masaIzKataloga = (entry, dimenzija) => (entry ? (Number(entry.vrijednost) 
 
 // Pozicija se sastoji od više stavki (profila i/ili limova) — masa/kom jedne stavke, pa masa cijele pozicije
 // (zbroj svih stavki × njihovi komadi, pomnoženo s količinom pozicije).
-const masaStavkePozicije = (s, katalog) => {
-  const faktor = KVALITETE_MATERIJALA.find((k) => k.key === (s.kvaliteta || "celik"))?.faktor || 1;
+const masaStavkePozicije = (s, katalog, kvalitete) => {
+  const faktor = faktorGustoce(kvalitete, s.kvaliteta);
   if (s.nacinMase === "katalog") {
     const entry = katalog.find((k) => k.id === s.katalogId);
     if (entry?.jedinica === "kg/m2") {
@@ -1431,7 +1440,7 @@ const masaStavkePozicije = (s, katalog) => {
   }
   return Number(s.masaJed) || 0;
 };
-const masaPozicije = (p, katalog) => (p.stavke || []).reduce((sum, s) => sum + masaStavkePozicije(s, katalog) * (Number(s.komada) || 1), 0);
+const masaPozicije = (p, katalog, kvalitete) => (p.stavke || []).reduce((sum, s) => sum + masaStavkePozicije(s, katalog, kvalitete) * (Number(s.komada) || 1), 0);
 
 function SkladistePage({ db, update, showToast, mojaPozicija }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "skladiste");
@@ -1439,6 +1448,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
   useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "zalihe"); }, [dozvKartice, tab]);
   const mozeZalihe = dozvolaZaKarticu(mojaPozicija, "skladiste", "zalihe").izmjene;
   const mozeKatalog = dozvolaZaKarticu(mojaPozicija, "skladiste", "katalog").izmjene;
+  const mozeKvaliteta = dozvolaZaKarticu(mojaPozicija, "skladiste", "kvaliteta").izmjene;
   const [modal, setModal] = useState(null); // {mode:'add'|'edit', item}
   const [del, setDel] = useState(null);
   const empty = { sifra: "", naziv: "", tip: TIPOVI_MATERIJALA[0], dimenzije: "", jm: "kg", cijena: 0, kolicina: 0, minZaliha: 0, lokacija: "", kgPoM: 0 };
@@ -1449,7 +1459,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
   const [katalogUnos, setKatalogUnos] = useState(emptyKatalogUnos);
   const katalogEntry = db.katalogProfila.find((k) => k.id === katalogUnos.katalogId);
   const jeLimUnos = katalogEntry?.jedinica === "kg/m2";
-  const faktorKvaliteteUnos = KVALITETE_MATERIJALA.find((k) => k.key === katalogUnos.kvaliteta)?.faktor || 1;
+  const faktorKvaliteteUnos = faktorGustoce(db.kvaliteteMaterijala, katalogUnos.kvaliteta);
   const izracunataMasaUnos = !katalogEntry ? 0 : jeLimUnos
     ? ((Number(katalogUnos.duzinaMM) || 0) / 1000) * ((Number(katalogUnos.sirinaMM) || 0) / 1000) * Number(katalogEntry.vrijednost) * faktorKvaliteteUnos * (Number(katalogUnos.komada) || 1)
     : ((Number(katalogUnos.duzinaMM) || 0) / 1000) * Number(katalogEntry.vrijednost) * faktorKvaliteteUnos * (Number(katalogUnos.komada) || 1);
@@ -1457,13 +1467,18 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
   const odaberiKatalogUnos = (katalogId) => {
     setKatalogUnos({ ...emptyKatalogUnos, katalogId });
     const entry = db.katalogProfila.find((k) => k.id === katalogId);
-    if (entry) setForm((f) => ({ ...f, tip: entry.tip, naziv: `${entry.tip} ${entry.oznaka}`, jm: "kg" }));
+    if (entry) {
+      // Šifra se predlaže iz oznake (isti obrazac kao kreirajMaterijalIzKataloga) ali ostaje uredljiva —
+      // predlaže se samo ako korisnik već nije nešto upisao, da ne prepiše ručni unos.
+      const predlozenaSifra = entry.oznaka.replace(/[^A-Za-z0-9]+/g, "-");
+      setForm((f) => ({ ...f, sifra: f.sifra.trim() ? f.sifra : predlozenaSifra, tip: entry.tip, naziv: `${entry.tip} ${entry.oznaka}`, jm: "kg" }));
+    }
   };
 
   const openAdd = () => { setForm(empty); setKatalogUnos(emptyKatalogUnos); setModal({ mode: "add" }); };
   const openEdit = (item) => { setForm(item); setKatalogUnos(emptyKatalogUnos); setModal({ mode: "edit" }); };
   const save = () => {
-    if (!form.sifra.trim() || !form.naziv.trim()) return;
+    if (!form.sifra.trim() || !form.naziv.trim()) { showToast("Šifra i naziv su obavezni."); return; }
     const duplikat = db.materijali.some((m) => m.sifra.trim().toLowerCase() === form.sifra.trim().toLowerCase() && m.id !== form.id);
     if (duplikat) { showToast(`Šifra "${form.sifra}" već postoji na drugom materijalu — koristi drugu šifru.`); return; }
     const dimenzijeIzKataloga = !katalogEntry ? form.dimenzije : jeLimUnos ? `${katalogUnos.duzinaMM || 0}×${katalogUnos.sirinaMM || 0} mm` : `${katalogUnos.duzinaMM || 0} mm`;
@@ -1495,12 +1510,31 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
     showToast("Stavka kataloga spremljena.");
   };
 
+  // kvaliteta materijala CRUD — korisnički definirane vrste (naziv + gustoća kg/dm3), koriste se
+  // u padajućim izbornicima kod unosa materijala i pozicija ponude (vidi faktorGustoce()).
+  const kvaliteteMaterijala = db.kvaliteteMaterijala && db.kvaliteteMaterijala.length ? db.kvaliteteMaterijala : ZADANE_KVALITETE_MATERIJALA;
+  const [kvalModal, setKvalModal] = useState(null);
+  const [kvalDel, setKvalDel] = useState(null);
+  const emptyKval = { naziv: "", gustoca: GUSTOCA_CELIKA };
+  const [kvalForm, setKvalForm] = useState(emptyKval);
+  const openKvalAdd = () => { setKvalForm(emptyKval); setKvalModal("add"); };
+  const openKvalEdit = (item) => { setKvalForm(item); setKvalModal("edit"); };
+  const saveKval = () => {
+    if (!kvalForm.naziv.trim()) return;
+    const payload = { ...kvalForm, gustoca: Number(kvalForm.gustoca) || 0 };
+    if (kvalModal === "add") update("kvaliteteMaterijala", [...kvaliteteMaterijala, { ...payload, id: uid("kvl") }]);
+    else update("kvaliteteMaterijala", kvaliteteMaterijala.map((k) => (k.id === kvalForm.id ? payload : k)));
+    setKvalModal(null);
+    showToast("Kvaliteta materijala spremljena.");
+  };
+
   return (
     <div>
       <PageHeader title="Skladište" icon={Package} subtitle="Zalihe materijala i katalog standardnih profila/limova za izračun mase" />
       <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
         {dozvKartice.some((k) => k.key === "zalihe") && <div className={`nav-tab ${tab === "zalihe" ? "active" : ""}`} onClick={() => setTab("zalihe")}>Zalihe</div>}
         {dozvKartice.some((k) => k.key === "katalog") && <div className={`nav-tab ${tab === "katalog" ? "active" : ""}`} onClick={() => setTab("katalog")}>Katalog profila i limova</div>}
+        {dozvKartice.some((k) => k.key === "kvaliteta") && <div className={`nav-tab ${tab === "kvaliteta" ? "active" : ""}`} onClick={() => setTab("kvaliteta")}>Kvaliteta materijala</div>}
       </div>
 
       {tab === "zalihe" && (
@@ -1539,6 +1573,23 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
         </>
       )}
 
+      {tab === "kvaliteta" && (
+        <>
+          <div style={{ marginBottom: 12, fontSize: 13, color: "var(--ink-soft)" }}>
+            Gustoća (kg/dm³) određuje koliko je ta vrsta materijala teža/lakša od konstrukcijskog čelika (7,85 kg/dm³, na kojem se temelje sve mase u katalogu profila/limova) — koristi se za automatski izračun mase kod unosa materijala i pozicija ponude.
+          </div>
+          <EntityPage
+            title="" data={kvaliteteMaterijala} onAdd={openKvalAdd} onEdit={openKvalEdit} onDelete={(row) => setKvalDel(row)}
+            addLabel="Nova kvaliteta materijala" searchKeys={["naziv"]} readOnly={!mozeKvaliteta}
+            columns={[
+              { key: "naziv", label: "Naziv" },
+              { key: "gustoca", label: "Gustoća (kg/dm³)", render: (r) => <span className="f-mono">{r.gustoca}</span> },
+              { key: "faktor", label: "Faktor prema čeliku", render: (r) => <span className="f-mono">{(Number(r.gustoca) / GUSTOCA_CELIKA).toFixed(3)}</span> },
+            ]}
+          />
+        </>
+      )}
+
       {modal && (
         <Modal title={modal.mode === "add" ? "Novi materijal" : "Uredi materijal"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={save}>Spremi</Btn></>}>
           <Field label="Profil / lim iz kataloga (opcionalno — sam izračuna masu)">
@@ -1572,7 +1623,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
                 <div style={{ width: 170 }}>
                   <label className="label">Kvaliteta materijala</label>
                   <select className="select" value={katalogUnos.kvaliteta} onChange={(e) => setKatalogUnos({ ...katalogUnos, kvaliteta: e.target.value })}>
-                    {KVALITETE_MATERIJALA.map((k) => <option key={k.key} value={k.key}>{k.label}</option>)}
+                    {(db.kvaliteteMaterijala && db.kvaliteteMaterijala.length ? db.kvaliteteMaterijala : ZADANE_KVALITETE_MATERIJALA).map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}
                   </select>
                 </div>
                 <div style={{ width: 130 }}>
@@ -1588,8 +1639,8 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
             <Field label="Naziv"><input className="input" value={form.naziv} onChange={(e) => setForm({ ...form, naziv: e.target.value })} /></Field>
             <Field label="Tip"><select className="select" value={form.tip} onChange={(e) => setForm({ ...form, tip: e.target.value })}>{TIPOVI_MATERIJALA.map((t) => <option key={t}>{t}</option>)}</select></Field>
             <Field label="Dimenzije">{katalogEntry ? <div className="input" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{jeLimUnos ? `${katalogUnos.duzinaMM || 0}×${katalogUnos.sirinaMM || 0} mm` : `${katalogUnos.duzinaMM || 0} mm`}</div> : <input className="input" value={form.dimenzije} onChange={(e) => setForm({ ...form, dimenzije: e.target.value })} />}</Field>
-            <Field label="Jedinica mjere"><select className="select" value={form.jm} onChange={(e) => setForm({ ...form, jm: e.target.value })}>{JEDINICE.map((j) => <option key={j}>{j}</option>)}</select></Field>
-            <Field label="Cijena po jedinici (€)"><input className="input f-mono" type="number" step="0.01" value={form.cijena} onChange={(e) => setForm({ ...form, cijena: e.target.value })} /></Field>
+            <Field label="Jedinica mjere">{katalogEntry ? <div className="input" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>kg</div> : <select className="select" value={form.jm} onChange={(e) => setForm({ ...form, jm: e.target.value })}>{JEDINICE.map((j) => <option key={j}>{j}</option>)}</select>}</Field>
+            <Field label={katalogEntry ? "Cijena (€/kg)" : "Cijena po jedinici (€)"}><input className="input f-mono" type="number" step="0.01" value={form.cijena} onChange={(e) => setForm({ ...form, cijena: e.target.value })} /></Field>
             <Field label="Masa po m' (kg/m) — za auto-izračun po dužini">{katalogEntry && !jeLimUnos ? <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{katalogEntry.vrijednost}</div> : <input className="input f-mono" type="number" step="0.01" value={form.kgPoM || 0} onChange={(e) => setForm({ ...form, kgPoM: e.target.value })} />}</Field>
             <Field label="Trenutno stanje">{katalogEntry ? <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{izracunataMasaUnos.toFixed(2)}</div> : <input className="input f-mono" type="number" value={form.kolicina} onChange={(e) => setForm({ ...form, kolicina: e.target.value })} />}</Field>
             <Field label="Minimalna zaliha"><input className="input f-mono" type="number" value={form.minZaliha} onChange={(e) => setForm({ ...form, minZaliha: e.target.value })} /></Field>
@@ -1610,6 +1661,15 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
         </Modal>
       )}
       {katDel && <ConfirmDelete label={katDel.oznaka} onCancel={() => setKatDel(null)} onConfirm={() => { update("katalogProfila", db.katalogProfila.filter((k) => k.id !== katDel.id)); setKatDel(null); showToast("Stavka kataloga obrisana."); }} />}
+
+      {kvalModal && (
+        <Modal title={kvalModal === "add" ? "Nova kvaliteta materijala" : "Uredi kvalitetu materijala"} onClose={() => setKvalModal(null)} footer={<><Btn onClick={() => setKvalModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={saveKval}>Spremi</Btn></>}>
+          <Field label="Naziv (npr. Nehrđajući čelik – Inox 304)"><input className="input" value={kvalForm.naziv} onChange={(e) => setKvalForm({ ...kvalForm, naziv: e.target.value })} /></Field>
+          <Field label="Gustoća (kg/dm³)"><input className="input f-mono" type="number" step="0.01" min="0" value={kvalForm.gustoca} onChange={(e) => setKvalForm({ ...kvalForm, gustoca: e.target.value })} /></Field>
+          <p style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Konstrukcijski čelik ima gustoću {GUSTOCA_CELIKA} kg/dm³ (faktor 1,00) — sve ostale gustoće se prema njemu razmjerno preračunavaju.</p>
+        </Modal>
+      )}
+      {kvalDel && <ConfirmDelete label={kvalDel.naziv} onCancel={() => setKvalDel(null)} onConfirm={() => { update("kvaliteteMaterijala", kvaliteteMaterijala.filter((k) => k.id !== kvalDel.id)); setKvalDel(null); showToast("Kvaliteta materijala obrisana."); }} />}
     </div>
   );
 }
@@ -3299,11 +3359,11 @@ function ProizvodnjaPage({ db, update, showToast, mojaPozicija }) {
 // Pozicija (npr. "P1 — nosač") sastoji se od više stavki materijala (profili i/ili limovi) — svaka
 // stavka ima svoj način unosa mase, a limovi (kataloške stavke s jedinicom kg/m²) unose se preko
 // širine i dužine (mm) iz kojih se površina i masa računaju automatski.
-function StavkaPozicijeRedak({ stavka: s, katalog, grupe, onAzuriraj, onObrisi }) {
+function StavkaPozicijeRedak({ stavka: s, katalog, grupe, kvalitete, onAzuriraj, onObrisi }) {
   const nacinMase = s.nacinMase || "rucno";
   const katEntry = katalog.find((k) => k.id === s.katalogId);
   const jeLim = katEntry?.jedinica === "kg/m2";
-  const masaJedEfektivna = masaStavkePozicije(s, katalog);
+  const masaJedEfektivna = masaStavkePozicije(s, katalog, kvalitete);
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap", padding: "8px 0", borderBottom: "1px dashed var(--line)" }}>
       <div style={{ width: 130 }}>
@@ -3346,7 +3406,7 @@ function StavkaPozicijeRedak({ stavka: s, katalog, grupe, onAzuriraj, onObrisi }
           <div style={{ width: 160 }}>
             <label className="label">Kvaliteta materijala</label>
             <select className="select" value={s.kvaliteta || "celik"} onChange={(e) => onAzuriraj({ kvaliteta: e.target.value })}>
-              {KVALITETE_MATERIJALA.map((k) => <option key={k.key} value={k.key}>{k.label}</option>)}
+              {(kvalitete && kvalitete.length ? kvalitete : ZADANE_KVALITETE_MATERIJALA).map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}
             </select>
           </div>
         </>
@@ -3369,7 +3429,7 @@ function StavkaPozicijeRedak({ stavka: s, katalog, grupe, onAzuriraj, onObrisi }
   );
 }
 
-function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], satnicaMontaza = 0 }) {
+function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], kvalitete = [], satnicaMontaza = 0 }) {
   const [otvorene, setOtvorene] = useState(() => Object.fromEntries(pozicije.map((p) => [p.id, true])));
   const toggle = (id) => setOtvorene((o) => ({ ...o, [id]: !o[id] }));
   const grupe = katalogPoTipu(katalog);
@@ -3412,7 +3472,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
     <div>
       {pozicije.length === 0 && <div style={{ textAlign: "center", color: "var(--ink-faint)", padding: "16px 0", fontSize: 13 }}>Nema pozicija. Dodajte prvu poziciju konstrukcije.</div>}
       {pozicije.map((p) => {
-        const masaJedEfektivna = masaPozicije(p, katalog);
+        const masaJedEfektivna = masaPozicije(p, katalog, kvalitete);
         return (
           <div key={p.id} className="card" style={{ padding: 12, marginBottom: 10, background: "var(--surface-alt)" }}>
             <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
@@ -3427,7 +3487,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
               <div className="label" style={{ marginBottom: 2 }}>Stavke materijala (profili / limovi) u jednoj poziciji</div>
               {(p.stavke || []).map((s) => (
                 <StavkaPozicijeRedak
-                  key={s.id} stavka={s} katalog={katalog} grupe={grupe}
+                  key={s.id} stavka={s} katalog={katalog} grupe={grupe} kvalitete={kvalitete}
                   onAzuriraj={(patch) => updateStavka(p.id, s.id, patch)}
                   onObrisi={() => removeStavka(p.id, s.id)}
                 />
@@ -3976,7 +4036,7 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
             <thead><tr><th>Oz.</th><th>Naziv</th><th>Kom</th><th>Masa/kom</th><th>Ukupno masa</th><th>Sati</th></tr></thead>
             <tbody>
               {pozicije.map((p) => {
-                const masaJed = masaPozicije(p, db.katalogProfila);
+                const masaJed = masaPozicije(p, db.katalogProfila, db.kvaliteteMaterijala);
                 const sati = OPERACIJE.reduce((s, o) => s + (Number(p.operacije?.[o.key]) || 0), 0);
                 return (
                   <tr key={p.id}>
@@ -4054,7 +4114,7 @@ const posaljiObavijestVoditelju = (projekt, zaposlenik) => {
 
 function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
   const t = db.postavkeTvrtke || {};
-  const calc = izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila);
+  const calc = izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala);
   const pdvStopa = Number(t.pdvStopa ?? 25);
   const izradaIznos = calc.trosakRada + calc.trosakMaterijala;
   const komercijalneStavke = [
@@ -4109,7 +4169,7 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
               <thead><tr><th style={{ width: 34 }}>Poz.</th><th>Naziv</th><th style={{ width: 55 }}>Kom.</th><th style={{ width: 80 }}>Masa (kg)</th></tr></thead>
               <tbody>
                 {ponuda.pozicije.map((p) => {
-                  const masaJed = masaPozicije(p, db.katalogProfila);
+                  const masaJed = masaPozicije(p, db.katalogProfila, db.kvaliteteMaterijala);
                   return <tr key={p.id}><td>{p.oznaka}</td><td>{p.naziv}</td><td>{p.kolicina}</td><td>{(masaJed * Number(p.kolicina)).toFixed(1)}</td></tr>;
                 })}
               </tbody>
@@ -4204,7 +4264,7 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
     showToast("Cjenik rada ažuriran.");
   };
   const pretvoriUProjekt = (ponuda) => {
-    const calc = izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila);
+    const calc = izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala);
     const noviProjekt = {
       id: uid("proj"), sifra: sljedeciBroj(db.projekti, "sifra", "PRJ-2026-"), naziv: ponuda.naziv, kupacId: ponuda.kupacId,
       status: "Odobren", vrijednost: Math.round(calc.cijenaKonacna), rokPocetka: todayISO(), rokZavrsetka: addDays(todayISO(), 60),
@@ -4289,8 +4349,8 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
             { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
             { key: "naziv", label: "Naziv posla" },
             { key: "kupac", label: "Kupac", render: (r) => kupacNaziv(r.kupacId) },
-            { key: "sati", label: "Sati", render: (r) => <span className="f-mono">{izracunPonude(r, db.materijali, db.cjenikRada, db.katalogProfila).ukupnoSati} h</span> },
-            { key: "ukupno", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCurDec(izracunPonude(r, db.materijali, db.cjenikRada, db.katalogProfila).cijenaKonacna)}</span> },
+            { key: "sati", label: "Sati", render: (r) => <span className="f-mono">{izracunPonude(r, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala).ukupnoSati} h</span> },
+            { key: "ukupno", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCurDec(izracunPonude(r, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala).cijenaKonacna)}</span> },
             { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
             { key: "pdf", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrintPonuda(r)}>PDF ponude</Btn> },
             {
@@ -4328,7 +4388,7 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
       )}
 
       {modal === "pon" && (() => {
-        const calc = izracunPonude(ponForm, db.materijali, db.cjenikRada, db.katalogProfila);
+        const calc = izracunPonude(ponForm, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala);
 
         const azurirajOtpadLima = (katalogId, postotak) => setPonForm({ ...ponForm, otpadLimPoTipu: { ...(ponForm.otpadLimPoTipu || {}), [katalogId]: postotak } });
 
@@ -4376,7 +4436,7 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
               <span style={{ fontSize: 11, color: "var(--ink-faint)" }}>Satnice se uređuju putem gumba "Cjenik rada"</span>
             </div>
             <div style={{ marginTop: 8, marginBottom: 16 }}>
-              <PozicijeEditor pozicije={ponForm.pozicije} setPozicije={(rows) => setPonForm({ ...ponForm, pozicije: rows })} cjenikRada={db.cjenikRada} katalog={db.katalogProfila} satnicaMontaza={ponForm.satnicaMontaza} />
+              <PozicijeEditor pozicije={ponForm.pozicije} setPozicije={(rows) => setPonForm({ ...ponForm, pozicije: rows })} cjenikRada={db.cjenikRada} katalog={db.katalogProfila} kvalitete={db.kvaliteteMaterijala} satnicaMontaza={ponForm.satnicaMontaza} />
             </div>
 
             <Field label="Materijal (iz skladišta)"><LineItemsEditor mode="materijal" rows={ponForm.materijalStavke} setRows={(rows) => setPonForm({ ...ponForm, materijalStavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} /></Field>
