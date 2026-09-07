@@ -2601,13 +2601,16 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, showToast, onClose
     const stavka = (i.grupa === "stavkePod" ? projekt.stavkePod : projekt.stavkeKomplet || []).find((s) => s.id === i.stavkaId);
     return `${i.grupa === "stavkePod" ? "Pod" : "Komplet"} — ${stavka?.oznaka || "(bez oznake)"}`;
   };
+  // Naručena količina po stavci — kod normativa je to ukupan broj komada tog tipa (iz Pod/Komplet
+  // tablice), kod obične narudžbe kupca je to unesena kolicina na toj stavci narudžbe.
+  const narucenoZaIsporuku = (i) => (i.grupa === "stavkePod" ? projekt.stavkePod : projekt.stavkeKomplet || []).find((s) => s.id === i.stavkaId)?.komada;
   const dostupneIsporuke = koristiNormativ ? (projekt.isporuke || []).filter((i) => i.isporuceno && !i.uOtpremniciId) : [];
   const emptyForm = () => ({
     broj: sljedeciBrojOtpremnice(db.otpremnice, todayISO()), datum: todayISO(), mjesto: "Prelog",
     projektId: projekt.id, kupacId: projekt?.kupacId || "", narudzbaId: narudzba?.id || null, izdaoId: "", napomena: "",
     stavke: koristiNormativ
-      ? dostupneIsporuke.map((i) => ({ id: uid("ost"), isporukaId: i.id, naziv: nazivIsporuke(i), jm: "kom", datumPlan: i.datum, kolicina: String(i.komada) }))
-      : (narudzba?.stavke || []).map((s) => ({ id: uid("ost"), narudzbaStavkaId: s.id, naziv: s.naziv, jm: s.jm, kolicina: "" })),
+      ? dostupneIsporuke.map((i) => ({ id: uid("ost"), isporukaId: i.id, naziv: nazivIsporuke(i), jm: "kom", datumPlan: i.datum, narucena: narucenoZaIsporuku(i), kolicina: String(i.komada) }))
+      : (narudzba?.stavke || []).map((s) => ({ id: uid("ost"), narudzbaStavkaId: s.id, naziv: s.naziv, jm: s.jm, narucena: s.kolicina, kolicina: "" })),
   });
   const [form, setForm] = useState(emptyForm());
 
@@ -2651,13 +2654,14 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, showToast, onClose
         <>
           <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Stavke za isporuku (upiši količinu koja se sada šalje)</div>
           <table className="erp-table">
-            <thead><tr><th>Naziv</th>{koristiNormativ && <th style={{ width: 110 }}>Planirano</th>}<th style={{ width: 80 }}>JM</th><th style={{ width: 130 }}>Količina</th></tr></thead>
+            <thead><tr><th>Naziv</th>{koristiNormativ && <th style={{ width: 110 }}>Planirano</th>}<th style={{ width: 80 }}>JM</th><th style={{ width: 90 }}>Naručeno</th><th style={{ width: 130 }}>Količina</th></tr></thead>
             <tbody>
               {form.stavke.map((s, i) => (
                 <tr key={s.id}>
                   <td>{s.naziv}</td>
                   {koristiNormativ && <td className="f-mono">{fmtDate(s.datumPlan) || "—"}</td>}
                   <td className="f-mono">{s.jm}</td>
+                  <td className="f-mono">{s.narucena ?? "—"}</td>
                   <td><input className="input f-mono" type="number" min="0" max={koristiNormativ ? dostupneIsporuke.find((d) => d.id === s.isporukaId)?.komada : undefined} style={{ padding: "5px 8px" }} value={s.kolicina} onChange={(e) => azurirajKolicinu(i, e.target.value)} /></td>
                 </tr>
               ))}
