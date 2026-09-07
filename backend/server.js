@@ -207,6 +207,7 @@ app.put("/api/zaposlenici/:id/lozinka", autentikacija, async (req, res) => {
 });
 
 // ---------- KIOSK prijava dolaska/odlaska (bez potrebe za login/PIN) ----------
+const KIOSK_BLOKADA_MIN = 3;
 app.post("/api/kiosk/scan", async (req, res) => {
   const kod = (req.body.rfidKod || "").trim().toUpperCase();
   const zaposlenici = (await ucitajKljuc("zaposlenici")) || [];
@@ -214,17 +215,34 @@ app.post("/api/kiosk/scan", async (req, res) => {
   if (!zaposlenik) return res.status(404).json({ error: "Kartica nije prepoznata." });
 
   const evidencija = (await ucitajKljuc("evidencijaRada")) || [];
-  const otvorena = evidencija.find((e) => e.zaposlenikId === zaposlenik.id && !e.vrijemeOdlaska);
-  const sada = new Date().toISOString();
+  const moji = evidencija.filter((e) => e.zaposlenikId === zaposlenik.id);
+  const otvorena = moji.find((e) => !e.vrijemeOdlaska);
+  const sada = new Date();
+
+  // Blokada slučajnog dvostrukog očitanja kartice — ista osoba ne može ponovno
+  // prijaviti dolazak/odlazak unutar KIOSK_BLOKADA_MIN minuta od svoje zadnje akcije.
+  const zadnjaAkcija = moji.reduce((naj, e) => {
+    const vrijeme = e.vrijemeOdlaska || e.vrijemeDolaska;
+    return vrijeme && (!naj || new Date(vrijeme) > new Date(naj)) ? vrijeme : naj;
+  }, null);
+  if (zadnjaAkcija) {
+    const proteklaMin = (sada - new Date(zadnjaAkcija)) / 60000;
+    if (proteklaMin < KIOSK_BLOKADA_MIN) {
+      const preostaloSek = Math.ceil((KIOSK_BLOKADA_MIN - proteklaMin) * 60);
+      return res.status(429).json({ error: `Pričekaj još ${preostaloSek} s prije sljedeće prijave/odjave.`, cooldown: true });
+    }
+  }
+
+  const sadaISO = sada.toISOString();
   let nova;
   if (otvorena) {
-    nova = evidencija.map((e) => (e.id === otvorena.id ? { ...e, vrijemeOdlaska: sada } : e));
+    nova = evidencija.map((e) => (e.id === otvorena.id ? { ...e, vrijemeOdlaska: sadaISO } : e));
     await spremiKljuc("evidencijaRada", nova);
-    return res.json({ tip: "odlazak", ime: zaposlenik.ime, prezime: zaposlenik.prezime, vrijeme: sada, dolazak: otvorena.vrijemeDolaska });
+    return res.json({ tip: "odlazak", ime: zaposlenik.ime, prezime: zaposlenik.prezime, vrijeme: sadaISO, dolazak: otvorena.vrijemeDolaska });
   }
-  nova = [...evidencija, { id: `evr-${Date.now()}`, zaposlenikId: zaposlenik.id, vrijemeDolaska: sada, vrijemeOdlaska: null, vrsta: "rad", autoOdjava: false, potvrdenoRacunovodstvo: false, unioRucnoId: null }];
+  nova = [...evidencija, { id: `evr-${Date.now()}`, zaposlenikId: zaposlenik.id, vrijemeDolaska: sadaISO, vrijemeOdlaska: null, vrsta: "rad", autoOdjava: false, potvrdenoRacunovodstvo: false, unioRucnoId: null }];
   await spremiKljuc("evidencijaRada", nova);
-  res.json({ tip: "dolazak", ime: zaposlenik.ime, prezime: zaposlenik.prezime, vrijeme: sada });
+  res.json({ tip: "dolazak", ime: zaposlenik.ime, prezime: zaposlenik.prezime, vrijeme: sadaISO });
 });
 
 // ---------- podaci (sve zaštićeno loginom) ----------

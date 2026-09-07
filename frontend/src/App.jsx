@@ -880,7 +880,11 @@ function KioskView({ onPrijava }) {
       });
       const data = await res.json();
       if (!res.ok) {
-        setPoruka({ tip: "greska", tekst: data.error || "Kartica nije prepoznata", detalj: `Kod: ${kod} — javi se administratoru.` });
+        if (data.cooldown) {
+          setPoruka({ tip: "greska", tekst: "Pričekaj malo", detalj: data.error });
+        } else {
+          setPoruka({ tip: "greska", tekst: data.error || "Kartica nije prepoznata", detalj: `Kod: ${kod} — javi se administratoru.` });
+        }
       } else if (data.tip === "odlazak") {
         const trajanjeMin = Math.max(0, Math.round((new Date(data.vrijeme) - new Date(data.dolazak)) / 60000));
         setPoruka({ tip: "odlazak", tekst: `${data.ime} ${data.prezime}`, detalj: `Odlazak u ${new Date(data.vrijeme).toLocaleTimeString("hr-HR", { hour: "2-digit", minute: "2-digit" })} · Radio/la ${Math.floor(trajanjeMin / 60)}h ${trajanjeMin % 60}min` });
