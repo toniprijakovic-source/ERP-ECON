@@ -909,28 +909,34 @@ function KioskView({ onPrijava }) {
   const bojePoruke = { dolazak: { bg: "#EAF6EF", border: "#B9E3C9", naslov: "#1F6B41" }, odlazak: { bg: "#EAF3F7", border: "#BFE0EC", naslov: "#215C77" }, greska: { bg: "#FBEAE6", border: "#F0C2B5", naslov: "#9A2E1B" } };
 
   return (
-    <div className="erp-root" style={{ position: "relative", minHeight: 640, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--sidebar)", padding: 20 }}>
+    <div className="erp-root f-display" style={{ position: "relative", minHeight: 640, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--sidebar)", padding: 20 }}>
       <GlobalStyle />
-      <div className="f-display" style={{ fontSize: 22, fontWeight: 700, color: "var(--sidebar-ink)", marginBottom: 24, textAlign: "center" }}>ECON Evidencija radnog vremena</div>
-      <div className="card" style={{ width: 420, maxWidth: "100%", padding: 32, background: "var(--surface)", textAlign: "center" }}>
-        <div className="f-mono" style={{ fontSize: 13, color: "var(--ink-faint)", marginBottom: 6, textTransform: "capitalize" }}>{sat.toLocaleDateString("hr-HR", { weekday: "long", day: "numeric", month: "long" })}</div>
-        <div className="f-display" style={{ fontSize: 36, fontWeight: 700, marginBottom: 20 }}>{sat.toLocaleTimeString("hr-HR", { hour: "2-digit", minute: "2-digit" })}</div>
+      <div style={{ marginBottom: 32, textAlign: "center" }}>
+        <div style={{ fontSize: 56, fontWeight: 700, color: "var(--sidebar-ink)", lineHeight: 1.1 }}>ECON</div>
+        <div style={{ fontSize: 26, fontWeight: 600, color: "var(--sidebar-ink)" }}>Evidencija radnog vremena</div>
+      </div>
+      <div className="card" style={{ width: 840, maxWidth: "100%", padding: 56, background: "var(--surface)", textAlign: "center" }}>
+        <div style={{ fontSize: 26, color: "var(--ink-faint)", marginBottom: 10, textTransform: "capitalize" }}>{sat.toLocaleDateString("hr-HR", { weekday: "long", day: "numeric", month: "long" })}</div>
+        <div style={{ fontSize: 72, fontWeight: 700, marginBottom: 30 }}>{sat.toLocaleTimeString("hr-HR", { hour: "2-digit", minute: "2-digit" })}</div>
 
         {poruka ? (
-          <div style={{ padding: "20px 16px", borderRadius: 4, marginBottom: 18, background: bojePoruke[poruka.tip].bg, border: `1px solid ${bojePoruke[poruka.tip].border}` }}>
-            {poruka.tip !== "greska" && <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: bojePoruke[poruka.tip].naslov, marginBottom: 6 }}>{poruka.tip === "dolazak" ? "✓ Dolazak" : "✓ Odlazak"}</div>}
-            <div style={{ fontSize: 19, fontWeight: 700, marginBottom: 4, color: poruka.tip === "greska" ? bojePoruke.greska.naslov : "var(--ink)" }}>{poruka.tekst}</div>
-            <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>{poruka.detalj}</div>
+          <div style={{ padding: "34px 28px", borderRadius: 6, marginBottom: 10, background: bojePoruke[poruka.tip].bg, border: `1px solid ${bojePoruke[poruka.tip].border}` }}>
+            {poruka.tip !== "greska" && <div style={{ fontSize: 22, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: bojePoruke[poruka.tip].naslov, marginBottom: 10 }}>{poruka.tip === "dolazak" ? "✓ Dolazak" : "✓ Odlazak"}</div>}
+            <div style={{ fontSize: 36, fontWeight: 700, marginBottom: 8, color: poruka.tip === "greska" ? bojePoruke.greska.naslov : "var(--ink)" }}>{poruka.tekst}</div>
+            <div style={{ fontSize: 24, color: "var(--ink-soft)" }}>{poruka.detalj}</div>
           </div>
         ) : (
-          <div style={{ fontSize: 14, color: "var(--ink-soft)", marginBottom: 18 }}>Prisloni karticu ili upiši kod</div>
+          <div style={{ fontSize: 26, color: "var(--ink-soft)" }}>Prisloni karticu čitaču</div>
         )}
 
+        {/* Skriveni input i dalje hvata upis RFID čitača (koji radi kao tipkovnica) — samo
+            više nema vidljivu kućicu za ručno upisivanje koda. */}
         <input
-          ref={inputRef} autoFocus value={unos} placeholder="Kod kartice"
+          ref={inputRef} autoFocus value={unos}
           onChange={(e) => setUnos(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") obradiKod(unos); }}
-          className="input f-mono" style={{ textAlign: "center", fontSize: 18, padding: "12px 10px" }}
+          aria-hidden="true"
+          style={{ position: "absolute", width: 1, height: 1, opacity: 0, border: "none", padding: 0 }}
         />
       </div>
       {onPrijava ? (
