@@ -125,8 +125,10 @@ const optimizirajProfile = (duljineKomada) => {
 };
 
 // Potreban sirovi materijal iz pozicija ponude: profili se optimiziraju u standardne šipke (6/12 m);
-// limovi se ne slažu (2D nesting), nego se procjenjuje ukupna masa iz zbroja površina po debljini + otpad %.
-const izracunPotrebnogMaterijala = (pozicije, katalog, otpadLimPostotak = OTPAD_LIM_ZADANO) => {
+// limovi se ne slažu (2D nesting), nego se procjenjuje ukupna masa iz zbroja površina po debljini + otpad %
+// — otpad se zadaje po tipu lima (katalogId), jer različite debljine/dimenzije limova imaju različit
+// realan gubitak pri rezanju; ako korisnik nije sam upisao postotak za taj tip, koristi se zadani (10%).
+const izracunPotrebnogMaterijala = (pozicije, katalog, otpadLimPoTipu = {}) => {
   const profiliPoTipu = new Map();
   const limoviPoTipu = new Map();
 
@@ -152,8 +154,9 @@ const izracunPotrebnogMaterijala = (pozicije, katalog, otpadLimPostotak = OTPAD_
 
   const profili = [...profiliPoTipu.entries()].map(([id, v]) => ({ katalogId: id, oznaka: v.oznaka, brojKomada: v.komadi.length, ...optimizirajProfile(v.komadi) }));
   const limovi = [...limoviPoTipu.entries()].map(([id, v]) => {
-    const povrsinaSOtpadom = v.povrsinaM2 * (1 + (Number(otpadLimPostotak) || 0) / 100);
-    return { katalogId: id, oznaka: v.oznaka, povrsinaM2: v.povrsinaM2, masaKg: povrsinaSOtpadom * v.kgPoM2 };
+    const otpadPostotak = otpadLimPoTipu?.[id] ?? OTPAD_LIM_ZADANO;
+    const povrsinaSOtpadom = v.povrsinaM2 * (1 + (Number(otpadPostotak) || 0) / 100);
+    return { katalogId: id, oznaka: v.oznaka, povrsinaM2: v.povrsinaM2, kgPoM2: v.kgPoM2, otpadPostotak, masaKg: povrsinaSOtpadom * v.kgPoM2 };
   });
   return { profili, limovi };
 };
@@ -188,7 +191,7 @@ const izracunPonude = (ponuda, materijali, cjenikRada, katalog = []) => {
   const iznosMarze = ukupno * (postotakMarze / 100);
   const cijenaKonacna = ukupno + iznosMarze;
 
-  const potrebanMaterijal = izracunPotrebnogMaterijala(ponuda.pozicije || [], katalog, ponuda.otpadLimPostotak);
+  const potrebanMaterijal = izracunPotrebnogMaterijala(ponuda.pozicije || [], katalog, ponuda.otpadLimPoTipu);
 
   return {
     satiPoOperaciji, trosakRada, trosakMaterijala, trosakOstalo, ukupnoSati,
@@ -3680,7 +3683,7 @@ function ProjektiPage({ db, update, showToast, setPage }) {
   const emptyProj = () => ({ sifra: "", naziv: "", kupacId: db.kupci[0]?.id || "", status: "Ponuda", vrijednost: 0, rokPocetka: todayISO(), rokZavrsetka: todayISO(), opis: "", voditeljId: "", zadaci: noviZadaciIzStandarda() });
   const [projForm, setProjForm] = useState(emptyProj());
 
-  const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, pozicije: [], materijalStavke: [], ostaleStavke: [], satnicaMontaza: 0, cijenaAKZ: 0, otpadLimPostotak: OTPAD_LIM_ZADANO, postotakMarze: 0 });
+  const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, pozicije: [], materijalStavke: [], ostaleStavke: [], satnicaMontaza: 0, cijenaAKZ: 0, otpadLimPoTipu: {}, postotakMarze: 0 });
   const [ponForm, setPonForm] = useState(emptyPon());
   const [cjenikOpen, setCjenikOpen] = useState(false);
   const [zadaciOpen, setZadaciOpen] = useState(false);
@@ -3845,6 +3848,55 @@ function ProjektiPage({ db, update, showToast, setPage }) {
 
       {modal === "pon" && (() => {
         const calc = izracunPonude(ponForm, db.materijali, db.cjenikRada, db.katalogProfila);
+
+        const azurirajOtpadLima = (katalogId, postotak) => setPonForm({ ...ponForm, otpadLimPoTipu: { ...(ponForm.otpadLimPoTipu || {}), [katalogId]: postotak } });
+
+        // Prebacuje izračunati sirovi materijal (šipke profila, masa limova) u "Materijal (iz skladišta)".
+        // Svaki redak nosi skriveni _optKljuc (tip + standardna dužina) preko kojeg se ponovni klik
+        // ažurira postojeći redak umjesto da ga duplicira (npr. nakon izmjene pozicija).
+        const prebaciUMaterijal = () => {
+          const noviMaterijali = [];
+          const nadjiIliKreirajMaterijal = (entry) => {
+            const sifra = entry.oznaka.replace(/[^A-Za-z0-9]+/g, "-");
+            const postojeci = [...db.materijali, ...noviMaterijali].find((m) => m.sifra === sifra);
+            if (postojeci) return postojeci.id;
+            const noviId = uid("mat");
+            noviMaterijali.push({
+              id: noviId, sifra, naziv: `${entry.tip} ${entry.oznaka}`, tip: entry.tip,
+              dimenzije: `${entry.vrijednost} ${entry.jedinica}`, jm: "kg", cijena: entry.jedinica === "kg/m2" ? 1.25 : 1.15, kolicina: 0, minZaliha: 0, lokacija: "",
+              kgPoM: entry.jedinica === "kg/m" ? Number(entry.vrijednost) : 0,
+            });
+            return noviId;
+          };
+
+          const stavkeZaPrebaciti = [];
+          calc.potrebanMaterijal.profili.forEach((p) => {
+            const entry = db.katalogProfila.find((k) => k.id === p.katalogId);
+            if (!entry) return;
+            const materijalId = nadjiIliKreirajMaterijal(entry);
+            if (p.brojPo6 > 0) stavkeZaPrebaciti.push({ kljuc: `${p.katalogId}::6`, materijalId, nacinUnosa: "duzina", duzinaM: 6, komada: p.brojPo6 });
+            if (p.brojPo12 > 0) stavkeZaPrebaciti.push({ kljuc: `${p.katalogId}::12`, materijalId, nacinUnosa: "duzina", duzinaM: 12, komada: p.brojPo12 });
+          });
+          calc.potrebanMaterijal.limovi.forEach((l) => {
+            const entry = db.katalogProfila.find((k) => k.id === l.katalogId);
+            if (!entry) return;
+            const materijalId = nadjiIliKreirajMaterijal(entry);
+            stavkeZaPrebaciti.push({ kljuc: `${l.katalogId}::lim`, materijalId, nacinUnosa: "kolicina", kolicina: Number(l.masaKg.toFixed(1)) });
+          });
+
+          if (stavkeZaPrebaciti.length === 0) { showToast("Nema izračunatog materijala za prebacivanje."); return; }
+          if (noviMaterijali.length > 0) update("materijali", [...db.materijali, ...noviMaterijali]);
+
+          const kljucevi = new Set(stavkeZaPrebaciti.map((s) => s.kljuc));
+          const zadrzaneStavke = ponForm.materijalStavke.filter((s) => !s._optKljuc || !kljucevi.has(s._optKljuc));
+          const azurirane = stavkeZaPrebaciti.map(({ kljuc, ...polja }) => {
+            const stara = ponForm.materijalStavke.find((s) => s._optKljuc === kljuc);
+            return { ...(stara || {}), ...polja, _optKljuc: kljuc };
+          });
+          setPonForm({ ...ponForm, materijalStavke: [...zadrzaneStavke, ...azurirane] });
+          showToast(`Prebačeno ${azurirane.length} stavki u materijal.`);
+        };
+
         return (
           <Modal wide title={ponForm.id ? `Ponuda ${ponForm.broj}` : "Nova ponuda"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={savePon}>Spremi</Btn></>}>
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
@@ -3868,10 +3920,9 @@ function ProjektiPage({ db, update, showToast, setPage }) {
 
             <div className="label" style={{ marginTop: 6 }}>Montaža, AKZ i uvećanje cijene</div>
             <div className="card" style={{ padding: 14, background: "var(--surface-alt)", marginBottom: 16 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
                 <Field label="Satnica montaže (€/h, fiksna za ovu ponudu)"><input className="input f-mono" type="number" min="0" step="0.5" value={ponForm.satnicaMontaza ?? 0} onChange={(e) => setPonForm({ ...ponForm, satnicaMontaza: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
                 <Field label="Cijena AKZ (€/kg)"><input className="input f-mono" type="number" min="0" step="0.01" value={ponForm.cijenaAKZ ?? 0} onChange={(e) => setPonForm({ ...ponForm, cijenaAKZ: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
-                <Field label="Otpad kod limova (%)"><input className="input f-mono" type="number" min="0" step="1" value={ponForm.otpadLimPostotak ?? OTPAD_LIM_ZADANO} onChange={(e) => setPonForm({ ...ponForm, otpadLimPostotak: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
                 <Field label="Uvećanje cijene / marža (%)"><input className="input f-mono" type="number" min="0" step="0.5" value={ponForm.postotakMarze ?? 0} onChange={(e) => setPonForm({ ...ponForm, postotakMarze: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
               </div>
               <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>
@@ -3881,7 +3932,10 @@ function ProjektiPage({ db, update, showToast, setPage }) {
 
             {(calc.potrebanMaterijal.profili.length > 0 || calc.potrebanMaterijal.limovi.length > 0) && (
               <>
-                <div className="label" style={{ marginTop: 6 }}>Potreban sirovi materijal (izračunato iz pozicija)</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, marginBottom: 6 }}>
+                  <label className="label" style={{ marginBottom: 0 }}>Potreban sirovi materijal (izračunato iz pozicija)</label>
+                  <Btn variant="ghost" size="sm" icon={Download} onClick={prebaciUMaterijal}>Prebaci u materijal (iz skladišta)</Btn>
+                </div>
                 {calc.potrebanMaterijal.profili.length > 0 && (
                   <table className="erp-table" style={{ marginBottom: 10 }}>
                     <thead><tr><th>Profil</th><th style={{ width: 70 }}>Komada</th><th style={{ width: 90 }}>Potrebno (m)</th><th style={{ width: 80 }}>Šipki 6m</th><th style={{ width: 80 }}>Šipki 12m</th><th style={{ width: 80 }}>Otpad (m)</th></tr></thead>
@@ -3901,12 +3955,13 @@ function ProjektiPage({ db, update, showToast, setPage }) {
                 )}
                 {calc.potrebanMaterijal.limovi.length > 0 && (
                   <table className="erp-table" style={{ marginBottom: 16 }}>
-                    <thead><tr><th>Lim</th><th style={{ width: 110 }}>Površina (m²)</th><th style={{ width: 110 }}>Masa s otpadom (kg)</th></tr></thead>
+                    <thead><tr><th>Lim</th><th style={{ width: 110 }}>Površina (m²)</th><th style={{ width: 110 }}>Otpad (%)</th><th style={{ width: 110 }}>Masa s otpadom (kg)</th></tr></thead>
                     <tbody>
                       {calc.potrebanMaterijal.limovi.map((l) => (
                         <tr key={l.katalogId}>
                           <td>{l.oznaka}</td>
                           <td className="f-mono">{l.povrsinaM2.toFixed(2)}</td>
+                          <td><input className="input f-mono" type="number" min="0" step="1" value={l.otpadPostotak} onChange={(e) => azurirajOtpadLima(l.katalogId, e.target.value === "" ? 0 : Number(e.target.value))} /></td>
                           <td className="f-mono">{l.masaKg.toFixed(1)}</td>
                         </tr>
                       ))}
