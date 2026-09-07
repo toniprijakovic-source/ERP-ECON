@@ -180,7 +180,7 @@ const izracunPonude = (ponuda, materijali, cjenikRada, katalog = []) => {
     const m = materijali.find((x) => x.id === st.materijalId);
     const cijena = st.cijenaPoJed != null ? Number(st.cijenaPoJed) : (m ? m.cijena : 0);
     return s + cijena * efektivnaKolicinaMaterijala(st, m);
-  }, 0);
+  }, 0) + (ponuda.sirovineStavke || []).reduce((s, st) => s + (Number(st.kolicina) || 0) * (Number(st.cijenaJed) || 0), 0);
   const trosakOstalo = (ponuda.ostaleStavke || []).reduce((s, st) => s + (Number(st.kolicina) || 0) * (Number(st.cijenaJed) || 0), 0);
   const ukupnoSati = OPERACIJE.reduce((s, o) => s + satiPoOperaciji[o.key], 0);
 
@@ -3881,7 +3881,7 @@ function ProjektiPage({ db, update, showToast, setPage }) {
   const emptyProj = () => ({ sifra: "", naziv: "", kupacId: db.kupci[0]?.id || "", status: "Ponuda", vrijednost: 0, rokPocetka: todayISO(), rokZavrsetka: todayISO(), opis: "", voditeljId: "", zadaci: noviZadaciIzStandarda() });
   const [projForm, setProjForm] = useState(emptyProj());
 
-  const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, pozicije: [], materijalStavke: [], ostaleStavke: [], satnicaMontaza: 0, otpadLimPoTipu: {}, postotakMarze: 0 });
+  const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, pozicije: [], materijalStavke: [], sirovineStavke: [], ostaleStavke: [], satnicaMontaza: 0, otpadLimPoTipu: {}, postotakMarze: 0 });
   const [ponForm, setPonForm] = useState(emptyPon());
   const [cjenikOpen, setCjenikOpen] = useState(false);
   const [zadaciOpen, setZadaciOpen] = useState(false);
@@ -4049,50 +4049,34 @@ function ProjektiPage({ db, update, showToast, setPage }) {
 
         const azurirajOtpadLima = (katalogId, postotak) => setPonForm({ ...ponForm, otpadLimPoTipu: { ...(ponForm.otpadLimPoTipu || {}), [katalogId]: postotak } });
 
-        // Prebacuje izračunati sirovi materijal (šipke profila, masa limova) u "Materijal (iz skladišta)".
-        // Svaki redak nosi skriveni _optKljuc (tip + standardna dužina) preko kojeg se ponovni klik
-        // ažurira postojeći redak umjesto da ga duplicira (npr. nakon izmjene pozicija).
+        // Prebacuje izračunati sirovi materijal (šipke profila, masa limova) u samostalnu stavku
+        // "Materijal iz kalkulacije" — NE dira skladište (db.materijali), samo daje gotovu količinu
+        // (kg) na koju korisnik ručno upiše cijenu, a to ulazi u trošak materijala ponude. Svaki
+        // redak nosi skriveni _optKljuc (tip + standardna dužina) preko kojeg se ponovni klik
+        // ažurira postojeći redak (osvježi količinu, zadrži već upisanu cijenu) umjesto da ga duplicira.
         const prebaciUMaterijal = () => {
-          const noviMaterijali = [];
-          const nadjiIliKreirajMaterijal = (entry) => {
-            const sifra = entry.oznaka.replace(/[^A-Za-z0-9]+/g, "-");
-            const postojeci = [...db.materijali, ...noviMaterijali].find((m) => m.sifra === sifra);
-            if (postojeci) return postojeci.id;
-            const noviId = uid("mat");
-            noviMaterijali.push({
-              id: noviId, sifra, naziv: `${entry.tip} ${entry.oznaka}`, tip: entry.tip,
-              dimenzije: `${entry.vrijednost} ${entry.jedinica}`, jm: "kg", cijena: entry.jedinica === "kg/m2" ? 1.25 : 1.15, kolicina: 0, minZaliha: 0, lokacija: "",
-              kgPoM: entry.jedinica === "kg/m" ? Number(entry.vrijednost) : 0,
-            });
-            return noviId;
-          };
-
           const stavkeZaPrebaciti = [];
           calc.potrebanMaterijal.profili.forEach((p) => {
             const entry = db.katalogProfila.find((k) => k.id === p.katalogId);
-            if (!entry) return;
-            const materijalId = nadjiIliKreirajMaterijal(entry);
-            if (p.brojPo6 > 0) stavkeZaPrebaciti.push({ kljuc: `${p.katalogId}::6`, materijalId, nacinUnosa: "duzina", duzinaM: 6, komada: p.brojPo6 });
-            if (p.brojPo12 > 0) stavkeZaPrebaciti.push({ kljuc: `${p.katalogId}::12`, materijalId, nacinUnosa: "duzina", duzinaM: 12, komada: p.brojPo12 });
+            const kgPoM = Number(entry?.vrijednost) || 0;
+            if (p.brojPo6 > 0) stavkeZaPrebaciti.push({ kljuc: `${p.katalogId}::6`, opis: `${p.oznaka} — šipke 6 m (${p.brojPo6} kom)`, jm: "kg", kolicina: Number((p.brojPo6 * 6 * kgPoM).toFixed(1)) });
+            if (p.brojPo12 > 0) stavkeZaPrebaciti.push({ kljuc: `${p.katalogId}::12`, opis: `${p.oznaka} — šipke 12 m (${p.brojPo12} kom)`, jm: "kg", kolicina: Number((p.brojPo12 * 12 * kgPoM).toFixed(1)) });
           });
           calc.potrebanMaterijal.limovi.forEach((l) => {
-            const entry = db.katalogProfila.find((k) => k.id === l.katalogId);
-            if (!entry) return;
-            const materijalId = nadjiIliKreirajMaterijal(entry);
-            stavkeZaPrebaciti.push({ kljuc: `${l.katalogId}::lim`, materijalId, nacinUnosa: "kolicina", kolicina: Number(l.masaKg.toFixed(1)) });
+            stavkeZaPrebaciti.push({ kljuc: `${l.katalogId}::lim`, opis: `${l.oznaka} (lim, s otpadom)`, jm: "kg", kolicina: Number(l.masaKg.toFixed(1)) });
           });
 
           if (stavkeZaPrebaciti.length === 0) { showToast("Nema izračunatog materijala za prebacivanje."); return; }
-          if (noviMaterijali.length > 0) update("materijali", [...db.materijali, ...noviMaterijali]);
 
           const kljucevi = new Set(stavkeZaPrebaciti.map((s) => s.kljuc));
-          const zadrzaneStavke = ponForm.materijalStavke.filter((s) => !s._optKljuc || !kljucevi.has(s._optKljuc));
+          const postojeceStavke = ponForm.sirovineStavke || [];
+          const zadrzaneStavke = postojeceStavke.filter((s) => !s._optKljuc || !kljucevi.has(s._optKljuc));
           const azurirane = stavkeZaPrebaciti.map(({ kljuc, ...polja }) => {
-            const stara = ponForm.materijalStavke.find((s) => s._optKljuc === kljuc);
-            return { ...(stara || {}), ...polja, _optKljuc: kljuc };
+            const stara = postojeceStavke.find((s) => s._optKljuc === kljuc);
+            return { cijenaJed: 0, ...(stara || {}), ...polja, _optKljuc: kljuc };
           });
-          setPonForm({ ...ponForm, materijalStavke: [...zadrzaneStavke, ...azurirane] });
-          showToast(`Prebačeno ${azurirane.length} stavki u materijal.`);
+          setPonForm({ ...ponForm, sirovineStavke: [...zadrzaneStavke, ...azurirane] });
+          showToast(`Prebačeno ${azurirane.length} stavki u materijal — upiši cijenu po kg.`);
         };
 
         return (
@@ -4133,7 +4117,7 @@ function ProjektiPage({ db, update, showToast, setPage }) {
               <>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, marginBottom: 6 }}>
                   <label className="label" style={{ marginBottom: 0 }}>Potreban sirovi materijal (izračunato iz pozicija)</label>
-                  <Btn variant="ghost" size="sm" icon={Download} onClick={prebaciUMaterijal}>Prebaci u materijal (iz skladišta)</Btn>
+                  <Btn variant="ghost" size="sm" icon={Download} onClick={prebaciUMaterijal}>Prebaci u materijal</Btn>
                 </div>
                 {calc.potrebanMaterijal.profili.length > 0 && (
                   <table className="erp-table" style={{ marginBottom: 10 }}>
@@ -4166,6 +4150,11 @@ function ProjektiPage({ db, update, showToast, setPage }) {
                       ))}
                     </tbody>
                   </table>
+                )}
+                {(ponForm.sirovineStavke || []).length > 0 && (
+                  <Field label="Materijal iz kalkulacije (upiši cijenu €/kg za korištenje u kalkulaciji — ne dira skladište)">
+                    <LineItemsEditor mode="custom" rows={ponForm.sirovineStavke} setRows={(rows) => setPonForm({ ...ponForm, sirovineStavke: rows })} />
+                  </Field>
                 )}
               </>
             )}
