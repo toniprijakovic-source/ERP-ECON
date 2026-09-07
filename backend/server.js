@@ -50,14 +50,14 @@ const KARTICE_MODULA = {
     postavke: { citanje: ["postavkeTvrtke"], pisanje: ["postavkeTvrtke"] },
   },
   proizvodnja: {
-    tablica: { citanje: ["radniNalozi", "projekti", "materijali", "katalogProfila"], pisanje: ["radniNalozi", "materijali"] },
+    tablica: { citanje: ["radniNalozi", "projekti", "materijali", "katalogProfila", "narudzbenice"], pisanje: ["radniNalozi", "materijali"] },
     gantogram: { citanje: ["radniNalozi", "radniCentri", "kapacitetiDana", "projekti", "zaposlenici"], pisanje: ["radniNalozi", "radniCentri", "kapacitetiDana"] },
     rezanje: { citanje: ["programiRezanja", "katalogProfila", "materijali", "radniNalozi", "zaposlenici"], pisanje: ["programiRezanja", "kapacitetiDana", "materijali"] },
     isporuke: { citanje: ["projekti"], pisanje: ["projekti"] },
   },
   projekti: {
-    projekti: { citanje: ["cjenikRada", "katalogProfila", "kupci", "materijali", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "zaposlenici", "upitiNabave", "kvaliteteMaterijala"], pisanje: ["projekti", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "materijali", "radniNalozi", "upitiNabave"] },
-    ponude: { citanje: ["cjenikRada", "katalogProfila", "materijali", "ponude", "kupci", "kvaliteteMaterijala"], pisanje: ["ponude", "cjenikRada", "materijali", "projekti", "radniNalozi"] },
+    projekti: { citanje: ["cjenikRada", "katalogProfila", "kupci", "materijali", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "zaposlenici", "upitiNabave", "kvaliteteMaterijala", "narudzbenice"], pisanje: ["projekti", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "materijali", "radniNalozi", "upitiNabave"] },
+    ponude: { citanje: ["cjenikRada", "katalogProfila", "materijali", "ponude", "kupci", "kvaliteteMaterijala", "narudzbenice"], pisanje: ["ponude", "cjenikRada", "materijali", "projekti", "radniNalozi"] },
   },
   fakturiranje: {
     fakture: { citanje: ["fakture", "kupci", "projekti"], pisanje: ["fakture"] },

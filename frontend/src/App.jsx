@@ -657,7 +657,16 @@ const kreirajMaterijalIzKataloga = (entry, db, update) => {
   return noviId;
 };
 
-function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = [], onCreateMaterijal }) {
+// Zadnja poznata nabavna cijena za materijal iz bilo koje narudžbenice (najnovija po datumu) —
+// pouzdanija je od (mogla bi biti zastarjele) cijene upisane na samom skladišnom artiklu.
+const zadnjaCijenaIzNarudzbenice = (materijalId, narudzbenice) => {
+  const sve = (narudzbenice || [])
+    .flatMap((n) => (n.stavke || []).filter((s) => s.materijalId === materijalId && s.cijenaPoJed != null).map((s) => ({ cijenaPoJed: s.cijenaPoJed, datum: n.datum })))
+    .sort((a, b) => (b.datum || "").localeCompare(a.datum || ""));
+  return sve[0]?.cijenaPoJed ?? null;
+};
+
+function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = [], narudzbenice = [], onCreateMaterijal }) {
   const addRow = () => setRows([...rows, mode === "materijal" ? { materijalId: "", nacinUnosa: "kolicina", kolicina: 1, duzinaM: 6, komada: 1, cijenaPoJed: 0 } : { opis: "", kolicina: 1, jm: "kom", cijenaJed: 0 }]);
   const removeRow = (i) => setRows(rows.filter((_, idx) => idx !== i));
   const update = (i, patch) => setRows(rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
@@ -704,7 +713,8 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
     } else {
       const mat = materijali.find((m) => m.id === val);
       const jeDuzina = mat?.kgPoM > 0;
-      azurirajRedak(i, { materijalId: val, nacinUnosa: jeDuzina ? "duzina" : "kolicina", duzinaM: duzinaDef, komada: komadaDef, cijenaPoJed: mat ? mat.cijena : 0 });
+      const cijenaPoJed = zadnjaCijenaIzNarudzbenice(val, narudzbenice) ?? (mat ? mat.cijena : 0);
+      azurirajRedak(i, { materijalId: val, nacinUnosa: jeDuzina ? "duzina" : "kolicina", duzinaM: duzinaDef, komada: komadaDef, cijenaPoJed });
     }
   };
 
@@ -746,7 +756,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
                 </div>
                 {nacin === "duzina" ? (
                   <>
-                    <div style={{ width: 110 }}><label className="label">Dužina (m)</label><input className="input f-mono" type="number" min="0" step="0.1" value={r.duzinaM ?? 6} onChange={(e) => azurirajRedak(i, { duzinaM: e.target.value })} /></div>
+                    <div style={{ width: 110 }}><label className="label">Dužina (mm)</label><input className="input f-mono" type="number" min="0" step="1" value={Math.round((Number(r.duzinaM ?? 6)) * 1000)} onChange={(e) => azurirajRedak(i, { duzinaM: (Number(e.target.value) || 0) / 1000 })} /></div>
                     <div style={{ width: 90 }}><label className="label">Komada</label><input className="input f-mono" type="number" min="0" value={r.komada ?? 1} onChange={(e) => azurirajRedak(i, { komada: e.target.value })} /></div>
                     <div style={{ width: 120 }}>
                       <label className="label">Masa (izračunato)</label>
@@ -1816,7 +1826,17 @@ const generirajBrojUpita = (upiti) => {
 const kreirajUpitIzMaterijala = (projekt, db, update, showToast) => {
   const stavke = (projekt.materijalStavke || []).filter((s) => s.materijalId).map((s) => {
     const m = db.materijali.find((x) => x.id === s.materijalId);
-    return { id: uid("us"), kolicina: s.kolicina, dimenzijaMM: "", vrstaMaterijala: m?.naziv || "", kvaliteta: "", normaIsporuke: "", dodatniZahtjevi: `Za projekt ${projekt.sifra} — ${projekt.naziv}`, ponude: [], odabranaPonudaId: null, narudzbenicaId: null };
+    const jeDuzina = s.nacinUnosa === "duzina";
+    return {
+      id: uid("us"),
+      kolicina: jeDuzina ? (Number(s.komada) || 0) : (Number(s.kolicina) || 0),
+      dimenzijaMM: jeDuzina ? Math.round((Number(s.duzinaM) || 0) * 1000) : "",
+      vrstaMaterijala: m?.naziv || "",
+      kvaliteta: "",
+      normaIsporuke: "",
+      dodatniZahtjevi: `Za projekt ${projekt.sifra} — ${projekt.naziv}`,
+      ponude: [], odabranaPonudaId: null, narudzbenicaId: null,
+    };
   });
   if (stavke.length === 0) { showToast("Nema definiranog materijala na projektu — dodaj stavke prije kreiranja upita."); return null; }
   const noviUpit = { id: uid("upit"), broj: generirajBrojUpita(db.upitiNabave), datum: todayISO(), izradioId: projekt.voditeljId || "", status: "Priprema", napomena: `Kreirano iz projekta ${projekt.sifra} — ${projekt.naziv}`, izvorProjektaId: projekt.id, stavke };
@@ -2030,7 +2050,7 @@ function NabavaPage({ db, update, showToast, mojaPozicija }) {
           </div>
           <Field label="Status"><select className="select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{["Nacrt", "Poslano", "Djelomično primljeno", "Primljeno"].map((s) => <option key={s}>{s}</option>)}</select></Field>
           <Field label="Stavke narudžbe">
-            <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} />
+            <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} />
           </Field>
           <Field label="Napomena"><textarea className="textarea" rows={2} value={form.napomena} onChange={(e) => setForm({ ...form, napomena: e.target.value })} /></Field>
         </Modal>
@@ -3346,7 +3366,7 @@ function ProizvodnjaPage({ db, update, showToast, mojaPozicija }) {
             <Field label="Datum završetka"><input className="input" type="date" value={form.datumZavrsetka} onChange={(e) => setForm({ ...form, datumZavrsetka: e.target.value })} /></Field>
           </div>
           <Field label="Potreban materijal (skladište)">
-            <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} />
+            <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} />
           </Field>
         </Modal>
       )}
@@ -4059,7 +4079,7 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
           <div className="label" style={{ marginBottom: 0 }}>Potreban materijal za izradu</div>
           <Btn variant="ghost" size="sm" icon={FolderInput} onClick={pokreniKreiranjeUpita}>Kreiraj upit iz materijala</Btn>
         </div>
-        <LineItemsEditor mode="materijal" rows={materijalStavke} setRows={azurirajMaterijal} materijali={db.materijali} katalog={db.katalogProfila} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} />
+        <LineItemsEditor mode="materijal" rows={materijalStavke} setRows={azurirajMaterijal} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} />
       </div>
 
       {ostaleStavke.length > 0 && (
@@ -4439,7 +4459,7 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
               <PozicijeEditor pozicije={ponForm.pozicije} setPozicije={(rows) => setPonForm({ ...ponForm, pozicije: rows })} cjenikRada={db.cjenikRada} katalog={db.katalogProfila} kvalitete={db.kvaliteteMaterijala} satnicaMontaza={ponForm.satnicaMontaza} />
             </div>
 
-            <Field label="Materijal (iz skladišta)"><LineItemsEditor mode="materijal" rows={ponForm.materijalStavke} setRows={(rows) => setPonForm({ ...ponForm, materijalStavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} /></Field>
+            <Field label="Materijal (iz skladišta)"><LineItemsEditor mode="materijal" rows={ponForm.materijalStavke} setRows={(rows) => setPonForm({ ...ponForm, materijalStavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} /></Field>
             <Field label="Ostale stavke (transport, projektiranje…)"><LineItemsEditor mode="custom" rows={ponForm.ostaleStavke} setRows={(rows) => setPonForm({ ...ponForm, ostaleStavke: rows })} materijali={db.materijali} /></Field>
             <Field label="Napomena"><textarea className="textarea" rows={2} value={ponForm.napomena} onChange={(e) => setPonForm({ ...ponForm, napomena: e.target.value })} /></Field>
 
