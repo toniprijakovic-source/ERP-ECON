@@ -1451,7 +1451,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
   const jeLimUnos = katalogEntry?.jedinica === "kg/m2";
   const faktorKvaliteteUnos = KVALITETE_MATERIJALA.find((k) => k.key === katalogUnos.kvaliteta)?.faktor || 1;
   const izracunataMasaUnos = !katalogEntry ? 0 : jeLimUnos
-    ? ((Number(katalogUnos.duzinaMM) || 0) / 1000) * ((Number(katalogUnos.sirinaMM) || 0) / 1000) * Number(katalogEntry.vrijednost) * faktorKvaliteteUnos
+    ? ((Number(katalogUnos.duzinaMM) || 0) / 1000) * ((Number(katalogUnos.sirinaMM) || 0) / 1000) * Number(katalogEntry.vrijednost) * faktorKvaliteteUnos * (Number(katalogUnos.komada) || 1)
     : ((Number(katalogUnos.duzinaMM) || 0) / 1000) * Number(katalogEntry.vrijednost) * faktorKvaliteteUnos * (Number(katalogUnos.komada) || 1);
 
   const odaberiKatalogUnos = (katalogId) => {
@@ -1559,17 +1559,16 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
                   <label className="label">Dužina (mm)</label>
                   <input className="input f-mono" type="number" min="0" value={katalogUnos.duzinaMM} onChange={(e) => setKatalogUnos({ ...katalogUnos, duzinaMM: e.target.value })} />
                 </div>
-                {jeLimUnos ? (
+                {jeLimUnos && (
                   <div style={{ width: 130 }}>
                     <label className="label">Širina (mm)</label>
                     <input className="input f-mono" type="number" min="0" value={katalogUnos.sirinaMM} onChange={(e) => setKatalogUnos({ ...katalogUnos, sirinaMM: e.target.value })} />
                   </div>
-                ) : (
-                  <div style={{ width: 100 }}>
-                    <label className="label">Komada</label>
-                    <input className="input f-mono" type="number" min="0" step="1" value={katalogUnos.komada} onChange={(e) => setKatalogUnos({ ...katalogUnos, komada: e.target.value })} />
-                  </div>
                 )}
+                <div style={{ width: 100 }}>
+                  <label className="label">Komada</label>
+                  <input className="input f-mono" type="number" min="0" step="1" value={katalogUnos.komada} onChange={(e) => setKatalogUnos({ ...katalogUnos, komada: e.target.value })} />
+                </div>
                 <div style={{ width: 170 }}>
                   <label className="label">Kvaliteta materijala</label>
                   <select className="select" value={katalogUnos.kvaliteta} onChange={(e) => setKatalogUnos({ ...katalogUnos, kvaliteta: e.target.value })}>
