@@ -667,7 +667,7 @@ const zadnjaCijenaIzNarudzbenice = (materijalId, narudzbenice) => {
 };
 
 function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = [], narudzbenice = [], onCreateMaterijal }) {
-  const addRow = () => setRows([...rows, mode === "materijal" ? { materijalId: "", nacinUnosa: "kolicina", kolicina: 1, duzinaM: 6, komada: 1, cijenaPoJed: 0 } : { opis: "", kolicina: 1, jm: "kom", cijenaJed: 0 }]);
+  const addRow = () => setRows([...rows, mode === "materijal" ? { materijalId: "", nacinUnosa: "kolicina", kolicina: 1, duzinaM: 6, komada: 1, cijenaPoJed: 0, kvaliteta: "" } : { opis: "", kolicina: 1, jm: "kom", cijenaJed: 0 }]);
   const removeRow = (i) => setRows(rows.filter((_, idx) => idx !== i));
   const update = (i, patch) => setRows(rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
 
@@ -766,6 +766,10 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
                 ) : (
                   <div style={{ width: 120 }}><label className="label">Količina ({mat?.jm || "kg"})</label><input className="input f-mono" type="number" min="0" value={r.kolicina} onChange={(e) => update(i, { kolicina: e.target.value })} /></div>
                 )}
+                <div style={{ width: 130 }}>
+                  <label className="label">Kvaliteta</label>
+                  <input className="input" placeholder="S235JR…" value={r.kvaliteta || ""} onChange={(e) => update(i, { kvaliteta: e.target.value })} />
+                </div>
                 <div style={{ width: 120 }}>
                   <label className="label">Cijena/{mat?.jm || "kg"} (€)</label>
                   <input className="input f-mono" type="number" min="0" step="0.01" value={r.cijenaPoJed ?? (mat ? mat.cijena : 0)} onChange={(e) => update(i, { cijenaPoJed: e.target.value })} />
@@ -1832,7 +1836,7 @@ const kreirajUpitIzMaterijala = (projekt, db, update, showToast) => {
       kolicina: jeDuzina ? (Number(s.komada) || 0) : (Number(s.kolicina) || 0),
       dimenzijaMM: jeDuzina ? Math.round((Number(s.duzinaM) || 0) * 1000) : "",
       vrstaMaterijala: m?.naziv || "",
-      kvaliteta: "",
+      kvaliteta: s.kvaliteta || "",
       normaIsporuke: "",
       dodatniZahtjevi: `Za projekt ${projekt.sifra} — ${projekt.naziv}`,
       ponude: [], odabranaPonudaId: null, narudzbenicaId: null,
