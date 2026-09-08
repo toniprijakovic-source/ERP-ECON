@@ -2091,6 +2091,16 @@ function NabavaPage({ db, update, showToast, mojaPozicija }) {
 
 /* ============================== PROIZVODNJA ============================== */
 const FAZE = [...OPERACIJE.map((o) => o.label), "Montaža (teren)", "Kontrola kvalitete", "Ostalo"];
+const praznaFazaSati = () => Object.fromEntries(FAZE.map((f) => [f, 0]));
+
+// Koliko je sati od planiranih na projektu za danu fazu već raspoređeno po (ostalim) radnim nalozima —
+// vraća null ako faza uopće nije definirana na projektu (nema smisla nuditi "preostalo" za nju).
+function preostaloSatiFaze(projekt, faza, radniNalozi, iskljuciNalogId) {
+  const planirano = Number(projekt?.faze?.[faza]) || 0;
+  if (planirano <= 0) return null;
+  const rasporedeno = radniNalozi.filter((r) => r.projektId === projekt.id && r.faza === faza && r.id !== iskljuciNalogId).reduce((s, r) => s + (Number(r.planiranoSati) || 0), 0);
+  return Math.max(0, planirano - rasporedeno);
+}
 
 /* ============================== GANTOGRAM ============================== */
 const GANTT_BOJA = { muted: "#9aa1a8", info: "#2E5E7A", warning: "#C68A1A", success: "#256B45", danger: "#B8442C" };
@@ -3276,7 +3286,8 @@ function ProizvodnjaPage({ db, update, showToast, mojaPozicija }) {
   const [del, setDel] = useState(null);
   const emptyForm = () => {
     const projekt = db.projekti[0];
-    return { id: null, broj: projekt ? sljedeciBrojRadnogNaloga(db.radniNalozi, projekt.sifra) : "", projektId: projekt?.id || "", naziv: "", faza: FAZE[0], zaduzenTim: "", status: "Planiran", planiranoSati: 0, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: todayISO(), stavke: [], materijalIzdan: false, ovisiONalogId: null, ovisnostTip: "zavrsetak", ovisnostSati: 8 };
+    const preostalo = preostaloSatiFaze(projekt, FAZE[0], db.radniNalozi, null);
+    return { id: null, broj: projekt ? sljedeciBrojRadnogNaloga(db.radniNalozi, projekt.sifra) : "", projektId: projekt?.id || "", naziv: "", faza: FAZE[0], zaduzenTim: "", status: "Planiran", planiranoSati: preostalo != null ? preostalo : 0, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: todayISO(), stavke: [], materijalIzdan: false, ovisiONalogId: null, ovisnostTip: "zavrsetak", ovisnostSati: 8 };
   };
   const [form, setForm] = useState(emptyForm());
 
@@ -3334,15 +3345,33 @@ function ProizvodnjaPage({ db, update, showToast, mojaPozicija }) {
       />
       )}
 
-      {modal && (
+      {modal && (() => {
+        const trenutniProjekt = db.projekti.find((p) => p.id === form.projektId);
+        const preostaloFaze = preostaloSatiFaze(trenutniProjekt, form.faza, db.radniNalozi, form.id);
+        return (
         <Modal wide title={form.id ? `Radni nalog ${form.broj}` : "Novi radni nalog"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={save}>Spremi</Btn></>}>
-          <Field label="Projekt"><select className="select" value={form.projektId} onChange={(e) => { const noviProjekt = db.projekti.find((p) => p.id === e.target.value); setForm({ ...form, projektId: e.target.value, broj: !form.id && noviProjekt ? sljedeciBrojRadnogNaloga(db.radniNalozi, noviProjekt.sifra) : form.broj }); }}>{db.projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}</select></Field>
+          <Field label="Projekt">
+            <select className="select" value={form.projektId} onChange={(e) => {
+              const noviProjekt = db.projekti.find((p) => p.id === e.target.value);
+              const preostalo = preostaloSatiFaze(noviProjekt, form.faza, db.radniNalozi, form.id);
+              setForm({ ...form, projektId: e.target.value, broj: !form.id && noviProjekt ? sljedeciBrojRadnogNaloga(db.radniNalozi, noviProjekt.sifra) : form.broj, planiranoSati: preostalo != null ? preostalo : form.planiranoSati });
+            }}>{db.projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}</select>
+          </Field>
           <Field label="Opis radnog naloga"><input className="input" value={form.naziv} onChange={(e) => setForm({ ...form, naziv: e.target.value })} /></Field>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-            <Field label="Faza proizvodnje"><select className="select" value={form.faza} onChange={(e) => setForm({ ...form, faza: e.target.value })}>{FAZE.map((f) => <option key={f}>{f}</option>)}</select></Field>
+            <Field label="Faza proizvodnje">
+              <select className="select" value={form.faza} onChange={(e) => {
+                const novaFaza = e.target.value;
+                const preostalo = preostaloSatiFaze(trenutniProjekt, novaFaza, db.radniNalozi, form.id);
+                setForm({ ...form, faza: novaFaza, planiranoSati: preostalo != null ? preostalo : form.planiranoSati });
+              }}>{FAZE.map((f) => <option key={f}>{f}</option>)}</select>
+            </Field>
             <Field label="Zadužen tim"><input className="input" value={form.zaduzenTim} onChange={(e) => setForm({ ...form, zaduzenTim: e.target.value })} /></Field>
             <Field label="Status"><select className="select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{["Planiran", "U tijeku", "Pauziran", "Završen"].map((s) => <option key={s}>{s}</option>)}</select></Field>
-            <Field label="Planirano sati"><input className="input f-mono" type="number" value={form.planiranoSati} onChange={(e) => setForm({ ...form, planiranoSati: e.target.value })} /></Field>
+            <Field label="Planirano sati">
+              <input className="input f-mono" type="number" value={form.planiranoSati} onChange={(e) => setForm({ ...form, planiranoSati: e.target.value })} />
+              {preostaloFaze != null && <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 4 }}>Planirano na projektu: {trenutniProjekt.faze[form.faza]} h · Preostalo (neraspoređeno): {preostaloFaze} h</div>}
+            </Field>
             <Field label="Utrošeno sati"><input className="input f-mono" type="number" value={form.utrosenoSati} onChange={(e) => setForm({ ...form, utrosenoSati: e.target.value })} /></Field>
             <Field label="Ovisi o nalogu (opcionalno)">
               <select className="select" value={form.ovisiONalogId || ""} onChange={(e) => setForm({ ...form, ovisiONalogId: e.target.value || null })}>
@@ -3369,7 +3398,8 @@ function ProizvodnjaPage({ db, update, showToast, mojaPozicija }) {
             <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} />
           </Field>
         </Modal>
-      )}
+        );
+      })()}
       {del && <ConfirmDelete label={del.broj} onCancel={() => setDel(null)} onConfirm={() => { update("radniNalozi", db.radniNalozi.filter((r) => r.id !== del.id)); setDel(null); showToast("Radni nalog obrisan."); }} />}
     </div>
   );
@@ -4241,7 +4271,7 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
   const [del, setDel] = useState(null);
 
   const noviZadaciIzStandarda = () => (db.standardniZadaci || []).map((t) => ({ id: uid("zad"), naziv: t.naziv, izvrseno: false, izvrsioId: null, datumIzvrsenja: null, planiraniDatum: null }));
-  const emptyProj = () => ({ sifra: "", naziv: "", kupacId: db.kupci[0]?.id || "", status: "Ponuda", vrijednost: 0, rokPocetka: todayISO(), rokZavrsetka: todayISO(), opis: "", voditeljId: "", zadaci: noviZadaciIzStandarda() });
+  const emptyProj = () => ({ sifra: "", naziv: "", kupacId: db.kupci[0]?.id || "", status: "Ponuda", vrijednost: 0, rokPocetka: todayISO(), rokZavrsetka: todayISO(), opis: "", voditeljId: "", zadaci: noviZadaciIzStandarda(), faze: praznaFazaSati() });
   const [projForm, setProjForm] = useState(emptyProj());
 
   const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, pozicije: [], materijalStavke: [], sirovineStavke: [], ostaleStavke: [], satnicaMontaza: 0, otpadLimPoTipu: {}, postotakMarze: 0 });
@@ -4291,6 +4321,7 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
       opis: `Kreirano iz ponude ${ponuda.broj}.`,
       izvorPonudaId: ponuda.id, pozicije: ponuda.pozicije || [], materijalStavke: ponuda.materijalStavke || [], ostaleStavke: ponuda.ostaleStavke || [],
       voditeljId: "", zadaci: noviZadaciIzStandarda(),
+      faze: { ...praznaFazaSati(), ...Object.fromEntries(OPERACIJE.map((o) => [o.label, calc.satiPoOperaciji[o.key]])), "Montaža (teren)": calc.satiMontaze },
     };
     let rnBrojac = parseInt(sljedeciBrojRadnogNaloga(db.radniNalozi, noviProjekt.sifra).split("/").pop(), 10);
     const sljedeciRnBroj = () => `${noviProjekt.sifra}/${rnBrojac++}`;
@@ -4341,7 +4372,7 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
         <EntityPage
           title="" data={db.projekti}
           onAdd={() => { setProjForm(emptyProj()); setModal("proj"); }}
-          onEdit={(row) => { setProjForm({ ...emptyProj(), ...row, zadaci: row.zadaci || noviZadaciIzStandarda(), voditeljId: row.voditeljId || "" }); setModal("proj"); }}
+          onEdit={(row) => { setProjForm({ ...emptyProj(), ...row, zadaci: row.zadaci || noviZadaciIzStandarda(), voditeljId: row.voditeljId || "", faze: { ...praznaFazaSati(), ...(row.faze || {}) } }); setModal("proj"); }}
           onDelete={(r) => setDel({ type: "proj", row: r })}
           addLabel="Novi projekt" searchKeys={["sifra", "naziv"]} readOnly={!mozeProjekti}
           columns={[
@@ -4404,6 +4435,15 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
             <Field label="Rok završetka"><input className="input" type="date" value={projForm.rokZavrsetka} onChange={(e) => setProjForm({ ...projForm, rokZavrsetka: e.target.value })} /></Field>
           </div>
           <Field label="Opis"><textarea className="textarea" rows={3} value={projForm.opis} onChange={(e) => setProjForm({ ...projForm, opis: e.target.value })} /></Field>
+          <div className="label" style={{ marginTop: 6 }}>Faze izrade (planirani sati)</div>
+          <div style={{ fontSize: 11, color: "var(--ink-faint)", marginBottom: 8 }}>Sati po fazi koriste se kao predložak kad se za ovaj projekt kasnije kreira radni nalog — nisu obavezni za faze koje se ne planiraju.</div>
+          <div className="card" style={{ padding: 14, background: "var(--surface-alt)", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+            {FAZE.map((f) => (
+              <Field key={f} label={f}>
+                <input className="input f-mono" type="number" min="0" step="0.5" value={projForm.faze?.[f] ?? 0} onChange={(e) => setProjForm({ ...projForm, faze: { ...(projForm.faze || praznaFazaSati()), [f]: Number(e.target.value) || 0 } })} />
+              </Field>
+            ))}
+          </div>
         </Modal>
       )}
 
