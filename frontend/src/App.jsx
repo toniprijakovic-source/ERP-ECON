@@ -4044,7 +4044,7 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
             </div>
 
             <StavkeNormativaTablica naslov="Pod (podna konstrukcija)" rezultat={izracunNorm.pod} rasporedjeno={(id) => rasporedjenoZaStavku("stavkePod", id)} onDodaj={() => dodajStavku("stavkePod")} onAzuriraj={(id, patch) => azurirajStavku("stavkePod", id, patch)} onObrisi={(id) => obrisiStavku("stavkePod", id)} />
-            <StavkeNormativaTablica naslov="Komplet (stranice + krov + spojni profili)" rezultat={izracunNorm.komplet} rasporedjeno={(id) => rasporedjenoZaStavku("stavkeKomplet", id)} onDodaj={() => dodajStavku("stavkeKomplet")} onAzuriraj={(id, patch) => azurirajStavku("stavkeKomplet", id, patch)} onObrisi={(id) => obrisiStavku("stavkeKomplet", id)} />
+            <StavkeNormativaTablica naslov="Stranice" rezultat={izracunNorm.komplet} rasporedjeno={(id) => rasporedjenoZaStavku("stavkeKomplet", id)} onDodaj={() => dodajStavku("stavkeKomplet")} onAzuriraj={(id, patch) => azurirajStavku("stavkeKomplet", id, patch)} onObrisi={(id) => obrisiStavku("stavkeKomplet", id)} />
 
             {izracunNorm.pod.ukupno.komada > 0 && izracunNorm.komplet.ukupno.komada > 0 && izracunNorm.pod.ukupno.komada !== izracunNorm.komplet.ukupno.komada && (
               <p style={{ fontSize: 11.5, color: "var(--rust)", marginTop: -6, marginBottom: 14 }}>
