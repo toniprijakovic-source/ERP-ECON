@@ -2600,6 +2600,7 @@ function PlanRezanjaView({ db, update, showToast }) {
   const [stroj, setStroj] = useState("laserProfili");
   const emptyForm = () => ({ brojPrograma: "", trajanjeMin: 60, radniNalogId: "", napomena: "", status: "Na čekanju" });
   const [form, setForm] = useState(emptyForm());
+  const prazanRedMaterijala = () => ({ materijalId: "", nacinUnosa: "kolicina", duzinaM: 6, sirinaM: 1.25, komada: 1, kolicina: "" });
   const [noveStavkeMaterijala, setNoveStavkeMaterijala] = useState([]);
   const [kapForm, setKapForm] = useState({ datum: addDays(todayISO(), 1), sati: 12 });
   const [materijalModalId, setMaterijalModalId] = useState(null);
@@ -2656,7 +2657,9 @@ function PlanRezanjaView({ db, update, showToast }) {
 
   const dodajProgram = () => {
     if (!form.brojPrograma.trim()) return;
-    const stavke = noveStavkeMaterijala.filter((s) => s.materijalId && Number(s.planiranoKolicina) > 0).map((s) => ({ id: uid("prm"), materijalId: s.materijalId, planiranoKolicina: Number(s.planiranoKolicina), stvarnoKolicina: null, finalizirano: false }));
+    const stavke = noveStavkeMaterijala
+      .filter((s) => s.materijalId && efektivnaKolicinaMaterijala(s, db.materijali.find((m) => m.id === s.materijalId)) > 0)
+      .map((s) => ({ id: uid("prm"), materijalId: s.materijalId, planiranoKolicina: efektivnaKolicinaMaterijala(s, db.materijali.find((m) => m.id === s.materijalId)), stvarnoKolicina: null, finalizirano: false }));
     update("programiRezanja", [...db.programiRezanja, { id: uid("pr"), stroj, brojPrograma: form.brojPrograma.trim(), trajanjeMin: Number(form.trajanjeMin) || 0, radniNalogId: form.radniNalogId, napomena: form.napomena, status: form.status, stavkeMaterijala: stavke, operaterId: "", pokrenuoId: null, zavrsioId: null, segmentPocetak: null, odradjenoMin: 0 }]);
     if (stavke.length > 0) {
       let materijali = [...db.materijali];
@@ -2811,20 +2814,14 @@ function PlanRezanjaView({ db, update, showToast }) {
             <Field label="Napomena"><input className="input" value={form.napomena} onChange={(e) => setForm({ ...form, napomena: e.target.value })} /></Field>
 
             <div className="label" style={{ marginTop: 10, marginBottom: 4 }}>Planirani materijal (skida se sa skladišta odmah)</div>
-            {noveStavkeMaterijala.map((s, i) => {
-              const mat = db.materijali.find((m) => m.id === s.materijalId);
-              return (
-                <div key={i} style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center" }}>
-                  <select className="select" style={{ flex: 1 }} value={s.materijalId} onChange={(e) => setNoveStavkeMaterijala(noveStavkeMaterijala.map((x, idx) => (idx === i ? { ...x, materijalId: e.target.value } : x)))}>
-                    <option value="">Odaberi materijal…</option>
-                    {db.materijali.map((m) => <option key={m.id} value={m.id}>{m.sifra} — {m.naziv} ({m.kolicina} {m.jm})</option>)}
-                  </select>
-                  <input className="input f-mono" style={{ width: 80 }} type="number" min="0" step="0.1" placeholder={mat?.jm || "kol."} value={s.planiranoKolicina} onChange={(e) => setNoveStavkeMaterijala(noveStavkeMaterijala.map((x, idx) => (idx === i ? { ...x, planiranoKolicina: e.target.value } : x)))} />
-                  <button className="btn btn-icon btn-ghost" onClick={() => setNoveStavkeMaterijala(noveStavkeMaterijala.filter((_, idx) => idx !== i))}><X size={14} /></button>
-                </div>
-              );
-            })}
-            <Btn variant="ghost" size="sm" icon={Plus} onClick={() => setNoveStavkeMaterijala([...noveStavkeMaterijala, { materijalId: "", planiranoKolicina: "" }])} style={{ marginBottom: 10 }}>Dodaj stavku materijala</Btn>
+            {noveStavkeMaterijala.map((s, i) => (
+              <PlanMaterijalRedak
+                key={i} row={s} materijali={db.materijali}
+                onChange={(patch) => setNoveStavkeMaterijala(noveStavkeMaterijala.map((x, idx) => (idx === i ? { ...x, ...patch } : x)))}
+                onRemove={() => setNoveStavkeMaterijala(noveStavkeMaterijala.filter((_, idx) => idx !== i))}
+              />
+            ))}
+            <Btn variant="ghost" size="sm" icon={Plus} onClick={() => setNoveStavkeMaterijala([...noveStavkeMaterijala, prazanRedMaterijala()])} style={{ marginBottom: 10 }}>Dodaj stavku materijala</Btn>
 
             <Btn variant="primary" icon={Plus} onClick={dodajProgram} style={{ width: "100%", justifyContent: "center" }}>Dodaj u red čekanja</Btn>
           </div>
@@ -2915,13 +2912,75 @@ function PlanRezanjaView({ db, update, showToast }) {
   );
 }
 
+// Redak za unos planiranog materijala (Plan rezanja) — isti princip kao LineItemsEditor (mode="materijal"):
+// dužina profila × komada za profile, dimenzije lima (dužina × širina) × komada za limove, ili ručni unos
+// količine kad materijal nema definiranu masu po m'/m². Masa se uvijek prikazuje/vraća u kg preko
+// efektivnaKolicinaMaterijala, a dužina/širina se u UI-u unose u mm dok se interno drže u metrima.
+function PlanMaterijalRedak({ row, materijali, onChange, onRemove }) {
+  const mat = materijali.find((m) => m.id === row.materijalId);
+  const nacin = row.nacinUnosa || "kolicina";
+  const kol = efektivnaKolicinaMaterijala(row, mat);
+  const odaberiMaterijal = (val) => {
+    const m = materijali.find((x) => x.id === val);
+    const jeDuzina = m?.kgPoM > 0;
+    const jeLim = m?.kgPoM2 > 0;
+    onChange({ materijalId: val, nacinUnosa: jeDuzina ? "duzina" : jeLim ? "lim" : "kolicina" });
+  };
+  return (
+    <div className="card" style={{ padding: 10, marginBottom: 8, background: "var(--surface-alt)" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+        <div style={{ flex: 1 }}>
+          <label className="label">Materijal</label>
+          <select className="select" value={row.materijalId} onChange={(e) => odaberiMaterijal(e.target.value)}>
+            <option value="">Odaberi materijal…</option>
+            {materijali.map((m) => <option key={m.id} value={m.id}>{m.sifra} — {m.naziv} ({m.kolicina} {m.jm})</option>)}
+          </select>
+        </div>
+        {onRemove && <button className="btn btn-icon btn-ghost" onClick={onRemove}><X size={14} /></button>}
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginTop: 8, flexWrap: "wrap" }}>
+        <div style={{ width: 155 }}>
+          <label className="label">Način unosa</label>
+          <select className="select" value={nacin} onChange={(e) => onChange({ nacinUnosa: e.target.value })}>
+            <option value="duzina">Dužina profila × komada</option>
+            <option value="lim">Dimenzije lima (dužina × širina)</option>
+            <option value="kolicina">Ručni unos količine</option>
+          </select>
+        </div>
+        {nacin === "duzina" ? (
+          <>
+            <div style={{ width: 95 }}><label className="label">Dužina (mm)</label><input className="input f-mono" type="number" min="0" step="1" value={Math.round((Number(row.duzinaM ?? 6)) * 1000)} onChange={(e) => onChange({ duzinaM: (Number(e.target.value) || 0) / 1000 })} /></div>
+            <div style={{ width: 75 }}><label className="label">Komada</label><input className="input f-mono" type="number" min="0" value={row.komada ?? 1} onChange={(e) => onChange({ komada: e.target.value })} /></div>
+            <div style={{ width: 105 }}>
+              <label className="label">Masa</label>
+              <div className="input f-mono" style={{ background: "var(--surface)", color: mat?.kgPoM > 0 ? "var(--ink-soft)" : "var(--rust)" }}>{mat?.kgPoM > 0 ? `${kol.toFixed(1)} kg` : "nema kg/m"}</div>
+            </div>
+          </>
+        ) : nacin === "lim" ? (
+          <>
+            <div style={{ width: 95 }}><label className="label">Dužina (mm)</label><input className="input f-mono" type="number" min="0" step="1" value={Math.round((Number(row.duzinaM ?? 2)) * 1000)} onChange={(e) => onChange({ duzinaM: (Number(e.target.value) || 0) / 1000 })} /></div>
+            <div style={{ width: 95 }}><label className="label">Širina (mm)</label><input className="input f-mono" type="number" min="0" step="1" value={Math.round((Number(row.sirinaM ?? 1.25)) * 1000)} onChange={(e) => onChange({ sirinaM: (Number(e.target.value) || 0) / 1000 })} /></div>
+            <div style={{ width: 65 }}><label className="label">Komada</label><input className="input f-mono" type="number" min="0" value={row.komada ?? 1} onChange={(e) => onChange({ komada: e.target.value })} /></div>
+            <div style={{ width: 105 }}>
+              <label className="label">Masa</label>
+              <div className="input f-mono" style={{ background: "var(--surface)", color: mat?.kgPoM2 > 0 ? "var(--ink-soft)" : "var(--rust)" }}>{mat?.kgPoM2 > 0 ? `${kol.toFixed(1)} kg` : "nema kg/m²"}</div>
+            </div>
+          </>
+        ) : (
+          <div style={{ width: 120 }}><label className="label">Količina ({mat?.jm || "kg"})</label><input className="input f-mono" type="number" min="0" value={row.kolicina ?? ""} onChange={(e) => onChange({ kolicina: e.target.value })} /></div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Materijal jednog programa rezanja — planirane stavke se rezerviraju sa skladišta odmah pri
 // dodavanju; operater ovdje po stavci upisuje stvarno utrošenu količinu, čime se ta stavka
 // zaključava (finalizira), stvarna količina trajno skida sa skladišta (trošak), a razlika prema
 // planiranom vraća natrag.
 function MaterijalProgramaModal({ program, materijali, radniNalogLabel, onDodaj, onObrisi, onFinaliziraj, onClose }) {
-  const [noviMaterijalId, setNoviMaterijalId] = useState("");
-  const [novaKolicina, setNovaKolicina] = useState("");
+  const prazanRed = () => ({ materijalId: "", nacinUnosa: "kolicina", duzinaM: 6, sirinaM: 1.25, komada: 1, kolicina: "" });
+  const [noviRed, setNoviRed] = useState(prazanRed());
   const [uneseno, setUneseno] = useState({});
 
   const stavke = program?.stavkeMaterijala || [];
@@ -2963,14 +3022,12 @@ function MaterijalProgramaModal({ program, materijali, radniNalogLabel, onDodaj,
           )}
         </tbody>
       </table>
-      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-        <select className="select" style={{ flex: 1 }} value={noviMaterijalId} onChange={(e) => setNoviMaterijalId(e.target.value)}>
-          <option value="">Odaberi materijal…</option>
-          {materijali.map((m) => <option key={m.id} value={m.id}>{m.sifra} — {m.naziv} ({m.kolicina} {m.jm})</option>)}
-        </select>
-        <input className="input f-mono" style={{ width: 90 }} type="number" min="0" step="0.1" placeholder="količina" value={novaKolicina} onChange={(e) => setNovaKolicina(e.target.value)} />
-        <Btn variant="ghost" icon={Plus} onClick={() => { onDodaj(noviMaterijalId, novaKolicina); setNoviMaterijalId(""); setNovaKolicina(""); }}>Dodaj</Btn>
-      </div>
+      <PlanMaterijalRedak row={noviRed} materijali={materijali} onChange={(patch) => setNoviRed({ ...noviRed, ...patch })} />
+      <Btn variant="ghost" icon={Plus} onClick={() => {
+        const mat = materijali.find((m) => m.id === noviRed.materijalId);
+        onDodaj(noviRed.materijalId, efektivnaKolicinaMaterijala(noviRed, mat));
+        setNoviRed(prazanRed());
+      }}>Dodaj</Btn>
     </Modal>
   );
 }
