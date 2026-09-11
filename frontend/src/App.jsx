@@ -312,7 +312,18 @@ const VRSTE_DANA = [
   { key: "rad", label: "Rad" },
   { key: "godisnji", label: "Godišnji odmor" },
   { key: "bolovanje", label: "Bolovanje" },
+  { key: "detasman", label: "Detašman" },
+  { key: "placeniDopust", label: "Plaćeni dopust" },
+  { key: "sluzbeniPut", label: "Službeni put" },
 ];
+// Kratke oznake za ćelije evidencije i legendu — boja + slovna kratica po vrsti dana (osim "rad").
+const OZNAKA_VRSTE_DANA = {
+  godisnji: { kratica: "GO", boja: "#215C77", bg: "#EAF3F7", naziv: "Godišnji odmor" },
+  bolovanje: { kratica: "BO", boja: "#8A6100", bg: "#FDF6E3", naziv: "Bolovanje" },
+  detasman: { kratica: "DE", boja: "#4A6A21", bg: "#EEF3E6", naziv: "Detašman" },
+  placeniDopust: { kratica: "PD", boja: "#6B3FA0", bg: "#F1EAF7", naziv: "Plaćeni dopust" },
+  sluzbeniPut: { kratica: "SP", boja: "#1B6B78", bg: "#E5F2F3", naziv: "Službeni put" },
+};
 
 // Pune godine staža na zadani datum
 const godineStaza = (datumZaposlenja, naDatum) => {
@@ -379,8 +390,8 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
   const odradjeniSati = vrsta === "rad" ? obracunskiSati(zapis.vrijemeDolaska, zapis.vrijemeOdlaska, smjena, postavke) : 0;
 
   let redovni = 0, prekovremeni = 0, placeniNerad = 0;
-  if (vrsta === "godisnji" || praznik) {
-    placeniNerad = norma; // godišnji i praznik plaćaju se kao puna norma
+  if (vrsta === "godisnji" || vrsta === "detasman" || vrsta === "placeniDopust" || vrsta === "sluzbeniPut" || praznik) {
+    placeniNerad = norma; // godišnji, detašman, plaćeni dopust, službeni put i praznik plaćaju se kao puna norma
   } else if (vrsta === "bolovanje") {
     placeniNerad = 0; // PRAVILO JOŠ NIJE DEFINIRANO — evidentira se, ne ulazi u obračun
   } else if (danUTjednu === 6 || danUTjednu === 0) {
@@ -5678,10 +5689,10 @@ function EvidencijaTab({ db, update, showToast, mozeMijenjati = true }) {
       </td>;
     }
 
-    if (zapis.vrsta === "godisnji" || zapis.vrsta === "bolovanje") {
-      const jeGod = zapis.vrsta === "godisnji";
-      return <td style={{ ...stil, background: jeGod ? "#EAF3F7" : "#FDF6E3" }} onClick={() => otvoriCeliju(zaposlenik.id, dan.datum)} title={jeGod ? "Godišnji odmor" : "Bolovanje"}>
-        <span className="f-mono" style={{ fontSize: 11, fontWeight: 700, color: jeGod ? "#215C77" : "#8A6100" }}>{jeGod ? "GO" : "BO"}</span>
+    const oznaka = OZNAKA_VRSTE_DANA[zapis.vrsta];
+    if (oznaka) {
+      return <td style={{ ...stil, background: oznaka.bg }} onClick={() => otvoriCeliju(zaposlenik.id, dan.datum)} title={oznaka.naziv}>
+        <span className="f-mono" style={{ fontSize: 11, fontWeight: 700, color: oznaka.boja }}>{oznaka.kratica}</span>
       </td>;
     }
 
@@ -5741,8 +5752,9 @@ function EvidencijaTab({ db, update, showToast, mozeMijenjati = true }) {
           <input className="input f-mono" type="month" style={{ width: 160 }} value={mjesec} onChange={(e) => setMjesec(e.target.value)} />
         </div>
         <div style={{ display: "flex", gap: 12, fontSize: 11, color: "var(--ink-soft)", flexWrap: "wrap" }}>
-          <span><span className="f-mono" style={{ fontWeight: 700, color: "#215C77" }}>GO</span> godišnji</span>
-          <span><span className="f-mono" style={{ fontWeight: 700, color: "#8A6100" }}>BO</span> bolovanje</span>
+          {Object.values(OZNAKA_VRSTE_DANA).map((o) => (
+            <span key={o.kratica}><span className="f-mono" style={{ fontWeight: 700, color: o.boja }}>{o.kratica}</span> {o.naziv.toLowerCase()}</span>
+          ))}
           <span><span style={{ display: "inline-block", width: 9, height: 9, background: "#FBEAE6", border: "1px solid #F0C2B5", borderRadius: 2 }} /> praznik / auto odjava</span>
           <span><span className="f-mono" style={{ color: "var(--steel)", fontWeight: 700 }}>8.0</span> popodnevna smjena</span>
         </div>
