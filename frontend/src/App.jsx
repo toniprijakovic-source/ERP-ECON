@@ -217,6 +217,46 @@ const izracunPonude = (ponuda, materijali, cjenikRada, katalog = [], kvalitete =
   };
 };
 
+/* ============================== PONUDA ZA LASERSKO REZANJE ==============================
+   Ponuda za uslugu laserskog rezanja (rezanje tuđeg materijala po nacrtu, ne izrada
+   konstrukcije) — masa se za pločasti laser računa iz dimenzija × gustoća odabrane kvalitete
+   materijala (isti princip kao pozicije u ponudi), a za cijevni laser iz dužine × mase po m'
+   (isti princip kao profili na skladištu). Vrijeme rezanja/pripreme unosi se ručno po stavci
+   jer ovisi o složenosti reza koju sustav ne može izvesti iz same geometrije. Dodatak (%) se
+   računa na zbroj stavki; savijanje i ostale stavke dodaju se nakon toga bez dodatka (isto
+   kao u predlošku iz kojeg je ovo preuzeto — Excel kalkulacija laserskog rezanja). */
+const prazniCjenikLasera = () => ({ plocastiEurH: 150, pripremaPlocastiEurH: 40, cijevniEurH: 250, pripremaCijevniEurH: 150, savijanjeEurH: 40, dodatakPct: 10 });
+
+const masaStavkeLasera = (s, kvalitete) => {
+  if (s.tipLasera === "cijevni") return ((Number(s.duzinaMM) || 0) / 1000) * (Number(s.komada) || 0) * (Number(s.kgPoM) || 0);
+  const gustocaKgM3 = faktorGustoce(kvalitete, s.kvaliteta) * GUSTOCA_CELIKA * 1000;
+  return ((Number(s.duzinaMM) || 0) / 1000) * ((Number(s.sirinaMM) || 0) / 1000) * ((Number(s.debljinaMM) || 0) / 1000) * gustocaKgM3 * (Number(s.komada) || 0);
+};
+
+const izracunStavkeLasera = (s, cjenik, kvalitete) => {
+  const masaKg = masaStavkeLasera(s, kvalitete);
+  const satRezanja = s.tipLasera === "cijevni" ? Number(cjenik.cijevniEurH) || 0 : Number(cjenik.plocastiEurH) || 0;
+  const satPripreme = s.tipLasera === "cijevni" ? Number(cjenik.pripremaCijevniEurH) || 0 : Number(cjenik.pripremaPlocastiEurH) || 0;
+  const trosakRezanja = ((Number(s.rezanjeMin) || 0) / 60) * satRezanja;
+  const trosakPripreme = ((Number(s.pripremaMin) || 0) / 60) * satPripreme;
+  const trosakMaterijala = masaKg * (Number(s.cijenaMaterijalaEurKg) || 0);
+  return { masaKg, trosakRezanja, trosakPripreme, trosakMaterijala, ukupno: trosakRezanja + trosakPripreme + trosakMaterijala };
+};
+
+const izracunPonudeLasera = (ponuda, kvalitete = []) => {
+  const cjenik = { ...prazniCjenikLasera(), ...(ponuda.cjenik || {}) };
+  const stavke = (ponuda.stavke || []).map((s) => ({ ...s, ...izracunStavkeLasera(s, cjenik, kvalitete) }));
+  const zbrojStavki = stavke.reduce((s, st) => s + st.ukupno, 0);
+  const dodatakPct = Number(cjenik.dodatakPct) || 0;
+  const iznosDodatka = zbrojStavki * (dodatakPct / 100);
+  const brojPregiba = Number(ponuda.savijanje?.brojPregiba) || 0;
+  const minPoKom = Number(ponuda.savijanje?.minPoKom) || 0;
+  const trosakSavijanja = ((brojPregiba * minPoKom) / 60) * (Number(cjenik.savijanjeEurH) || 0);
+  const trosakOstalo = (ponuda.ostaleStavke || []).reduce((s, st) => s + (Number(st.kolicina) || 0) * (Number(st.cijenaJed) || 0), 0);
+  const cijenaKonacna = zbrojStavki + iznosDodatka + trosakSavijanja + trosakOstalo;
+  return { cjenik, stavke, zbrojStavki, dodatakPct, iznosDodatka, trosakSavijanja, trosakOstalo, cijenaKonacna };
+};
+
 /* ============================== NORMATIV TIPSKIH PROJEKATA ==============================
    Za dugoročno ugovorene poslove (npr. kupaonice) cijena i vrijeme ne unose se ručno po poziciji,
    nego se izvode iz mase: cijena = masa × €/kg, sati = masa ÷ (kg/h), a ti sati se zatim
@@ -599,7 +639,7 @@ const generirajRfidKod = (ime, prezime, postojeciKodovi) => {
   return kod;
 };
 
-const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi", "postavkePlaca", "praznici", "kvaliteteMaterijala"];
+const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi", "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera"];
 
 /* ============================== SMALL UI PRIMITIVES ============================== */
 const Btn = ({ variant = "ghost", size, icon: Icon, children, className = "", ...rest }) => (
@@ -931,7 +971,7 @@ const KARTICE_MODULA = {
   skladiste: { kartice: [{ key: "zalihe", naziv: "Zalihe" }, { key: "katalog", naziv: "Katalog profila i limova" }, { key: "kvaliteta", naziv: "Kvaliteta materijala" }] },
   nabava: { kartice: [{ key: "narudzbenice", naziv: "Narudžbenice" }, { key: "upiti", naziv: "Upiti materijala" }, { key: "postavke", naziv: "Postavke tvrtke" }] },
   proizvodnja: { kartice: [{ key: "tablica", naziv: "Tablica" }, { key: "gantogram", naziv: "Gantogram" }, { key: "rezanje", naziv: "Plan rezanja" }, { key: "isporuke", naziv: "Isporuke kupaonica" }] },
-  projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "ponude", naziv: "Ponude" }] },
+  projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "ponude", naziv: "Ponude" }, { key: "laser", naziv: "Ponude - Laser" }] },
   fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "otpremnice", naziv: "Otpremnice" }, { key: "podloge", naziv: "Podloge za fakturu" }] },
   partneri: { kartice: [{ key: "kupci", naziv: "Kupci" }, { key: "dobavljaci", naziv: "Dobavljači" }] },
   zaposlenici: { kartice: [{ key: "zaposlenici", naziv: "Zaposlenici" }, { key: "pozicije", naziv: "Pozicije" }, { key: "evidencija", naziv: "Evidencija rada" }, { key: "obracun", naziv: "Obračun plaća" }] },
@@ -4349,6 +4389,214 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
   );
 }
 
+// Redak jedne stavke ponude za lasersko rezanje — tip lasera bira koji se uređaj/satnica koristi
+// (pločasti = rezanje limova po dimenzijama i gustoći kvalitete; cijevni = rezanje po dužini i
+// masi po m', isti princip kao profili na skladištu), a masa/trošak se prikazuju uživo.
+function LaserStavkaRedak({ stavka: s, kvalitete, onAzuriraj, onObrisi }) {
+  const izracun = izracunStavkeLasera(s, s._cjenik, kvalitete);
+  return (
+    <div className="card" style={{ padding: 10, marginBottom: 8, background: "var(--surface-alt)" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+        <div style={{ flex: 1 }}><label className="label">Opis stavke</label><input className="input" value={s.opis} onChange={(e) => onAzuriraj({ opis: e.target.value })} /></div>
+        <div style={{ width: 150 }}>
+          <label className="label">Tip lasera</label>
+          <select className="select" value={s.tipLasera} onChange={(e) => onAzuriraj({ tipLasera: e.target.value })}>
+            <option value="plocasti">Pločasti (limovi)</option>
+            <option value="cijevni">Cijevni (profili)</option>
+          </select>
+        </div>
+        <button className="btn btn-icon btn-ghost" onClick={onObrisi}><X size={14} /></button>
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginTop: 8, flexWrap: "wrap" }}>
+        {s.tipLasera === "cijevni" ? (
+          <>
+            <div style={{ width: 100 }}><label className="label">Dužina (mm)</label><input className="input f-mono" type="number" min="0" value={s.duzinaMM} onChange={(e) => onAzuriraj({ duzinaMM: e.target.value })} /></div>
+            <div style={{ width: 80 }}><label className="label">Komada</label><input className="input f-mono" type="number" min="0" value={s.komada} onChange={(e) => onAzuriraj({ komada: e.target.value })} /></div>
+            <div style={{ width: 100 }}><label className="label">Masa po m' (kg/m)</label><input className="input f-mono" type="number" min="0" step="0.01" value={s.kgPoM} onChange={(e) => onAzuriraj({ kgPoM: e.target.value })} /></div>
+          </>
+        ) : (
+          <>
+            <div style={{ width: 95 }}><label className="label">Dužina (mm)</label><input className="input f-mono" type="number" min="0" value={s.duzinaMM} onChange={(e) => onAzuriraj({ duzinaMM: e.target.value })} /></div>
+            <div style={{ width: 95 }}><label className="label">Širina (mm)</label><input className="input f-mono" type="number" min="0" value={s.sirinaMM} onChange={(e) => onAzuriraj({ sirinaMM: e.target.value })} /></div>
+            <div style={{ width: 85 }}><label className="label">Debljina (mm)</label><input className="input f-mono" type="number" min="0" step="0.1" value={s.debljinaMM} onChange={(e) => onAzuriraj({ debljinaMM: e.target.value })} /></div>
+            <div style={{ width: 70 }}><label className="label">Komada</label><input className="input f-mono" type="number" min="0" value={s.komada} onChange={(e) => onAzuriraj({ komada: e.target.value })} /></div>
+            <div style={{ width: 165 }}>
+              <label className="label">Kvaliteta materijala</label>
+              <select className="select" value={s.kvaliteta} onChange={(e) => onAzuriraj({ kvaliteta: e.target.value })}>
+                {(kvalitete && kvalitete.length ? kvalitete : ZADANE_KVALITETE_MATERIJALA).map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}
+              </select>
+            </div>
+          </>
+        )}
+        <div style={{ width: 110 }}><label className="label">Cijena materijala (€/kg)</label><input className="input f-mono" type="number" min="0" step="0.01" value={s.cijenaMaterijalaEurKg} onChange={(e) => onAzuriraj({ cijenaMaterijalaEurKg: e.target.value })} /></div>
+        <div style={{ width: 90 }}><label className="label">Rezanje (min)</label><input className="input f-mono" type="number" min="0" value={s.rezanjeMin} onChange={(e) => onAzuriraj({ rezanjeMin: e.target.value })} /></div>
+        <div style={{ width: 90 }}><label className="label">Priprema (min)</label><input className="input f-mono" type="number" min="0" value={s.pripremaMin} onChange={(e) => onAzuriraj({ pripremaMin: e.target.value })} /></div>
+        <div style={{ marginLeft: "auto", textAlign: "right" }}>
+          <label className="label">Masa / Trošak stavke</label>
+          <div className="f-mono" style={{ fontWeight: 700, fontSize: 14 }}>{izracun.masaKg.toFixed(1)} kg · {fmtCurDec(izracun.ukupno)}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PonudaLaseraModal({ form, setForm, db, onSave, onClose }) {
+  const calc = izracunPonudeLasera(form, db.kvaliteteMaterijala);
+  const prazanRed = () => ({ id: uid("lst"), opis: "", tipLasera: "plocasti", duzinaMM: 1000, sirinaMM: 1000, debljinaMM: 3, komada: 1, kvaliteta: "celik", cijenaMaterijalaEurKg: 0.9, kgPoM: 0, rezanjeMin: 0, pripremaMin: 0 });
+  const azurirajStavku = (id, patch) => setForm({ ...form, stavke: form.stavke.map((s) => (s.id === id ? { ...s, ...patch } : s)) });
+  const obrisiStavku = (id) => setForm({ ...form, stavke: form.stavke.filter((s) => s.id !== id) });
+  const azurirajCjenik = (patch) => setForm({ ...form, cjenik: { ...prazniCjenikLasera(), ...form.cjenik, ...patch } });
+
+  return (
+    <Modal wide title={form.id ? `Ponuda za laser ${form.broj}` : "Nova ponuda za laser"} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={onSave}>Spremi</Btn></>}>
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
+        <Field label="Naziv posla"><input className="input" placeholder="npr. Usluga laserskog rezanja" value={form.naziv} onChange={(e) => setForm({ ...form, naziv: e.target.value })} /></Field>
+        <Field label="Kupac"><select className="select" value={form.kupacId} onChange={(e) => setForm({ ...form, kupacId: e.target.value })}>{db.kupci.map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}</select></Field>
+        <Field label="Datum"><input className="input" type="date" value={form.datum} onChange={(e) => setForm({ ...form, datum: e.target.value })} /></Field>
+      </div>
+      <Field label="Status"><select className="select" style={{ maxWidth: 220 }} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{["U izradi", "Poslana", "Prihvaćena", "Odbijena"].map((s) => <option key={s}>{s}</option>)}</select></Field>
+
+      <div className="label" style={{ marginTop: 6 }}>Satnice i dodatak (vrijede za ovu ponudu)</div>
+      <div className="card" style={{ padding: 14, background: "var(--surface-alt)", marginBottom: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+          <Field label="Pločasti laser (€/h)"><input className="input f-mono" type="number" min="0" step="1" value={form.cjenik?.plocastiEurH ?? 0} onChange={(e) => azurirajCjenik({ plocastiEurH: Number(e.target.value) || 0 })} /></Field>
+          <Field label="Priprema pločasti (€/h)"><input className="input f-mono" type="number" min="0" step="1" value={form.cjenik?.pripremaPlocastiEurH ?? 0} onChange={(e) => azurirajCjenik({ pripremaPlocastiEurH: Number(e.target.value) || 0 })} /></Field>
+          <div />
+          <Field label="Cijevni laser (€/h)"><input className="input f-mono" type="number" min="0" step="1" value={form.cjenik?.cijevniEurH ?? 0} onChange={(e) => azurirajCjenik({ cijevniEurH: Number(e.target.value) || 0 })} /></Field>
+          <Field label="Priprema cijevni (€/h)"><input className="input f-mono" type="number" min="0" step="1" value={form.cjenik?.pripremaCijevniEurH ?? 0} onChange={(e) => azurirajCjenik({ pripremaCijevniEurH: Number(e.target.value) || 0 })} /></Field>
+          <div />
+          <Field label="Savijanje (€/h)"><input className="input f-mono" type="number" min="0" step="1" value={form.cjenik?.savijanjeEurH ?? 0} onChange={(e) => azurirajCjenik({ savijanjeEurH: Number(e.target.value) || 0 })} /></Field>
+          <Field label="Dodatak (%)"><input className="input f-mono" type="number" min="0" step="0.5" value={form.cjenik?.dodatakPct ?? 0} onChange={(e) => azurirajCjenik({ dodatakPct: Number(e.target.value) || 0 })} /></Field>
+        </div>
+      </div>
+
+      <div className="label" style={{ marginBottom: 4 }}>Stavke rezanja</div>
+      {form.stavke.length === 0 && <div style={{ textAlign: "center", color: "var(--ink-faint)", padding: "14px 0", fontSize: 13 }}>Nema stavki. Dodaj stavku rezanja.</div>}
+      {form.stavke.map((s) => (
+        <LaserStavkaRedak key={s.id} stavka={{ ...s, _cjenik: calc.cjenik }} kvalitete={db.kvaliteteMaterijala} onAzuriraj={(patch) => azurirajStavku(s.id, patch)} onObrisi={() => obrisiStavku(s.id)} />
+      ))}
+      <Btn variant="ghost" size="sm" icon={Plus} onClick={() => setForm({ ...form, stavke: [...form.stavke, prazanRed()] })} style={{ marginBottom: 16 }}>Dodaj stavku rezanja</Btn>
+
+      <div className="label" style={{ marginBottom: 4 }}>Savijanje (opcionalno)</div>
+      <div className="card" style={{ padding: 14, background: "var(--surface-alt)", marginBottom: 16, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+        <Field label="Broj pregiba"><input className="input f-mono" type="number" min="0" value={form.savijanje?.brojPregiba ?? 0} onChange={(e) => setForm({ ...form, savijanje: { ...form.savijanje, brojPregiba: e.target.value } })} /></Field>
+        <Field label="Min. po komadu"><input className="input f-mono" type="number" min="0" step="0.5" value={form.savijanje?.minPoKom ?? 0} onChange={(e) => setForm({ ...form, savijanje: { ...form.savijanje, minPoKom: e.target.value } })} /></Field>
+        <div><div className="label">Trošak savijanja</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700, marginTop: 6 }}>{fmtCurDec(calc.trosakSavijanja)}</div></div>
+      </div>
+
+      <Field label="Ostale stavke (crtanje, transport…)"><LineItemsEditor mode="custom" rows={form.ostaleStavke} setRows={(rows) => setForm({ ...form, ostaleStavke: rows })} /></Field>
+      <Field label="Napomena"><textarea className="textarea" rows={2} value={form.napomena} onChange={(e) => setForm({ ...form, napomena: e.target.value })} /></Field>
+
+      <div className="card" style={{ padding: 14, background: "var(--surface-alt)", marginTop: 4 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, fontSize: 12.5, marginBottom: 12 }}>
+          <div><div style={{ color: "var(--ink-soft)" }}>Zbroj stavki rezanja</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.zbrojStavki)}</div></div>
+          <div><div style={{ color: "var(--ink-soft)" }}>Dodatak ({calc.dodatakPct}%)</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.iznosDodatka)}</div></div>
+          <div><div style={{ color: "var(--ink-soft)" }}>Savijanje + ostalo</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.trosakSavijanja + calc.trosakOstalo)}</div></div>
+        </div>
+        <div style={{ borderTop: "1px solid var(--line-strong)", paddingTop: 10, display: "flex", justifyContent: "flex-end" }}>
+          <div>
+            <div style={{ fontSize: 12, color: "var(--ink-soft)", textAlign: "right" }}>Konačna cijena ponude</div>
+            <div className="f-mono" style={{ fontSize: 19, fontWeight: 700, color: "var(--steel)", textAlign: "right" }}>{fmtCurDec(calc.cijenaKonacna)}</div>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
+  const t = db.postavkeTvrtke || {};
+  const calc = izracunPonudeLasera(ponuda, db.kvaliteteMaterijala);
+  const pdvStopa = Number(t.pdvStopa ?? 25);
+  const pdvIznos = calc.cijenaKonacna * (pdvStopa / 100);
+  const ukupnoSPdv = calc.cijenaKonacna + pdvIznos;
+
+  return (
+    <Modal wide title={`Pregled za ispis — Ponuda za laser ${ponuda.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => window.print()}>Ispis / Spremi kao PDF</Btn></>}>
+      <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 17 }}>PONUDA — USLUGA LASERSKOG REZANJA</div>
+            <div className="f-mono" style={{ fontSize: 13 }}>Broj: {ponuda.broj}</div>
+          </div>
+          <div style={{ textAlign: "right", fontSize: 10.5, lineHeight: 1.5 }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>{t.naziv}</div>
+            <div style={{ fontSize: 9.5, color: "#555", maxWidth: 260 }}>{t.djelatnost}</div>
+            <div>{t.adresa}</div>
+            <div>{t.telefon}</div>
+            <div>{t.email}</div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16, fontSize: 11.5 }}>
+          <div>
+            <div style={{ color: "#555", marginBottom: 3 }}>Naručitelj:</div>
+            <div style={{ fontWeight: 700 }}>{kupac?.naziv || "—"}</div>
+            <div>{kupac?.adresa}</div>
+            {kupac?.oib && <div>OIB: {kupac.oib}</div>}
+          </div>
+          <table style={{ borderCollapse: "collapse", height: "fit-content" }}>
+            <tbody>
+              <tr><td style={{ paddingRight: 10, color: "#555" }}>Datum ponude:</td><td style={{ fontWeight: 600 }}>{fmtDate(ponuda.datum)}</td></tr>
+              <tr><td style={{ paddingRight: 10, color: "#555" }}>Ponuda vrijedi do:</td><td style={{ fontWeight: 600 }}>{fmtDate(addDays(ponuda.datum, 30))}</td></tr>
+              <tr><td style={{ paddingRight: 10, color: "#555" }}>Predmet:</td><td style={{ fontWeight: 600 }}>{ponuda.naziv}</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 6 }}>Stavke rezanja</div>
+        <table className="doc-table" style={{ marginBottom: 16 }}>
+          <thead><tr><th>Opis</th><th style={{ width: 90 }}>Tip lasera</th><th style={{ width: 55 }}>Kom.</th><th style={{ width: 80 }}>Masa (kg)</th><th style={{ width: 90 }}>Iznos</th></tr></thead>
+          <tbody>
+            {calc.stavke.map((s) => (
+              <tr key={s.id}>
+                <td>{s.opis || "—"}</td>
+                <td>{s.tipLasera === "cijevni" ? "Cijevni" : "Pločasti"}</td>
+                <td className="f-mono">{s.komada}</td>
+                <td className="f-mono">{s.masaKg.toFixed(1)}</td>
+                <td className="f-mono">{fmtCurDec(s.ukupno)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        {(ponuda.ostaleStavke || []).length > 0 && (
+          <table className="doc-table" style={{ marginBottom: 16 }}>
+            <thead><tr><th>Ostale stavke</th><th style={{ width: 100 }}>Iznos</th></tr></thead>
+            <tbody>{ponuda.ostaleStavke.map((r, i) => <tr key={i}><td>{r.opis}</td><td className="f-mono">{fmtCurDec((Number(r.kolicina) || 0) * (Number(r.cijenaJed) || 0))}</td></tr>)}</tbody>
+          </table>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 20 }}>
+          <table style={{ borderCollapse: "collapse", fontSize: 12, minWidth: 260 }}>
+            <tbody>
+              <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Zbroj stavki rezanja:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(calc.zbrojStavki)}</td></tr>
+              <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Dodatak ({calc.dodatakPct}%):</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(calc.iznosDodatka)}</td></tr>
+              {calc.trosakSavijanja > 0 && <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Savijanje:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(calc.trosakSavijanja)}</td></tr>}
+              {calc.trosakOstalo > 0 && <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Ostalo:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(calc.trosakOstalo)}</td></tr>}
+              <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Osnovica:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(calc.cijenaKonacna)}</td></tr>
+              <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>PDV ({pdvStopa}%):</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(pdvIznos)}</td></tr>
+              <tr style={{ borderTop: "1px solid #333" }}><td style={{ padding: "6px 14px 0 0", fontWeight: 700 }}>UKUPNO:</td><td style={{ textAlign: "right", fontWeight: 700, paddingTop: 6, fontSize: 14 }}>{fmtCurDec(ukupnoSPdv)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        {ponuda.napomena && <div style={{ fontSize: 11, marginBottom: 16 }}><strong>Napomena:</strong> {ponuda.napomena}</div>}
+
+        <div style={{ fontSize: 11, marginBottom: 20 }}>
+          <div>Uvjeti plaćanja i rok isporuke definiraju se ugovorom/narudžbom po prihvaćanju ponude.</div>
+          <div style={{ marginTop: 10 }}>S poštovanjem,</div>
+          <div style={{ fontWeight: 700, marginTop: 8 }}>{t.naziv}</div>
+        </div>
+
+        <div style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
+          <strong>OIB</strong>: {t.oib} | <strong>MB</strong>: {t.mb} | <strong>VAT-ID:</strong> {t.vatId} | <strong>IBAN:</strong> {t.iban} | <strong>SWIFT:</strong> {t.swift} | Poduzeće je upisano na {t.sud}, <strong>MBS:</strong> {t.mbs} | <strong>Uprava:</strong> {t.uprava}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "projekti");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "projekti");
@@ -4368,6 +4616,11 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
   const [zadaciOpen, setZadaciOpen] = useState(false);
   const [detalj, setDetalj] = useState(null);
   const [printPonuda, setPrintPonuda] = useState(null);
+
+  const emptyLaser = () => ({ id: null, broj: sljedeciBroj(db.ponudeLasera, "broj", "LAS-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", cjenik: prazniCjenikLasera(), stavke: [], savijanje: { brojPregiba: 0, minPoKom: 0 }, ostaleStavke: [] });
+  const [laserForm, setLaserForm] = useState(emptyLaser());
+  const [printLaser, setPrintLaser] = useState(null);
+  const mozeLaser = dozvolaZaKarticu(mojaPozicija, "projekti", "laser").izmjene;
 
   const kupacNaziv = (id) => db.kupci.find((k) => k.id === id)?.naziv || "—";
   const projSifra = (id) => db.projekti.find((p) => p.id === id)?.sifra || "";
@@ -4394,6 +4647,13 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
     else update("ponude", [...db.ponude, { ...ponForm, id: uid("pon") }]);
     setModal(null);
     showToast("Ponuda spremljena.");
+  };
+  const saveLaser = () => {
+    if (!laserForm.naziv.trim()) return;
+    if (laserForm.id) update("ponudeLasera", db.ponudeLasera.map((p) => (p.id === laserForm.id ? laserForm : p)));
+    else update("ponudeLasera", [...db.ponudeLasera, { ...laserForm, id: uid("las") }]);
+    setModal(null);
+    showToast("Ponuda za laser spremljena.");
   };
   const saveCjenik = (novi) => {
     const cleaned = Object.fromEntries(Object.entries(novi).map(([k, v]) => [k, Number(v) || 0]));
@@ -4451,6 +4711,7 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
         <div style={{ display: "flex", gap: 20 }}>
           {dozvKartice.some((k) => k.key === "projekti") && <div className={`nav-tab ${tab === "projekti" ? "active" : ""}`} onClick={() => setTab("projekti")}>Projekti</div>}
           {dozvKartice.some((k) => k.key === "ponude") && <div className={`nav-tab ${tab === "ponude" ? "active" : ""}`} onClick={() => setTab("ponude")}>Ponude</div>}
+          {dozvKartice.some((k) => k.key === "laser") && <div className={`nav-tab ${tab === "laser" ? "active" : ""}`} onClick={() => setTab("laser")}>Ponude - Laser</div>}
         </div>
         {tab === "ponude" && <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setCjenikOpen(true)}>Cjenik rada</Btn>}
         {tab === "projekti" && <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setZadaciOpen(true)}>Standardni zadaci</Btn>}
@@ -4498,6 +4759,24 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
                 : r.status === "Prihvaćena" ? <Btn size="sm" icon={FolderInput} onClick={() => pretvoriUProjekt(r)}>Pretvori u projekt</Btn>
                 : null
             },
+          ]}
+        />
+      )}
+
+      {tab === "laser" && (
+        <EntityPage
+          title="" data={db.ponudeLasera}
+          onAdd={() => { setLaserForm(emptyLaser()); setModal("laser"); }}
+          onEdit={(row) => { setLaserForm({ ...emptyLaser(), ...JSON.parse(JSON.stringify(row)), stavke: row.stavke || [], ostaleStavke: row.ostaleStavke || [], cjenik: { ...prazniCjenikLasera(), ...(row.cjenik || {}) } }); setModal("laser"); }}
+          onDelete={(r) => setDel({ type: "laser", row: r })}
+          addLabel="Nova ponuda za laser" searchKeys={["broj", "naziv"]} readOnly={!mozeLaser}
+          columns={[
+            { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
+            { key: "naziv", label: "Naziv posla" },
+            { key: "kupac", label: "Kupac", render: (r) => kupacNaziv(r.kupacId) },
+            { key: "ukupno", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCurDec(izracunPonudeLasera(r, db.kvaliteteMaterijala).cijenaKonacna)}</span> },
+            { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
+            { key: "pdf", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrintLaser(r)}>PDF ponude</Btn> },
           ]}
         />
       )}
@@ -4675,13 +4954,16 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
       {zadaciOpen && <StandardniZadaciModal standardniZadaci={db.standardniZadaci} update={update} showToast={showToast} onClose={() => setZadaciOpen(false)} />}
       {detalj && <ProjektDetaljModal projekt={db.projekti.find((p) => p.id === detalj.id) || detalj} db={db} update={update} showToast={showToast} setPage={setPage} onClose={() => setDetalj(null)} />}
       {printPonuda && <PonudaPrintModal ponuda={printPonuda} kupac={db.kupci.find((k) => k.id === printPonuda.kupacId)} db={db} onClose={() => setPrintPonuda(null)} />}
+      {modal === "laser" && <PonudaLaseraModal form={laserForm} setForm={setLaserForm} db={db} onSave={saveLaser} onClose={() => setModal(null)} />}
+      {printLaser && <PonudaLaseraPrintModal ponuda={printLaser} kupac={db.kupci.find((k) => k.id === printLaser.kupacId)} db={db} onClose={() => setPrintLaser(null)} />}
 
       {del && (
         <ConfirmDelete
-          label={del.type === "proj" ? del.row.naziv : del.row.broj}
+          label={del.type === "proj" || del.type === "laser" ? (del.row.naziv || del.row.broj) : del.row.broj}
           onCancel={() => setDel(null)}
           onConfirm={() => {
             if (del.type === "proj") update("projekti", db.projekti.filter((p) => p.id !== del.row.id));
+            else if (del.type === "laser") update("ponudeLasera", db.ponudeLasera.filter((p) => p.id !== del.row.id));
             else update("ponude", db.ponude.filter((p) => p.id !== del.row.id));
             setDel(null);
             showToast("Stavka obrisana.");
