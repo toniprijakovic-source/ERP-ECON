@@ -4306,15 +4306,16 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
   const calc = izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala);
   const pdvStopa = Number(t.pdvStopa ?? 25);
   const izradaIznos = calc.trosakRada + calc.trosakMaterijala;
+  // Uvećanje se ne navodi kao posebna stavka — uračunato je izravno u cijenu svake stavke,
+  // pa je zbroj prikazanih iznosa već konačna (uvećana) osnovica.
+  const faktorMarze = 1 + (calc.postotakMarze || 0) / 100;
   const komercijalneStavke = [
     { opis: "Izrada i isporuka čelične konstrukcije (materijal i rad)", iznos: izradaIznos },
     ...(ponuda.ostaleStavke || []).map((s) => ({ opis: s.opis, iznos: (Number(s.kolicina) || 0) * (Number(s.cijenaJed) || 0) })),
     ...(calc.trosakMontaze > 0 ? [{ opis: "Montaža konstrukcije", iznos: calc.trosakMontaze }] : []),
     ...calc.akzPoTipu.filter((t) => t.iznos > 0).map((t) => ({ opis: `Antikorozivna zaštita – ${t.label}`, iznos: t.iznos })),
-  ];
-  const podzbroj = komercijalneStavke.reduce((s, r) => s + r.iznos, 0);
-  const iznosMarze = podzbroj * (calc.postotakMarze / 100);
-  const osnovica = podzbroj + iznosMarze;
+  ].map((r) => ({ ...r, iznos: r.iznos * faktorMarze }));
+  const osnovica = komercijalneStavke.reduce((s, r) => s + r.iznos, 0);
   const pdvIznos = osnovica * (pdvStopa / 100);
   const ukupno = osnovica + pdvIznos;
 
@@ -4375,8 +4376,6 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 20 }}>
           <table style={{ borderCollapse: "collapse", fontSize: 12, minWidth: 240 }}>
             <tbody>
-              {calc.postotakMarze > 0 && <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Podzbroj:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(podzbroj)}</td></tr>}
-              {calc.postotakMarze > 0 && <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Uvećanje ({calc.postotakMarze}%):</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(iznosMarze)}</td></tr>}
               <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Osnovica:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(osnovica)}</td></tr>
               <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>PDV ({pdvStopa}%):</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(pdvIznos)}</td></tr>
               <tr style={{ borderTop: "1px solid #333" }}><td style={{ padding: "6px 14px 0 0", fontWeight: 700 }}>UKUPNO:</td><td style={{ textAlign: "right", fontWeight: 700, paddingTop: 6, fontSize: 14 }}>{fmtCurDec(ukupno)}</td></tr>
