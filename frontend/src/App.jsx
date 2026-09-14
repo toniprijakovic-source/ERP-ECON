@@ -5629,10 +5629,15 @@ function EvidencijaTab({ db, update, showToast, mozeMijenjati = true }) {
     });
   }, [mjesec, db.praznici]);
 
-  // Brzi pristup zapisima: "zaposlenikId|datum" -> zapis
+  // Brzi pristup zapisima: "zaposlenikId|datum" -> NIZ zapisa (jedan dan može imati više
+  // odvojenih prijava/odjava — npr. jutarnja smjena pa kratki povratak u tvrtku).
   const zapisiMapa = useMemo(() => {
     const m = new Map();
-    (db.evidencijaRada || []).forEach((e) => m.set(`${e.zaposlenikId}|${e.vrijemeDolaska.slice(0, 10)}`, e));
+    (db.evidencijaRada || []).forEach((e) => {
+      const k = `${e.zaposlenikId}|${e.vrijemeDolaska.slice(0, 10)}`;
+      const niz = m.get(k);
+      if (niz) niz.push(e); else m.set(k, [e]);
+    });
     return m;
   }, [db.evidencijaRada]);
 
@@ -5644,32 +5649,40 @@ function EvidencijaTab({ db, update, showToast, mozeMijenjati = true }) {
 
   const otvoriCeliju = (zaposlenikId, datum) => {
     if (!mozeMijenjati) return;
-    const zapis = zapisiMapa.get(`${zaposlenikId}|${datum}`);
+    const zapisi = zapisiMapa.get(`${zaposlenikId}|${datum}`) || [];
+    const posebna = zapisi.find((z) => z.vrsta !== "rad");
+    const radni = zapisi.filter((z) => z.vrsta === "rad");
     setUrediCeliju({
       zaposlenikId, datum,
-      vrsta: zapis?.vrsta || "rad",
-      od: zapis?.vrijemeDolaska ? new Date(zapis.vrijemeDolaska).toTimeString().slice(0, 5) : "06:00",
-      do: zapis?.vrijemeOdlaska ? new Date(zapis.vrijemeOdlaska).toTimeString().slice(0, 5) : "14:00",
-      postojeciId: zapis?.id || null,
+      vrsta: posebna?.vrsta || "rad",
+      segmenti: radni.length
+        ? radni.map((z) => ({ id: z.id, od: new Date(z.vrijemeDolaska).toTimeString().slice(0, 5), do: z.vrijemeOdlaska ? new Date(z.vrijemeOdlaska).toTimeString().slice(0, 5) : "" }))
+        : [{ id: null, od: "06:00", do: "14:00" }],
     });
   };
 
+  // Sprema cijeli dan odjednom: makne SVE postojeće zapise tog zaposlenika za taj datum i
+  // zamijeni ih onim što je trenutno u editoru (jedan zapis po radnom segmentu, ili jedan
+  // zapis za cjelodnevnu vrstu poput godišnjeg) — tako više radnih segmenata istog dana
+  // (npr. jutarnja smjena + kratki povratak) ostaju svaki zaseban, umjesto da se izgube.
   const spremiCeliju = () => {
-    const { zaposlenikId, datum, vrsta, od, do: doSat, postojeciId } = urediCeliju;
-    const bezPostojeceg = db.evidencijaRada.filter((e) => e.id !== postojeciId);
-    const noviZapis = {
-      id: postojeciId || uid("evr"), zaposlenikId,
-      vrijemeDolaska: `${datum}T${vrsta === "rad" ? od : "00:00"}:00`,
-      vrijemeOdlaska: `${datum}T${vrsta === "rad" ? doSat : "00:00"}:00`,
-      vrsta, autoOdjava: false, potvrdenoRacunovodstvo: true, unioRucnoId: "racunovodstvo",
-    };
-    update("evidencijaRada", [...bezPostojeceg, noviZapis]);
+    const { zaposlenikId, datum, vrsta, segmenti } = urediCeliju;
+    const bezPostojecih = db.evidencijaRada.filter((e) => !(e.zaposlenikId === zaposlenikId && e.vrijemeDolaska.slice(0, 10) === datum));
+    const noviZapisi = vrsta === "rad"
+      ? segmenti.filter((s) => s.od && s.do).map((s) => ({
+          id: s.id || uid("evr"), zaposlenikId,
+          vrijemeDolaska: `${datum}T${s.od}:00`, vrijemeOdlaska: `${datum}T${s.do}:00`,
+          vrsta: "rad", autoOdjava: false, potvrdenoRacunovodstvo: true, unioRucnoId: "racunovodstvo",
+        }))
+      : [{ id: uid("evr"), zaposlenikId, vrijemeDolaska: `${datum}T00:00:00`, vrijemeOdlaska: `${datum}T00:00:00`, vrsta, autoOdjava: false, potvrdenoRacunovodstvo: true, unioRucnoId: "racunovodstvo" }];
+    update("evidencijaRada", [...bezPostojecih, ...noviZapisi]);
     setUrediCeliju(null);
     showToast("Evidencija spremljena.");
   };
 
   const obrisiCeliju = () => {
-    update("evidencijaRada", db.evidencijaRada.filter((e) => e.id !== urediCeliju.postojeciId));
+    const { zaposlenikId, datum } = urediCeliju;
+    update("evidencijaRada", db.evidencijaRada.filter((e) => !(e.zaposlenikId === zaposlenikId && e.vrijemeDolaska.slice(0, 10) === datum)));
     setUrediCeliju(null);
     showToast("Zapis obrisan.");
   };
@@ -5677,33 +5690,39 @@ function EvidencijaTab({ db, update, showToast, mozeMijenjati = true }) {
   const potvrdiAutoOdjavu = (id) => { if (mozeMijenjati) update("evidencijaRada", db.evidencijaRada.map((e) => (e.id === id ? { ...e, potvrdenoRacunovodstvo: true } : e))); };
   const zaposlenikIme = (id) => { const z = db.zaposlenici.find((zz) => zz.id === id); return z ? `${z.prezime} ${z.ime}` : "—"; };
 
-  // Sadržaj jedne ćelije
+  // Sadržaj jedne ćelije — dan može imati više radnih segmenata (npr. jutarnja smjena + kratki
+  // povratak u tvrtku); sati se zbrajaju preko svih, a prikazuje se raspon prvi dolazak-zadnja
+  // odjava uz oznaku "+N" kad ih ima više od jednog.
   const Celija = ({ zaposlenik, dan }) => {
-    const zapis = zapisiMapa.get(`${zaposlenik.id}|${dan.datum}`);
+    const zapisi = zapisiMapa.get(`${zaposlenik.id}|${dan.datum}`) || [];
     const bgBase = dan.praznik ? "#FBEAE6" : dan.vikend ? "var(--surface-alt)" : "var(--surface)";
     const stil = { padding: "2px 3px", textAlign: "center", cursor: "pointer", background: bgBase, borderRight: "1px solid var(--line)", minWidth: 54, height: 46, verticalAlign: "middle" };
 
-    if (!zapis) {
+    if (zapisi.length === 0) {
       return <td style={stil} onClick={() => otvoriCeliju(zaposlenik.id, dan.datum)} title="Klikni za unos">
         <span style={{ color: "var(--ink-faint)", fontSize: 13 }}>{dan.praznik ? "P" : dan.vikend ? "" : "—"}</span>
       </td>;
     }
 
-    const oznaka = OZNAKA_VRSTE_DANA[zapis.vrsta];
+    const posebna = zapisi.find((z) => z.vrsta !== "rad");
+    const oznaka = posebna && OZNAKA_VRSTE_DANA[posebna.vrsta];
     if (oznaka) {
       return <td style={{ ...stil, background: oznaka.bg }} onClick={() => otvoriCeliju(zaposlenik.id, dan.datum)} title={oznaka.naziv}>
         <span className="f-mono" style={{ fontSize: 11, fontWeight: 700, color: oznaka.boja }}>{oznaka.kratica}</span>
       </td>;
     }
 
-    const smjena = odrediSmjenu(zapis.vrijemeDolaska, db.postavkePlaca);
-    const sati = obracunskiSati(zapis.vrijemeDolaska, zapis.vrijemeOdlaska, smjena, db.postavkePlaca);
+    const radni = zapisi.filter((z) => z.vrsta === "rad").sort((a, b) => a.vrijemeDolaska.localeCompare(b.vrijemeDolaska));
+    const sati = radni.reduce((s, z) => s + obracunskiSati(z.vrijemeDolaska, z.vrijemeOdlaska, odrediSmjenu(z.vrijemeDolaska, db.postavkePlaca), db.postavkePlaca), 0);
+    const imaDodatak = radni.some((z) => odrediSmjenu(z.vrijemeDolaska, db.postavkePlaca)?.dodatakPostotak > 0);
+    const imaAutoOdjavu = radni.some((z) => z.autoOdjava && !z.potvrdenoRacunovodstvo);
     const hhmm = (iso) => (iso ? new Date(iso).toTimeString().slice(0, 5) : "—");
+    const prvi = radni[0], zadnji = radni[radni.length - 1];
     return (
-      <td style={{ ...stil, background: zapis.autoOdjava && !zapis.potvrdenoRacunovodstvo ? "#FBEAE6" : bgBase }} onClick={() => otvoriCeliju(zaposlenik.id, dan.datum)} title={zapis.autoOdjava ? "Automatska odjava — provjeri" : "Klikni za izmjenu"}>
-        <div className="f-mono" style={{ fontSize: 9, color: "var(--ink-faint)", lineHeight: 1.25 }}>{hhmm(zapis.vrijemeDolaska)}</div>
-        <div className="f-mono" style={{ fontSize: 9, color: zapis.autoOdjava ? "var(--rust)" : "var(--ink-faint)", lineHeight: 1.25 }}>{hhmm(zapis.vrijemeOdlaska)}</div>
-        <div className="f-mono" style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.3, color: smjena?.dodatakPostotak > 0 ? "var(--steel)" : "var(--ink)" }}>{sati.toFixed(1)}</div>
+      <td style={{ ...stil, background: imaAutoOdjavu ? "#FBEAE6" : bgBase }} onClick={() => otvoriCeliju(zaposlenik.id, dan.datum)} title={imaAutoOdjavu ? "Automatska odjava — provjeri" : radni.length > 1 ? `${radni.length} segmenta — klikni za izmjenu` : "Klikni za izmjenu"}>
+        <div className="f-mono" style={{ fontSize: 9, color: "var(--ink-faint)", lineHeight: 1.25 }}>{hhmm(prvi.vrijemeDolaska)}</div>
+        <div className="f-mono" style={{ fontSize: 9, color: imaAutoOdjavu ? "var(--rust)" : "var(--ink-faint)", lineHeight: 1.25 }}>{hhmm(zadnji.vrijemeOdlaska)}</div>
+        <div className="f-mono" style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.3, color: imaDodatak ? "var(--steel)" : "var(--ink)" }}>{sati.toFixed(1)}{radni.length > 1 && <sup style={{ fontSize: 8 }}>+{radni.length - 1}</sup>}</div>
       </td>
     );
   };
@@ -5779,9 +5798,8 @@ function EvidencijaTab({ db, update, showToast, mozeMijenjati = true }) {
               <tbody>
                 {lista.map((z) => {
                   const ukupnoSati = dani.reduce((s, d) => {
-                    const zap = zapisiMapa.get(`${z.id}|${d.datum}`);
-                    if (!zap || zap.vrsta !== "rad") return s;
-                    return s + obracunskiSati(zap.vrijemeDolaska, zap.vrijemeOdlaska, odrediSmjenu(zap.vrijemeDolaska, db.postavkePlaca), db.postavkePlaca);
+                    const zapisi = zapisiMapa.get(`${z.id}|${d.datum}`) || [];
+                    return zapisi.filter((zap) => zap.vrsta === "rad").reduce((s2, zap) => s2 + obracunskiSati(zap.vrijemeDolaska, zap.vrijemeOdlaska, odrediSmjenu(zap.vrijemeDolaska, db.postavkePlaca), db.postavkePlaca), s);
                   }, 0);
                   return (
                     <tr key={z.id} style={{ borderTop: "1px solid var(--line)" }}>
@@ -5813,7 +5831,7 @@ function EvidencijaTab({ db, update, showToast, mozeMijenjati = true }) {
       {urediCeliju && (
         <Modal title={`${zaposlenikIme(urediCeliju.zaposlenikId)} — ${fmtDate(urediCeliju.datum)}`} onClose={() => setUrediCeliju(null)}
           footer={<>
-            {urediCeliju.postojeciId && <Btn variant="ghost" icon={Trash2} onClick={obrisiCeliju}>Obriši</Btn>}
+            <Btn variant="ghost" icon={Trash2} onClick={obrisiCeliju}>Obriši cijeli dan</Btn>
             <div style={{ flex: 1 }} />
             <Btn onClick={() => setUrediCeliju(null)}>Odustani</Btn>
             <Btn variant="primary" icon={Save} onClick={spremiCeliju}>Spremi</Btn>
@@ -5825,21 +5843,32 @@ function EvidencijaTab({ db, update, showToast, mozeMijenjati = true }) {
           </Field>
           {urediCeliju.vrsta === "rad" && (
             <>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <Field label="Prijava"><input className="input f-mono" type="time" value={urediCeliju.od} onChange={(e) => setUrediCeliju({ ...urediCeliju, od: e.target.value })} /></Field>
-                <Field label="Odjava"><input className="input f-mono" type="time" value={urediCeliju.do} onChange={(e) => setUrediCeliju({ ...urediCeliju, do: e.target.value })} /></Field>
-              </div>
-              {(() => {
-                const dolazak = `${urediCeliju.datum}T${urediCeliju.od}:00`;
-                const odlazak = `${urediCeliju.datum}T${urediCeliju.do}:00`;
+              <div className="label" style={{ marginTop: 6 }}>Radni segmenti (dolazak — odjava)</div>
+              <p style={{ fontSize: 11, color: "var(--ink-soft)", marginBottom: 8 }}>Više segmenata koristi se kad je netko istog dana radio u dvije razdvojene prijave (npr. jutarnja smjena pa kratki povratak u tvrtku).</p>
+              {urediCeliju.segmenti.map((seg, i) => {
+                const dolazak = `${urediCeliju.datum}T${seg.od || "00:00"}:00`;
+                const odlazak = seg.do ? `${urediCeliju.datum}T${seg.do}:00` : null;
                 const smj = odrediSmjenu(dolazak, db.postavkePlaca);
-                const h = obracunskiSati(dolazak, odlazak, smj, db.postavkePlaca);
+                const h = odlazak ? obracunskiSati(dolazak, odlazak, smj, db.postavkePlaca) : 0;
+                const azurirajSeg = (patch) => setUrediCeliju({ ...urediCeliju, segmenti: urediCeliju.segmenti.map((s, idx) => (idx === i ? { ...s, ...patch } : s)) });
                 return (
-                  <div className="card" style={{ padding: 10, background: "var(--surface-alt)", fontSize: 12.5 }}>
-                    Smjena: <strong>{smj?.naziv}</strong>{smj?.dodatakPostotak > 0 && <span style={{ color: "var(--steel)" }}> (+{smj.dodatakPostotak}%)</span>} · obračunski sati: <strong className="f-mono">{h.toFixed(1)} h</strong>
+                  <div key={i} className="card" style={{ padding: 10, marginBottom: 8, background: "var(--surface-alt)" }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                      <Field label="Prijava"><input className="input f-mono" type="time" value={seg.od} onChange={(e) => azurirajSeg({ od: e.target.value })} /></Field>
+                      <Field label="Odjava"><input className="input f-mono" type="time" value={seg.do} onChange={(e) => azurirajSeg({ do: e.target.value })} /></Field>
+                      {urediCeliju.segmenti.length > 1 && (
+                        <button className="btn btn-icon btn-ghost" onClick={() => setUrediCeliju({ ...urediCeliju, segmenti: urediCeliju.segmenti.filter((_, idx) => idx !== i) })}><X size={14} /></button>
+                      )}
+                    </div>
+                    {seg.do && (
+                      <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 6 }}>
+                        Smjena: <strong>{smj?.naziv}</strong>{smj?.dodatakPostotak > 0 && <span style={{ color: "var(--steel)" }}> (+{smj.dodatakPostotak}%)</span>} · obračunski sati: <strong className="f-mono">{h.toFixed(1)} h</strong>
+                      </div>
+                    )}
                   </div>
                 );
-              })()}
+              })}
+              <Btn variant="ghost" size="sm" icon={Plus} onClick={() => setUrediCeliju({ ...urediCeliju, segmenti: [...urediCeliju.segmenti, { id: null, od: "14:00", do: "" }] })}>Dodaj segment</Btn>
             </>
           )}
         </Modal>
