@@ -4520,6 +4520,9 @@ function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
   const pdvStopa = Number(t.pdvStopa ?? 25);
   const pdvIznos = calc.cijenaKonacna * (pdvStopa / 100);
   const ukupnoSPdv = calc.cijenaKonacna + pdvIznos;
+  // Dodatak se ne navodi kao posebna stavka na ispisu — uračunat je izravno u cijenu svake
+  // stavke rezanja (isto kao uvećanje kod standardnih ponuda).
+  const faktorDodatka = 1 + (calc.dodatakPct || 0) / 100;
 
   return (
     <Modal wide title={`Pregled za ispis — Ponuda za laser ${ponuda.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => window.print()}>Ispis / Spremi kao PDF</Btn></>}>
@@ -4564,7 +4567,7 @@ function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
                 <td>{s.tipLasera === "cijevni" ? "Cijevni" : "Pločasti"}</td>
                 <td className="f-mono">{s.komada}</td>
                 <td className="f-mono">{s.masaKg.toFixed(1)}</td>
-                <td className="f-mono">{fmtCurDec(s.ukupno)}</td>
+                <td className="f-mono">{fmtCurDec(s.ukupno * faktorDodatka)}</td>
               </tr>
             ))}
           </tbody>
@@ -4580,8 +4583,6 @@ function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 20 }}>
           <table style={{ borderCollapse: "collapse", fontSize: 12, minWidth: 260 }}>
             <tbody>
-              <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Zbroj stavki rezanja:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(calc.zbrojStavki)}</td></tr>
-              <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Dodatak ({calc.dodatakPct}%):</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(calc.iznosDodatka)}</td></tr>
               {calc.trosakSavijanja > 0 && <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Savijanje:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(calc.trosakSavijanja)}</td></tr>}
               {calc.trosakOstalo > 0 && <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Ostalo:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(calc.trosakOstalo)}</td></tr>}
               <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Osnovica:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(calc.cijenaKonacna)}</td></tr>
