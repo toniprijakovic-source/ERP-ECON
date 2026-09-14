@@ -592,6 +592,15 @@ const uid = (p) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36)
 const fmtCur = (n) => new Intl.NumberFormat("hr-HR", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(Number(n) || 0);
 const fmtCurDec = (n) => new Intl.NumberFormat("hr-HR", { style: "currency", currency: "EUR", maximumFractionDigits: 2 }).format(Number(n) || 0);
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString("hr-HR") : "—");
+
+// Otvara dijalog za ispis/spremanje PDF-a s nazivom dokumenta kao predloženim imenom datoteke
+// (preglednik za naslov datoteke uzima document.title u trenutku otvaranja dijaloga).
+const ispisPdf = (naziv) => {
+  const stariNaslov = document.title;
+  document.title = naziv;
+  window.print();
+  document.title = stariNaslov;
+};
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const daysUntil = (d) => Math.ceil((new Date(d) - new Date(todayISO())) / 86400000);
 const addDays = (d, n) => { const dt = new Date(d); dt.setDate(dt.getDate() + n); return dt.toISOString().slice(0, 10); };
@@ -4320,7 +4329,7 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
   const ukupno = osnovica + pdvIznos;
 
   return (
-    <Modal wide title={`Pregled za ispis — Ponuda ${ponuda.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => window.print()}>Ispis / Spremi kao PDF</Btn></>}>
+    <Modal wide title={`Pregled za ispis — Ponuda ${ponuda.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(ponuda.broj)}>Ispis / Spremi kao PDF</Btn></>}>
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
           <div>
@@ -4525,7 +4534,7 @@ function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
   const faktorDodatka = 1 + (calc.dodatakPct || 0) / 100;
 
   return (
-    <Modal wide title={`Pregled za ispis — Ponuda za laser ${ponuda.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => window.print()}>Ispis / Spremi kao PDF</Btn></>}>
+    <Modal wide title={`Pregled za ispis — Ponuda za laser ${ponuda.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(ponuda.broj)}>Ispis / Spremi kao PDF</Btn></>}>
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
           <div>
@@ -4559,14 +4568,13 @@ function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
 
         <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 6 }}>Stavke rezanja</div>
         <table className="doc-table" style={{ marginBottom: 16 }}>
-          <thead><tr><th>Opis</th><th style={{ width: 90 }}>Tip lasera</th><th style={{ width: 55 }}>Kom.</th><th style={{ width: 80 }}>Masa (kg)</th><th style={{ width: 90 }}>Iznos</th></tr></thead>
+          <thead><tr><th>Opis</th><th style={{ width: 90 }}>Tip lasera</th><th style={{ width: 55 }}>Kom.</th><th style={{ width: 90 }}>Iznos</th></tr></thead>
           <tbody>
             {calc.stavke.map((s) => (
               <tr key={s.id}>
                 <td>{s.opis || "—"}</td>
                 <td>{s.tipLasera === "cijevni" ? "Cijevni" : "Pločasti"}</td>
                 <td className="f-mono">{s.komada}</td>
-                <td className="f-mono">{s.masaKg.toFixed(1)}</td>
                 <td className="f-mono">{fmtCurDec(s.ukupno * faktorDodatka)}</td>
               </tr>
             ))}
