@@ -1072,9 +1072,20 @@ function KioskView({ onPrijava }) {
   const [sat, setSat] = useState(new Date());
   const inputRef = useRef(null);
   const obradjenIzUrla = useRef(false);
+  const uTijeku = useRef(false); // sprječava dvostruku obradu ako netko dvaput brzo prisloni karticu
 
   useEffect(() => {
     const t = setInterval(() => setSat(new Date()), 1000 * 30);
+    return () => clearInterval(t);
+  }, []);
+
+  // Redovan "ping" dok je kiosk zaslon otvoren — drži besplatni Render poslužitelj budnim
+  // preko dana, umjesto da nakon 15 min mirovanja prva prava prijava čeka 30-50 s (što u
+  // gužvi na početku smjene izgleda kao da sustav "ne registrira" prijavu).
+  useEffect(() => {
+    const ping = () => fetch(`${API_URL}/api/kiosk/ping`).catch(() => {});
+    ping();
+    const t = setInterval(ping, 5 * 60 * 1000);
     return () => clearInterval(t);
   }, []);
 
@@ -1082,8 +1093,10 @@ function KioskView({ onPrijava }) {
 
   const obradiKod = async (kodSirovi) => {
     const kod = (kodSirovi || "").trim().toUpperCase();
-    if (!kod) return;
+    if (!kod || uTijeku.current) return;
+    uTijeku.current = true;
     setUnos("");
+    setPoruka({ tip: "obrada", tekst: "Obrađujem…", detalj: "" });
     try {
       const res = await fetch(`${API_URL}/api/kiosk/scan`, {
         method: "POST",
@@ -1104,8 +1117,9 @@ function KioskView({ onPrijava }) {
         setPoruka({ tip: "dolazak", tekst: `${data.ime} ${data.prezime}`, detalj: `Dolazak zabilježen u ${new Date(data.vrijeme).toLocaleTimeString("hr-HR", { hour: "2-digit", minute: "2-digit" })}` });
       }
     } catch {
-      setPoruka({ tip: "greska", tekst: "Greška veze", detalj: "Ne mogu se spojiti na poslužitelj." });
+      setPoruka({ tip: "greska", tekst: "Greška veze", detalj: "Ne mogu se spojiti na poslužitelj — pokušaj ponovno." });
     }
+    uTijeku.current = false;
     setTimeout(() => setPoruka(null), 4000);
   };
 
@@ -1118,7 +1132,7 @@ function KioskView({ onPrijava }) {
   }, []);
 
   const zatvoriKiosk = () => { window.location.href = window.location.pathname; };
-  const bojePoruke = { dolazak: { bg: "#EAF6EF", border: "#B9E3C9", naslov: "#1F6B41" }, odlazak: { bg: "#EAF3F7", border: "#BFE0EC", naslov: "#215C77" }, greska: { bg: "#FBEAE6", border: "#F0C2B5", naslov: "#9A2E1B" } };
+  const bojePoruke = { dolazak: { bg: "#EAF6EF", border: "#B9E3C9", naslov: "#1F6B41" }, odlazak: { bg: "#EAF3F7", border: "#BFE0EC", naslov: "#215C77" }, greska: { bg: "#FBEAE6", border: "#F0C2B5", naslov: "#9A2E1B" }, obrada: { bg: "#F4F4F4", border: "#DADADA", naslov: "#666" } };
 
   return (
     <div className="erp-root f-display" style={{ position: "relative", minHeight: 640, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--sidebar)", padding: 20 }}>
@@ -1133,7 +1147,7 @@ function KioskView({ onPrijava }) {
 
         {poruka ? (
           <div style={{ padding: "34px 28px", borderRadius: 6, marginBottom: 10, background: bojePoruke[poruka.tip].bg, border: `1px solid ${bojePoruke[poruka.tip].border}` }}>
-            {poruka.tip !== "greska" && <div style={{ fontSize: 22, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: bojePoruke[poruka.tip].naslov, marginBottom: 10 }}>{poruka.tip === "dolazak" ? "✓ Dolazak" : "✓ Odlazak"}</div>}
+            {(poruka.tip === "dolazak" || poruka.tip === "odlazak") && <div style={{ fontSize: 22, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: bojePoruke[poruka.tip].naslov, marginBottom: 10 }}>{poruka.tip === "dolazak" ? "✓ Dolazak" : "✓ Odlazak"}</div>}
             <div style={{ fontSize: 36, fontWeight: 700, marginBottom: 8, color: poruka.tip === "greska" ? bojePoruke.greska.naslov : "var(--ink)" }}>{poruka.tekst}</div>
             <div style={{ fontSize: 24, color: "var(--ink-soft)" }}>{poruka.detalj}</div>
           </div>

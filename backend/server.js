@@ -233,36 +233,66 @@ app.post("/api/kiosk/scan", async (req, res) => {
   const zaposlenik = zaposlenici.find((z) => (z.rfidKod || "").toUpperCase() === kod);
   if (!zaposlenik) return res.status(404).json({ error: "Kartica nije prepoznata." });
 
-  const evidencija = (await ucitajKljuc("evidencijaRada")) || [];
-  const moji = evidencija.filter((e) => e.zaposlenikId === zaposlenik.id);
-  const otvorena = moji.find((e) => !e.vrijemeOdlaska);
-  const sada = new Date();
+  // Kad više ljudi skenira u kratkom razmaku (npr. gužva na početku smjene), obična
+  // "pročitaj cijeli niz -> izmijeni -> spremi cijeli niz" sekvenca gubi zapise: dok drugi
+  // zahtjev čita niz, prvi još nije stigao spremiti svoju izmjenu, pa drugi zahtjev
+  // naknadno prepiše cijeli niz BEZ prvog upisa. SELECT ... FOR UPDATE zaključava red za
+  // cijelo trajanje transakcije — drugi zahtjev čeka da prvi završi (COMMIT) i tek onda
+  // čita već ažurirani niz, umjesto da radi na zastarjeloj kopiji.
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query("SELECT value FROM app_data WHERE key = 'evidencijaRada' FOR UPDATE");
+    const evidencija = r.rows[0]?.value || [];
+    const moji = evidencija.filter((e) => e.zaposlenikId === zaposlenik.id);
+    const otvorena = moji.find((e) => !e.vrijemeOdlaska);
+    const sada = new Date();
 
-  // Blokada slučajnog dvostrukog očitanja kartice — ista osoba ne može ponovno
-  // prijaviti dolazak/odlazak unutar KIOSK_BLOKADA_MIN minuta od svoje zadnje akcije.
-  const zadnjaAkcija = moji.reduce((naj, e) => {
-    const vrijeme = e.vrijemeOdlaska || e.vrijemeDolaska;
-    return vrijeme && (!naj || new Date(vrijeme) > new Date(naj)) ? vrijeme : naj;
-  }, null);
-  if (zadnjaAkcija) {
-    const proteklaMin = (sada - new Date(zadnjaAkcija)) / 60000;
-    if (proteklaMin < KIOSK_BLOKADA_MIN) {
-      const preostaloSek = Math.ceil((KIOSK_BLOKADA_MIN - proteklaMin) * 60);
-      return res.status(429).json({ error: `Pričekaj još ${preostaloSek} s prije sljedeće prijave/odjave.`, cooldown: true });
+    // Blokada slučajnog dvostrukog očitanja kartice — ista osoba ne može ponovno
+    // prijaviti dolazak/odlazak unutar KIOSK_BLOKADA_MIN minuta od svoje zadnje akcije.
+    const zadnjaAkcija = moji.reduce((naj, e) => {
+      const vrijeme = e.vrijemeOdlaska || e.vrijemeDolaska;
+      return vrijeme && (!naj || new Date(vrijeme) > new Date(naj)) ? vrijeme : naj;
+    }, null);
+    if (zadnjaAkcija) {
+      const proteklaMin = (sada - new Date(zadnjaAkcija)) / 60000;
+      if (proteklaMin < KIOSK_BLOKADA_MIN) {
+        await client.query("ROLLBACK");
+        const preostaloSek = Math.ceil((KIOSK_BLOKADA_MIN - proteklaMin) * 60);
+        return res.status(429).json({ error: `Pričekaj još ${preostaloSek} s prije sljedeće prijave/odjave.`, cooldown: true });
+      }
     }
-  }
 
-  const sadaISO = sada.toISOString();
-  let nova;
-  if (otvorena) {
-    nova = evidencija.map((e) => (e.id === otvorena.id ? { ...e, vrijemeOdlaska: sadaISO } : e));
-    await spremiKljuc("evidencijaRada", nova);
-    return res.json({ tip: "odlazak", ime: zaposlenik.ime, prezime: zaposlenik.prezime, vrijeme: sadaISO, dolazak: otvorena.vrijemeDolaska });
+    const sadaISO = sada.toISOString();
+    let nova, odgovor;
+    if (otvorena) {
+      nova = evidencija.map((e) => (e.id === otvorena.id ? { ...e, vrijemeOdlaska: sadaISO } : e));
+      odgovor = { tip: "odlazak", ime: zaposlenik.ime, prezime: zaposlenik.prezime, vrijeme: sadaISO, dolazak: otvorena.vrijemeDolaska };
+    } else {
+      nova = [...evidencija, { id: `evr-${Date.now()}`, zaposlenikId: zaposlenik.id, vrijemeDolaska: sadaISO, vrijemeOdlaska: null, vrsta: "rad", autoOdjava: false, potvrdenoRacunovodstvo: false, unioRucnoId: null }];
+      odgovor = { tip: "dolazak", ime: zaposlenik.ime, prezime: zaposlenik.prezime, vrijeme: sadaISO };
+    }
+    await client.query(
+      `INSERT INTO app_data (key, value, updated_at) VALUES ('evidencijaRada', $1, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [JSON.stringify(nova)]
+    );
+    await client.query("COMMIT");
+    res.json(odgovor);
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Greška kod kiosk skeniranja:", e);
+    res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+  } finally {
+    client.release();
   }
-  nova = [...evidencija, { id: `evr-${Date.now()}`, zaposlenikId: zaposlenik.id, vrijemeDolaska: sadaISO, vrijemeOdlaska: null, vrsta: "rad", autoOdjava: false, potvrdenoRacunovodstvo: false, unioRucnoId: null }];
-  await spremiKljuc("evidencijaRada", nova);
-  res.json({ tip: "dolazak", ime: zaposlenik.ime, prezime: zaposlenik.prezime, vrijeme: sadaISO });
 });
+
+// Lagana ruta bez upita u bazu — koristi je kiosk zaslon za povremeni "ping" da spriječi
+// uspavljivanje besplatnog Render plana (usnivanje nakon 15 min neaktivnosti uzrokuje da prvi
+// pravi zahtjev nakon toga čeka 30-50 s, što u gužvi na početku smjene izgleda kao da se
+// prijava "ne registrira").
+app.get("/api/kiosk/ping", (req, res) => res.json({ ok: true }));
 
 // ---------- podaci (sve zaštićeno loginom) ----------
 // Vraća SVE ključeve odjednom — koristi se pri pokretanju aplikacije. Ključevi izvan
