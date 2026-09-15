@@ -336,14 +336,30 @@ const godineStaza = (datumZaposlenja, naDatum) => {
   return Math.max(0, g);
 };
 
-const satnicaZaposlenika = (zaposlenik, postavke, naDatum = todayISO()) => {
+// radniDaniMjeseca: broj radnih dana za taj konkretan mjesec (pon-pet, bez vikenda) — kad se
+// preda, koristi se umjesto fiksne postavke "radnihDanaMjesec" jer se stvarni broj radnih dana
+// mijenja iz mjeseca u mjesec (npr. 21 u kolovozu vs 20 fiksno u postavkama).
+const satnicaZaposlenika = (zaposlenik, postavke, naDatum = todayISO(), radniDaniMjeseca = null) => {
   const bodovi = Number(zaposlenik?.bodovi) || 0;
   const osnovica = bodovi * (Number(postavke?.vrijednostBoda) || 0);
   const staz = godineStaza(zaposlenik?.datumZaposlenja, naDatum);
-  const dodatakStaz = staz * (Number(postavke?.dodatakStazPoGodini) || 0) * (Number(postavke?.radnihDanaMjesec) || 0);
+  const radniDani = radniDaniMjeseca != null ? radniDaniMjeseca : (Number(postavke?.radnihDanaMjesec) || 0);
+  const dodatakStaz = staz * (Number(postavke?.dodatakStazPoGodini) || 0) * radniDani;
   const neto = osnovica + dodatakStaz;
   const fond = Number(postavke?.fondSatiMjesec) || 0;
   return { bodovi, osnovica, staz, dodatakStaz, netoOsnovna: neto, satnica: fond > 0 ? neto / fond : 0 };
+};
+
+// Broj radnih dana (pon-pet) u mjesecu "YYYY-MM" — koristi se za dodatak na staž.
+const radniDaniUMjesecu = (mjesec) => {
+  const [g, m] = mjesec.split("-").map(Number);
+  const brojDana = new Date(g, m, 0).getDate();
+  let broj = 0;
+  for (let dan = 1; dan <= brojDana; dan++) {
+    const dow = new Date(g, m - 1, dan).getDay();
+    if (dow >= 1 && dow <= 5) broj++;
+  }
+  return broj;
 };
 
 const jePraznik = (datumISO, praznici) => (praznici || []).some((p) => p.datum === datumISO);
@@ -389,17 +405,30 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
   // Sati se obračunavaju zaokruženo na obračunsku jedinicu (raniji dolazak se ne priznaje)
   const odradjeniSati = vrsta === "rad" ? obracunskiSati(zapis.vrijemeDolaska, zapis.vrijemeOdlaska, smjena, postavke) : 0;
 
+  // Kategorije plaćenih neradnih sati vode se odvojeno (praznik/godišnji/dopust/bolovanje) —
+  // isti ukupni "placeniNerad" ostaje zbroj svih plaćenih (bolovanje se evidentira, ali NE
+  // plaća, pa se ne zbraja u placeniNerad — pravilo obračuna bolovanja još nije definirano).
   let redovni = 0, prekovremeni = 0, placeniNerad = 0;
-  if (vrsta === "godisnji" || vrsta === "detasman" || vrsta === "placeniDopust" || vrsta === "sluzbeniPut" || praznik) {
-    placeniNerad = norma; // godišnji, detašman, plaćeni dopust, službeni put i praznik plaćaju se kao puna norma
+  let praznikSati = 0, godisnjiSati = 0, dopustSati = 0, bolovanjeSati = 0;
+  if (praznik) {
+    placeniNerad = norma;
+    praznikSati = norma;
+  } else if (vrsta === "godisnji") {
+    placeniNerad = norma;
+    godisnjiSati = norma;
+  } else if (vrsta === "detasman" || vrsta === "placeniDopust" || vrsta === "sluzbeniPut") {
+    placeniNerad = norma; // detašman, plaćeni dopust i službeni put plaćaju se kao puna norma
+    dopustSati = norma;
   } else if (vrsta === "bolovanje") {
     placeniNerad = 0; // PRAVILO JOŠ NIJE DEFINIRANO — evidentira se, ne ulazi u obračun
+    bolovanjeSati = norma;
   } else if (danUTjednu === 6 || danUTjednu === 0) {
     prekovremeni = odradjeniSati; // subota je cijela prekovremena; nedjelja se ne radi
   } else {
     redovni = Math.min(odradjeniSati, norma);
     prekovremeni = Math.max(odradjeniSati - norma, 0);
   }
+  const jeSluzbeniPut = vrsta === "sluzbeniPut";
 
   const jeRadniDan = vrsta === "rad" && odradjeniSati > 0 && !praznik;
   const putni = jeRadniDan ? (Number(zaposlenik?.udaljenostKm) || 0) * (Number(postavke?.cijenaKm) || 0) : 0;
@@ -417,6 +446,7 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
   return {
     datum, vrsta, danUTjednu, praznik, smjena, dodatakSmjene, faktorPrekSaSmjenom,
     odradjeniSati, redovni, prekovremeni, placeniNerad, putni, topliObrok,
+    praznikSati, godisnjiSati, dopustSati, bolovanjeSati, jeSluzbeniPut,
     iznosRedovni, iznosPrekovremeni, iznosNerad,
     ukupnoDan: iznosRedovni + iznosPrekovremeni + iznosNerad + putni + topliObrok,
   };
@@ -425,9 +455,23 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
 // Mjesečni obračun za jednog zaposlenika. mjesec u formatu "2026-09"
 const obracunMjeseca = (zaposlenik, mjesec, db) => {
   const postavke = db.postavkePlaca;
-  const { satnica, ...osnova } = satnicaZaposlenika(zaposlenik, postavke, `${mjesec}-01`);
+  const radniDaniMjeseca = radniDaniUMjesecu(mjesec);
+  const { satnica, ...osnova } = satnicaZaposlenika(zaposlenik, postavke, `${mjesec}-01`, radniDaniMjeseca);
   const zapisi = (db.evidencijaRada || []).filter((e) => e.zaposlenikId === zaposlenik.id && e.vrijemeDolaska.slice(0, 7) === mjesec);
   const dani = zapisi.map((z) => obracunDana(z, zaposlenik, postavke, db.praznici, satnica));
+
+  // Praznici u mjesecu za koje zaposlenik nema NIKAKAV zapis (npr. cijela tvrtka ne radi tog
+  // dana) svejedno se plaćaju kao puna norma — ali samo ako padaju na radni dan (pon-pet).
+  const datumiSaZapisom = new Set(dani.map((d) => d.datum));
+  const [g, m] = mjesec.split("-").map(Number);
+  const brojDanaMjeseca = new Date(g, m, 0).getDate();
+  for (let dan = 1; dan <= brojDanaMjeseca; dan++) {
+    const datum = `${mjesec}-${String(dan).padStart(2, "0")}`;
+    const dow = new Date(g, m - 1, dan).getDay();
+    if (jePraznik(datum, db.praznici) && dow >= 1 && dow <= 5 && !datumiSaZapisom.has(datum)) {
+      dani.push(obracunDana({ vrijemeDolaska: `${datum}T00:00:00`, vrijemeOdlaska: null, vrsta: "rad" }, zaposlenik, postavke, db.praznici, satnica));
+    }
+  }
 
   const zbroj = dani.reduce((s, d) => ({
     redovni: s.redovni + d.redovni,
@@ -441,11 +485,26 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     iznosRedovni: s.iznosRedovni + d.iznosRedovni,
     iznosPrekovremeni: s.iznosPrekovremeni + d.iznosPrekovremeni,
     iznosNerad: s.iznosNerad + d.iznosNerad,
-  }), { redovni: 0, prekovremeni: 0, placeniNerad: 0, putni: 0, topliObrok: 0, odradjeni: 0, satiSDodatkom: 0, iznosRedovni: 0, iznosPrekovremeni: 0, iznosNerad: 0 });
+    praznikSati: s.praznikSati + d.praznikSati,
+    godisnjiSati: s.godisnjiSati + d.godisnjiSati,
+    dopustSati: s.dopustSati + d.dopustSati,
+    bolovanjeSati: s.bolovanjeSati + d.bolovanjeSati,
+    danaSluzbenogPuta: s.danaSluzbenogPuta + (d.jeSluzbeniPut ? 1 : 0),
+  }), { redovni: 0, prekovremeni: 0, placeniNerad: 0, putni: 0, topliObrok: 0, odradjeni: 0, satiSDodatkom: 0, iznosRedovni: 0, iznosPrekovremeni: 0, iznosNerad: 0, praznikSati: 0, godisnjiSati: 0, dopustSati: 0, bolovanjeSati: 0, danaSluzbenogPuta: 0 });
 
   const ukupno = zbroj.iznosRedovni + zbroj.iznosPrekovremeni + zbroj.iznosNerad + zbroj.putni + zbroj.topliObrok;
 
-  return { zaposlenik, satnica, ...osnova, ...zbroj, ukupno, brojDana: dani.length, dani };
+  // Dnevnica za službeni put + ručni mjesečni dodaci/odbici (stimulacija, kredit, usteg
+  // prehrane) — potonji se upisuju ručno po zaposleniku/mjesecu jer ne proizlaze iz sati.
+  const dnevnicaTeren = zbroj.danaSluzbenogPuta * (Number(postavke?.dnevnicaTerenEurDan) || 0);
+  const doplatak = (db.doplaciPlaca || []).find((d) => d.zaposlenikId === zaposlenik.id && d.mjesec === mjesec) || {};
+  const stimulacija = Number(doplatak.stimulacija) || 0;
+  const kredit = Number(doplatak.kredit) || 0;
+  const ustegPrehrane = Number(doplatak.ustegPrehrane) || 0;
+  const dodaciUkupno = zbroj.topliObrok + dnevnicaTeren + zbroj.putni;
+  const isplata = zbroj.iznosRedovni + zbroj.iznosPrekovremeni + zbroj.iznosNerad + stimulacija + dodaciUkupno - kredit - ustegPrehrane;
+
+  return { zaposlenik, satnica, radniDaniMjeseca, ...osnova, ...zbroj, ukupno, brojDana: dani.length, dani, dnevnicaTeren, stimulacija, kredit, ustegPrehrane, dodaciUkupno, isplata };
 };
 
 // Kooperanti (vanjski suradnici) se ne obračunavaju po formuli plaće (bodovi/staž/topli obrok/
@@ -659,7 +718,7 @@ const generirajRfidKod = (ime, prezime, postojeciKodovi) => {
   return kod;
 };
 
-const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi", "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera"];
+const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi", "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca"];
 
 /* ============================== SMALL UI PRIMITIVES ============================== */
 const Btn = ({ variant = "ghost", size, icon: Icon, children, className = "", ...rest }) => (
@@ -5544,6 +5603,7 @@ function PostavkePlacaModal({ db, update, showToast, onClose }) {
     ["topliObrokMinSati", "Topli obrok — min. sati", 0.5],
     ["autoOdjavaSati", "Automatska odjava nakon (h)", 1],
     ["obracunskaJedinicaMin", "Obračunska jedinica (min)", 5],
+    ["dnevnicaTerenEurDan", "Dnevnica za službeni put (€/dan)", 1],
   ];
 
   const spremi = () => {
@@ -5891,6 +5951,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
   const [postavkeOtvorene, setPostavkeOtvorene] = useState(false);
   const [detalj, setDetalj] = useState(null);
   const [detaljKoop, setDetaljKoop] = useState(null);
+  const [printOtvoren, setPrintOtvoren] = useState(false);
 
   const redovi = useMemo(() => db.zaposlenici
     .filter((z) => z.status === "Aktivan" && !jeKooperant(z, db.pozicijeZaposlenika))
@@ -5898,6 +5959,19 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
     .filter((r) => r.brojDana > 0)
     .sort((a, b) => (a.zaposlenik.prezime + a.zaposlenik.ime).localeCompare(b.zaposlenik.prezime + b.zaposlenik.ime, "hr")),
     [db, mjesec]);
+
+  const detaljZaposlenik = detalj ? redovi.find((r) => r.zaposlenik.id === detalj) : null;
+
+  // Ručni mjesečni dodaci/odbici (stimulacija, kredit, usteg prehrane) po zaposleniku — ne
+  // proizlaze iz evidencije rada, pa se pamte kao zaseban zapis po (zaposlenik, mjesec).
+  const spremiDoplatak = (zaposlenikId, patch) => {
+    const postojeci = (db.doplaciPlaca || []).find((d) => d.zaposlenikId === zaposlenikId && d.mjesec === mjesec);
+    if (postojeci) {
+      update("doplaciPlaca", db.doplaciPlaca.map((d) => (d.id === postojeci.id ? { ...d, ...patch } : d)));
+    } else {
+      update("doplaciPlaca", [...(db.doplaciPlaca || []), { id: uid("dpl"), zaposlenikId, mjesec, stimulacija: 0, kredit: 0, ustegPrehrane: 0, ...patch }]);
+    }
+  };
 
   const redoviKooperanti = useMemo(() => db.zaposlenici
     .filter((z) => z.status === "Aktivan" && jeKooperant(z, db.pozicijeZaposlenika))
@@ -5922,7 +5996,10 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
           <span className="label">Mjesec</span>
           <input className="input f-mono" type="month" style={{ width: 160 }} value={mjesec} onChange={(e) => setMjesec(e.target.value)} />
         </div>
-        {mozeMijenjati && <Btn variant="ghost" icon={Settings} onClick={() => setPostavkeOtvorene(true)}>Postavke plaća</Btn>}
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn variant="ghost" icon={Eye} onClick={() => setPrintOtvoren(true)}>PDF obračuna</Btn>
+          {mozeMijenjati && <Btn variant="ghost" icon={Settings} onClick={() => setPostavkeOtvorene(true)}>Postavke plaća</Btn>}
+        </div>
       </div>
 
       {imaBolovanje && (
@@ -5960,7 +6037,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
                   <td className="f-mono">{fmtCurDec(r.putni)}</td>
                   <td className="f-mono">{fmtCurDec(r.topliObrok)}</td>
                   <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(r.ukupno)}</td>
-                  <td><button className="btn btn-icon btn-ghost" title="Detalji po danima" onClick={() => setDetalj(r)}><Eye size={14} /></button></td>
+                  <td><button className="btn btn-icon btn-ghost" title="Detalji po danima" onClick={() => setDetalj(r.zaposlenik.id)}><Eye size={14} /></button></td>
                 </tr>
               ))}
               <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
@@ -6036,15 +6113,15 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
         </Modal>
       )}
 
-      {detalj && (
-        <Modal wide title={`Obračun po danima — ${detalj.zaposlenik.prezime} ${detalj.zaposlenik.ime} (${mjesec})`} onClose={() => setDetalj(null)} footer={<Btn onClick={() => setDetalj(null)}>Zatvori</Btn>}>
+      {detaljZaposlenik && (
+        <Modal wide title={`Obračun po danima — ${detaljZaposlenik.zaposlenik.prezime} ${detaljZaposlenik.zaposlenik.ime} (${mjesec})`} onClose={() => setDetalj(null)} footer={<Btn onClick={() => setDetalj(null)}>Zatvori</Btn>}>
           <div className="card" style={{ padding: 12, marginBottom: 12, background: "var(--surface-alt)", fontSize: 12.5 }}>
-            {detalj.bodovi} bodova × {db.postavkePlaca?.vrijednostBoda} € = <strong className="f-mono">{fmtCurDec(detalj.osnovica)}</strong> · staž {detalj.staz} god. = <strong className="f-mono">{fmtCurDec(detalj.dodatakStaz)}</strong> · osnovna neto <strong className="f-mono">{fmtCurDec(detalj.netoOsnovna)}</strong> ÷ {db.postavkePlaca?.fondSatiMjesec} h = <strong className="f-mono" style={{ color: "var(--steel)" }}>{detalj.satnica.toFixed(3)} €/h</strong>
+            {detaljZaposlenik.bodovi} bodova × {db.postavkePlaca?.vrijednostBoda} € = <strong className="f-mono">{fmtCurDec(detaljZaposlenik.osnovica)}</strong> · staž {detaljZaposlenik.staz} god. × {detaljZaposlenik.radniDaniMjeseca} radnih dana = <strong className="f-mono">{fmtCurDec(detaljZaposlenik.dodatakStaz)}</strong> · osnovna neto <strong className="f-mono">{fmtCurDec(detaljZaposlenik.netoOsnovna)}</strong> ÷ {db.postavkePlaca?.fondSatiMjesec} h = <strong className="f-mono" style={{ color: "var(--steel)" }}>{detaljZaposlenik.satnica.toFixed(3)} €/h</strong>
           </div>
           <table className="erp-table">
             <thead><tr><th style={{ width: 100 }}>Datum</th><th style={{ width: 85 }}>Vrsta</th><th style={{ width: 95 }}>Smjena</th><th style={{ width: 65 }}>Sati</th><th style={{ width: 65 }}>Redovni</th><th style={{ width: 75 }}>Prekovr.</th><th style={{ width: 65 }}>Putni</th><th style={{ width: 65 }}>Obrok</th></tr></thead>
             <tbody>
-              {[...detalj.dani].sort((a, b) => a.datum.localeCompare(b.datum)).map((d) => (
+              {[...detaljZaposlenik.dani].sort((a, b) => a.datum.localeCompare(b.datum)).map((d) => (
                 <tr key={d.datum}>
                   <td className="f-mono">{fmtDate(d.datum)}{d.danUTjednu === 6 && <span style={{ color: "var(--steel)", fontSize: 10 }}> SUB</span>}{d.praznik && <span style={{ color: "var(--rust)", fontSize: 10 }}> PRAZ</span>}</td>
                   <td style={{ fontSize: 11.5 }}>{VRSTE_DANA.find((v) => v.key === d.vrsta)?.label}</td>
@@ -6060,20 +6137,178 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
           </table>
           <div className="card" style={{ padding: 12, marginTop: 12, background: "var(--surface-alt)" }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 12.5 }}>
-              <span>Redovni rad ({detalj.redovni.toFixed(1)} h)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detalj.iznosRedovni)}</span>
-              <span>Prekovremeni ({detalj.prekovremeni.toFixed(1)} h)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detalj.iznosPrekovremeni)}</span>
-              <span>Godišnji / praznici ({detalj.placeniNerad.toFixed(1)} h)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detalj.iznosNerad)}</span>
-              <span>Putni troškovi</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detalj.putni)}</span>
-              <span>Topli obrok</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detalj.topliObrok)}</span>
+              <span>Redovni rad ({detaljZaposlenik.redovni.toFixed(1)} h)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosRedovni)}</span>
+              <span>Prekovremeni ({detaljZaposlenik.prekovremeni.toFixed(1)} h)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosPrekovremeni)}</span>
+              <span>Godišnji / praznici / dopust ({detaljZaposlenik.placeniNerad.toFixed(1)} h)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosNerad)}</span>
+              <span>Putni troškovi</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.putni)}</span>
+              <span>Topli obrok</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.topliObrok)}</span>
+              {detaljZaposlenik.danaSluzbenogPuta > 0 && <><span>Dnevnica službeni put ({detaljZaposlenik.danaSluzbenogPuta} dana)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.dnevnicaTeren)}</span></>}
+              {detaljZaposlenik.bolovanjeSati > 0 && <><span style={{ color: "var(--ink-faint)" }}>Bolovanje ({detaljZaposlenik.bolovanjeSati.toFixed(1)} h, evidentirano)</span><span className="f-mono" style={{ textAlign: "right", color: "var(--ink-faint)" }}>0,00 €</span></>}
               <span style={{ fontWeight: 700, borderTop: "1px solid var(--line)", paddingTop: 6 }}>UKUPNO NETO</span>
-              <span className="f-mono" style={{ textAlign: "right", fontWeight: 700, borderTop: "1px solid var(--line)", paddingTop: 6 }}>{fmtCurDec(detalj.ukupno)}</span>
+              <span className="f-mono" style={{ textAlign: "right", fontWeight: 700, borderTop: "1px solid var(--line)", paddingTop: 6 }}>{fmtCurDec(detaljZaposlenik.ukupno)}</span>
+            </div>
+          </div>
+
+          <div className="label" style={{ marginTop: 16, marginBottom: 6 }}>Ručni dodaci/odbici za {mjesec}</div>
+          <div className="card" style={{ padding: 12, background: "var(--surface-alt)" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+              <Field label="Stimulacija (€)">
+                <input className="input f-mono" type="number" step="0.01" value={detaljZaposlenik.stimulacija || 0} onChange={(e) => spremiDoplatak(detaljZaposlenik.zaposlenik.id, { stimulacija: Number(e.target.value) || 0 })} disabled={!mozeMijenjati} />
+              </Field>
+              <Field label="Odbitak kredita (€)">
+                <input className="input f-mono" type="number" step="0.01" value={detaljZaposlenik.kredit || 0} onChange={(e) => spremiDoplatak(detaljZaposlenik.zaposlenik.id, { kredit: Number(e.target.value) || 0 })} disabled={!mozeMijenjati} />
+              </Field>
+              <Field label="Usteg prehrane (€)">
+                <input className="input f-mono" type="number" step="0.01" value={detaljZaposlenik.ustegPrehrane || 0} onChange={(e) => spremiDoplatak(detaljZaposlenik.zaposlenik.id, { ustegPrehrane: Number(e.target.value) || 0 })} disabled={!mozeMijenjati} />
+              </Field>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid var(--line)", paddingTop: 8 }}>
+              <strong style={{ fontSize: 13 }}>ISPLATA</strong>
+              <strong className="f-mono" style={{ fontSize: 15 }}>{fmtCurDec(detaljZaposlenik.isplata)}</strong>
             </div>
           </div>
         </Modal>
       )}
 
       {postavkeOtvorene && <PostavkePlacaModal db={db} update={update} showToast={showToast} onClose={() => setPostavkeOtvorene(false)} />}
+      {printOtvoren && <ObracunPlacaPrintModal redovi={redovi} mjesec={mjesec} db={db} onClose={() => setPrintOtvoren(false)} />}
     </div>
+  );
+}
+
+// Ispis obračuna plaće za cijelu tvrtku za odabrani mjesec — po uzoru na postojeći excel koji
+// računovodstvo šalje vanjskom knjigovodstvu. Bolovanja se prikazuju kao popis raspona datuma
+// (evidentirano, ali se ne obračunava — vidi obracunDana), a poziv na broj se ne može izvesti
+// automatski pa ostaje ručno polje.
+function ObracunPlacaPrintModal({ redovi, mjesec, db, onClose }) {
+  const t = db.postavkeTvrtke || {};
+  const [pozivBroj, setPozivBroj] = useState("");
+  const [gmesec, gg] = mjesec.split("-");
+
+  const brojDanaSObrokom = (r) => r.dani.filter((d) => d.topliObrok > 0).length;
+  const ukupnoSati = (r) => r.redovni + r.prekovremeni + r.praznikSati + r.godisnjiSati + r.dopustSati + r.bolovanjeSati;
+  const ukupnoFondSatiEur = (r) => r.iznosRedovni + r.iznosPrekovremeni + r.iznosNerad;
+  const ukupnoPdf = (r) => r.stimulacija + r.dodatakStaz + ukupnoFondSatiEur(r);
+
+  const ukupnaIsplata = redovi.reduce((s, r) => s + r.isplata, 0);
+
+  // Bolovanja (uključujući roditeljski/dulja odsustva evidentirana kao "bolovanje") — raspon
+  // datuma po zaposleniku, prikazuju se svi rasponi koji dodiruju odabrani mjesec.
+  const bolovanja = useMemo(() => {
+    const poZaposleniku = new Map();
+    (db.evidencijaRada || []).filter((e) => e.vrsta === "bolovanje").forEach((e) => {
+      const datum = e.vrijemeDolaska.slice(0, 10);
+      const niz = poZaposleniku.get(e.zaposlenikId) || [];
+      niz.push(datum);
+      poZaposleniku.set(e.zaposlenikId, niz);
+    });
+    const rezultat = [];
+    poZaposleniku.forEach((datumi, zapId) => {
+      const sortirano = [...new Set(datumi)].sort();
+      let raspon = null;
+      const rasponi = [];
+      sortirano.forEach((d) => {
+        if (raspon && addDays(raspon.do, 1) === d) raspon.do = d;
+        else { if (raspon) rasponi.push(raspon); raspon = { od: d, do: d }; }
+      });
+      if (raspon) rasponi.push(raspon);
+      const zap = db.zaposlenici.find((z) => z.id === zapId);
+      rasponi.filter((r) => r.od.slice(0, 7) <= mjesec && r.do.slice(0, 7) >= mjesec)
+        .forEach((r) => rezultat.push({ ime: zap ? `${zap.prezime} ${zap.ime}` : "—", ...r }));
+    });
+    return rezultat.sort((a, b) => a.ime.localeCompare(b.ime, "hr"));
+  }, [db.evidencijaRada, db.zaposlenici, mjesec]);
+
+  const tdS = { padding: "3px 4px", fontSize: 9, whiteSpace: "nowrap" };
+  const thS = { ...tdS, fontWeight: 700, background: "#f0f0f0" };
+
+  return (
+    <Modal wide title={`Pregled za ispis — Obračun plaće ${mjesec}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(`Placa_${gg}${gmesec}`)}>Ispis / Spremi kao PDF</Btn></>}>
+      <style>{"@media print { @page { size: landscape; } }"}</style>
+      <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 12, marginBottom: 8 }}>
+          <span>{t.naziv || "ECON d.o.o."}</span>
+          <span>OBRAČUN PLAĆE - HR</span>
+          <span>Mjesec obračuna: {gmesec}/{gg}</span>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ borderCollapse: "collapse", width: "100%" }}>
+            <thead>
+              <tr>
+                <th style={thS}>Red. broj</th>
+                <th style={thS}>Matični broj</th>
+                <th style={thS}>Ime i prezime</th>
+                <th style={thS}>Radni sati</th>
+                <th style={thS}>Sati preko</th>
+                <th style={thS}>Praznik</th>
+                <th style={thS}>Plaćeni dopust</th>
+                <th style={thS}>GO sati</th>
+                <th style={thS}>BO sati</th>
+                <th style={thS}>Ukupno sati</th>
+                <th style={thS}>Stimulacija I</th>
+                <th style={thS}>Dodatak na staž</th>
+                <th style={thS}>Ukupno fond sati €</th>
+                <th style={thS}>UKUPNO</th>
+                <th style={thS}>D</th>
+                <th style={thS}>Prehrana</th>
+                <th style={thS}>D</th>
+                <th style={thS}>Teren.DE</th>
+                <th style={thS}>Prijevoz</th>
+                <th style={thS}>DODACI ukupno</th>
+                <th style={thS}>ODBICI KREDIT</th>
+                <th style={thS}>USTEG Prehrana</th>
+                <th style={thS}>ISPLATA</th>
+              </tr>
+            </thead>
+            <tbody>
+              {redovi.map((r, i) => (
+                <tr key={r.zaposlenik.id}>
+                  <td style={tdS}>{i + 1}</td>
+                  <td style={tdS}>{r.zaposlenik.maticniBroj || ""}</td>
+                  <td style={tdS}>{r.zaposlenik.prezime} {r.zaposlenik.ime}</td>
+                  <td style={tdS}>{r.redovni.toFixed(2)}</td>
+                  <td style={tdS}>{r.prekovremeni.toFixed(2)}</td>
+                  <td style={tdS}>{r.praznikSati.toFixed(0)}</td>
+                  <td style={tdS}>{r.dopustSati.toFixed(0)}</td>
+                  <td style={tdS}>{r.godisnjiSati.toFixed(0)}</td>
+                  <td style={tdS}>{r.bolovanjeSati.toFixed(0)}</td>
+                  <td style={tdS}>{ukupnoSati(r).toFixed(2)}</td>
+                  <td style={tdS}>{fmtCurDec(r.stimulacija).replace(" €", "")}</td>
+                  <td style={tdS}>{fmtCurDec(r.dodatakStaz).replace(" €", "")}</td>
+                  <td style={tdS}>{fmtCurDec(ukupnoFondSatiEur(r)).replace(" €", "")}</td>
+                  <td style={{ ...tdS, fontWeight: 700 }}>{fmtCurDec(ukupnoPdf(r)).replace(" €", "")}</td>
+                  <td style={tdS}>{brojDanaSObrokom(r)}</td>
+                  <td style={tdS}>{fmtCurDec(r.topliObrok).replace(" €", "")}</td>
+                  <td style={tdS}>{r.danaSluzbenogPuta}</td>
+                  <td style={tdS}>{fmtCurDec(r.dnevnicaTeren).replace(" €", "")}</td>
+                  <td style={tdS}>{fmtCurDec(r.putni).replace(" €", "")}</td>
+                  <td style={tdS}>{fmtCurDec(r.dodaciUkupno).replace(" €", "")}</td>
+                  <td style={tdS}>{fmtCurDec(r.kredit).replace(" €", "")}</td>
+                  <td style={tdS}>{fmtCurDec(r.ustegPrehrane).replace(" €", "")}</td>
+                  <td style={{ ...tdS, fontWeight: 700 }}>{fmtCurDec(r.isplata).replace(" €", "")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ textAlign: "right", fontWeight: 700, fontSize: 11, marginTop: 6, paddingRight: 4 }}>{fmtCurDec(ukupnaIsplata)}</div>
+        </div>
+
+        {bolovanja.length > 0 && (
+          <div style={{ marginTop: 18, fontSize: 10.5 }}>
+            <div style={{ fontWeight: 700, textDecoration: "underline", marginBottom: 4 }}>Bolovanja:</div>
+            {bolovanja.map((b, i) => (
+              <div key={i}><strong>{b.ime}:</strong> bolovanje od {fmtDate(b.od)} do {fmtDate(b.do)} — <strong>dodati</strong></div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ marginTop: 18, fontSize: 10.5 }}>
+          Svi isplata plaće poziv na broj platitelja: Model <strong>67</strong> poziv na broj platitelja <strong className="f-mono">{t.oib}</strong>-
+          <input className="f-mono" style={{ border: "1px solid #ccc", width: 70, fontSize: 10.5, padding: "1px 4px" }} value={pozivBroj} onChange={(e) => setPozivBroj(e.target.value)} placeholder="XXXXX" />
+          -0
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -6087,7 +6322,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija }) 
   const [del, setDel] = useState(null);
   const [lozinkaZa, setLozinkaZa] = useState(null);
 
-  const emptyZap = { ime: "", prezime: "", pozicijaId: db.pozicijeZaposlenika[0]?.id || "", email: "", telefon: "", status: "Aktivan", datumZaposlenja: todayISO(), kompetencije: [], rfidKod: "", bodovi: 0, udaljenostKm: 0, koristiPrehranuUTvrtki: false, satnicaKooperant: 0 };
+  const emptyZap = { ime: "", prezime: "", pozicijaId: db.pozicijeZaposlenika[0]?.id || "", email: "", telefon: "", status: "Aktivan", datumZaposlenja: todayISO(), kompetencije: [], rfidKod: "", bodovi: 0, udaljenostKm: 0, koristiPrehranuUTvrtki: false, satnicaKooperant: 0, maticniBroj: "" };
   const [zapForm, setZapForm] = useState(emptyZap);
 
   const emptyPoz = { naziv: "", opis: "", moduli: [], karticeDozvole: {} };
@@ -6228,6 +6463,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija }) 
             <Field label="Telefon"><input className="input" value={zapForm.telefon} onChange={(e) => setZapForm({ ...zapForm, telefon: e.target.value })} /></Field>
             <Field label="Status"><select className="select" value={zapForm.status} onChange={(e) => setZapForm({ ...zapForm, status: e.target.value })}><option>Aktivan</option><option>Neaktivan</option></select></Field>
             <Field label="Zaposlen od"><input className="input" type="date" value={zapForm.datumZaposlenja} onChange={(e) => setZapForm({ ...zapForm, datumZaposlenja: e.target.value })} /></Field>
+            <Field label="Matični broj"><input className="input f-mono" value={zapForm.maticniBroj || ""} onChange={(e) => setZapForm({ ...zapForm, maticniBroj: e.target.value })} /></Field>
             {db.pozicijeZaposlenika.find((p) => p.id === zapForm.pozicijaId)?.naziv?.trim().toLowerCase() === "kooperant" ? (
               <Field label="Satnica kooperanta (€/h)"><input className="input f-mono" type="number" min="0" step="0.5" value={zapForm.satnicaKooperant ?? 0} onChange={(e) => setZapForm({ ...zapForm, satnicaKooperant: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
             ) : (

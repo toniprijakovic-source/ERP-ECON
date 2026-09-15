@@ -27,7 +27,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana",
   "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada",
   "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
-  "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera",
+  "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca",
 ];
 
 // Svaki modul (isti "moduli" popis kao u pozicijeZaposlenika) dijeli se na kartice — iste
@@ -73,7 +73,7 @@ const KARTICE_MODULA = {
     zaposlenici: { citanje: ["zaposlenici"], pisanje: ["zaposlenici"] },
     pozicije: { citanje: ["pozicijeZaposlenika"], pisanje: ["pozicijeZaposlenika"] },
     evidencija: { citanje: ["evidencijaRada", "postavkePlaca", "praznici"], pisanje: ["evidencijaRada"] },
-    obracun: { citanje: ["evidencijaRada", "postavkePlaca", "praznici", "zaposlenici"], pisanje: ["postavkePlaca", "praznici"] },
+    obracun: { citanje: ["evidencijaRada", "postavkePlaca", "praznici", "zaposlenici", "doplaciPlaca", "postavkeTvrtke"], pisanje: ["postavkePlaca", "praznici", "doplaciPlaca"] },
   },
 };
 
