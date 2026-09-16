@@ -1104,12 +1104,16 @@ function KioskView({ onPrijava }) {
         body: JSON.stringify({ rfidKod: kod }),
       });
       if (res.status >= 500) {
-        setPoruka({ tip: "greska", tekst: "Prijava nije uspjela", detalj: "" });
+        setPoruka({ tip: "greska", tekst: "Prijava nije uspjela", detalj: "Ponovi prijavu." });
       } else {
         const data = await res.json();
         if (!res.ok) {
           if (data.cooldown) {
-            setPoruka({ tip: "greska", tekst: "Pričekaj malo", detalj: data.error });
+            // Kartica je već netom prije uspješno očitana — javi joj TO umjesto nejasnog
+            // "pričekaj", da se zna da prethodno skeniranje nije propalo.
+            const vrijeme = data.zadnjaAkcija?.vrijeme ? new Date(data.zadnjaAkcija.vrijeme).toLocaleTimeString("hr-HR", { hour: "2-digit", minute: "2-digit" }) : "";
+            const jeOdlazak = data.zadnjaAkcija?.tip === "odlazak";
+            setPoruka({ tip: jeOdlazak ? "odlazak" : "dolazak", tekst: jeOdlazak ? "VEĆ ODJAVLJENO" : "VEĆ PRIJAVLJENO", detalj: vrijeme ? `u ${vrijeme}` : "" });
           } else {
             setPoruka({ tip: "greska", tekst: data.error || "Kartica nije prepoznata", detalj: `Kod: ${kod} — javi se administratoru.` });
           }
@@ -1120,7 +1124,7 @@ function KioskView({ onPrijava }) {
         }
       }
     } catch {
-      setPoruka({ tip: "greska", tekst: "Prijava nije uspjela", detalj: "" });
+      setPoruka({ tip: "greska", tekst: "Prijava nije uspjela", detalj: "Ponovi prijavu." });
     }
     uTijeku.current = false;
     setTimeout(() => setPoruka(null), 4000);
@@ -1150,7 +1154,7 @@ function KioskView({ onPrijava }) {
 
         {poruka ? (
           <div style={{ padding: "34px 28px", borderRadius: 6, marginBottom: 10, background: bojePoruke[poruka.tip].bg, border: `1px solid ${bojePoruke[poruka.tip].border}` }}>
-            <div style={{ fontSize: poruka.tip === "dolazak" || poruka.tip === "odlazak" ? 48 : 36, fontWeight: 700, marginBottom: poruka.detalj ? 8 : 0, letterSpacing: poruka.tip === "dolazak" || poruka.tip === "odlazak" ? "0.05em" : 0, color: poruka.tip === "greska" ? bojePoruke.greska.naslov : poruka.tip === "dolazak" || poruka.tip === "odlazak" ? bojePoruke[poruka.tip].naslov : "var(--ink)" }}>{poruka.tekst}</div>
+            <div style={{ fontSize: poruka.tip === "dolazak" || poruka.tip === "odlazak" ? (poruka.tekst.length > 10 ? 32 : 48) : 36, fontWeight: 700, marginBottom: poruka.detalj ? 8 : 0, letterSpacing: poruka.tip === "dolazak" || poruka.tip === "odlazak" ? "0.05em" : 0, color: poruka.tip === "greska" ? bojePoruke.greska.naslov : poruka.tip === "dolazak" || poruka.tip === "odlazak" ? bojePoruke[poruka.tip].naslov : "var(--ink)" }}>{poruka.tekst}</div>
             {poruka.detalj && <div style={{ fontSize: 24, color: "var(--ink-soft)" }}>{poruka.detalj}</div>}
           </div>
         ) : (
@@ -5752,9 +5756,9 @@ function EvidencijaTab({ db, update, showToast, mozeMijenjati = true }) {
     const { zaposlenikId, datum, vrsta, segmenti } = urediCeliju;
     const bezPostojecih = db.evidencijaRada.filter((e) => !(e.zaposlenikId === zaposlenikId && e.vrijemeDolaska.slice(0, 10) === datum));
     const noviZapisi = vrsta === "rad"
-      ? segmenti.filter((s) => s.od && s.do).map((s) => ({
+      ? segmenti.filter((s) => s.od).map((s) => ({
           id: s.id || uid("evr"), zaposlenikId,
-          vrijemeDolaska: `${datum}T${s.od}:00`, vrijemeOdlaska: `${datum}T${s.do}:00`,
+          vrijemeDolaska: `${datum}T${s.od}:00`, vrijemeOdlaska: s.do ? `${datum}T${s.do}:00` : null,
           vrsta: "rad", autoOdjava: false, potvrdenoRacunovodstvo: true, unioRucnoId: "racunovodstvo",
         }))
       : [{ id: uid("evr"), zaposlenikId, vrijemeDolaska: `${datum}T00:00:00`, vrijemeOdlaska: `${datum}T00:00:00`, vrsta, autoOdjava: false, potvrdenoRacunovodstvo: true, unioRucnoId: "racunovodstvo" }];
@@ -5943,9 +5947,13 @@ function EvidencijaTab({ db, update, showToast, mozeMijenjati = true }) {
                         <button className="btn btn-icon btn-ghost" onClick={() => setUrediCeliju({ ...urediCeliju, segmenti: urediCeliju.segmenti.filter((_, idx) => idx !== i) })}><X size={14} /></button>
                       )}
                     </div>
-                    {seg.do && (
+                    {seg.do ? (
                       <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 6 }}>
                         Smjena: <strong>{smj?.naziv}</strong>{smj?.dodatakPostotak > 0 && <span style={{ color: "var(--steel)" }}> (+{smj.dodatakPostotak}%)</span>} · obračunski sati: <strong className="f-mono">{h.toFixed(1)} h</strong>
+                      </div>
+                    ) : seg.od && (
+                      <div style={{ fontSize: 12, color: "var(--steel)", marginTop: 6 }}>
+                        Bez odjave — evidentira se kao "još na poslu", upiši odjavu naknadno kad se zaposlenik javi.
                       </div>
                     )}
                   </div>

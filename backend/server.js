@@ -258,8 +258,14 @@ app.post("/api/kiosk/scan", async (req, res) => {
       const proteklaMin = (sada - new Date(zadnjaAkcija)) / 60000;
       if (proteklaMin < KIOSK_BLOKADA_MIN) {
         await client.query("ROLLBACK");
-        const preostaloSek = Math.ceil((KIOSK_BLOKADA_MIN - proteklaMin) * 60);
-        return res.status(429).json({ error: `Pričekaj još ${preostaloSek} s prije sljedeće prijave/odjave.`, cooldown: true });
+        // Ne samo "pričekaj" — javi i ŠTO je zadnja akcija bila i kada, da osoba vidi da je
+        // njeno prethodno skeniranje stvarno uspjelo (a ne da izgleda kao nova greška).
+        return res.status(429).json({
+          error: "Već zabilježeno.",
+          cooldown: true,
+          zadnjaAkcija: { tip: otvorena ? "dolazak" : "odlazak", vrijeme: zadnjaAkcija },
+          ime: zaposlenik.ime, prezime: zaposlenik.prezime,
+        });
       }
     }
 
