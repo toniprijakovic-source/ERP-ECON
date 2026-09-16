@@ -1066,69 +1066,17 @@ const dozvolaZaKarticu = (pozicija, modulKey, karticaKey) => {
 // Popis kartica modula na koje pozicija ima pristup (za skrivanje tabova u stranicama).
 const dozvoljeneKarticeModula = (pozicija, modulKey) => (KARTICE_MODULA[modulKey]?.kartice || []).filter((k) => dozvolaZaKarticu(pozicija, modulKey, k.key).pristup);
 
-const KIOSK_RED_KLJUC = "kioskRedCekanja";
-const citajKioskRed = () => {
-  try { return JSON.parse(localStorage.getItem(KIOSK_RED_KLJUC)) || []; } catch { return []; }
-};
-const spremiKioskRed = (red) => {
-  try { localStorage.setItem(KIOSK_RED_KLJUC, JSON.stringify(red)); } catch { /* privatni način rada i sl. — red ostaje samo u memoriji taba */ }
-};
-
 function KioskView({ onPrijava }) {
   const [unos, setUnos] = useState("");
   const [poruka, setPoruka] = useState(null);
   const [sat, setSat] = useState(new Date());
-  const [uReduCekanja, setUReduCekanja] = useState(() => citajKioskRed().length);
   const inputRef = useRef(null);
   const obradjenIzUrla = useRef(false);
   const uTijeku = useRef(false); // sprječava dvostruku obradu ako netko dvaput brzo prisloni karticu
-  const saljemRed = useRef(false);
 
   useEffect(() => {
     const t = setInterval(() => setSat(new Date()), 1000 * 30);
     return () => clearInterval(t);
-  }, []);
-
-  // Ako skeniranje ne uspije poslati odmah (nema interneta, poslužitelj ne odgovara), zapis se
-  // sprema lokalno (localStorage) sa STVARNIM vremenom skeniranja i šalje se automatski čim
-  // veza proradi — kartica se ne mora iznova prislanjati, a sat u evidenciji ostaje točan.
-  const posaljiKioskRed = async () => {
-    if (saljemRed.current) return;
-    saljemRed.current = true;
-    try {
-      let red = citajKioskRed();
-      while (red.length > 0) {
-        const stavka = red[0];
-        let odgovor;
-        try {
-          odgovor = await fetch(`${API_URL}/api/kiosk/scan`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ rfidKod: stavka.rfidKod, klijentskoVrijeme: stavka.klijentskoVrijeme }),
-          });
-        } catch {
-          break; // i dalje nema veze — pokušaj ponovno kod sljedećeg ciklusa
-        }
-        // 404 (kartica nepoznata) i 429 (cooldown) su konačni odgovori — nema smisla ponavljati
-        if (odgovor.ok || odgovor.status === 404 || odgovor.status === 429) {
-          red = red.slice(1);
-          spremiKioskRed(red);
-          setUReduCekanja(red.length);
-        } else {
-          break; // poslužitelj i dalje ima problema (5xx) — pokušaj kasnije
-        }
-      }
-    } finally {
-      saljemRed.current = false;
-    }
-  };
-
-  useEffect(() => {
-    posaljiKioskRed();
-    const t = setInterval(posaljiKioskRed, 20000);
-    window.addEventListener("online", posaljiKioskRed);
-    return () => { clearInterval(t); window.removeEventListener("online", posaljiKioskRed); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Redovan "ping" dok je kiosk zaslon otvoren — drži besplatni Render poslužitelj budnim
@@ -1149,21 +1097,14 @@ function KioskView({ onPrijava }) {
     uTijeku.current = true;
     setUnos("");
     setPoruka(null); // bez međuporuke "Obrađujem…" — ekran ostaje miran do stvarnog rezultata
-    const klijentskoVrijeme = new Date().toISOString(); // stvarni trenutak skeniranja — bitno ako se pošalje kasnije iz reda čekanja
-    const staviURed = (razlogTekst) => {
-      const red = [...citajKioskRed(), { rfidKod: kod, klijentskoVrijeme }];
-      spremiKioskRed(red);
-      setUReduCekanja(red.length);
-      setPoruka({ tip: "cekanje", tekst: "Zabilježeno lokalno", detalj: `${razlogTekst} Poslat će se automatski čim veza proradi.` });
-    };
     try {
       const res = await fetch(`${API_URL}/api/kiosk/scan`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rfidKod: kod, klijentskoVrijeme }),
+        body: JSON.stringify({ rfidKod: kod }),
       });
       if (res.status >= 500) {
-        staviURed("Poslužitelj trenutno ne odgovara.");
+        setPoruka({ tip: "greska", tekst: "Prijava nije uspjela", detalj: "" });
       } else {
         const data = await res.json();
         if (!res.ok) {
@@ -1179,7 +1120,7 @@ function KioskView({ onPrijava }) {
         }
       }
     } catch {
-      staviURed("Nema veze s poslužiteljem.");
+      setPoruka({ tip: "greska", tekst: "Prijava nije uspjela", detalj: "" });
     }
     uTijeku.current = false;
     setTimeout(() => setPoruka(null), 4000);
@@ -1194,7 +1135,7 @@ function KioskView({ onPrijava }) {
   }, []);
 
   const zatvoriKiosk = () => { window.location.href = window.location.pathname; };
-  const bojePoruke = { dolazak: { bg: "#EAF6EF", border: "#B9E3C9", naslov: "#1F6B41" }, odlazak: { bg: "#EAF3F7", border: "#BFE0EC", naslov: "#215C77" }, greska: { bg: "#FBEAE6", border: "#F0C2B5", naslov: "#9A2E1B" }, cekanje: { bg: "#FDF6E3", border: "#EBDBA4", naslov: "#8A6D1D" } };
+  const bojePoruke = { dolazak: { bg: "#EAF6EF", border: "#B9E3C9", naslov: "#1F6B41" }, odlazak: { bg: "#EAF3F7", border: "#BFE0EC", naslov: "#215C77" }, greska: { bg: "#FBEAE6", border: "#F0C2B5", naslov: "#9A2E1B" } };
 
   return (
     <div className="erp-root f-display" style={{ position: "relative", minHeight: 640, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--sidebar)", padding: 20 }}>
@@ -1215,12 +1156,6 @@ function KioskView({ onPrijava }) {
         ) : (
           <div style={{ fontSize: 26, color: "var(--ink-soft)" }}>Prisloni karticu čitaču</div>
         )}
-        {uReduCekanja > 0 && (
-          <div style={{ marginTop: 14, fontSize: 14, color: "#8A6D1D" }}>
-            ⏳ {uReduCekanja} {uReduCekanja === 1 ? "zapis čeka" : "zapisa čeka"} slanje poslužitelju…
-          </div>
-        )}
-
         {/* Skriveni input i dalje hvata upis RFID čitača (koji radi kao tipkovnica) — samo
             više nema vidljivu kućicu za ručno upisivanje koda. */}
         <input

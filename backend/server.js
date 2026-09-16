@@ -246,17 +246,7 @@ app.post("/api/kiosk/scan", async (req, res) => {
     const evidencija = r.rows[0]?.value || [];
     const moji = evidencija.filter((e) => e.zaposlenikId === zaposlenik.id);
     const otvorena = moji.find((e) => !e.vrijemeOdlaska);
-
-    // Kiosk zaslon skeniranje koje nije uspio odmah poslati (npr. nestanak interneta) sprema
-    // lokalno i šalje kasnije zajedno sa stvarnim trenutkom skeniranja (klijentskoVrijeme), da
-    // evidencija ne bilježi vrijeme kad je veza uspostavljena nego kad je kartica STVARNO
-    // prislonjena. Prihvaćamo ga samo ako je razuman broj (validan datum, ne u budućnosti više
-    // od minute, ne stariji od 48h) — inače (uobičajen slučaj, live skeniranje) koristimo sada().
-    let sada = new Date();
-    const klijentskoVrijeme = req.body.klijentskoVrijeme ? new Date(req.body.klijentskoVrijeme) : null;
-    if (klijentskoVrijeme && !isNaN(klijentskoVrijeme) && klijentskoVrijeme <= new Date(Date.now() + 60000) && klijentskoVrijeme >= new Date(Date.now() - 48 * 3600000)) {
-      sada = klijentskoVrijeme;
-    }
+    const sada = new Date();
 
     // Blokada slučajnog dvostrukog očitanja kartice — ista osoba ne može ponovno
     // prijaviti dolazak/odlazak unutar KIOSK_BLOKADA_MIN minuta od svoje zadnje akcije.
