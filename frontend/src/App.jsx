@@ -1148,7 +1148,7 @@ function KioskView({ onPrijava }) {
     if (!kod || uTijeku.current) return;
     uTijeku.current = true;
     setUnos("");
-    setPoruka({ tip: "obrada", tekst: "Obrađujem…", detalj: "" });
+    setPoruka(null); // bez međuporuke "Obrađujem…" — ekran ostaje miran do stvarnog rezultata
     const klijentskoVrijeme = new Date().toISOString(); // stvarni trenutak skeniranja — bitno ako se pošalje kasnije iz reda čekanja
     const staviURed = (razlogTekst) => {
       const red = [...citajKioskRed(), { rfidKod: kod, klijentskoVrijeme }];
@@ -1173,10 +1173,9 @@ function KioskView({ onPrijava }) {
             setPoruka({ tip: "greska", tekst: data.error || "Kartica nije prepoznata", detalj: `Kod: ${kod} — javi se administratoru.` });
           }
         } else if (data.tip === "odlazak") {
-          const trajanjeMin = Math.max(0, Math.round((new Date(data.vrijeme) - new Date(data.dolazak)) / 60000));
-          setPoruka({ tip: "odlazak", tekst: `${data.ime} ${data.prezime}`, detalj: `Odlazak u ${new Date(data.vrijeme).toLocaleTimeString("hr-HR", { hour: "2-digit", minute: "2-digit" })} · Radio/la ${Math.floor(trajanjeMin / 60)}h ${trajanjeMin % 60}min` });
+          setPoruka({ tip: "odlazak", tekst: "ODJAVA", detalj: "" });
         } else {
-          setPoruka({ tip: "dolazak", tekst: `${data.ime} ${data.prezime}`, detalj: `Dolazak zabilježen u ${new Date(data.vrijeme).toLocaleTimeString("hr-HR", { hour: "2-digit", minute: "2-digit" })}` });
+          setPoruka({ tip: "dolazak", tekst: "PRIJAVA", detalj: "" });
         }
       }
     } catch {
@@ -1195,7 +1194,7 @@ function KioskView({ onPrijava }) {
   }, []);
 
   const zatvoriKiosk = () => { window.location.href = window.location.pathname; };
-  const bojePoruke = { dolazak: { bg: "#EAF6EF", border: "#B9E3C9", naslov: "#1F6B41" }, odlazak: { bg: "#EAF3F7", border: "#BFE0EC", naslov: "#215C77" }, greska: { bg: "#FBEAE6", border: "#F0C2B5", naslov: "#9A2E1B" }, obrada: { bg: "#F4F4F4", border: "#DADADA", naslov: "#666" }, cekanje: { bg: "#FDF6E3", border: "#EBDBA4", naslov: "#8A6D1D" } };
+  const bojePoruke = { dolazak: { bg: "#EAF6EF", border: "#B9E3C9", naslov: "#1F6B41" }, odlazak: { bg: "#EAF3F7", border: "#BFE0EC", naslov: "#215C77" }, greska: { bg: "#FBEAE6", border: "#F0C2B5", naslov: "#9A2E1B" }, cekanje: { bg: "#FDF6E3", border: "#EBDBA4", naslov: "#8A6D1D" } };
 
   return (
     <div className="erp-root f-display" style={{ position: "relative", minHeight: 640, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--sidebar)", padding: 20 }}>
@@ -1210,9 +1209,8 @@ function KioskView({ onPrijava }) {
 
         {poruka ? (
           <div style={{ padding: "34px 28px", borderRadius: 6, marginBottom: 10, background: bojePoruke[poruka.tip].bg, border: `1px solid ${bojePoruke[poruka.tip].border}` }}>
-            {(poruka.tip === "dolazak" || poruka.tip === "odlazak") && <div style={{ fontSize: 22, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: bojePoruke[poruka.tip].naslov, marginBottom: 10 }}>{poruka.tip === "dolazak" ? "✓ Dolazak" : "✓ Odlazak"}</div>}
-            <div style={{ fontSize: 36, fontWeight: 700, marginBottom: 8, color: poruka.tip === "greska" ? bojePoruke.greska.naslov : "var(--ink)" }}>{poruka.tekst}</div>
-            <div style={{ fontSize: 24, color: "var(--ink-soft)" }}>{poruka.detalj}</div>
+            <div style={{ fontSize: poruka.tip === "dolazak" || poruka.tip === "odlazak" ? 48 : 36, fontWeight: 700, marginBottom: poruka.detalj ? 8 : 0, letterSpacing: poruka.tip === "dolazak" || poruka.tip === "odlazak" ? "0.05em" : 0, color: poruka.tip === "greska" ? bojePoruke.greska.naslov : poruka.tip === "dolazak" || poruka.tip === "odlazak" ? bojePoruke[poruka.tip].naslov : "var(--ink)" }}>{poruka.tekst}</div>
+            {poruka.detalj && <div style={{ fontSize: 24, color: "var(--ink-soft)" }}>{poruka.detalj}</div>}
           </div>
         ) : (
           <div style={{ fontSize: 26, color: "var(--ink-soft)" }}>Prisloni karticu čitaču</div>
