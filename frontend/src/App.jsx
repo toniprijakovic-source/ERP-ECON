@@ -1385,6 +1385,30 @@ export default function App() {
     }).catch(() => showToast("Greška pri spremanju — provjeri internetsku vezu."));
   };
 
+  // Ciljana izmjena evidencijaRada — za razliku od update(), ne šalje CIJELI (potencijalno
+  // zastarjeli) popis natrag, nego samo koje zapise dodati/izmijeniti (upsert, po id-u) i koje
+  // ukloniti (remove, popis id-eva). Backend to primjenjuje na TRENUTNI (zaključani) popis u
+  // bazi, ne na popis koji je ovaj preglednik učitao — inače bi npr. istovremena prijava na
+  // kiosku, nastala nakon što je ova stranica zadnji put dohvatila podatke, nestala kad admin
+  // spremi bilo kakvu, i nepovezanu, izmjenu evidencije.
+  const patchEvidencija = async (upsert = [], remove = []) => {
+    const token = localStorage.getItem("erp_token");
+    try {
+      const res = await fetch(`${API_URL}/api/evidencija/patch`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ upsert, remove }),
+      });
+      if (!res.ok) { showToast("Greška pri spremanju evidencije."); return false; }
+      const data = await res.json();
+      setDb((prev) => ({ ...prev, evidencijaRada: data.evidencijaRada }));
+      return true;
+    } catch {
+      showToast("Greška pri spremanju — provjeri internetsku vezu.");
+      return false;
+    }
+  };
+
   // Ponovno učitava jedan ključ s backenda i osvježava lokalni state BEZ ponovnog PUT-a —
   // koristi se nakon promjena koje backend napravi izravno (npr. hashiranje lozinke), gdje
   // bi obični update() prepisao stvarni hash lokalnom (nepotpunom) kopijom podataka.
@@ -1499,7 +1523,7 @@ export default function App() {
           {aktivnaStranica === "projekti" && <ProjektiPage db={db} update={update} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "fakturiranje" && <FakturiranjePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "partneri" && <PartneriPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
-          {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} mojaPozicija={mojaPozicija} />}
+          {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} patchEvidencija={patchEvidencija} mojaPozicija={mojaPozicija} />}
         </div>
 
       </div>
@@ -5690,15 +5714,18 @@ function PostavkePlacaModal({ db, update, showToast, onClose }) {
 }
 
 /* ============================== EVIDENCIJA RADA — MJESEČNA MREŽA ============================== */
-function EvidencijaTab({ db, update, showToast, mozeMijenjati = true }) {
+function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true }) {
   const [mjesec, setMjesec] = useState(todayISO().slice(0, 7));
   const [urediCeliju, setUrediCeliju] = useState(null); // { zaposlenikId, datum, vrsta, od, do, postojeciId }
 
   // Automatska odjava zaostalih (nezavršenih) smjena — provjerava se pri otvaranju ovog taba,
-  // gdje korisnik ionako ima ovlasti za uređivanje evidencije.
+  // gdje korisnik ionako ima ovlasti za uređivanje evidencije. Šalje SAMO zapise koje je stvarno
+  // promijenila (usporedbom reference s automatskiOdjaviZaostale), preko patchEvidencija — ne
+  // cijeli popis — da ne prepiše prijave/odjave koje su u međuvremenu stigle s kioska.
   useEffect(() => {
-    const { nova, promijenjeno } = automatskiOdjaviZaostale(db.evidencijaRada || [], db.postavkePlaca);
-    if (promijenjeno) update("evidencijaRada", nova);
+    const izvor = db.evidencijaRada || [];
+    const { nova, promijenjeno } = automatskiOdjaviZaostale(izvor, db.postavkePlaca);
+    if (promijenjeno) patchEvidencija(nova.filter((e, i) => e !== izvor[i]), []);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -5752,9 +5779,13 @@ function EvidencijaTab({ db, update, showToast, mozeMijenjati = true }) {
   // zamijeni ih onim što je trenutno u editoru (jedan zapis po radnom segmentu, ili jedan
   // zapis za cjelodnevnu vrstu poput godišnjeg) — tako više radnih segmenata istog dana
   // (npr. jutarnja smjena + kratki povratak) ostaju svaki zaseban, umjesto da se izgube.
-  const spremiCeliju = () => {
+  // Umjesto da izračuna cijeli novi popis evidencije i pošalje ga natrag (što bi na bazi
+  // prepisalo bilo koju prijavu/odjavu s kioska koja je stigla nakon što je ovaj preglednik
+  // zadnji put dohvatio podatke), šalje se samo TOČNO ono što se za ovaj dan mijenja —
+  // patchEvidencija to primjenjuje na trenutni popis u bazi, zaključan za vrijeme izmjene.
+  const spremiCeliju = async () => {
     const { zaposlenikId, datum, vrsta, segmenti } = urediCeliju;
-    const bezPostojecih = db.evidencijaRada.filter((e) => !(e.zaposlenikId === zaposlenikId && e.vrijemeDolaska.slice(0, 10) === datum));
+    const postojeciZaDan = db.evidencijaRada.filter((e) => e.zaposlenikId === zaposlenikId && e.vrijemeDolaska.slice(0, 10) === datum);
     const noviZapisi = vrsta === "rad"
       ? segmenti.filter((s) => s.od).map((s) => ({
           id: s.id || uid("evr"), zaposlenikId,
@@ -5762,19 +5793,24 @@ function EvidencijaTab({ db, update, showToast, mozeMijenjati = true }) {
           vrsta: "rad", autoOdjava: false, potvrdenoRacunovodstvo: true, unioRucnoId: "racunovodstvo",
         }))
       : [{ id: uid("evr"), zaposlenikId, vrijemeDolaska: `${datum}T00:00:00`, vrijemeOdlaska: `${datum}T00:00:00`, vrsta, autoOdjava: false, potvrdenoRacunovodstvo: true, unioRucnoId: "racunovodstvo" }];
-    update("evidencijaRada", [...bezPostojecih, ...noviZapisi]);
-    setUrediCeliju(null);
-    showToast("Evidencija spremljena.");
+    const zadrzaniIds = new Set(noviZapisi.map((z) => z.id));
+    const zaUkloniti = postojeciZaDan.filter((e) => !zadrzaniIds.has(e.id)).map((e) => e.id);
+    const ok = await patchEvidencija(noviZapisi, zaUkloniti);
+    if (ok) { setUrediCeliju(null); showToast("Evidencija spremljena."); }
   };
 
-  const obrisiCeliju = () => {
+  const obrisiCeliju = async () => {
     const { zaposlenikId, datum } = urediCeliju;
-    update("evidencijaRada", db.evidencijaRada.filter((e) => !(e.zaposlenikId === zaposlenikId && e.vrijemeDolaska.slice(0, 10) === datum)));
-    setUrediCeliju(null);
-    showToast("Zapis obrisan.");
+    const zaUkloniti = db.evidencijaRada.filter((e) => e.zaposlenikId === zaposlenikId && e.vrijemeDolaska.slice(0, 10) === datum).map((e) => e.id);
+    const ok = await patchEvidencija([], zaUkloniti);
+    if (ok) { setUrediCeliju(null); showToast("Zapis obrisan."); }
   };
 
-  const potvrdiAutoOdjavu = (id) => { if (mozeMijenjati) update("evidencijaRada", db.evidencijaRada.map((e) => (e.id === id ? { ...e, potvrdenoRacunovodstvo: true } : e))); };
+  const potvrdiAutoOdjavu = (id) => {
+    if (!mozeMijenjati) return;
+    const zapis = db.evidencijaRada.find((e) => e.id === id);
+    if (zapis) patchEvidencija([{ ...zapis, potvrdenoRacunovodstvo: true }], []);
+  };
   const zaposlenikIme = (id) => { const z = db.zaposlenici.find((zz) => zz.id === id); return z ? `${z.prezime} ${z.ime}` : "—"; };
 
   // Sadržaj jedne ćelije — dan može imati više radnih segmenata (npr. jutarnja smjena + kratki
@@ -6335,7 +6371,7 @@ function ObracunPlacaPrintModal({ redovi, mjesec, db, onClose }) {
   );
 }
 
-function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija }) {
+function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija, mojaPozicija }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "zaposlenici");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "zaposlenici");
   useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "zaposlenici"); }, [dozvKartice, tab]);
@@ -6461,7 +6497,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija }) 
         </>
       )}
 
-      {tab === "evidencija" && <EvidencijaTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "evidencija").izmjene} />}
+      {tab === "evidencija" && <EvidencijaTab db={db} update={update} patchEvidencija={patchEvidencija} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "evidencija").izmjene} />}
 
       {tab === "obracun" && <ObracunPlacaTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "obracun").izmjene} />}
 

@@ -300,6 +300,51 @@ app.post("/api/kiosk/scan", async (req, res) => {
 // prijava "ne registrira").
 app.get("/api/kiosk/ping", (req, res) => res.json({ ok: true }));
 
+// ---------- Ciljana izmjena evidencijaRada (Evidencija rada u glavnoj aplikaciji) ----------
+// Obična PUT /api/data/evidencijaRada šalje CIJELI popis kakav ga je preglednik zadnji put
+// dohvatio — ako je u međuvremenu (dok je taj preglednik otvoren) netko prijavio/odjavio
+// dolazak na kiosku, taj zapis ne postoji u poslanom popisu pa se pri spremanju TIHO IZBRIŠE.
+// Ova ruta umjesto toga prima samo ŠTO se mijenja (upsert: zapisi za dodati/izmijeniti po id-u,
+// remove: id-evi za ukloniti) i primjenjuje to na TRENUTNI popis u bazi, zaključan istom
+// SELECT ... FOR UPDATE transakcijom kao i kiosk skeniranje — tako da paralelna kiosk prijava i
+// ručna izmjena u Evidenciji rada više ne mogu jedna drugu prepisati.
+app.put("/api/evidencija/patch", autentikacija, async (req, res) => {
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  const { pisivo } = izracunajDozvoljeneKljuceve(pozicija);
+  if (!pisivo.has("evidencijaRada")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za mijenjanje evidencije." });
+
+  const upsert = Array.isArray(req.body.upsert) ? req.body.upsert : [];
+  const remove = Array.isArray(req.body.remove) ? req.body.remove : [];
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query("SELECT value FROM app_data WHERE key = 'evidencijaRada' FOR UPDATE");
+    const trenutno = r.rows[0]?.value || [];
+    const removeSet = new Set(remove);
+    const upsertMap = new Map(upsert.map((z) => [z.id, z]));
+    const postojeciIds = new Set(trenutno.map((e) => e.id));
+    const rezultat = trenutno
+      .filter((e) => !removeSet.has(e.id))
+      .map((e) => (upsertMap.has(e.id) ? upsertMap.get(e.id) : e));
+    upsert.forEach((z) => { if (!postojeciIds.has(z.id)) rezultat.push(z); });
+
+    await client.query(
+      `INSERT INTO app_data (key, value, updated_at) VALUES ('evidencijaRada', $1, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [JSON.stringify(rezultat)]
+    );
+    await client.query("COMMIT");
+    res.json({ ok: true, evidencijaRada: rezultat });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Greška kod izmjene evidencije:", e);
+    res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+  } finally {
+    client.release();
+  }
+});
+
 // ---------- podaci (sve zaštićeno loginom) ----------
 // Vraća SVE ključeve odjednom — koristi se pri pokretanju aplikacije. Ključevi izvan
 // zaposlenikovih dopuštenih kartica vraćaju se kao prazan placeholder (a ne izostavljeni)
