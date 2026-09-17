@@ -325,15 +325,17 @@ const OZNAKA_VRSTE_DANA = {
   sluzbeniPut: { kratica: "SP", boja: "#1B6B78", bg: "#E5F2F3", naziv: "Službeni put" },
 };
 
-// Pune godine staža na zadani datum
-const godineStaza = (datumZaposlenja, naDatum) => {
-  if (!datumZaposlenja) return 0;
+// Pune godine staža na zadani datum, uvećane za ručno uneseni staž iz prijašnjeg zaposlenja u
+// tvrtki (za zaposlenike koji su otišli pa se vratili — datumZaposlenja odražava samo zadnji
+// povratak, pa se raniji period ne može automatski izračunati iz njega).
+const godineStaza = (datumZaposlenja, naDatum, dodatniStaz = 0) => {
+  if (!datumZaposlenja) return Math.max(0, Number(dodatniStaz) || 0);
   const od = new Date(datumZaposlenja);
   const do_ = new Date(naDatum);
   let g = do_.getFullYear() - od.getFullYear();
   const prijeGodisnjice = do_.getMonth() < od.getMonth() || (do_.getMonth() === od.getMonth() && do_.getDate() < od.getDate());
   if (prijeGodisnjice) g--;
-  return Math.max(0, g);
+  return Math.max(0, g) + (Number(dodatniStaz) || 0);
 };
 
 // radniDaniMjeseca: broj radnih dana za taj konkretan mjesec (pon-pet, bez vikenda) — kad se
@@ -342,7 +344,7 @@ const godineStaza = (datumZaposlenja, naDatum) => {
 const satnicaZaposlenika = (zaposlenik, postavke, naDatum = todayISO(), radniDaniMjeseca = null) => {
   const bodovi = Number(zaposlenik?.bodovi) || 0;
   const osnovica = bodovi * (Number(postavke?.vrijednostBoda) || 0);
-  const staz = godineStaza(zaposlenik?.datumZaposlenja, naDatum);
+  const staz = godineStaza(zaposlenik?.datumZaposlenja, naDatum, zaposlenik?.dodatniStazGodine);
   const radniDani = radniDaniMjeseca != null ? radniDaniMjeseca : (Number(postavke?.radnihDanaMjesec) || 0);
   const dodatakStaz = staz * (Number(postavke?.dodatakStazPoGodini) || 0) * radniDani;
   const neto = osnovica + dodatakStaz;
@@ -430,10 +432,12 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
   }
   const jeSluzbeniPut = vrsta === "sluzbeniPut";
 
+  // Zaposlenici na pola radnog vremena dobivaju putni trošak i topli obrok prepolovljene.
+  const faktorRadnogVremena = zaposlenik?.radnoVrijeme === "pola" ? 0.5 : 1;
   const jeRadniDan = vrsta === "rad" && odradjeniSati > 0 && !praznik;
-  const putni = jeRadniDan ? (Number(zaposlenik?.udaljenostKm) || 0) * (Number(postavke?.cijenaKm) || 0) : 0;
+  const putni = jeRadniDan ? (Number(zaposlenik?.udaljenostKm) || 0) * (Number(postavke?.cijenaKm) || 0) * faktorRadnogVremena : 0;
   const topliObrok = jeRadniDan && !zaposlenik?.koristiPrehranuUTvrtki && odradjeniSati >= (Number(postavke?.topliObrokMinSati) || 6)
-    ? (Number(postavke?.topliObrokIznos) || 0) : 0;
+    ? (Number(postavke?.topliObrokIznos) || 0) * faktorRadnogVremena : 0;
 
   // Dodatak za smjenu i prekovremeni ZBRAJAJU se, ne množe:
   // popodnevna do 8h = ×1,2; iznad 8h = ×(1,2 + 0,5) = ×1,7
@@ -6381,7 +6385,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
   const [del, setDel] = useState(null);
   const [lozinkaZa, setLozinkaZa] = useState(null);
 
-  const emptyZap = { ime: "", prezime: "", pozicijaId: db.pozicijeZaposlenika[0]?.id || "", email: "", telefon: "", status: "Aktivan", datumZaposlenja: todayISO(), kompetencije: [], rfidKod: "", bodovi: 0, udaljenostKm: 0, koristiPrehranuUTvrtki: false, satnicaKooperant: 0, maticniBroj: "" };
+  const emptyZap = { ime: "", prezime: "", pozicijaId: db.pozicijeZaposlenika[0]?.id || "", email: "", telefon: "", status: "Aktivan", datumZaposlenja: todayISO(), kompetencije: [], rfidKod: "", bodovi: 0, udaljenostKm: 0, koristiPrehranuUTvrtki: false, satnicaKooperant: 0, maticniBroj: "", dodatniStazGodine: 0, radnoVrijeme: "puno" };
   const [zapForm, setZapForm] = useState(emptyZap);
 
   const emptyPoz = { naziv: "", opis: "", moduli: [], karticeDozvole: {} };
@@ -6523,6 +6527,15 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
             <Field label="Status"><select className="select" value={zapForm.status} onChange={(e) => setZapForm({ ...zapForm, status: e.target.value })}><option>Aktivan</option><option>Neaktivan</option></select></Field>
             <Field label="Zaposlen od"><input className="input" type="date" value={zapForm.datumZaposlenja} onChange={(e) => setZapForm({ ...zapForm, datumZaposlenja: e.target.value })} /></Field>
             <Field label="Matični broj"><input className="input f-mono" value={zapForm.maticniBroj || ""} onChange={(e) => setZapForm({ ...zapForm, maticniBroj: e.target.value })} /></Field>
+            <Field label="Dodatni staž iz prijašnjeg zaposlenja (godine)">
+              <input className="input f-mono" type="number" min="0" step="1" value={zapForm.dodatniStazGodine ?? 0} onChange={(e) => setZapForm({ ...zapForm, dodatniStazGodine: e.target.value === "" ? 0 : Number(e.target.value) })} />
+            </Field>
+            <Field label="Radno vrijeme">
+              <select className="select" value={zapForm.radnoVrijeme || "puno"} onChange={(e) => setZapForm({ ...zapForm, radnoVrijeme: e.target.value })}>
+                <option value="puno">Puno radno vrijeme</option>
+                <option value="pola">Pola radnog vremena</option>
+              </select>
+            </Field>
             {db.pozicijeZaposlenika.find((p) => p.id === zapForm.pozicijaId)?.naziv?.trim().toLowerCase() === "kooperant" ? (
               <Field label="Satnica kooperanta (€/h)"><input className="input f-mono" type="number" min="0" step="0.5" value={zapForm.satnicaKooperant ?? 0} onChange={(e) => setZapForm({ ...zapForm, satnicaKooperant: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
             ) : (
