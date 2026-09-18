@@ -2092,13 +2092,14 @@ const tezinaStavkeUpita = (s, katalogProfila) => {
 };
 
 // Ukupna cijena jedne ponude dobavljača za stavku — količina (kg ili m, prema odabranoj jedinici
-// cijene) × cijena, plus fiksni dodatak tog dobavljača (transport/pakiranje i sl.), ako postoji.
-// Vraća null ako se ne može izračunati (npr. cijena po kg bez poznate težine).
-const ukupnaCijenaPonude = (s, p, katalogProfila, dobavljaci) => {
+// cijene) × cijena, plus dodatak (transport/pakiranje i sl.) unesen na TOJ konkretnoj ponudi —
+// dodatak se namjerno unosi po stavci, ne kao jedan fiksni iznos za cijelog dobavljača, jer se
+// razlikuje od narudžbe do narudžbe. Vraća null ako se ne može izračunati (npr. cijena po kg bez
+// poznate težine).
+const ukupnaCijenaPonude = (s, p, katalogProfila) => {
   const kolicinaZaCijenu = p.jedinicaCijene === "m" ? duzinaUkupnaMStavke(s) : tezinaStavkeUpita(s, katalogProfila);
   if (kolicinaZaCijenu == null) return null;
-  const dobavljac = (dobavljaci || []).find((d) => d.id === p.dobavljacId);
-  return kolicinaZaCijenu * (Number(p.cijena) || 0) + (Number(dobavljac?.dodatakIznos) || 0);
+  return kolicinaZaCijenu * (Number(p.cijena) || 0) + (Number(p.dodatak) || 0);
 };
 
 const generirajBrojUpita = (upiti) => {
@@ -2181,8 +2182,11 @@ const generirajNarudzbeIzUpita = (upit, db, update, showToast) => {
 
 function UpitDetaljModal({ upit, db, update, showToast, onClose, onOtvoriPrint }) {
   const azuriraj = (noveStavke) => update("upitiNabave", db.upitiNabave.map((u) => (u.id === upit.id ? { ...u, stavke: noveStavke } : u)));
-  const dodajPonudu = (stavkaId) => azuriraj(upit.stavke.map((s) => (s.id === stavkaId ? { ...s, ponude: [...s.ponude, { id: uid("usp"), dobavljacId: db.dobavljaci[0]?.id || "", cijena: 0, jedinicaCijene: "kg", napomena: "" }] } : s)));
+  const dodajPonudu = (stavkaId) => azuriraj(upit.stavke.map((s) => (s.id === stavkaId ? { ...s, ponude: [...s.ponude, { id: uid("usp"), dobavljacId: db.dobavljaci[0]?.id || "", cijena: 0, jedinicaCijene: "kg", dodatak: Number(db.dobavljaci[0]?.dodatakIznos) || 0, napomena: "" }] } : s)));
   const azurirajPonudu = (stavkaId, ponudaId, patch) => azuriraj(upit.stavke.map((s) => (s.id === stavkaId ? { ...s, ponude: s.ponude.map((p) => (p.id === ponudaId ? { ...p, ...patch } : p)) } : s)));
+  // Kad se promijeni dobavljač na ponudi, dodatak se predpuni njegovim zadanim iznosom (Partneri
+  // → Dobavljači) — samo kao pogodan predložak, ostaje slobodno uredljiv po stavci.
+  const promijeniDobavljaca = (stavkaId, ponudaId, dobavljacId) => azurirajPonudu(stavkaId, ponudaId, { dobavljacId, dodatak: Number(db.dobavljaci.find((d) => d.id === dobavljacId)?.dodatakIznos) || 0 });
   const obrisiPonudu = (stavkaId, ponudaId) => azuriraj(upit.stavke.map((s) => (s.id === stavkaId ? { ...s, ponude: s.ponude.filter((p) => p.id !== ponudaId), odabranaPonudaId: s.odabranaPonudaId === ponudaId ? null : s.odabranaPonudaId } : s)));
   const odaberiPonudu = (stavkaId, ponudaId) => azuriraj(upit.stavke.map((s) => (s.id === stavkaId ? { ...s, odabranaPonudaId: ponudaId || null } : s)));
   const dobNaziv = (id) => db.dobavljaci.find((d) => d.id === id)?.naziv || "—";
@@ -2197,7 +2201,7 @@ function UpitDetaljModal({ upit, db, update, showToast, onClose, onOtvoriPrint }
       <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Za svaku stavku unesi ponude pristiglih dobavljača (cijena po kg ili po m, prema tome kako je dobavljač naveo), zatim označi koju ponudu odabireš. Zelenom je označena trenutno najjeftinija ponuda za tu stavku (uključuje i eventualni dodatak dobavljača za transport/pakiranje). Nakon toga generiraj narudžbe — automatski grupirane po dobavljaču.</p>
       {upit.stavke.map((s) => {
         const tezina = tezinaStavkeUpita(s, db.katalogProfila);
-        const ponudeSaCijenom = s.ponude.map((p) => ({ p, ukupno: ukupnaCijenaPonude(s, p, db.katalogProfila, db.dobavljaci) }));
+        const ponudeSaCijenom = s.ponude.map((p) => ({ p, ukupno: ukupnaCijenaPonude(s, p, db.katalogProfila) }));
         const najnizaCijena = ponudeSaCijenom.reduce((min, { ukupno }) => (ukupno != null && (min == null || ukupno < min) ? ukupno : min), null);
         return (
         <div key={s.id} className="card" style={{ padding: 12, marginBottom: 10, background: "var(--surface-alt)" }}>
@@ -2207,14 +2211,14 @@ function UpitDetaljModal({ upit, db, update, showToast, onClose, onOtvoriPrint }
           </div>
           {s.ponude.length === 0 ? <div style={{ fontSize: 12, color: "var(--ink-faint)", marginBottom: 8 }}>Još nema unesenih ponuda.</div> : (
             <table className="erp-table" style={{ marginBottom: 8 }}>
-              <thead><tr><th style={{ width: 30 }}></th><th>Dobavljač</th><th style={{ width: 100 }}>Cijena</th><th style={{ width: 80 }}>Jedinica</th><th style={{ width: 100 }}>Ukupno</th><th>Napomena</th><th style={{ width: 32 }}></th></tr></thead>
+              <thead><tr><th style={{ width: 30 }}></th><th>Dobavljač</th><th style={{ width: 90 }}>Cijena</th><th style={{ width: 75 }}>Jedinica</th><th style={{ width: 90 }}>Dodatak</th><th style={{ width: 100 }}>Ukupno</th><th>Napomena</th><th style={{ width: 32 }}></th></tr></thead>
               <tbody>
                 {ponudeSaCijenom.map(({ p, ukupno }) => {
                   const najjeftinija = ukupno != null && ukupno === najnizaCijena;
                   return (
                   <tr key={p.id} style={s.odabranaPonudaId === p.id ? { background: "#EAF6EF" } : undefined}>
                     <td><input type="radio" name={`odabir-${s.id}`} checked={s.odabranaPonudaId === p.id} onChange={() => odaberiPonudu(s.id, p.id)} disabled={!!s.narudzbenicaId} /></td>
-                    <td><select className="select" style={{ fontSize: 12.5 }} value={p.dobavljacId} disabled={!!s.narudzbenicaId} onChange={(e) => azurirajPonudu(s.id, p.id, { dobavljacId: e.target.value })}>{db.dobavljaci.map((d) => <option key={d.id} value={d.id}>{d.naziv}</option>)}</select></td>
+                    <td><select className="select" style={{ fontSize: 12.5 }} value={p.dobavljacId} disabled={!!s.narudzbenicaId} onChange={(e) => promijeniDobavljaca(s.id, p.id, e.target.value)}>{db.dobavljaci.map((d) => <option key={d.id} value={d.id}>{d.naziv}</option>)}</select></td>
                     <td><input className="input f-mono" type="number" min="0" step="0.01" disabled={!!s.narudzbenicaId} value={p.cijena} onChange={(e) => azurirajPonudu(s.id, p.id, { cijena: e.target.value })} /></td>
                     <td>
                       <select className="select" style={{ fontSize: 12.5 }} value={p.jedinicaCijene || "kg"} disabled={!!s.narudzbenicaId} onChange={(e) => azurirajPonudu(s.id, p.id, { jedinicaCijene: e.target.value })}>
@@ -2222,6 +2226,7 @@ function UpitDetaljModal({ upit, db, update, showToast, onClose, onOtvoriPrint }
                         <option value="m">€/m</option>
                       </select>
                     </td>
+                    <td><input className="input f-mono" type="number" min="0" step="0.01" title="Dodatak za ovu stavku (npr. transport, pakiranje)" disabled={!!s.narudzbenicaId} value={p.dodatak ?? 0} onChange={(e) => azurirajPonudu(s.id, p.id, { dodatak: e.target.value })} /></td>
                     <td className="f-mono" style={{ fontWeight: najjeftinija ? 700 : 400, color: najjeftinija ? "var(--green)" : undefined }}>{ukupno != null ? fmtCurDec(ukupno) : "—"}</td>
                     <td><input className="input" disabled={!!s.narudzbenicaId} value={p.napomena} onChange={(e) => azurirajPonudu(s.id, p.id, { napomena: e.target.value })} /></td>
                     <td>{!s.narudzbenicaId && <button className="btn btn-icon btn-ghost" onClick={() => obrisiPonudu(s.id, p.id)}><X size={13} /></button>}</td>
@@ -5772,10 +5777,13 @@ function PartneriPage({ db, update, showToast, mojaPozicija }) {
             </Field>
           )}
           {tab === "dobavljaci" && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12 }}>
-              <Field label="Dodatak (€)"><input className="input f-mono" type="number" min="0" step="0.01" value={form.dodatakIznos ?? 0} onChange={(e) => setForm({ ...form, dodatakIznos: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
-              <Field label="Napomena uz dodatak"><input className="input" placeholder="npr. transport, pakiranje…" value={form.dodatakNapomena || ""} onChange={(e) => setForm({ ...form, dodatakNapomena: e.target.value })} /></Field>
-            </div>
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12 }}>
+                <Field label="Zadani dodatak (€)"><input className="input f-mono" type="number" min="0" step="0.01" value={form.dodatakIznos ?? 0} onChange={(e) => setForm({ ...form, dodatakIznos: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
+                <Field label="Napomena uz dodatak"><input className="input" placeholder="npr. transport, pakiranje…" value={form.dodatakNapomena || ""} onChange={(e) => setForm({ ...form, dodatakNapomena: e.target.value })} /></Field>
+              </div>
+              <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: -8, marginBottom: 14 }}>Samo predložak — kod svake ponude u Upitima nabave dodatak se može posebno urediti po stavci.</p>
+            </>
           )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <Field label="OIB"><input className="input f-mono" value={form.oib} onChange={(e) => setForm({ ...form, oib: e.target.value })} /></Field>
