@@ -344,9 +344,11 @@ const godineStaza = (datumZaposlenja, naDatum, dodatniStaz = 0) => {
 const satnicaZaposlenika = (zaposlenik, postavke, naDatum = todayISO(), radniDaniMjeseca = null) => {
   const bodovi = Number(zaposlenik?.bodovi) || 0;
   const osnovica = bodovi * (Number(postavke?.vrijednostBoda) || 0);
-  // Zaposlenici na pola radnog vremena staž im se za obračun priznaje na pola.
-  const stazPuni = godineStaza(zaposlenik?.datumZaposlenja, naDatum, zaposlenik?.dodatniStazGodine);
-  const staz = zaposlenik?.radnoVrijeme === "pola" ? stazPuni / 2 : stazPuni;
+  // Zaposlenici na pola radnog vremena — samo se staž izračunat od datuma zaposlenja priznaje
+  // na pola; ručno dodani staž iz prijašnjeg zaposlenja ide u punom iznosu.
+  const stazOdDatuma = godineStaza(zaposlenik?.datumZaposlenja, naDatum);
+  const dodatniStaz = Number(zaposlenik?.dodatniStazGodine) || 0;
+  const staz = (zaposlenik?.radnoVrijeme === "pola" ? stazOdDatuma / 2 : stazOdDatuma) + dodatniStaz;
   const radniDani = radniDaniMjeseca != null ? radniDaniMjeseca : (Number(postavke?.radnihDanaMjesec) || 0);
   const dodatakStaz = staz * (Number(postavke?.dodatakStazPoGodini) || 0) * radniDani;
   const neto = osnovica + dodatakStaz;
