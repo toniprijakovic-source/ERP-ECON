@@ -5585,6 +5585,10 @@ function FakturiranjePage({ db, update, showToast, mojaPozicija }) {
 }
 
 /* ============================== PARTNERI (KUPCI / DOBAVLJAČI) ============================== */
+// Zadane vrste dobavljača — samo predložak/početni skup; bilo koja nova vrsta upisana na
+// dobavljaču automatski postaje dio popisa za odabir (vidi vrsteDobavljaca ispod).
+const ZADANE_VRSTE_DOBAVLJACA = ["Metali", "Transport", "Ostalo"];
+
 function PartneriPage({ db, update, showToast, mojaPozicija }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "partneri");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "kupci");
@@ -5592,12 +5596,27 @@ function PartneriPage({ db, update, showToast, mojaPozicija }) {
   const mozeMijenjatiTab = dozvolaZaKarticu(mojaPozicija, "partneri", tab).izmjene;
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
+  const [filtarVrsta, setFiltarVrsta] = useState("");
   const emptyKupac = { naziv: "", oib: "", kontaktOsoba: "", telefon: "", email: "", adresa: "" };
-  const emptyDobav = { naziv: "", oib: "", kontaktOsoba: "", telefon: "", email: "" };
+  const emptyDobav = { naziv: "", oib: "", kontaktOsoba: "", telefon: "", email: "", vrsta: "" };
   const [form, setForm] = useState(emptyKupac);
 
   const key = tab === "kupci" ? "kupci" : "dobavljaci";
   const empty = tab === "kupci" ? emptyKupac : emptyDobav;
+
+  // Popis vrsta za odabir — zadane + sve koje su ljudi već upisali na dobavljačima (npr. ako
+  // netko upiše novu vrstu "Elektromaterijal", ona se od tog trenutka nudi svima).
+  const vrsteDobavljaca = useMemo(() => {
+    const koristene = db.dobavljaci.map((d) => d.vrsta).filter(Boolean);
+    return Array.from(new Set([...ZADANE_VRSTE_DOBAVLJACA, ...koristene]));
+  }, [db.dobavljaci]);
+
+  // Dobavljači se uvijek prikazuju abecedno po nazivu; kupci ostaju u zatečenom redoslijedu.
+  const podaci = useMemo(() => {
+    if (tab !== "dobavljaci") return db[key];
+    const lista = [...db.dobavljaci].sort((a, b) => a.naziv.localeCompare(b.naziv, "hr"));
+    return filtarVrsta ? lista.filter((d) => (d.vrsta || "") === filtarVrsta) : lista;
+  }, [tab, db, key, filtarVrsta]);
 
   const openAdd = () => { setForm(empty); setModal("add"); };
   const openEdit = (row) => { setForm(row); setModal("edit"); };
@@ -5609,8 +5628,15 @@ function PartneriPage({ db, update, showToast, mojaPozicija }) {
     showToast("Partner spremljen.");
   };
 
-  const cols = [
+  const cols = tab === "kupci" ? [
     { key: "naziv", label: "Naziv" },
+    { key: "oib", label: "OIB", render: (r) => <span className="f-mono">{r.oib}</span> },
+    { key: "kontaktOsoba", label: "Kontakt osoba" },
+    { key: "telefon", label: "Telefon" },
+    { key: "email", label: "E-mail" },
+  ] : [
+    { key: "naziv", label: "Naziv" },
+    { key: "vrsta", label: "Vrsta robe", render: (r) => r.vrsta || <span style={{ color: "var(--ink-faint)" }}>—</span> },
     { key: "oib", label: "OIB", render: (r) => <span className="f-mono">{r.oib}</span> },
     { key: "kontaktOsoba", label: "Kontakt osoba" },
     { key: "telefon", label: "Telefon" },
@@ -5624,14 +5650,29 @@ function PartneriPage({ db, update, showToast, mojaPozicija }) {
         {dozvKartice.some((k) => k.key === "kupci") && <div className={`nav-tab ${tab === "kupci" ? "active" : ""}`} onClick={() => setTab("kupci")}>Kupci</div>}
         {dozvKartice.some((k) => k.key === "dobavljaci") && <div className={`nav-tab ${tab === "dobavljaci" ? "active" : ""}`} onClick={() => setTab("dobavljaci")}>Dobavljači</div>}
       </div>
+      {tab === "dobavljaci" && (
+        <div className="card" style={{ marginBottom: 14, padding: "8px 10px", display: "flex", alignItems: "center", gap: 8, maxWidth: 320 }}>
+          <span style={{ fontSize: 12.5, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>Vrsta robe</span>
+          <select className="select" style={{ border: "none" }} value={filtarVrsta} onChange={(e) => setFiltarVrsta(e.target.value)}>
+            <option value="">Sve vrste</option>
+            {vrsteDobavljaca.map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+        </div>
+      )}
       <EntityPage
-        title="" data={db[key]} onAdd={openAdd} onEdit={openEdit} onDelete={(r) => setDel(r)}
+        title="" data={podaci} onAdd={openAdd} onEdit={openEdit} onDelete={(r) => setDel(r)}
         addLabel={tab === "kupci" ? "Novi kupac" : "Novi dobavljač"} searchKeys={["naziv", "oib", "kontaktOsoba"]}
         columns={cols} readOnly={!mozeMijenjatiTab}
       />
       {modal && (
         <Modal title={modal === "add" ? "Novi partner" : "Uredi partnera"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={save}>Spremi</Btn></>}>
           <Field label="Naziv tvrtke"><input className="input" value={form.naziv} onChange={(e) => setForm({ ...form, naziv: e.target.value })} /></Field>
+          {tab === "dobavljaci" && (
+            <Field label="Vrsta robe">
+              <input className="input" list="vrste-dobavljaca-popis" value={form.vrsta || ""} onChange={(e) => setForm({ ...form, vrsta: e.target.value })} placeholder="Odaberi postojeću ili upiši novu…" />
+              <datalist id="vrste-dobavljaca-popis">{vrsteDobavljaca.map((v) => <option key={v} value={v} />)}</datalist>
+            </Field>
+          )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <Field label="OIB"><input className="input f-mono" value={form.oib} onChange={(e) => setForm({ ...form, oib: e.target.value })} /></Field>
             <Field label="Kontakt osoba"><input className="input" value={form.kontaktOsoba} onChange={(e) => setForm({ ...form, kontaktOsoba: e.target.value })} /></Field>
