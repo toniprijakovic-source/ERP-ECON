@@ -4567,7 +4567,39 @@ const posaljiObavijestVoditelju = (projekt, zaposlenik) => {
   return true;
 };
 
+// Prijevodi teksta na PDF-u ponude — samo strukturni natpisi (naslovi, oznake, standardne
+// stavke koje app sama generira); slobodni tekst koji je korisnik upisao (djelatnost, napomena,
+// ostale stavke, naziv posla) ostaje kakav je upisan jer se ne može pouzdano strojno prevesti.
+const PRIJEVODI_PONUDE = {
+  hr: {
+    ponuda: "PONUDA", broj: "Broj", narucitelj: "Naručitelj:", oib: "OIB",
+    datumPonude: "Datum ponude:", vrijediDo: "Ponuda vrijedi do:", predmet: "Predmet:",
+    tehnickiOpis: "Tehnički opis konstrukcije", poz: "Poz.", naziv: "Naziv", kom: "Kom.", masa: "Masa (kg)",
+    komercijalnaPonuda: "Komercijalna ponuda", opis: "Opis", iznos: "Iznos",
+    osnovica: "Osnovica:", pdv: "PDV", ukupno: "UKUPNO:", napomena: "Napomena:",
+    uvjeti: "Uvjeti plaćanja i rok isporuke definiraju se ugovorom/narudžbom po prihvaćanju ponude.",
+    postovanje: "S poštovanjem,",
+    izrada: "Izrada i isporuka čelične konstrukcije (materijal i rad)",
+    montaza: "Montaža konstrukcije", akz: "Antikorozivna zaštita",
+    upisano: "Poduzeće je upisano na", mbs: "MBS", uprava: "Uprava",
+  },
+  de: {
+    ponuda: "ANGEBOT", broj: "Nummer", narucitelj: "Auftraggeber:", oib: "USt-IdNr. (HR)",
+    datumPonude: "Angebotsdatum:", vrijediDo: "Angebot gültig bis:", predmet: "Betreff:",
+    tehnickiOpis: "Technische Beschreibung der Konstruktion", poz: "Pos.", naziv: "Bezeichnung", kom: "Stk.", masa: "Gewicht (kg)",
+    komercijalnaPonuda: "Kommerzielles Angebot", opis: "Beschreibung", iznos: "Betrag",
+    osnovica: "Nettobetrag:", pdv: "MwSt.", ukupno: "GESAMT:", napomena: "Anmerkung:",
+    uvjeti: "Zahlungsbedingungen und Lieferfrist werden nach Annahme des Angebots im Vertrag/der Bestellung festgelegt.",
+    postovanje: "Mit freundlichen Grüßen,",
+    izrada: "Herstellung und Lieferung der Stahlkonstruktion (Material und Arbeit)",
+    montaza: "Montage der Konstruktion", akz: "Korrosionsschutz",
+    upisano: "Das Unternehmen ist eingetragen beim", mbs: "MBS", uprava: "Geschäftsführung",
+  },
+};
+
 function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
+  const [jezik, setJezik] = useState("hr");
+  const L = PRIJEVODI_PONUDE[jezik];
   const t = db.postavkeTvrtke || {};
   const calc = izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala);
   const pdvStopa = Number(t.pdvStopa ?? 25);
@@ -4576,10 +4608,10 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
   // pa je zbroj prikazanih iznosa već konačna (uvećana) osnovica.
   const faktorMarze = 1 + (calc.postotakMarze || 0) / 100;
   const komercijalneStavke = [
-    { opis: "Izrada i isporuka čelične konstrukcije (materijal i rad)", iznos: izradaIznos },
+    { opis: L.izrada, iznos: izradaIznos },
     ...(ponuda.ostaleStavke || []).map((s) => ({ opis: s.opis, iznos: (Number(s.kolicina) || 0) * (Number(s.cijenaJed) || 0) })),
-    ...(calc.trosakMontaze > 0 ? [{ opis: "Montaža konstrukcije", iznos: calc.trosakMontaze }] : []),
-    ...calc.akzPoTipu.filter((t) => t.iznos > 0).map((t) => ({ opis: `Antikorozivna zaštita – ${t.label}`, iznos: t.iznos })),
+    ...(calc.trosakMontaze > 0 ? [{ opis: L.montaza, iznos: calc.trosakMontaze }] : []),
+    ...calc.akzPoTipu.filter((t) => t.iznos > 0).map((t) => ({ opis: `${L.akz} – ${t.label}`, iznos: t.iznos })),
   ].map((r) => ({ ...r, iznos: r.iznos * faktorMarze }));
   const osnovica = komercijalneStavke.reduce((s, r) => s + r.iznos, 0);
   const pdvIznos = osnovica * (pdvStopa / 100);
@@ -4587,11 +4619,16 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
 
   return (
     <Modal wide title={`Pregled za ispis — Ponuda ${ponuda.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(ponuda.broj)}>Ispis / Spremi kao PDF</Btn></>}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+        <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>Jezik ponude:</span>
+        <Btn size="sm" variant={jezik === "hr" ? "primary" : "ghost"} onClick={() => setJezik("hr")}>Hrvatski</Btn>
+        <Btn size="sm" variant={jezik === "de" ? "primary" : "ghost"} onClick={() => setJezik("de")}>Deutsch</Btn>
+      </div>
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
           <div>
-            <div style={{ fontWeight: 700, fontSize: 17 }}>PONUDA</div>
-            <div className="f-mono" style={{ fontSize: 13 }}>Broj: {ponuda.broj}</div>
+            <div style={{ fontWeight: 700, fontSize: 17 }}>{L.ponuda}</div>
+            <div className="f-mono" style={{ fontSize: 13 }}>{L.broj}: {ponuda.broj}</div>
           </div>
           <div style={{ textAlign: "right", fontSize: 10.5, lineHeight: 1.5 }}>
             <div style={{ fontWeight: 700, fontSize: 13 }}>{t.naziv}</div>
@@ -4604,25 +4641,25 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
 
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16, fontSize: 11.5 }}>
           <div>
-            <div style={{ color: "#555", marginBottom: 3 }}>Naručitelj:</div>
+            <div style={{ color: "#555", marginBottom: 3 }}>{L.narucitelj}</div>
             <div style={{ fontWeight: 700 }}>{kupac?.naziv || "—"}</div>
             <div>{kupac?.adresa}</div>
-            {kupac?.oib && <div>OIB: {kupac.oib}</div>}
+            {kupac?.oib && <div>{L.oib}: {kupac.oib}</div>}
           </div>
           <table style={{ borderCollapse: "collapse", height: "fit-content" }}>
             <tbody>
-              <tr><td style={{ paddingRight: 10, color: "#555" }}>Datum ponude:</td><td style={{ fontWeight: 600 }}>{fmtDate(ponuda.datum)}</td></tr>
-              <tr><td style={{ paddingRight: 10, color: "#555" }}>Ponuda vrijedi do:</td><td style={{ fontWeight: 600 }}>{fmtDate(addDays(ponuda.datum, 30))}</td></tr>
-              <tr><td style={{ paddingRight: 10, color: "#555" }}>Predmet:</td><td style={{ fontWeight: 600 }}>{ponuda.naziv}</td></tr>
+              <tr><td style={{ paddingRight: 10, color: "#555" }}>{L.datumPonude}</td><td style={{ fontWeight: 600 }}>{fmtDate(ponuda.datum)}</td></tr>
+              <tr><td style={{ paddingRight: 10, color: "#555" }}>{L.vrijediDo}</td><td style={{ fontWeight: 600 }}>{fmtDate(addDays(ponuda.datum, 30))}</td></tr>
+              <tr><td style={{ paddingRight: 10, color: "#555" }}>{L.predmet}</td><td style={{ fontWeight: 600 }}>{ponuda.naziv}</td></tr>
             </tbody>
           </table>
         </div>
 
         {(ponuda.pozicije || []).length > 0 && (
           <>
-            <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 6 }}>Tehnički opis konstrukcije</div>
+            <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 6 }}>{L.tehnickiOpis}</div>
             <table className="doc-table" style={{ marginBottom: 16 }}>
-              <thead><tr><th style={{ width: 34 }}>Poz.</th><th>Naziv</th><th style={{ width: 55 }}>Kom.</th><th style={{ width: 80 }}>Masa (kg)</th></tr></thead>
+              <thead><tr><th style={{ width: 34 }}>{L.poz}</th><th>{L.naziv}</th><th style={{ width: 55 }}>{L.kom}</th><th style={{ width: 80 }}>{L.masa}</th></tr></thead>
               <tbody>
                 {ponuda.pozicije.map((p) => {
                   const masaJed = masaPozicije(p, db.katalogProfila, db.kvaliteteMaterijala);
@@ -4633,32 +4670,32 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
           </>
         )}
 
-        <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 6 }}>Komercijalna ponuda</div>
+        <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 6 }}>{L.komercijalnaPonuda}</div>
         <table className="doc-table" style={{ marginBottom: 14 }}>
-          <thead><tr><th>Opis</th><th style={{ width: 100 }}>Iznos</th></tr></thead>
+          <thead><tr><th>{L.opis}</th><th style={{ width: 100 }}>{L.iznos}</th></tr></thead>
           <tbody>{komercijalneStavke.map((r, i) => <tr key={i}><td>{r.opis}</td><td>{fmtCurDec(r.iznos)}</td></tr>)}</tbody>
         </table>
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 20 }}>
           <table style={{ borderCollapse: "collapse", fontSize: 12, minWidth: 240 }}>
             <tbody>
-              <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Osnovica:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(osnovica)}</td></tr>
-              <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>PDV ({pdvStopa}%):</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(pdvIznos)}</td></tr>
-              <tr style={{ borderTop: "1px solid #333" }}><td style={{ padding: "6px 14px 0 0", fontWeight: 700 }}>UKUPNO:</td><td style={{ textAlign: "right", fontWeight: 700, paddingTop: 6, fontSize: 14 }}>{fmtCurDec(ukupno)}</td></tr>
+              <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>{L.osnovica}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(osnovica)}</td></tr>
+              <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>{L.pdv} ({pdvStopa}%):</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(pdvIznos)}</td></tr>
+              <tr style={{ borderTop: "1px solid #333" }}><td style={{ padding: "6px 14px 0 0", fontWeight: 700 }}>{L.ukupno}</td><td style={{ textAlign: "right", fontWeight: 700, paddingTop: 6, fontSize: 14 }}>{fmtCurDec(ukupno)}</td></tr>
             </tbody>
           </table>
         </div>
 
-        {ponuda.napomena && <div style={{ fontSize: 11, marginBottom: 16 }}><strong>Napomena:</strong> {ponuda.napomena}</div>}
+        {ponuda.napomena && <div style={{ fontSize: 11, marginBottom: 16 }}><strong>{L.napomena}</strong> {ponuda.napomena}</div>}
 
         <div style={{ fontSize: 11, marginBottom: 20 }}>
-          <div>Uvjeti plaćanja i rok isporuke definiraju se ugovorom/narudžbom po prihvaćanju ponude.</div>
-          <div style={{ marginTop: 10 }}>S poštovanjem,</div>
+          <div>{L.uvjeti}</div>
+          <div style={{ marginTop: 10 }}>{L.postovanje}</div>
           <div style={{ fontWeight: 700, marginTop: 8 }}>{t.naziv}</div>
         </div>
 
         <div style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
-          <strong>OIB</strong>: {t.oib} | <strong>MB</strong>: {t.mb} | <strong>VAT-ID:</strong> {t.vatId} | <strong>IBAN:</strong> {t.iban} | <strong>SWIFT:</strong> {t.swift} | Poduzeće je upisano na {t.sud}, <strong>MBS:</strong> {t.mbs} | <strong>Uprava:</strong> {t.uprava}
+          <strong>{L.oib}</strong>: {t.oib} | <strong>MB</strong>: {t.mb} | <strong>VAT-ID:</strong> {t.vatId} | <strong>IBAN:</strong> {t.iban} | <strong>SWIFT:</strong> {t.swift} | {L.upisano} {t.sud}, <strong>{L.mbs}:</strong> {t.mbs} | <strong>{L.uprava}:</strong> {t.uprava}
         </div>
       </div>
     </Modal>
