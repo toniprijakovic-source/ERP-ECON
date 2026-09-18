@@ -2075,6 +2075,32 @@ function UpitStavkeEditor({ stavke, setStavke, katalogProfila, upitiNabave }) {
 // Profil ima samo dužinu; lim ima dužinu i širinu — koristi se svugdje gdje se dimenzije stavke upita prikazuju kao tekst.
 const formatDimenzijaStavke = (s) => (s.vrstaStavke === "lim" ? `${s.dimenzijaMM || 0}×${s.sirinaMM || 0}` : `${s.dimenzijaMM || ""}`);
 
+// Ukupna dužina (m) svih komada stavke — koristi se i za težinu i za ponude naplaćene po metru.
+const duzinaUkupnaMStavke = (s) => ((Number(s.dimenzijaMM) || 0) / 1000) * (Number(s.kolicina) || 0);
+
+// Ukupna težina (kg) cijele stavke — traži kataloški unos čija se oznaka točno podudara s upisanom
+// "Vrstom materijala" (upit ne čuva izravnu vezu na katalog, samo slobodan tekst — vidi
+// prijedloziVrsteMaterijala u UpitStavkeEditor, koji te oznake i nudi za odabir). Bez podudaranja
+// težinu nije moguće izračunati (vraća null).
+const tezinaStavkeUpita = (s, katalogProfila) => {
+  const kat = (katalogProfila || []).find((k) => katalogOznakaPuna(k) === s.vrstaMaterijala);
+  if (!kat) return null;
+  const jeLim = kat.jedinica === "kg/m2";
+  const duzinaM = (Number(s.dimenzijaMM) || 0) / 1000;
+  const masaJed = jeLim ? duzinaM * ((Number(s.sirinaMM) || 0) / 1000) * Number(kat.vrijednost) : duzinaM * Number(kat.vrijednost);
+  return masaJed * (Number(s.kolicina) || 0);
+};
+
+// Ukupna cijena jedne ponude dobavljača za stavku — količina (kg ili m, prema odabranoj jedinici
+// cijene) × cijena, plus fiksni dodatak tog dobavljača (transport/pakiranje i sl.), ako postoji.
+// Vraća null ako se ne može izračunati (npr. cijena po kg bez poznate težine).
+const ukupnaCijenaPonude = (s, p, katalogProfila, dobavljaci) => {
+  const kolicinaZaCijenu = p.jedinicaCijene === "m" ? duzinaUkupnaMStavke(s) : tezinaStavkeUpita(s, katalogProfila);
+  if (kolicinaZaCijenu == null) return null;
+  const dobavljac = (dobavljaci || []).find((d) => d.id === p.dobavljacId);
+  return kolicinaZaCijenu * (Number(p.cijena) || 0) + (Number(dobavljac?.dodatakIznos) || 0);
+};
+
 const generirajBrojUpita = (upiti) => {
   const god = new Date().getFullYear().toString().slice(-2);
   const brojevi = upiti.filter((u) => u.broj && u.broj.startsWith(`${god}-`)).map((u) => parseInt(u.broj.split("-")[1], 10)).filter((n) => !isNaN(n));
@@ -2155,46 +2181,64 @@ const generirajNarudzbeIzUpita = (upit, db, update, showToast) => {
 
 function UpitDetaljModal({ upit, db, update, showToast, onClose, onOtvoriPrint }) {
   const azuriraj = (noveStavke) => update("upitiNabave", db.upitiNabave.map((u) => (u.id === upit.id ? { ...u, stavke: noveStavke } : u)));
-  const dodajPonudu = (stavkaId) => azuriraj(upit.stavke.map((s) => (s.id === stavkaId ? { ...s, ponude: [...s.ponude, { id: uid("usp"), dobavljacId: db.dobavljaci[0]?.id || "", cijena: 0, napomena: "" }] } : s)));
+  const dodajPonudu = (stavkaId) => azuriraj(upit.stavke.map((s) => (s.id === stavkaId ? { ...s, ponude: [...s.ponude, { id: uid("usp"), dobavljacId: db.dobavljaci[0]?.id || "", cijena: 0, jedinicaCijene: "kg", napomena: "" }] } : s)));
   const azurirajPonudu = (stavkaId, ponudaId, patch) => azuriraj(upit.stavke.map((s) => (s.id === stavkaId ? { ...s, ponude: s.ponude.map((p) => (p.id === ponudaId ? { ...p, ...patch } : p)) } : s)));
   const obrisiPonudu = (stavkaId, ponudaId) => azuriraj(upit.stavke.map((s) => (s.id === stavkaId ? { ...s, ponude: s.ponude.filter((p) => p.id !== ponudaId), odabranaPonudaId: s.odabranaPonudaId === ponudaId ? null : s.odabranaPonudaId } : s)));
   const odaberiPonudu = (stavkaId, ponudaId) => azuriraj(upit.stavke.map((s) => (s.id === stavkaId ? { ...s, odabranaPonudaId: ponudaId || null } : s)));
   const dobNaziv = (id) => db.dobavljaci.find((d) => d.id === id)?.naziv || "—";
 
   return (
-    <Modal wide title={`Ponude dobavljača — Upit ${upit.broj}`} onClose={onClose} footer={
+    <Modal xwide title={`Ponude dobavljača — Upit ${upit.broj}`} onClose={onClose} footer={
       <>
         <Btn onClick={onClose}>Zatvori</Btn>
         <Btn variant="primary" icon={FolderInput} onClick={() => generirajNarudzbeIzUpita(upit, db, update, showToast)}>Generiraj narudžbe za odabrane pozicije</Btn>
       </>
     }>
-      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Za svaku stavku unesi ponude pristiglih dobavljača (cijena po komadu), zatim označi koju ponudu odabireš. Nakon toga generiraj narudžbe — automatski grupirane po dobavljaču.</p>
-      {upit.stavke.map((s) => (
+      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Za svaku stavku unesi ponude pristiglih dobavljača (cijena po kg ili po m, prema tome kako je dobavljač naveo), zatim označi koju ponudu odabireš. Zelenom je označena trenutno najjeftinija ponuda za tu stavku (uključuje i eventualni dodatak dobavljača za transport/pakiranje). Nakon toga generiraj narudžbe — automatski grupirane po dobavljaču.</p>
+      {upit.stavke.map((s) => {
+        const tezina = tezinaStavkeUpita(s, db.katalogProfila);
+        const ponudeSaCijenom = s.ponude.map((p) => ({ p, ukupno: ukupnaCijenaPonude(s, p, db.katalogProfila, db.dobavljaci) }));
+        const najnizaCijena = ponudeSaCijenom.reduce((min, { ukupno }) => (ukupno != null && (min == null || ukupno < min) ? ukupno : min), null);
+        return (
         <div key={s.id} className="card" style={{ padding: 12, marginBottom: 10, background: "var(--surface-alt)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600 }}>{s.vrstaMaterijala} <span className="f-mono" style={{ fontWeight: 400, color: "var(--ink-soft)" }}>· {s.kolicina} kom × {formatDimenzijaStavke(s)}mm{s.kvaliteta ? ` · ${s.kvaliteta}` : ""}</span></div>
+            <div style={{ fontSize: 13.5, fontWeight: 600 }}>{s.vrstaMaterijala} <span className="f-mono" style={{ fontWeight: 400, color: "var(--ink-soft)" }}>· {s.kolicina} kom × {formatDimenzijaStavke(s)}mm{s.kvaliteta ? ` · ${s.kvaliteta}` : ""}{tezina != null && ` · ${tezina.toFixed(1)} kg ukupno`}</span></div>
             {s.narudzbenicaId ? <Badge status="Primljeno" /> : (s.odabranaPonudaId ? <Badge status="Odobren" /> : <Badge status="Nacrt" />)}
           </div>
           {s.ponude.length === 0 ? <div style={{ fontSize: 12, color: "var(--ink-faint)", marginBottom: 8 }}>Još nema unesenih ponuda.</div> : (
             <table className="erp-table" style={{ marginBottom: 8 }}>
-              <thead><tr><th style={{ width: 30 }}></th><th>Dobavljač</th><th style={{ width: 110 }}>Cijena/kom</th><th>Napomena</th><th style={{ width: 32 }}></th></tr></thead>
+              <thead><tr><th style={{ width: 30 }}></th><th>Dobavljač</th><th style={{ width: 100 }}>Cijena</th><th style={{ width: 80 }}>Jedinica</th><th style={{ width: 100 }}>Ukupno</th><th>Napomena</th><th style={{ width: 32 }}></th></tr></thead>
               <tbody>
-                {s.ponude.map((p) => (
+                {ponudeSaCijenom.map(({ p, ukupno }) => {
+                  const najjeftinija = ukupno != null && ukupno === najnizaCijena;
+                  return (
                   <tr key={p.id} style={s.odabranaPonudaId === p.id ? { background: "#EAF6EF" } : undefined}>
                     <td><input type="radio" name={`odabir-${s.id}`} checked={s.odabranaPonudaId === p.id} onChange={() => odaberiPonudu(s.id, p.id)} disabled={!!s.narudzbenicaId} /></td>
                     <td><select className="select" style={{ fontSize: 12.5 }} value={p.dobavljacId} disabled={!!s.narudzbenicaId} onChange={(e) => azurirajPonudu(s.id, p.id, { dobavljacId: e.target.value })}>{db.dobavljaci.map((d) => <option key={d.id} value={d.id}>{d.naziv}</option>)}</select></td>
                     <td><input className="input f-mono" type="number" min="0" step="0.01" disabled={!!s.narudzbenicaId} value={p.cijena} onChange={(e) => azurirajPonudu(s.id, p.id, { cijena: e.target.value })} /></td>
+                    <td>
+                      <select className="select" style={{ fontSize: 12.5 }} value={p.jedinicaCijene || "kg"} disabled={!!s.narudzbenicaId} onChange={(e) => azurirajPonudu(s.id, p.id, { jedinicaCijene: e.target.value })}>
+                        <option value="kg">€/kg</option>
+                        <option value="m">€/m</option>
+                      </select>
+                    </td>
+                    <td className="f-mono" style={{ fontWeight: najjeftinija ? 700 : 400, color: najjeftinija ? "var(--green)" : undefined }}>{ukupno != null ? fmtCurDec(ukupno) : "—"}</td>
                     <td><input className="input" disabled={!!s.narudzbenicaId} value={p.napomena} onChange={(e) => azurirajPonudu(s.id, p.id, { napomena: e.target.value })} /></td>
                     <td>{!s.narudzbenicaId && <button className="btn btn-icon btn-ghost" onClick={() => obrisiPonudu(s.id, p.id)}><X size={13} /></button>}</td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
+          )}
+          {s.ponude.some((p) => p.jedinicaCijene !== "m") && tezina == null && (
+            <div style={{ fontSize: 11, color: "var(--ink-faint)", marginBottom: 6 }}>Težina se ne može izračunati — "Vrsta materijala" ne odgovara točno nijednoj stavci u katalogu profila/limova.</div>
           )}
           {!s.narudzbenicaId && <Btn variant="ghost" size="sm" icon={Plus} onClick={() => dodajPonudu(s.id)}>Dodaj ponudu</Btn>}
           {s.narudzbenicaId && <div style={{ fontSize: 11.5, color: "var(--green)" }}>✓ Naručeno od {dobNaziv(s.ponude.find((p) => p.id === s.odabranaPonudaId)?.dobavljacId)}</div>}
         </div>
-      ))}
+        );
+      })}
     </Modal>
   );
 }
@@ -5649,7 +5693,7 @@ function PartneriPage({ db, update, showToast, mojaPozicija }) {
   const [del, setDel] = useState(null);
   const [filtarVrsta, setFiltarVrsta] = useState("");
   const emptyKupac = { naziv: "", oib: "", kontaktOsoba: "", telefon: "", email: "", adresa: "" };
-  const emptyDobav = { naziv: "", oib: "", kontaktOsoba: "", telefon: "", email: "", vrsta: "" };
+  const emptyDobav = { naziv: "", oib: "", kontaktOsoba: "", telefon: "", email: "", vrsta: "", dodatakIznos: 0, dodatakNapomena: "" };
   const [form, setForm] = useState(emptyKupac);
 
   const key = tab === "kupci" ? "kupci" : "dobavljaci";
@@ -5726,6 +5770,12 @@ function PartneriPage({ db, update, showToast, mojaPozicija }) {
               </div>
               <datalist id="vrste-dobavljaca-popis">{vrsteDobavljaca.map((v) => <option key={v} value={v} />)}</datalist>
             </Field>
+          )}
+          {tab === "dobavljaci" && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12 }}>
+              <Field label="Dodatak (€)"><input className="input f-mono" type="number" min="0" step="0.01" value={form.dodatakIznos ?? 0} onChange={(e) => setForm({ ...form, dodatakIznos: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
+              <Field label="Napomena uz dodatak"><input className="input" placeholder="npr. transport, pakiranje…" value={form.dodatakNapomena || ""} onChange={(e) => setForm({ ...form, dodatakNapomena: e.target.value })} /></Field>
+            </div>
           )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <Field label="OIB"><input className="input f-mono" value={form.oib} onChange={(e) => setForm({ ...form, oib: e.target.value })} /></Field>
