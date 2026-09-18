@@ -1070,6 +1070,17 @@ const dozvolaZaKarticu = (pozicija, modulKey, karticaKey) => {
 // Popis kartica modula na koje pozicija ima pristup (za skrivanje tabova u stranicama).
 const dozvoljeneKarticeModula = (pozicija, modulKey) => (KARTICE_MODULA[modulKey]?.kartice || []).filter((k) => dozvolaZaKarticu(pozicija, modulKey, k.key).pristup);
 
+// RFID čitač na kiosku "tipka" kod pa šalje Enter — ali ako Enter ikad izostane (kod nekih
+// čitača/kartica, ili ako se dvoje ljudi prisloni gotovo istovremeno), ostatak koda ostaje u
+// polju i spoji se s IDUĆIM skeniranjem u jedan besmislen niz (npr. dva stvarna 10-znamenkasta
+// koda zalijepljena u jedan 20-znamenkasti) — obje osobe tad dobiju "kartica nije prepoznata".
+// KIOSK_TISINA_MS: ako nema novog upisa ovoliko dugo, ono što je upisano do sad šalje se samo
+// od sebe (ne čeka se Enter) — kratka prirodna stanka između dva različita skeniranja tako
+// prirodno razdvaja kodove umjesto da se lijepe. KIOSK_MAX_DULJINA_KODA: ako se unos ipak
+// razraste preko razumne duljine za jednu karticu, odbacuje se kao pokvaren umjesto da se šalje.
+const KIOSK_TISINA_MS = 300;
+const KIOSK_MAX_DULJINA_KODA = 15;
+
 function KioskView({ onPrijava }) {
   const [unos, setUnos] = useState("");
   const [poruka, setPoruka] = useState(null);
@@ -1077,6 +1088,7 @@ function KioskView({ onPrijava }) {
   const inputRef = useRef(null);
   const obradjenIzUrla = useRef(false);
   const uTijeku = useRef(false); // sprječava dvostruku obradu ako netko dvaput brzo prisloni karticu
+  const tisinaTimeoutRef = useRef(null);
 
   useEffect(() => {
     const t = setInterval(() => setSat(new Date()), 1000 * 30);
@@ -1095,7 +1107,17 @@ function KioskView({ onPrijava }) {
 
   useEffect(() => { inputRef.current?.focus(); }, [poruka]);
 
+  useEffect(() => () => { if (tisinaTimeoutRef.current) clearTimeout(tisinaTimeoutRef.current); }, []);
+
+  const promjenaUnosa = (vrijednost) => {
+    if (tisinaTimeoutRef.current) clearTimeout(tisinaTimeoutRef.current);
+    if (vrijednost.length > KIOSK_MAX_DULJINA_KODA) { setUnos(""); return; } // spojena/pokvarena očitanja — odbaci
+    setUnos(vrijednost);
+    if (vrijednost) tisinaTimeoutRef.current = setTimeout(() => obradiKod(vrijednost), KIOSK_TISINA_MS);
+  };
+
   const obradiKod = async (kodSirovi) => {
+    if (tisinaTimeoutRef.current) { clearTimeout(tisinaTimeoutRef.current); tisinaTimeoutRef.current = null; }
     const kod = (kodSirovi || "").trim().toUpperCase();
     if (!kod || uTijeku.current) return;
     uTijeku.current = true;
@@ -1168,7 +1190,7 @@ function KioskView({ onPrijava }) {
             više nema vidljivu kućicu za ručno upisivanje koda. */}
         <input
           ref={inputRef} autoFocus value={unos}
-          onChange={(e) => setUnos(e.target.value)}
+          onChange={(e) => promjenaUnosa(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") obradiKod(unos); }}
           aria-hidden="true"
           style={{ position: "absolute", width: 1, height: 1, opacity: 0, border: "none", padding: 0 }}
