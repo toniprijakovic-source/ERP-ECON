@@ -1148,9 +1148,9 @@ function KioskView({ onPrijava }) {
             setPoruka({ tip: "greska", tekst: data.error || "Kartica nije prepoznata", detalj: `Kod: ${kod} — javi se administratoru.` });
           }
         } else if (data.tip === "odlazak") {
-          setPoruka({ tip: "odlazak", tekst: "ODJAVA", detalj: "" });
+          setPoruka({ tip: "odlazak", tekst: "ODJAVA 🙂", detalj: "" });
         } else {
-          setPoruka({ tip: "dolazak", tekst: "PRIJAVA", detalj: "" });
+          setPoruka({ tip: "dolazak", tekst: "PRIJAVA 🙂", detalj: "" });
         }
       }
     } catch {
