@@ -1912,7 +1912,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
 
 /* ============================== NABAVA ============================== */
 /* ============================== ISPIS DOKUMENTA (UPIT / NARUDŽBA) ============================== */
-function DokumentNabavePrintModal({ tip, brojDokumenta, datum, izradioIme, stavke, postavkeTvrtke, onClose }) {
+function DokumentNabavePrintModal({ tip, brojDokumenta, datum, izradioIme, dobavljacIme, stavke, postavkeTvrtke, onClose }) {
   const t = postavkeTvrtke || {};
   return (
     <Modal wide title={`Pregled za ispis — ${tip} ${brojDokumenta}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => window.print()}>Ispis / Spremi kao PDF</Btn></>}>
@@ -1920,6 +1920,7 @@ function DokumentNabavePrintModal({ tip, brojDokumenta, datum, izradioIme, stavk
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
           <div style={{ maxWidth: 260 }}>
             <div style={{ fontWeight: 700, fontSize: 15, lineHeight: 1.3 }}>NARUDŽBA / UPIT<br />ZA NABAVU OSNOVNOG<br />MATERIJALA</div>
+            {dobavljacIme && <div style={{ fontSize: 12.5, marginTop: 8 }}>Dobavljač: <strong>{dobavljacIme}</strong></div>}
           </div>
           <div style={{ textAlign: "right", fontSize: 10.5, lineHeight: 1.5 }}>
             <div style={{ fontWeight: 700, fontSize: 13 }}>{t.naziv}</div>
@@ -2315,7 +2316,7 @@ function NabavaPage({ db, update, showToast, mojaPozicija }) {
     const stavke = row.stavkeUpita && row.stavkeUpita.length
       ? row.stavkeUpita
       : row.stavke.map((s) => { const m = db.materijali.find((x) => x.id === s.materijalId); return { kolicina: s.kolicina, dimenzijaMM: "", vrstaMaterijala: m?.naziv || "—", kvaliteta: "", normaIsporuke: "", dodatniZahtjevi: "" }; });
-    setPrintDoc({ tip: "Narudžba", brojDokumenta: row.broj, datum: row.datum, izradioIme: zaposlenikIme(row.izradioId), stavke });
+    setPrintDoc({ tip: "Narudžba", brojDokumenta: row.broj, datum: row.datum, izradioIme: zaposlenikIme(row.izradioId), dobavljacIme: db.dobavljaci.find((d) => d.id === row.dobavljacId)?.naziv || "", stavke });
   };
 
   return (
