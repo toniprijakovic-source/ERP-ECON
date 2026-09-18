@@ -2027,7 +2027,7 @@ function UpitStavkeEditor({ stavke, setStavke, katalogProfila, upitiNabave }) {
   return (
     <div>
       <table className="erp-table" style={{ marginBottom: 8 }}>
-        <thead><tr><th style={{ width: 76 }}>Kom</th><th style={{ width: 80 }}>Profil/Lim</th><th style={{ width: 140 }}>Dimenzije [mm]</th><th>Vrsta materijala</th><th style={{ width: 110 }}>Kvaliteta</th><th style={{ width: 110 }}>Norma isporuke</th><th>Dodatni zahtjevi</th><th style={{ width: 32 }}></th></tr></thead>
+        <thead><tr><th style={{ width: 110 }}>Kom</th><th style={{ width: 80 }}>Profil/Lim</th><th style={{ width: 224 }}>Dimenzije [mm]</th><th>Vrsta materijala</th><th style={{ width: 110 }}>Kvaliteta</th><th style={{ width: 110 }}>Norma isporuke</th><th>Dodatni zahtjevi</th><th style={{ width: 32 }}></th></tr></thead>
         <tbody>
           {stavke.length === 0 && <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--ink-faint)", padding: 14 }}>Nema stavki. Dodaj potreban materijal.</td></tr>}
           {stavke.map((s, i) => {
@@ -2044,11 +2044,11 @@ function UpitStavkeEditor({ stavke, setStavke, katalogProfila, upitiNabave }) {
               <td>
                 {jeLim ? (
                   <div style={{ display: "flex", gap: 4 }}>
-                    <input className="input f-mono" type="number" min="0" placeholder="dužina" value={s.dimenzijaMM} onChange={(e) => update(i, { dimenzijaMM: e.target.value })} />
-                    <input className="input f-mono" type="number" min="0" placeholder="širina" value={s.sirinaMM} onChange={(e) => update(i, { sirinaMM: e.target.value })} />
+                    <input className="input f-mono" style={{ width: 110, flex: "none" }} type="number" min="0" placeholder="dužina" value={s.dimenzijaMM} onChange={(e) => update(i, { dimenzijaMM: e.target.value })} />
+                    <input className="input f-mono" style={{ width: 110, flex: "none" }} type="number" min="0" placeholder="širina" value={s.sirinaMM} onChange={(e) => update(i, { sirinaMM: e.target.value })} />
                   </div>
                 ) : (
-                  <input className="input f-mono" type="number" min="0" placeholder="dužina" value={s.dimenzijaMM} onChange={(e) => update(i, { dimenzijaMM: e.target.value })} />
+                  <input className="input f-mono" style={{ width: 110 }} type="number" min="0" placeholder="dužina" value={s.dimenzijaMM} onChange={(e) => update(i, { dimenzijaMM: e.target.value })} />
                 )}
               </td>
               <td>
