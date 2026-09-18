@@ -4594,6 +4594,7 @@ const PRIJEVODI_PONUDE = {
     izrada: "Herstellung und Lieferung der Stahlkonstruktion (Material und Arbeit)",
     montaza: "Montage der Konstruktion", akz: "Korrosionsschutz",
     upisano: "Das Unternehmen ist eingetragen beim", mbs: "MBS", uprava: "Geschäftsführung",
+    napomenaPorez: "Preis versteht sich ausschließlich gesetzliche Mehrwertsteuer",
   },
 };
 
@@ -4676,15 +4677,22 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
           <tbody>{komercijalneStavke.map((r, i) => <tr key={i}><td>{r.opis}</td><td>{fmtCurDec(r.iznos)}</td></tr>)}</tbody>
         </table>
 
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: jezik === "de" ? 6 : 20 }}>
           <table style={{ borderCollapse: "collapse", fontSize: 12, minWidth: 240 }}>
             <tbody>
-              <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>{L.osnovica}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(osnovica)}</td></tr>
-              <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>{L.pdv} ({pdvStopa}%):</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(pdvIznos)}</td></tr>
-              <tr style={{ borderTop: "1px solid #333" }}><td style={{ padding: "6px 14px 0 0", fontWeight: 700 }}>{L.ukupno}</td><td style={{ textAlign: "right", fontWeight: 700, paddingTop: 6, fontSize: 14 }}>{fmtCurDec(ukupno)}</td></tr>
+              {jezik === "de" ? (
+                <tr><td style={{ padding: "3px 14px 0 0", fontWeight: 700 }}>{L.ukupno}</td><td style={{ textAlign: "right", fontWeight: 700, fontSize: 14 }}>{fmtCurDec(osnovica)}</td></tr>
+              ) : (
+                <>
+                  <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>{L.osnovica}</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(osnovica)}</td></tr>
+                  <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>{L.pdv} ({pdvStopa}%):</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(pdvIznos)}</td></tr>
+                  <tr style={{ borderTop: "1px solid #333" }}><td style={{ padding: "6px 14px 0 0", fontWeight: 700 }}>{L.ukupno}</td><td style={{ textAlign: "right", fontWeight: 700, paddingTop: 6, fontSize: 14 }}>{fmtCurDec(ukupno)}</td></tr>
+                </>
+              )}
             </tbody>
           </table>
         </div>
+        {jezik === "de" && <div style={{ fontSize: 10, color: "#555", textAlign: "right", marginBottom: 20 }}>{L.napomenaPorez}</div>}
 
         {ponuda.napomena && <div style={{ fontSize: 11, marginBottom: 16 }}><strong>{L.napomena}</strong> {ponuda.napomena}</div>}
 
