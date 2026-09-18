@@ -4,7 +4,7 @@ import {
   Plus, Pencil, Trash2, X, Search, AlertTriangle, CheckCircle2, ArrowRight,
   Clock, ChevronRight, Save, PackageCheck, PackageMinus, Settings, Layers,
   ChevronDown, ChevronUp, FolderInput, Eye, UserCog, CalendarRange,
-  Database, Download, Upload, AlertCircle
+  Database, Download, Upload, AlertCircle, Copy
 } from "lucide-react";
 import logoEcon from "./assets/logo-econ.jpg";
 
@@ -4835,6 +4835,18 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
     setModal(null);
     showToast("Ponuda za laser spremljena.");
   };
+  // Kopija ponude — nova ponuda s istim stavkama/pozicijama, ali svoj broj, "U izradi" status i
+  // bez veze na projekt (kopija koja je već pretvorena u projekt ne smije "naslijediti" tu vezu).
+  const kopirajPonudu = (ponuda) => {
+    const kopija = { ...JSON.parse(JSON.stringify(ponuda)), id: uid("pon"), broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), status: "U izradi", projektId: null, datum: todayISO() };
+    update("ponude", [...db.ponude, kopija]);
+    showToast(`Ponuda kopirana kao ${kopija.broj}.`);
+  };
+  const kopirajLaser = (ponuda) => {
+    const kopija = { ...JSON.parse(JSON.stringify(ponuda)), id: uid("las"), broj: sljedeciBroj(db.ponudeLasera, "broj", "LAS-2026-"), status: "U izradi", datum: todayISO() };
+    update("ponudeLasera", [...db.ponudeLasera, kopija]);
+    showToast(`Ponuda za laser kopirana kao ${kopija.broj}.`);
+  };
   const saveCjenik = (novi) => {
     const cleaned = Object.fromEntries(Object.entries(novi).map(([k, v]) => [k, Number(v) || 0]));
     update("cjenikRada", cleaned);
@@ -4933,6 +4945,7 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
             { key: "ukupno", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCurDec(izracunPonude(r, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala).cijenaKonacna)}</span> },
             { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
             { key: "pdf", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrintPonuda(r)}>PDF ponude</Btn> },
+            { key: "kopiraj", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Copy} onClick={() => kopirajPonudu(r)}>Kopiraj</Btn> },
             {
               key: "akcija", label: "", render: (r) =>
                 r.projektId ? <span style={{ fontSize: 11, color: "var(--green)" }}>→ {projSifra(r.projektId)}</span>
@@ -4957,6 +4970,7 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
             { key: "ukupno", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCurDec(izracunPonudeLasera(r, db.kvaliteteMaterijala).cijenaKonacna)}</span> },
             { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
             { key: "pdf", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrintLaser(r)}>PDF ponude</Btn> },
+            { key: "kopiraj", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Copy} onClick={() => kopirajLaser(r)}>Kopiraj</Btn> },
           ]}
         />
       )}
