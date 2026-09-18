@@ -736,9 +736,9 @@ const Btn = ({ variant = "ghost", size, icon: Icon, children, className = "", ..
   </button>
 );
 
-const Modal = ({ title, onClose, children, footer, wide }) => (
+const Modal = ({ title, onClose, children, footer, wide, xwide }) => (
   <div className="modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-    <div className="modal-panel" style={wide ? { maxWidth: 820 } : undefined}>
+    <div className="modal-panel" style={xwide ? { maxWidth: 1140 } : wide ? { maxWidth: 820 } : undefined}>
       <div className="modal-header">
         <h3 className="f-display" style={{ fontSize: 17, fontWeight: 600 }}>{title}</h3>
         <button className="btn btn-icon btn-ghost" onClick={onClose}><X size={16} /></button>
@@ -2010,10 +2010,17 @@ function PostavkeTvrtkeModal({ postavke, onSave, onClose }) {
   );
 }
 
-function UpitStavkeEditor({ stavke, setStavke }) {
+function UpitStavkeEditor({ stavke, setStavke, katalogProfila, upitiNabave }) {
   const addRow = () => setStavke([...stavke, { id: uid("us"), kolicina: 1, vrstaStavke: "profil", dimenzijaMM: 6000, sirinaMM: "", vrstaMaterijala: "", kvaliteta: "", normaIsporuke: "", dodatniZahtjevi: "", ponude: [], odabranaPonudaId: null, narudzbenicaId: null }]);
   const update = (i, patch) => setStavke(stavke.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
   const removeRow = (i) => setStavke(stavke.filter((_, idx) => idx !== i));
+  // Prijedlozi za "Vrsta materijala" — iz kataloga profila/limova i iz svih dosad upisanih
+  // upita, da se ne mora uvijek iznova ručno tipkati isti naziv profila.
+  const prijedloziVrsteMaterijala = useMemo(() => {
+    const izKataloga = (katalogProfila || []).map((k) => `${k.tip} ${k.oznaka}`.trim());
+    const izUpita = (upitiNabave || []).flatMap((u) => (u.stavke || []).map((s) => s.vrstaMaterijala)).filter(Boolean);
+    return Array.from(new Set([...izKataloga, ...izUpita]));
+  }, [katalogProfila, upitiNabave]);
   return (
     <div>
       <table className="erp-table" style={{ marginBottom: 8 }}>
@@ -2041,7 +2048,10 @@ function UpitStavkeEditor({ stavke, setStavke }) {
                   <input className="input f-mono" type="number" min="0" placeholder="dužina" value={s.dimenzijaMM} onChange={(e) => update(i, { dimenzijaMM: e.target.value })} />
                 )}
               </td>
-              <td><input className="input" placeholder="npr. Cijev 40x20x2 / HEA 100" value={s.vrstaMaterijala} onChange={(e) => update(i, { vrstaMaterijala: e.target.value })} /></td>
+              <td>
+                <input className="input" list={`vrste-materijala-${s.id}`} placeholder="npr. Cijev 40x20x2 / HEA 100" value={s.vrstaMaterijala} onChange={(e) => update(i, { vrstaMaterijala: e.target.value })} />
+                <datalist id={`vrste-materijala-${s.id}`}>{prijedloziVrsteMaterijala.map((v) => <option key={v} value={v} />)}</datalist>
+              </td>
               <td><input className="input" placeholder="S235JR…" value={s.kvaliteta} onChange={(e) => update(i, { kvaliteta: e.target.value })} /></td>
               <td><input className="input" value={s.normaIsporuke} onChange={(e) => update(i, { normaIsporuke: e.target.value })} /></td>
               <td><input className="input" value={s.dodatniZahtjevi} onChange={(e) => update(i, { dodatniZahtjevi: e.target.value })} /></td>
@@ -2315,14 +2325,14 @@ function NabavaPage({ db, update, showToast, mojaPozicija }) {
       )}
 
       {modal === "upit" && (
-        <Modal wide title={upitForm.id ? `Upit ${upitForm.broj}` : "Novi upit za nabavu materijala"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={saveUpit}>Spremi</Btn></>}>
+        <Modal xwide title={upitForm.id ? `Upit ${upitForm.broj}` : "Novi upit za nabavu materijala"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={saveUpit}>Spremi</Btn></>}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
             <Field label="Broj"><input className="input f-mono" value={upitForm.broj} onChange={(e) => setUpitForm({ ...upitForm, broj: e.target.value })} /></Field>
             <Field label="Datum"><input className="input" type="date" value={upitForm.datum} onChange={(e) => setUpitForm({ ...upitForm, datum: e.target.value })} /></Field>
             <Field label="Izradio"><select className="select" value={upitForm.izradioId} onChange={(e) => setUpitForm({ ...upitForm, izradioId: e.target.value })}>{zaposleniciNabava.map((z) => <option key={z.id} value={z.id}>{z.ime} {z.prezime}</option>)}</select></Field>
           </div>
           <Field label="Status"><select className="select" style={{ maxWidth: 220 }} value={upitForm.status} onChange={(e) => setUpitForm({ ...upitForm, status: e.target.value })}>{["Priprema", "Poslan", "Zaprimanje ponuda", "Zatvoreno"].map((s) => <option key={s}>{s}</option>)}</select></Field>
-          <Field label="Potreban materijal"><UpitStavkeEditor stavke={upitForm.stavke} setStavke={(rows) => setUpitForm({ ...upitForm, stavke: rows })} /></Field>
+          <Field label="Potreban materijal"><UpitStavkeEditor stavke={upitForm.stavke} setStavke={(rows) => setUpitForm({ ...upitForm, stavke: rows })} katalogProfila={db.katalogProfila} upitiNabave={db.upitiNabave} /></Field>
           <Field label="Napomena"><textarea className="textarea" rows={2} value={upitForm.napomena} onChange={(e) => setUpitForm({ ...upitForm, napomena: e.target.value })} /></Field>
         </Modal>
       )}
