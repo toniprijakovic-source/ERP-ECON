@@ -3567,14 +3567,16 @@ function ProizvodnjaPage({ db, update, showToast, mojaPozicija }) {
   const emptyForm = () => {
     const projekt = db.projekti[0];
     const preostalo = preostaloSatiFaze(projekt, FAZE[0], db.radniNalozi, null);
-    return { id: null, broj: projekt ? sljedeciBrojRadnogNaloga(db.radniNalozi, projekt.sifra) : "", projektId: projekt?.id || "", naziv: "", faza: FAZE[0], zaduzenTim: "", status: "Planiran", planiranoSati: preostalo != null ? preostalo : 0, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: todayISO(), stavke: [], materijalIzdan: false, ovisiONalogId: null, ovisnostTip: "zavrsetak", ovisnostSati: 8 };
+    return { id: null, broj: projekt ? sljedeciBrojRadnogNaloga(db.radniNalozi, projekt.sifra) : "", projektId: projekt?.id || "", naziv: projekt?.naziv || "", faza: FAZE[0], zaduzenTim: "", status: "Planiran", planiranoSati: preostalo != null ? preostalo : 0, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: todayISO(), stavke: [], materijalIzdan: false, ovisiONalogId: null, ovisnostTip: "zavrsetak", ovisnostSati: 8 };
   };
   const [form, setForm] = useState(emptyForm());
 
   const openAdd = () => { setForm(emptyForm()); setModal("edit"); };
   const openEdit = (row) => { setForm(JSON.parse(JSON.stringify(row))); setModal("edit"); };
   const save = () => {
-    const payload = { ...form, planiranoSati: Number(form.planiranoSati), utrosenoSati: Number(form.utrosenoSati), ovisnostSati: Number(form.ovisnostSati) || 0 };
+    // Naziv radnog naloga uvijek prati naziv projekta — ne postoji zaseban slobodan unos.
+    const naziv = db.projekti.find((p) => p.id === form.projektId)?.naziv || form.naziv;
+    const payload = { ...form, naziv, planiranoSati: Number(form.planiranoSati), utrosenoSati: Number(form.utrosenoSati), ovisnostSati: Number(form.ovisnostSati) || 0 };
     if (form.id) update("radniNalozi", db.radniNalozi.map((r) => (r.id === form.id ? payload : r)));
     else update("radniNalozi", [...db.radniNalozi, { ...payload, id: uid("rn") }]);
     setModal(null);
@@ -3614,7 +3616,6 @@ function ProizvodnjaPage({ db, update, showToast, mojaPozicija }) {
         addLabel="Novi radni nalog" searchKeys={["broj", "naziv", "zaduzenTim"]} readOnly={!mozeTablica}
         columns={[
           { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
-          { key: "naziv", label: "Opis" },
           { key: "projekt", label: "Projekt", render: (r) => projNaziv(r.projektId) },
           { key: "faza", label: "Faza" },
           { key: "zaduzenTim", label: "Tim" },
@@ -3634,10 +3635,10 @@ function ProizvodnjaPage({ db, update, showToast, mojaPozicija }) {
             <select className="select" value={form.projektId} onChange={(e) => {
               const noviProjekt = db.projekti.find((p) => p.id === e.target.value);
               const preostalo = preostaloSatiFaze(noviProjekt, form.faza, db.radniNalozi, form.id);
-              setForm({ ...form, projektId: e.target.value, broj: !form.id && noviProjekt ? sljedeciBrojRadnogNaloga(db.radniNalozi, noviProjekt.sifra) : form.broj, planiranoSati: preostalo != null ? preostalo : form.planiranoSati });
+              setForm({ ...form, projektId: e.target.value, naziv: noviProjekt?.naziv || form.naziv, broj: !form.id && noviProjekt ? sljedeciBrojRadnogNaloga(db.radniNalozi, noviProjekt.sifra) : form.broj, planiranoSati: preostalo != null ? preostalo : form.planiranoSati });
             }}>{db.projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}</select>
           </Field>
-          <Field label="Opis radnog naloga"><input className="input" value={form.naziv} onChange={(e) => setForm({ ...form, naziv: e.target.value })} /></Field>
+          <Field label="Naziv radnog naloga (uvijek jednak nazivu projekta)"><input className="input" value={trenutniProjekt?.naziv || form.naziv} disabled /></Field>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
             <Field label="Faza proizvodnje">
               <select className="select" value={form.faza} onChange={(e) => {
@@ -3654,9 +3655,11 @@ function ProizvodnjaPage({ db, update, showToast, mojaPozicija }) {
             </Field>
             <Field label="Utrošeno sati"><input className="input f-mono" type="number" value={form.utrosenoSati} onChange={(e) => setForm({ ...form, utrosenoSati: e.target.value })} /></Field>
             <Field label="Ovisi o nalogu (opcionalno)">
+              {/* Samo nalozi ISTOG projekta, i to za faze koje na projektu uopće imaju planirane
+                  sate — ovisnost o tuđem projektu ili o fazi bez planiranih sati nema smisla. */}
               <select className="select" value={form.ovisiONalogId || ""} onChange={(e) => setForm({ ...form, ovisiONalogId: e.target.value || null })}>
                 <option value="">— Bez ovisnosti —</option>
-                {db.radniNalozi.filter((r) => r.id !== form.id).map((r) => { const proj = db.projekti.find((p) => p.id === r.projektId); return <option key={r.id} value={r.id}>{proj?.sifra} · {r.broj} — {r.faza}</option>; })}
+                {db.radniNalozi.filter((r) => r.id !== form.id && r.projektId === form.projektId && Number(trenutniProjekt?.faze?.[r.faza]) > 0).map((r) => <option key={r.id} value={r.id}>{r.broj} — {r.faza}</option>)}
               </select>
             </Field>
             {form.ovisiONalogId && (
@@ -4111,6 +4114,24 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
   const kupac = db.kupci.find((k) => k.id === projekt.kupacId);
   const voditelj = db.zaposlenici.find((z) => z.id === projekt.voditeljId);
   const nalozi = db.radniNalozi.filter((r) => r.projektId === projekt.id);
+  // Kreira po jedan radni nalog za svaku fazu koja na projektu ima planiranih, a još
+  // nerasporedenih sati (preostaloSatiFaze) — ne diraju se faze bez planiranih sati ili one
+  // za koje je već sve raspoređeno. Ručno pokrenuto gumbom, nikad automatski.
+  const kreirajRadneNaloge = () => {
+    let brojac = parseInt(sljedeciBrojRadnogNaloga(db.radniNalozi, projekt.sifra).split("/").pop(), 10);
+    const noviNalozi = FAZE
+      .map((faza) => ({ faza, preostalo: preostaloSatiFaze(projekt, faza, db.radniNalozi, null) }))
+      .filter(({ preostalo }) => preostalo > 0)
+      .map(({ faza, preostalo }) => ({
+        id: uid("rn"), broj: `${projekt.sifra}/${brojac++}`, projektId: projekt.id,
+        naziv: projekt.naziv, faza, zaduzenTim: "", status: "Planiran",
+        planiranoSati: preostalo, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: todayISO(),
+        stavke: [], materijalIzdan: false, ovisiONalogId: null, ovisnostTip: "zavrsetak", ovisnostSati: 8,
+      }));
+    if (noviNalozi.length === 0) { showToast("Sve planirane faze već imaju radne naloge."); return; }
+    update("radniNalozi", [...db.radniNalozi, ...noviNalozi]);
+    showToast(`Kreirano ${noviNalozi.length} radnih naloga.`);
+  };
   const planiranoUkupno = nalozi.reduce((s, n) => s + (Number(n.planiranoSati) || 0), 0);
   const utrosenoUkupno = nalozi.reduce((s, n) => s + (Number(n.utrosenoSati) || 0), 0);
   const postotak = planiranoUkupno > 0 ? Math.min(100, Math.round((utrosenoUkupno / planiranoUkupno) * 100)) : 0;
@@ -4403,7 +4424,10 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
       )}
 
       <div>
-        <div className="label" style={{ marginBottom: 6 }}>Radni nalozi</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div className="label">Radni nalozi</div>
+          <Btn variant="ghost" size="sm" icon={Plus} onClick={kreirajRadneNaloge}>Kreiraj radne naloge</Btn>
+        </div>
         {nalozi.length === 0 ? <EmptyState text="Nema radnih naloga za ovaj projekt." /> : (
           <table className="erp-table">
             <thead><tr><th>Broj</th><th>Faza</th><th>Tim</th><th>Sati (utr./plan.)</th><th>Status</th></tr></thead>
@@ -4783,6 +4807,11 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
     const voditeljPromijenjen = payload.voditeljId && payload.voditeljId !== stariProjekt?.voditeljId;
     if (projForm.id) update("projekti", db.projekti.map((p) => (p.id === projForm.id ? payload : p)));
     else update("projekti", [...db.projekti, { ...payload, id: uid("proj") }]);
+    // Naziv radnog naloga uvijek prati naziv projekta — kad se projekt preimenuje, isto ime
+    // se prepiše na sve njegove radne naloge da ne ostanu razdvojeni.
+    if (projForm.id && stariProjekt && stariProjekt.naziv !== payload.naziv) {
+      update("radniNalozi", db.radniNalozi.map((r) => (r.projektId === projForm.id ? { ...r, naziv: payload.naziv } : r)));
+    }
     setModal(null);
     if (voditeljPromijenjen) {
       const zaposlenik = db.zaposlenici.find((z) => z.id === payload.voditeljId);
@@ -4826,7 +4855,7 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
     const sljedeciRnBroj = () => `${noviProjekt.sifra}/${rnBrojac++}`;
     let noviNalozi = OPERACIJE.filter((o) => calc.satiPoOperaciji[o.key] > 0).map((o) => ({
       id: uid("rn"), broj: sljedeciRnBroj(), projektId: noviProjekt.id,
-      naziv: `${o.label} — ${ponuda.naziv}`, faza: o.label, zaduzenTim: "", status: "Planiran",
+      naziv: noviProjekt.naziv, faza: o.label, zaduzenTim: "", status: "Planiran",
       planiranoSati: calc.satiPoOperaciji[o.key], utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: addDays(todayISO(), 14),
       stavke: o.key === "pripremaPozicija" ? ponuda.materijalStavke || [] : [], materijalIzdan: false,
     }));
@@ -4835,7 +4864,7 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
     if (!imaPripremuNalog && (ponuda.materijalStavke || []).length > 0) {
       noviNalozi = [...noviNalozi, {
         id: uid("rn"), broj: sljedeciRnBroj(), projektId: noviProjekt.id,
-        naziv: `Priprema materijala — ${ponuda.naziv}`, faza: "Priprema pozicija za sklapanje", zaduzenTim: "", status: "Planiran",
+        naziv: noviProjekt.naziv, faza: "Priprema pozicija za sklapanje", zaduzenTim: "", status: "Planiran",
         planiranoSati: 0, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: addDays(todayISO(), 14),
         stavke: ponuda.materijalStavke || [], materijalIzdan: false,
       }];
@@ -4843,7 +4872,7 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
     if (calc.satiMontaze > 0) {
       noviNalozi = [...noviNalozi, {
         id: uid("rn"), broj: sljedeciRnBroj(), projektId: noviProjekt.id,
-        naziv: `Montaža — ${ponuda.naziv}`, faza: "Montaža (teren)", zaduzenTim: "", status: "Planiran",
+        naziv: noviProjekt.naziv, faza: "Montaža (teren)", zaduzenTim: "", status: "Planiran",
         planiranoSati: calc.satiMontaze, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: addDays(todayISO(), 14),
         stavke: [], materijalIzdan: false,
       }];
