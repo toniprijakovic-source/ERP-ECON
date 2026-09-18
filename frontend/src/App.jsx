@@ -1952,7 +1952,7 @@ function DokumentNabavePrintModal({ tip, brojDokumenta, datum, izradioIme, stavk
           <tbody>
             {stavke.map((s, i) => (
               <tr key={s.id || i}>
-                <td>{i + 1}.</td><td>{s.kolicina}</td><td>{s.dimenzijaMM}</td>
+                <td>{i + 1}.</td><td>{s.kolicina}</td><td>{formatDimenzijaStavke(s)}</td>
                 <td>{s.vrstaMaterijala}</td><td>{s.kvaliteta}</td><td>{s.normaIsporuke}</td><td>{s.dodatniZahtjevi}</td>
               </tr>
             ))}
@@ -2011,32 +2011,53 @@ function PostavkeTvrtkeModal({ postavke, onSave, onClose }) {
 }
 
 function UpitStavkeEditor({ stavke, setStavke }) {
-  const addRow = () => setStavke([...stavke, { id: uid("us"), kolicina: 1, dimenzijaMM: 6000, vrstaMaterijala: "", kvaliteta: "", normaIsporuke: "", dodatniZahtjevi: "", ponude: [], odabranaPonudaId: null, narudzbenicaId: null }]);
+  const addRow = () => setStavke([...stavke, { id: uid("us"), kolicina: 1, vrstaStavke: "profil", dimenzijaMM: 6000, sirinaMM: "", vrstaMaterijala: "", kvaliteta: "", normaIsporuke: "", dodatniZahtjevi: "", ponude: [], odabranaPonudaId: null, narudzbenicaId: null }]);
   const update = (i, patch) => setStavke(stavke.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
   const removeRow = (i) => setStavke(stavke.filter((_, idx) => idx !== i));
   return (
     <div>
       <table className="erp-table" style={{ marginBottom: 8 }}>
-        <thead><tr><th style={{ width: 55 }}>Kom</th><th style={{ width: 90 }}>Dim. [mm]</th><th>Vrsta materijala</th><th style={{ width: 110 }}>Kvaliteta</th><th style={{ width: 110 }}>Norma isporuke</th><th>Dodatni zahtjevi</th><th style={{ width: 32 }}></th></tr></thead>
+        <thead><tr><th style={{ width: 55 }}>Kom</th><th style={{ width: 80 }}>Profil/Lim</th><th style={{ width: 140 }}>Dimenzije [mm]</th><th>Vrsta materijala</th><th style={{ width: 110 }}>Kvaliteta</th><th style={{ width: 110 }}>Norma isporuke</th><th>Dodatni zahtjevi</th><th style={{ width: 32 }}></th></tr></thead>
         <tbody>
-          {stavke.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--ink-faint)", padding: 14 }}>Nema stavki. Dodaj potreban materijal.</td></tr>}
-          {stavke.map((s, i) => (
+          {stavke.length === 0 && <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--ink-faint)", padding: 14 }}>Nema stavki. Dodaj potreban materijal.</td></tr>}
+          {stavke.map((s, i) => {
+            const jeLim = s.vrstaStavke === "lim";
+            return (
             <tr key={s.id}>
               <td><input className="input f-mono" type="number" min="0" value={s.kolicina} onChange={(e) => update(i, { kolicina: e.target.value })} /></td>
-              <td><input className="input f-mono" type="number" min="0" value={s.dimenzijaMM} onChange={(e) => update(i, { dimenzijaMM: e.target.value })} /></td>
+              <td>
+                <select className="select" value={s.vrstaStavke || "profil"} onChange={(e) => update(i, { vrstaStavke: e.target.value })}>
+                  <option value="profil">Profil</option>
+                  <option value="lim">Lim</option>
+                </select>
+              </td>
+              <td>
+                {jeLim ? (
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <input className="input f-mono" type="number" min="0" placeholder="dužina" value={s.dimenzijaMM} onChange={(e) => update(i, { dimenzijaMM: e.target.value })} />
+                    <input className="input f-mono" type="number" min="0" placeholder="širina" value={s.sirinaMM} onChange={(e) => update(i, { sirinaMM: e.target.value })} />
+                  </div>
+                ) : (
+                  <input className="input f-mono" type="number" min="0" placeholder="dužina" value={s.dimenzijaMM} onChange={(e) => update(i, { dimenzijaMM: e.target.value })} />
+                )}
+              </td>
               <td><input className="input" placeholder="npr. Cijev 40x20x2 / HEA 100" value={s.vrstaMaterijala} onChange={(e) => update(i, { vrstaMaterijala: e.target.value })} /></td>
               <td><input className="input" placeholder="S235JR…" value={s.kvaliteta} onChange={(e) => update(i, { kvaliteta: e.target.value })} /></td>
               <td><input className="input" value={s.normaIsporuke} onChange={(e) => update(i, { normaIsporuke: e.target.value })} /></td>
               <td><input className="input" value={s.dodatniZahtjevi} onChange={(e) => update(i, { dodatniZahtjevi: e.target.value })} /></td>
               <td><button className="btn btn-icon btn-ghost" onClick={() => removeRow(i)}><X size={14} /></button></td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
       <Btn variant="ghost" size="sm" icon={Plus} onClick={addRow}>Dodaj stavku</Btn>
     </div>
   );
 }
+
+// Profil ima samo dužinu; lim ima dužinu i širinu — koristi se svugdje gdje se dimenzije stavke upita prikazuju kao tekst.
+const formatDimenzijaStavke = (s) => (s.vrstaStavke === "lim" ? `${s.dimenzijaMM || 0}×${s.sirinaMM || 0}` : `${s.dimenzijaMM || ""}`);
 
 const generirajBrojUpita = (upiti) => {
   const god = new Date().getFullYear().toString().slice(-2);
@@ -2050,10 +2071,13 @@ const kreirajUpitIzMaterijala = (projekt, db, update, showToast) => {
   const stavke = (projekt.materijalStavke || []).filter((s) => s.materijalId).map((s) => {
     const m = db.materijali.find((x) => x.id === s.materijalId);
     const jeDuzina = s.nacinUnosa === "duzina";
+    const jeLim = s.nacinUnosa === "lim";
     return {
       id: uid("us"),
       kolicina: jeDuzina ? (Number(s.komada) || 0) : (Number(s.kolicina) || 0),
-      dimenzijaMM: jeDuzina ? Math.round((Number(s.duzinaM) || 0) * 1000) : "",
+      vrstaStavke: jeLim ? "lim" : "profil",
+      dimenzijaMM: jeDuzina ? Math.round((Number(s.duzinaM) || 0) * 1000) : jeLim ? Math.round((Number(s.duzinaM) || 0) * 1000) : "",
+      sirinaMM: jeLim ? Math.round((Number(s.sirinaM) || 0) * 1000) : "",
       vrstaMaterijala: m?.naziv || "",
       kvaliteta: s.kvaliteta || "",
       normaIsporuke: "",
@@ -2091,7 +2115,7 @@ const generirajNarudzbeIzUpita = (upit, db, update, showToast) => {
     stavke.forEach(({ stavka, ponuda }) => {
       const noviMaterijal = {
         id: uid("mat"), sifra: stavka.vrstaMaterijala.replace(/[^A-Za-z0-9]+/g, "-") || uid("sif"),
-        naziv: stavka.vrstaMaterijala, tip: "Ostalo", dimenzije: `${stavka.dimenzijaMM} mm${stavka.kvaliteta ? ", " + stavka.kvaliteta : ""}`,
+        naziv: stavka.vrstaMaterijala, tip: "Ostalo", dimenzije: `${formatDimenzijaStavke(stavka)} mm${stavka.kvaliteta ? ", " + stavka.kvaliteta : ""}`,
         jm: "kom", cijena: Number(ponuda.cijena) || 0, kolicina: 0, minZaliha: 0, lokacija: "",
       };
       noviMaterijali.push(noviMaterijal);
@@ -2101,7 +2125,7 @@ const generirajNarudzbeIzUpita = (upit, db, update, showToast) => {
       id: uid("nab"), broj: `${nabPrefiks}${String(nabBrojac++).padStart(3, "0")}`, dobavljacId, datum: todayISO(), rokIsporuke: addDays(todayISO(), 14),
       status: "Nacrt", napomena: `Generirano iz upita ${upit.broj}`, izradioId: upit.izradioId, izvorUpitaId: upit.id,
       stavke: materijalIdZaStavku.map((m) => ({ materijalId: m.materijalId, kolicina: m.kolicina })),
-      stavkeUpita: stavke.map(({ stavka, ponuda }) => ({ kolicina: stavka.kolicina, dimenzijaMM: stavka.dimenzijaMM, vrstaMaterijala: stavka.vrstaMaterijala, kvaliteta: stavka.kvaliteta, normaIsporuke: stavka.normaIsporuke, dodatniZahtjevi: stavka.dodatniZahtjevi, cijena: ponuda.cijena })),
+      stavkeUpita: stavke.map(({ stavka, ponuda }) => ({ kolicina: stavka.kolicina, vrstaStavke: stavka.vrstaStavke, dimenzijaMM: stavka.dimenzijaMM, sirinaMM: stavka.sirinaMM, vrstaMaterijala: stavka.vrstaMaterijala, kvaliteta: stavka.kvaliteta, normaIsporuke: stavka.normaIsporuke, dodatniZahtjevi: stavka.dodatniZahtjevi, cijena: ponuda.cijena })),
     };
     noveNarudzbenice.push(novaNarudzbenica);
     stavke.forEach(({ stavka }) => { azuriranjeStavkiId[stavka.id] = novaNarudzbenica.id; });
@@ -2132,7 +2156,7 @@ function UpitDetaljModal({ upit, db, update, showToast, onClose, onOtvoriPrint }
       {upit.stavke.map((s) => (
         <div key={s.id} className="card" style={{ padding: 12, marginBottom: 10, background: "var(--surface-alt)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600 }}>{s.vrstaMaterijala} <span className="f-mono" style={{ fontWeight: 400, color: "var(--ink-soft)" }}>· {s.kolicina} kom × {s.dimenzijaMM}mm{s.kvaliteta ? ` · ${s.kvaliteta}` : ""}</span></div>
+            <div style={{ fontSize: 13.5, fontWeight: 600 }}>{s.vrstaMaterijala} <span className="f-mono" style={{ fontWeight: 400, color: "var(--ink-soft)" }}>· {s.kolicina} kom × {formatDimenzijaStavke(s)}mm{s.kvaliteta ? ` · ${s.kvaliteta}` : ""}</span></div>
             {s.narudzbenicaId ? <Badge status="Primljeno" /> : (s.odabranaPonudaId ? <Badge status="Odobren" /> : <Badge status="Nacrt" />)}
           </div>
           {s.ponude.length === 0 ? <div style={{ fontSize: 12, color: "var(--ink-faint)", marginBottom: 8 }}>Još nema unesenih ponuda.</div> : (
@@ -2172,10 +2196,21 @@ function NabavaPage({ db, update, showToast, mojaPozicija }) {
   const [printDoc, setPrintDoc] = useState(null); // { tip, brojDokumenta, datum, izradioIme, stavke }
   const [upitDetalj, setUpitDetalj] = useState(null);
 
+  // "Izradio" na upitu smije biti samo netko tko uopće ima dodijeljen modul Nabave na svojoj
+  // poziciji — bilo tko drugi tu ionako ne bi trebao ni raditi upite.
+  const zaposleniciNabava = useMemo(() => [...db.zaposlenici]
+    .filter((z) => {
+      if (z.status !== "Aktivan") return false;
+      const pozicija = db.pozicijeZaposlenika.find((p) => p.id === z.pozicijaId);
+      const moduli = pozicija?.moduli?.length ? pozicija.moduli : ["dashboard"];
+      return moduli.includes("nabava");
+    })
+    .sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")), [db.zaposlenici, db.pozicijeZaposlenika]);
+
   const emptyForm = () => ({ id: null, broj: sljedeciBroj(db.narudzbenice, "broj", "NAR-2026-"), dobavljacId: db.dobavljaci[0]?.id || "", datum: todayISO(), rokIsporuke: todayISO(), status: "Nacrt", napomena: "", stavke: [] });
   const [form, setForm] = useState(emptyForm());
 
-  const emptyUpit = () => ({ id: null, broj: generirajBrojUpita(db.upitiNabave), datum: todayISO(), izradioId: db.zaposlenici[0]?.id || "", status: "Priprema", napomena: "", stavke: [] });
+  const emptyUpit = () => ({ id: null, broj: generirajBrojUpita(db.upitiNabave), datum: todayISO(), izradioId: zaposleniciNabava[0]?.id || "", status: "Priprema", napomena: "", stavke: [] });
   const [upitForm, setUpitForm] = useState(emptyUpit());
 
   const openAdd = () => { setForm(emptyForm()); setModal("edit"); };
@@ -2284,7 +2319,7 @@ function NabavaPage({ db, update, showToast, mojaPozicija }) {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
             <Field label="Broj"><input className="input f-mono" value={upitForm.broj} onChange={(e) => setUpitForm({ ...upitForm, broj: e.target.value })} /></Field>
             <Field label="Datum"><input className="input" type="date" value={upitForm.datum} onChange={(e) => setUpitForm({ ...upitForm, datum: e.target.value })} /></Field>
-            <Field label="Izradio"><select className="select" value={upitForm.izradioId} onChange={(e) => setUpitForm({ ...upitForm, izradioId: e.target.value })}>{[...db.zaposlenici].sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.ime} {z.prezime}</option>)}</select></Field>
+            <Field label="Izradio"><select className="select" value={upitForm.izradioId} onChange={(e) => setUpitForm({ ...upitForm, izradioId: e.target.value })}>{zaposleniciNabava.map((z) => <option key={z.id} value={z.id}>{z.ime} {z.prezime}</option>)}</select></Field>
           </div>
           <Field label="Status"><select className="select" style={{ maxWidth: 220 }} value={upitForm.status} onChange={(e) => setUpitForm({ ...upitForm, status: e.target.value })}>{["Priprema", "Poslan", "Zaprimanje ponuda", "Zatvoreno"].map((s) => <option key={s}>{s}</option>)}</select></Field>
           <Field label="Potreban materijal"><UpitStavkeEditor stavke={upitForm.stavke} setStavke={(rows) => setUpitForm({ ...upitForm, stavke: rows })} /></Field>
