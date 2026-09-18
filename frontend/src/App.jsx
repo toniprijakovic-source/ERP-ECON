@@ -876,7 +876,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
                     </optgroup>
                     {katalog && katalog.length > 0 && (
                       <optgroup label="Dodaj iz kataloga profila (svi standardni profili)">
-                        {katalog.map((k) => <option key={k.id} value={`kat::${k.id}`}>{k.tip} {k.oznaka} ({k.vrijednost} {k.jedinica})</option>)}
+                        {katalog.map((k) => <option key={k.id} value={`kat::${k.id}`}>{katalogOznakaPuna(k)} ({k.vrijednost} {k.jedinica})</option>)}
                       </optgroup>
                     )}
                   </select>
@@ -1655,6 +1655,9 @@ const JEDINICE = ["kg", "kom", "m", "m2", "l"];
 
 const TIPOVI_KATALOGA = ["HEA", "HEB", "HEM", "IPE", "IPN", "UPN", "SHS", "RHS", "CHS", "Okrugla šipka", "Kvadratna šipka", "Plosnat", "Kutni jednakokraki", "Lim", "Ostalo"];
 const katalogPoTipu = (katalog) => TIPOVI_KATALOGA.map((tip) => ({ tip, stavke: katalog.filter((k) => k.tip === tip) })).filter((g) => g.stavke.length);
+// Puni naziv kataloške stavke za prikaz — oznaka obično već sadrži tip (npr. "HEA 100", "Lim 1
+// mm"), pa se tip ne dodaje ispred ako bi se time udvostručio (npr. "HEA HEA 100").
+const katalogOznakaPuna = (k) => (k.oznaka?.toUpperCase().startsWith((k.tip || "").toUpperCase()) ? k.oznaka : `${k.tip} ${k.oznaka}`.trim());
 const masaIzKataloga = (entry, dimenzija) => (entry ? (Number(entry.vrijednost) || 0) * (Number(dimenzija) || 0) : 0);
 
 // Pozicija se sastoji od više stavki (profila i/ili limova) — masa/kom jedne stavke, pa masa cijele pozicije
@@ -2017,14 +2020,14 @@ function UpitStavkeEditor({ stavke, setStavke, katalogProfila, upitiNabave }) {
   // Prijedlozi za "Vrsta materijala" — iz kataloga profila/limova i iz svih dosad upisanih
   // upita, da se ne mora uvijek iznova ručno tipkati isti naziv profila.
   const prijedloziVrsteMaterijala = useMemo(() => {
-    const izKataloga = (katalogProfila || []).map((k) => `${k.tip} ${k.oznaka}`.trim());
+    const izKataloga = (katalogProfila || []).map(katalogOznakaPuna);
     const izUpita = (upitiNabave || []).flatMap((u) => (u.stavke || []).map((s) => s.vrstaMaterijala)).filter(Boolean);
     return Array.from(new Set([...izKataloga, ...izUpita]));
   }, [katalogProfila, upitiNabave]);
   return (
     <div>
       <table className="erp-table" style={{ marginBottom: 8 }}>
-        <thead><tr><th style={{ width: 55 }}>Kom</th><th style={{ width: 80 }}>Profil/Lim</th><th style={{ width: 140 }}>Dimenzije [mm]</th><th>Vrsta materijala</th><th style={{ width: 110 }}>Kvaliteta</th><th style={{ width: 110 }}>Norma isporuke</th><th>Dodatni zahtjevi</th><th style={{ width: 32 }}></th></tr></thead>
+        <thead><tr><th style={{ width: 76 }}>Kom</th><th style={{ width: 80 }}>Profil/Lim</th><th style={{ width: 140 }}>Dimenzije [mm]</th><th>Vrsta materijala</th><th style={{ width: 110 }}>Kvaliteta</th><th style={{ width: 110 }}>Norma isporuke</th><th>Dodatni zahtjevi</th><th style={{ width: 32 }}></th></tr></thead>
         <tbody>
           {stavke.length === 0 && <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--ink-faint)", padding: 14 }}>Nema stavki. Dodaj potreban materijal.</td></tr>}
           {stavke.map((s, i) => {
@@ -2049,7 +2052,10 @@ function UpitStavkeEditor({ stavke, setStavke, katalogProfila, upitiNabave }) {
                 )}
               </td>
               <td>
-                <input className="input" list={`vrste-materijala-${s.id}`} placeholder="npr. Cijev 40x20x2 / HEA 100" value={s.vrstaMaterijala} onChange={(e) => update(i, { vrstaMaterijala: e.target.value })} />
+                <div style={{ position: "relative" }}>
+                  <input className="input" style={{ paddingRight: 24 }} list={`vrste-materijala-${s.id}`} placeholder="npr. Cijev 40x20x2 / HEA 100" value={s.vrstaMaterijala} onChange={(e) => update(i, { vrstaMaterijala: e.target.value })} />
+                  <ChevronDown size={13} style={{ position: "absolute", right: 7, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "var(--ink-faint)" }} />
+                </div>
                 <datalist id={`vrste-materijala-${s.id}`}>{prijedloziVrsteMaterijala.map((v) => <option key={v} value={v} />)}</datalist>
               </td>
               <td><input className="input" placeholder="S235JR…" value={s.kvaliteta} onChange={(e) => update(i, { kvaliteta: e.target.value })} /></td>
@@ -5714,7 +5720,10 @@ function PartneriPage({ db, update, showToast, mojaPozicija }) {
           <Field label="Naziv tvrtke"><input className="input" value={form.naziv} onChange={(e) => setForm({ ...form, naziv: e.target.value })} /></Field>
           {tab === "dobavljaci" && (
             <Field label="Vrsta robe">
-              <input className="input" list="vrste-dobavljaca-popis" value={form.vrsta || ""} onChange={(e) => setForm({ ...form, vrsta: e.target.value })} placeholder="Odaberi postojeću ili upiši novu…" />
+              <div style={{ position: "relative" }}>
+                <input className="input" style={{ paddingRight: 24 }} list="vrste-dobavljaca-popis" value={form.vrsta || ""} onChange={(e) => setForm({ ...form, vrsta: e.target.value })} placeholder="Odaberi postojeću ili upiši novu…" />
+                <ChevronDown size={13} style={{ position: "absolute", right: 7, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "var(--ink-faint)" }} />
+              </div>
               <datalist id="vrste-dobavljaca-popis">{vrsteDobavljaca.map((v) => <option key={v} value={v} />)}</datalist>
             </Field>
           )}
