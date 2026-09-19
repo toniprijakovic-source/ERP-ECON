@@ -726,7 +726,7 @@ const generirajRfidKod = (ime, prezime, postojeciKodovi) => {
   return kod;
 };
 
-const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi", "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca"];
+const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi", "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca", "satiPoNalogu"];
 
 /* ============================== SMALL UI PRIMITIVES ============================== */
 const Btn = ({ variant = "ghost", size, icon: Icon, children, className = "", ...rest }) => (
@@ -1061,7 +1061,7 @@ const KARTICE_MODULA = {
   projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "ponude", naziv: "Ponude" }, { key: "laser", naziv: "Ponude - Laser" }] },
   fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "otpremnice", naziv: "Otpremnice" }, { key: "podloge", naziv: "Podloge za fakturu" }] },
   partneri: { kartice: [{ key: "kupci", naziv: "Kupci" }, { key: "dobavljaci", naziv: "Dobavljači" }] },
-  zaposlenici: { kartice: [{ key: "zaposlenici", naziv: "Zaposlenici" }, { key: "pozicije", naziv: "Pozicije" }, { key: "evidencija", naziv: "Evidencija rada" }, { key: "obracun", naziv: "Obračun plaća" }] },
+  zaposlenici: { kartice: [{ key: "zaposlenici", naziv: "Zaposlenici" }, { key: "pozicije", naziv: "Pozicije" }, { key: "evidencija", naziv: "Evidencija rada" }, { key: "obracun", naziv: "Obračun plaća" }, { key: "satinalozi", naziv: "Sati po nalozima" }] },
 };
 
 // Dozvola za jednu karticu — po zadanom TRUE (naslijeđeno od dodjele modula), osim ako je
@@ -2426,6 +2426,11 @@ function preostaloSatiFaze(projekt, faza, radniNalozi, iskljuciNalogId) {
   return Math.max(0, planirano - rasporedeno);
 }
 
+// Utrošeno sati na radnom nalogu je izvedeno (zbroj dnevnih unosa u "Sati po nalozima"), ne
+// ručno upisano — vidi SatiPoNalozimaTab.
+const zbrojSatiZaNalog = (radniNalogId, satiPoNalogu) =>
+  (satiPoNalogu || []).filter((s) => s.radniNalogId === radniNalogId).reduce((s, r) => s + (Number(r.sati) || 0), 0);
+
 /* ============================== GANTOGRAM ============================== */
 const GANTT_BOJA = { muted: "#9aa1a8", info: "#2E5E7A", warning: "#C68A1A", success: "#256B45", danger: "#B8442C" };
 
@@ -3677,7 +3682,9 @@ function ProizvodnjaPage({ db, update, showToast, mojaPozicija }) {
   const save = () => {
     // Naziv radnog naloga uvijek prati naziv projekta — ne postoji zaseban slobodan unos.
     const naziv = db.projekti.find((p) => p.id === form.projektId)?.naziv || form.naziv;
-    const payload = { ...form, naziv, planiranoSati: Number(form.planiranoSati), utrosenoSati: Number(form.utrosenoSati), ovisnostSati: Number(form.ovisnostSati) || 0 };
+    // Utrošeno sati se ne uzima iz forme — uvijek se preračuna iz stvarnog zbroja dnevnih unosa
+    // (Sati po nalozima), da polje ne može ostati zastarjelo ili ručno izmijenjeno.
+    const payload = { ...form, naziv, planiranoSati: Number(form.planiranoSati), utrosenoSati: zbrojSatiZaNalog(form.id, db.satiPoNalogu), ovisnostSati: Number(form.ovisnostSati) || 0 };
     if (form.id) update("radniNalozi", db.radniNalozi.map((r) => (r.id === form.id ? payload : r)));
     else update("radniNalozi", [...db.radniNalozi, { ...payload, id: uid("rn") }]);
     setModal(null);
@@ -3754,7 +3761,10 @@ function ProizvodnjaPage({ db, update, showToast, mojaPozicija }) {
               <input className="input f-mono" type="number" value={form.planiranoSati} onChange={(e) => setForm({ ...form, planiranoSati: e.target.value })} />
               {preostaloFaze != null && <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 4 }}>Planirano na projektu: {trenutniProjekt.faze[form.faza]} h · Preostalo (neraspoređeno): {preostaloFaze} h</div>}
             </Field>
-            <Field label="Utrošeno sati"><input className="input f-mono" type="number" value={form.utrosenoSati} onChange={(e) => setForm({ ...form, utrosenoSati: e.target.value })} /></Field>
+            <Field label="Utrošeno sati">
+              <input className="input f-mono" value={`${zbrojSatiZaNalog(form.id, db.satiPoNalogu)} (izvedeno)`} disabled style={{ opacity: 0.7 }} />
+              <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 4 }}>Izračunato iz dnevnih unosa u "Sati po nalozima" — nije moguće ručno urediti.</div>
+            </Field>
             <Field label="Ovisi o nalogu (opcionalno)">
               {/* Samo nalozi ISTOG projekta, i to za faze koje na projektu uopće imaju planirane
                   sate — ovisnost o tuđem projektu ili o fazi bez planiranih sati nema smisla. */}
@@ -6643,6 +6653,141 @@ function ObracunPlacaPrintModal({ redovi, mjesec, db, onClose }) {
   );
 }
 
+/* ============================== SATI PO NALOZIMA ============================== */
+// Dnevni unos sati po radnom nalogu, po zaposleniku. "utrosenoSati" na radnom nalogu postaje
+// IZVEDENO polje (zbroj ovih redaka) umjesto ručno upisanog broja — vidi zbrojSatiZaNalog i
+// polje "Utrošeno sati" u ProizvodnjaPage.
+function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
+  const [datum, setDatum] = useState(todayISO());
+  const [uredjivanje, setUredjivanje] = useState(null); // id zaposlenika trenutno otvorenog za unos
+  const [redoviUnos, setRedoviUnos] = useState([]);
+
+  const zaposlenikIme = (id) => { const z = db.zaposlenici.find((zz) => zz.id === id); return z ? `${z.prezime} ${z.ime}` : "—"; };
+
+  // Radnici koji su TOG dana stvarno radili (vrsta "rad") — samo za njih ima smisla raspoređivati
+  // sate. Jedan dan može imati VIŠE odvojenih prijava/odjava (npr. jutarnja smjena pa kratki
+  // povratak u tvrtku) — zbraja se preko svih "rad" segmenata tog dana, ne samo prvog pronađenog.
+  const radnici = useMemo(() => db.zaposlenici
+    .filter((z) => z.status === "Aktivan")
+    .map((z) => {
+      const zapisi = db.evidencijaRada.filter((e) => e.zaposlenikId === z.id && e.vrijemeDolaska.slice(0, 10) === datum && (e.vrsta || "rad") === "rad");
+      if (zapisi.length === 0) return null;
+      const satiPrijave = zapisi.reduce((s, e) => s + obracunskiSati(e.vrijemeDolaska, e.vrijemeOdlaska, odrediSmjenu(e.vrijemeDolaska, db.postavkePlaca), db.postavkePlaca), 0);
+      const uneseno = db.satiPoNalogu.filter((s) => s.zaposlenikId === z.id && s.datum === datum);
+      return { zaposlenik: z, satiPrijave, uneseno, satiUneseno: uneseno.reduce((s, r) => s + (Number(r.sati) || 0), 0) };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (a.zaposlenik.prezime + a.zaposlenik.ime).localeCompare(b.zaposlenik.prezime + b.zaposlenik.ime, "hr")),
+    [db.zaposlenici, db.evidencijaRada, db.satiPoNalogu, db.postavkePlaca, datum]);
+
+  const otvoriUnos = (r) => {
+    if (!mozeMijenjati) return;
+    setUredjivanje(r.zaposlenik.id);
+    setRedoviUnos(r.uneseno.length ? r.uneseno.map((u) => ({ radniNalogId: u.radniNalogId, sati: u.sati })) : [{ radniNalogId: "", sati: "" }]);
+  };
+  const dodajRedak = () => setRedoviUnos([...redoviUnos, { radniNalogId: "", sati: "" }]);
+  const azurirajRedak = (i, patch) => setRedoviUnos(redoviUnos.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  const obrisiRedak = (i) => setRedoviUnos(redoviUnos.filter((_, idx) => idx !== i));
+
+  const zbrojUnosa = redoviUnos.reduce((s, r) => s + (Number(r.sati) || 0), 0);
+  const trenutniRadnik = radnici.find((r) => r.zaposlenik.id === uredjivanje);
+  const poklapaSe = trenutniRadnik && Math.abs(zbrojUnosa - trenutniRadnik.satiPrijave) < 0.01;
+
+  // Naloge se ne filtrira — samo poredaju tako da oni koji odgovaraju kompetencijama radnika i
+  // nisu završeni idu prvi. Ovo je samo pomoć pri odabiru, ne ograničenje.
+  const naloziZaOdabir = (zaposlenik) => {
+    const kompetencije = zaposlenik?.kompetencije || [];
+    return [...db.radniNalozi].sort((a, b) => {
+      const rang = (n) => (n.status === "Završen" ? 2 : kompetencije.includes(n.faza) ? 0 : 1);
+      const ra = rang(a), rb = rang(b);
+      return ra !== rb ? ra - rb : a.broj.localeCompare(b.broj);
+    });
+  };
+
+  const spremi = () => {
+    if (!poklapaSe) return;
+    const validni = redoviUnos.filter((r) => r.radniNalogId && Number(r.sati) > 0);
+    if (validni.length === 0) { showToast("Dodaj barem jedan redak s nalogom i satima."); return; }
+
+    const dotaknutiStari = new Set(db.satiPoNalogu.filter((s) => s.zaposlenikId === uredjivanje && s.datum === datum).map((s) => s.radniNalogId));
+    const bezStarih = db.satiPoNalogu.filter((s) => !(s.zaposlenikId === uredjivanje && s.datum === datum));
+    const noviRedovi = validni.map((r) => ({ id: uid("spn"), datum, zaposlenikId: uredjivanje, radniNalogId: r.radniNalogId, sati: Number(r.sati) }));
+    const noviSatiPoNalogu = [...bezStarih, ...noviRedovi];
+
+    const sviDotaknuti = new Set([...dotaknutiStari, ...validni.map((r) => r.radniNalogId)]);
+    const noviRadniNalozi = db.radniNalozi.map((n) => (sviDotaknuti.has(n.id) ? { ...n, utrosenoSati: zbrojSatiZaNalog(n.id, noviSatiPoNalogu) } : n));
+
+    update("satiPoNalogu", noviSatiPoNalogu);
+    update("radniNalozi", noviRadniNalozi);
+    setUredjivanje(null);
+    showToast("Sati zabilježeni.");
+  };
+
+  return (
+    <div>
+      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Dnevni unos po radniku — birani nalozi i sati moraju se točno poklopiti sa satima iz evidencije prijave/odjave prije spremanja.</p>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+        <span className="label">Dan</span>
+        <input className="input f-mono" type="date" style={{ width: 160 }} value={datum} onChange={(e) => { setDatum(e.target.value); setUredjivanje(null); }} />
+      </div>
+
+      {radnici.length === 0 ? <EmptyState text="Nitko nije evidentiran kao da je radio taj dan." /> : (
+        <table className="erp-table">
+          <thead><tr><th>Zaposlenik</th><th style={{ width: 90 }}>Prijava</th><th style={{ width: 90 }}>Uneseno</th><th style={{ width: 110 }}>Status</th><th style={{ width: 90 }}></th></tr></thead>
+          <tbody>
+            {radnici.map((r) => {
+              const zavrseno = r.uneseno.length > 0 && Math.abs(r.satiUneseno - r.satiPrijave) < 0.01;
+              return (
+                <tr key={r.zaposlenik.id}>
+                  <td>{r.zaposlenik.prezime} {r.zaposlenik.ime}</td>
+                  <td className="f-mono">{r.satiPrijave.toFixed(1)} h</td>
+                  <td className="f-mono" style={{ color: r.uneseno.length > 0 && !zavrseno ? "var(--rust)" : "inherit" }}>{r.satiUneseno.toFixed(1)} h</td>
+                  <td>{zavrseno ? <span style={{ color: "var(--green)", fontSize: 12 }}>✓ Uneseno</span> : r.uneseno.length > 0 ? <span style={{ color: "var(--rust)", fontSize: 12 }}>Ne poklapa se</span> : <span style={{ color: "var(--ink-faint)", fontSize: 12 }}>—</span>}</td>
+                  <td>{mozeMijenjati && <Btn variant="ghost" size="sm" onClick={() => otvoriUnos(r)}>{r.uneseno.length ? "Uredi" : "Unesi"}</Btn>}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
+      {uredjivanje && trenutniRadnik && (
+        <Modal wide title={`Sati po nalozima — ${zaposlenikIme(uredjivanje)} — ${fmtDate(datum)}`} onClose={() => setUredjivanje(null)}
+          footer={<><Btn onClick={() => setUredjivanje(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi} disabled={!poklapaSe}>Spremi</Btn></>}>
+          <table className="erp-table" style={{ marginBottom: 10 }}>
+            <thead><tr><th>Radni nalog</th><th style={{ width: 100 }}>Sati</th><th style={{ width: 40 }}></th></tr></thead>
+            <tbody>
+              {redoviUnos.map((r, i) => (
+                <tr key={i}>
+                  <td>
+                    <select className="select" value={r.radniNalogId} onChange={(e) => azurirajRedak(i, { radniNalogId: e.target.value })}>
+                      <option value="">— odaberi —</option>
+                      {naloziZaOdabir(trenutniRadnik.zaposlenik).map((n) => (
+                        <option key={n.id} value={n.id}>{(trenutniRadnik.zaposlenik.kompetencije || []).includes(n.faza) ? "★ " : ""}{n.broj} — {n.naziv} ({n.faza})</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td><input className="input f-mono" type="number" min="0" step="0.5" value={r.sati} onChange={(e) => azurirajRedak(i, { sati: e.target.value })} /></td>
+                  <td><button className="btn btn-icon btn-ghost" onClick={() => obrisiRedak(i)}><Trash2 size={14} /></button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajRedak}>Dodaj redak</Btn>
+
+          <div className="card" style={{ padding: 12, marginTop: 14, background: poklapaSe ? "#EAF6EF" : "#FBEAE6", border: `1px solid ${poklapaSe ? "#B9E3C9" : "#F0C2B5"}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+              <span>Uneseno: <strong className="f-mono">{zbrojUnosa.toFixed(1)} h</strong></span>
+              <span>Prijava (evidencija): <strong className="f-mono">{trenutniRadnik.satiPrijave.toFixed(1)} h</strong></span>
+            </div>
+            {!poklapaSe && <div style={{ fontSize: 12, color: "var(--rust)", marginTop: 6 }}>Razlika {Math.abs(zbrojUnosa - trenutniRadnik.satiPrijave).toFixed(1)} h — mora se točno poklopiti prije spremanja.</div>}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija, mojaPozicija }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "zaposlenici");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "zaposlenici");
@@ -6704,6 +6849,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
         {dozvKartice.some((k) => k.key === "pozicije") && <div className={`nav-tab ${tab === "pozicije" ? "active" : ""}`} onClick={() => setTab("pozicije")}>Pozicije</div>}
         {dozvKartice.some((k) => k.key === "evidencija") && <div className={`nav-tab ${tab === "evidencija" ? "active" : ""}`} onClick={() => setTab("evidencija")}>Evidencija rada</div>}
         {dozvKartice.some((k) => k.key === "obracun") && <div className={`nav-tab ${tab === "obracun" ? "active" : ""}`} onClick={() => setTab("obracun")}>Obračun plaća</div>}
+        {dozvKartice.some((k) => k.key === "satinalozi") && <div className={`nav-tab ${tab === "satinalozi" ? "active" : ""}`} onClick={() => setTab("satinalozi")}>Sati po nalozima</div>}
       </div>
 
       {tab === "zaposlenici" && (
@@ -6772,6 +6918,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
       {tab === "evidencija" && <EvidencijaTab db={db} update={update} patchEvidencija={patchEvidencija} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "evidencija").izmjene} />}
 
       {tab === "obracun" && <ObracunPlacaTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "obracun").izmjene} />}
+      {tab === "satinalozi" && <SatiPoNalozimaTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "satinalozi").izmjene} />}
 
       {modal === "zap" && (
         <Modal title={zapForm.id ? "Uredi zaposlenika" : "Novi zaposlenik"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={saveZap}>Spremi</Btn></>}>

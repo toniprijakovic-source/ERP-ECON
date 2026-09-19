@@ -28,6 +28,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada",
   "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
   "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca",
+  "satiPoNalogu",
 ];
 
 // Svaki modul (isti "moduli" popis kao u pozicijeZaposlenika) dijeli se na kartice — iste
@@ -50,7 +51,7 @@ const KARTICE_MODULA = {
     postavke: { citanje: ["postavkeTvrtke"], pisanje: ["postavkeTvrtke"] },
   },
   proizvodnja: {
-    tablica: { citanje: ["radniNalozi", "projekti", "materijali", "katalogProfila", "narudzbenice"], pisanje: ["radniNalozi", "materijali"] },
+    tablica: { citanje: ["radniNalozi", "projekti", "materijali", "katalogProfila", "narudzbenice", "satiPoNalogu"], pisanje: ["radniNalozi", "materijali"] },
     gantogram: { citanje: ["radniNalozi", "radniCentri", "kapacitetiDana", "projekti", "zaposlenici"], pisanje: ["radniNalozi", "radniCentri", "kapacitetiDana"] },
     rezanje: { citanje: ["programiRezanja", "katalogProfila", "materijali", "radniNalozi", "zaposlenici"], pisanje: ["programiRezanja", "kapacitetiDana", "materijali"] },
     isporuke: { citanje: ["projekti"], pisanje: ["projekti"] },
@@ -74,6 +75,7 @@ const KARTICE_MODULA = {
     pozicije: { citanje: ["pozicijeZaposlenika"], pisanje: ["pozicijeZaposlenika"] },
     evidencija: { citanje: ["evidencijaRada", "postavkePlaca", "praznici"], pisanje: ["evidencijaRada"] },
     obracun: { citanje: ["evidencijaRada", "postavkePlaca", "praznici", "zaposlenici", "doplaciPlaca", "postavkeTvrtke"], pisanje: ["postavkePlaca", "praznici", "doplaciPlaca"] },
+    satinalozi: { citanje: ["evidencijaRada", "postavkePlaca", "radniNalozi", "zaposlenici", "satiPoNalogu"], pisanje: ["satiPoNalogu", "radniNalozi"] },
   },
 };
 
