@@ -1540,6 +1540,31 @@ export default function App() {
     }).catch(() => showToast("Greška pri spremanju — provjeri internetsku vezu."));
   };
 
+  // Ciljana izmjena upitiNabave — isti razlog i isti oblik (upsert/remove po id-u) kao
+  // patchEvidencija, uz OPTIMISTIČNO lokalno ažuriranje kao patchProjekt (ponuda dobavljača se
+  // uređuje polje po polje, pa se ne smije čekati mreža za svaki unos). upsert prima CIJELI
+  // upit-objekt (zamjenjuje postojeći po id-u, ili ga dodaje ako je nov) — ne parcijalni patch.
+  const patchUpiti = (upsert = [], remove = []) => {
+    setDb((prev) => {
+      const removeSet = new Set(remove);
+      const upsertMap = new Map(upsert.map((u) => [u.id, u]));
+      const postojeciIds = new Set(prev.upitiNabave.map((u) => u.id));
+      const rezultat = prev.upitiNabave.filter((u) => !removeSet.has(u.id)).map((u) => (upsertMap.has(u.id) ? upsertMap.get(u.id) : u));
+      upsert.forEach((u) => { if (!postojeciIds.has(u.id)) rezultat.push(u); });
+      return { ...prev, upitiNabave: rezultat };
+    });
+    const token = localStorage.getItem("erp_token");
+    fetch(`${API_URL}/api/upiti/patch`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ upsert, remove }),
+    }).then(async (res) => {
+      if (!res.ok) { showToast("Greška pri spremanju upita."); return; }
+      const data = await res.json();
+      setDb((prev) => ({ ...prev, upitiNabave: data.upitiNabave }));
+    }).catch(() => showToast("Greška pri spremanju — provjeri internetsku vezu."));
+  };
+
   // Ponovno učitava jedan ključ s backenda i osvježava lokalni state BEZ ponovnog PUT-a —
   // koristi se nakon promjena koje backend napravi izravno (npr. hashiranje lozinke), gdje
   // bi obični update() prepisao stvarni hash lokalnom (nepotpunom) kopijom podataka.
@@ -1649,9 +1674,9 @@ export default function App() {
         <div style={{ padding: 24, flex: 1, overflowY: "auto" }}>
           {aktivnaStranica === "dashboard" && <Dashboard db={db} setPage={setPage} />}
           {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
-          {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
+          {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
-          {aktivnaStranica === "projekti" && <ProjektiPage db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} />}
+          {aktivnaStranica === "projekti" && <ProjektiPage db={db} update={update} patchProjekt={patchProjekt} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "fakturiranje" && <FakturiranjePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "partneri" && <PartneriPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} patchEvidencija={patchEvidencija} mojaPozicija={mojaPozicija} />}
@@ -2460,7 +2485,7 @@ const generirajBrojUpita = (upiti) => {
 };
 
 // Kreira novi Upit (RFQ) u Nabavi na temelju popisa potrebnog materijala definiranog na projektu
-const kreirajUpitIzMaterijala = (projekt, db, update, showToast) => {
+const kreirajUpitIzMaterijala = (projekt, db, patchUpiti, showToast) => {
   const stavke = (projekt.materijalStavke || []).filter((s) => s.materijalId).map((s) => {
     const m = db.materijali.find((x) => x.id === s.materijalId);
     const jeDuzina = s.nacinUnosa === "duzina";
@@ -2483,13 +2508,13 @@ const kreirajUpitIzMaterijala = (projekt, db, update, showToast) => {
   });
   if (stavke.length === 0) { showToast("Nema definiranog materijala na projektu — dodaj stavke prije kreiranja upita."); return null; }
   const noviUpit = { id: uid("upit"), broj: generirajBrojUpita(db.upitiNabave), datum: todayISO(), izradioId: projekt.voditeljId || "", status: "Priprema", napomena: `Kreirano iz projekta ${projekt.sifra} — ${projekt.naziv}`, izvorProjektaId: projekt.id, stavke };
-  update("upitiNabave", [...db.upitiNabave, noviUpit]);
+  patchUpiti([noviUpit], []);
   showToast(`Upit ${noviUpit.broj} kreiran u Nabavi (Upiti materijala).`);
   return noviUpit;
 };
 
 // Grupira odabrane (a još nenaručene) stavke upita po dobavljaču i stvara narudžbenice + skladišne artikle
-const generirajNarudzbeIzUpita = (upit, db, update, showToast) => {
+const generirajNarudzbeIzUpita = (upit, db, update, patchUpiti, showToast) => {
   const zaObradu = upit.stavke.filter((s) => s.odabranaPonudaId && !s.narudzbenicaId);
   if (zaObradu.length === 0) { showToast("Nema odabranih pozicija spremnih za narudžbu."); return; }
   const poDobavljacu = {};
@@ -2532,12 +2557,12 @@ const generirajNarudzbeIzUpita = (upit, db, update, showToast) => {
 
   update("materijali", noviMaterijali);
   update("narudzbenice", noveNarudzbenice);
-  update("upitiNabave", db.upitiNabave.map((u) => (u.id === upit.id ? { ...u, stavke: u.stavke.map((s) => (azuriranjeStavkiId[s.id] ? { ...s, narudzbenicaId: azuriranjeStavkiId[s.id] } : s)), status: "Zatvoreno" } : u)));
+  patchUpiti([{ ...upit, stavke: upit.stavke.map((s) => (azuriranjeStavkiId[s.id] ? { ...s, narudzbenicaId: azuriranjeStavkiId[s.id] } : s)), status: "Zatvoreno" }], []);
   showToast(`Generirano ${Object.keys(poDobavljacu).length} narudžbenica prema dobavljačima.`);
 };
 
-function UpitDetaljModal({ upit, db, update, showToast, onClose, onOtvoriPrint }) {
-  const azuriraj = (noveStavke) => update("upitiNabave", db.upitiNabave.map((u) => (u.id === upit.id ? { ...u, stavke: noveStavke } : u)));
+function UpitDetaljModal({ upit, db, update, patchUpiti, showToast, onClose, onOtvoriPrint }) {
+  const azuriraj = (noveStavke) => patchUpiti([{ ...upit, stavke: noveStavke }], []);
   const dodajPonudu = (stavkaId) => azuriraj(upit.stavke.map((s) => (s.id === stavkaId ? { ...s, ponude: [...s.ponude, { id: uid("usp"), dobavljacId: db.dobavljaci[0]?.id || "", cijena: 0, jedinicaCijene: "kg", dodatak: Number(db.dobavljaci[0]?.dodatakIznos) || 0, napomena: "" }] } : s)));
   const azurirajPonudu = (stavkaId, ponudaId, patch) => azuriraj(upit.stavke.map((s) => (s.id === stavkaId ? { ...s, ponude: s.ponude.map((p) => (p.id === ponudaId ? { ...p, ...patch } : p)) } : s)));
   // Kad se promijeni dobavljač na ponudi, dodatak se predpuni njegovim zadanim iznosom (Partneri
@@ -2551,7 +2576,7 @@ function UpitDetaljModal({ upit, db, update, showToast, onClose, onOtvoriPrint }
     <Modal xwide title={`Ponude dobavljača — Upit ${upit.broj}`} onClose={onClose} footer={
       <>
         <Btn onClick={onClose}>Zatvori</Btn>
-        <Btn variant="primary" icon={FolderInput} onClick={() => generirajNarudzbeIzUpita(upit, db, update, showToast)}>Generiraj narudžbe za odabrane pozicije</Btn>
+        <Btn variant="primary" icon={FolderInput} onClick={() => generirajNarudzbeIzUpita(upit, db, update, patchUpiti, showToast)}>Generiraj narudžbe za odabrane pozicije</Btn>
       </>
     }>
       <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Za svaku stavku unesi ponude pristiglih dobavljača (cijena po kg ili po m, prema tome kako je dobavljač naveo), zatim označi koju ponudu odabireš. Zelenom je označena trenutno najjeftinija ponuda za tu stavku (uključuje i eventualni dodatak dobavljača za transport/pakiranje). Nakon toga generiraj narudžbe — automatski grupirane po dobavljaču.</p>
@@ -2604,7 +2629,7 @@ function UpitDetaljModal({ upit, db, update, showToast, onClose, onOtvoriPrint }
   );
 }
 
-function NabavaPage({ db, update, showToast, mojaPozicija }) {
+function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "nabava");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "narudzbenice");
   useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "narudzbenice"); }, [dozvKartice, tab]);
@@ -2659,8 +2684,7 @@ function NabavaPage({ db, update, showToast, mojaPozicija }) {
   const openUpitAdd = () => { setUpitForm(emptyUpit()); setModal("upit"); };
   const openUpitEdit = (row) => { setUpitForm(JSON.parse(JSON.stringify(row))); setModal("upit"); };
   const saveUpit = () => {
-    if (upitForm.id) update("upitiNabave", db.upitiNabave.map((u) => (u.id === upitForm.id ? upitForm : u)));
-    else update("upitiNabave", [...db.upitiNabave, { ...upitForm, id: uid("upit") }]);
+    patchUpiti([upitForm.id ? upitForm : { ...upitForm, id: uid("upit") }], []);
     setModal(null);
     showToast("Upit spremljen.");
   };
@@ -2753,7 +2777,7 @@ function NabavaPage({ db, update, showToast, mojaPozicija }) {
           label={del.type === "upit" ? del.row.broj : del.broj}
           onCancel={() => setDel(null)}
           onConfirm={() => {
-            if (del?.type === "upit") update("upitiNabave", db.upitiNabave.filter((u) => u.id !== del.row.id));
+            if (del?.type === "upit") patchUpiti([], [del.row.id]);
             else update("narudzbenice", db.narudzbenice.filter((n) => n.id !== del.id));
             setDel(null);
             showToast("Stavka obrisana.");
@@ -2762,7 +2786,7 @@ function NabavaPage({ db, update, showToast, mojaPozicija }) {
       )}
 
       {postavkeOpen && <PostavkeTvrtkeModal postavke={db.postavkeTvrtke} onSave={savePostavke} onClose={() => setPostavkeOpen(false)} />}
-      {upitDetalj && <UpitDetaljModal upit={db.upitiNabave.find((u) => u.id === upitDetalj.id) || upitDetalj} db={db} update={update} showToast={showToast} onClose={() => setUpitDetalj(null)} />}
+      {upitDetalj && <UpitDetaljModal upit={db.upitiNabave.find((u) => u.id === upitDetalj.id) || upitDetalj} db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} onClose={() => setUpitDetalj(null)} />}
       {printDoc && <DokumentNabavePrintModal {...printDoc} postavkeTvrtke={db.postavkeTvrtke} onClose={() => setPrintDoc(null)} />}
     </div>
   );
@@ -4601,7 +4625,7 @@ function NormativiModal({ db, update, showToast, onClose }) {
 }
 
 /* ============================== DETALJI PROJEKTA ============================== */
-function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsync, showToast, setPage, onClose }) {
+function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsync, patchUpiti, showToast, setPage, onClose }) {
   const kupac = db.kupci.find((k) => k.id === projekt.kupacId);
   const voditelj = db.zaposlenici.find((z) => z.id === projekt.voditeljId);
   const nalozi = db.radniNalozi.filter((r) => r.projektId === projekt.id);
@@ -4679,7 +4703,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
   const azurirajZadatke = (noviZadaci) => patchProjekt({ zadaci: noviZadaci });
   const azurirajMaterijal = (noveStavke) => patchProjekt({ materijalStavke: noveStavke });
   const pokreniKreiranjeUpita = () => {
-    const noviUpit = kreirajUpitIzMaterijala({ ...projekt, materijalStavke }, db, update, showToast);
+    const noviUpit = kreirajUpitIzMaterijala({ ...projekt, materijalStavke }, db, patchUpiti, showToast);
     if (noviUpit && setPage) setPage("nabava");
   };
   const toggleZadatak = (zadId, checked) => azurirajZadatke(zadaci.map((z) => (z.id === zadId ? { ...z, izvrseno: checked, izvrsioId: checked ? z.izvrsioId : null, datumIzvrsenja: checked ? z.datumIzvrsenja || todayISO() : null } : z)));
@@ -5308,7 +5332,7 @@ function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
   );
 }
 
-function ProjektiPage({ db, update, patchProjekt, showToast, setPage, mojaPozicija }) {
+function ProjektiPage({ db, update, patchProjekt, patchUpiti, showToast, setPage, mojaPozicija }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "projekti");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "projekti");
   useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "projekti"); }, [dozvKartice, tab]);
@@ -5703,7 +5727,7 @@ function ProjektiPage({ db, update, patchProjekt, showToast, setPage, mojaPozici
 
       {cjenikOpen && <CjenikRadaModal cjenikRada={db.cjenikRada} onSave={saveCjenik} onClose={() => setCjenikOpen(false)} />}
       {zadaciOpen && <StandardniZadaciModal standardniZadaci={db.standardniZadaci} update={update} showToast={showToast} onClose={() => setZadaciOpen(false)} />}
-      {detalj && <ProjektDetaljModal projekt={db.projekti.find((p) => p.id === detalj.id) || detalj} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} setPage={setPage} onClose={() => setDetalj(null)} />}
+      {detalj && <ProjektDetaljModal projekt={db.projekti.find((p) => p.id === detalj.id) || detalj} db={db} update={update} patchProjekt={patchProjekt} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} onClose={() => setDetalj(null)} />}
       {printPonuda && <PonudaPrintModal ponuda={printPonuda} kupac={db.kupci.find((k) => k.id === printPonuda.kupacId)} db={db} onClose={() => setPrintPonuda(null)} />}
       {modal === "laser" && <PonudaLaseraModal form={laserForm} setForm={setLaserForm} db={db} onSave={saveLaser} onClose={() => setModal(null)} />}
       {printLaser && <PonudaLaseraPrintModal ponuda={printLaser} kupac={db.kupci.find((k) => k.id === printLaser.kupacId)} db={db} onClose={() => setPrintLaser(null)} />}

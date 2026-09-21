@@ -390,6 +390,48 @@ app.put("/api/projekti/:id/patch", autentikacija, async (req, res) => {
   }
 });
 
+// ---------- Ciljana izmjena upitiNabave (Upiti materijala u Nabavi) ----------
+// Isti oblik kao /api/evidencija/patch (upsert po id-u + remove) — ponuda dobavljača u jednom
+// upitu uređuje se često i u sitnim koracima (cijena, jedinica, dodatak, napomena po svakoj
+// ponudi), pa obična PUT /api/data/upitiNabave sa cijelim popisom nosi isti rizik tihog
+// prepisivanja tuđe/novije izmjene kao i evidencijaRada/projekti.
+app.put("/api/upiti/patch", autentikacija, async (req, res) => {
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  const { pisivo } = izracunajDozvoljeneKljuceve(pozicija);
+  if (!pisivo.has("upitiNabave")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za mijenjanje upita nabave." });
+
+  const upsert = Array.isArray(req.body.upsert) ? req.body.upsert : [];
+  const remove = Array.isArray(req.body.remove) ? req.body.remove : [];
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query("SELECT value FROM app_data WHERE key = 'upitiNabave' FOR UPDATE");
+    const trenutno = r.rows[0]?.value || [];
+    const removeSet = new Set(remove);
+    const upsertMap = new Map(upsert.map((u) => [u.id, u]));
+    const postojeciIds = new Set(trenutno.map((u) => u.id));
+    const rezultat = trenutno
+      .filter((u) => !removeSet.has(u.id))
+      .map((u) => (upsertMap.has(u.id) ? upsertMap.get(u.id) : u));
+    upsert.forEach((u) => { if (!postojeciIds.has(u.id)) rezultat.push(u); });
+
+    await client.query(
+      `INSERT INTO app_data (key, value, updated_at) VALUES ('upitiNabave', $1, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [JSON.stringify(rezultat)]
+    );
+    await client.query("COMMIT");
+    res.json({ ok: true, upitiNabave: rezultat });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Greška kod izmjene upita nabave:", e);
+    res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+  } finally {
+    client.release();
+  }
+});
+
 // ---------- podaci (sve zaštićeno loginom) ----------
 // Vraća SVE ključeve odjednom — koristi se pri pokretanju aplikacije. Ključevi izvan
 // zaposlenikovih dopuštenih kartica vraćaju se kao prazan placeholder (a ne izostavljeni)
