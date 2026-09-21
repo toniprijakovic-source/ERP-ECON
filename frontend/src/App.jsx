@@ -4,7 +4,7 @@ import {
   Plus, Pencil, Trash2, X, Search, AlertTriangle, CheckCircle2, ArrowRight,
   Clock, ChevronRight, Save, PackageCheck, PackageMinus, Settings, Layers,
   ChevronDown, ChevronUp, FolderInput, Eye, UserCog, CalendarRange,
-  Database, Download, Upload, AlertCircle, Copy
+  Database, Download, Upload, AlertCircle, Copy, GripVertical
 } from "lucide-react";
 import logoEcon from "./assets/logo-econ.jpg";
 
@@ -999,13 +999,27 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
 }
 
 /* ============================== GENERIC ENTITY TABLE PAGE ============================== */
-function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete, columns, searchKeys, addLabel, rowClass, readOnly = false }) {
+// onReorder (opcionalno): kad je zadan, redovi postaju povlačivi (drag & drop) — nakon ispuštanja
+// poziva se onReorder(novaLista) s prikazanim redcima u novom poretku, a pozivatelj odlučuje kako
+// tu novu listu trajno spremiti (npr. upisati redni broj na svaki zapis). Povlačenje radi na
+// TRENUTNO PRIKAZANOJ (filtriranoj) listi — ima smisla dok pretraga nije aktivna.
+function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete, columns, searchKeys, addLabel, rowClass, readOnly = false, onReorder }) {
   const [q, setQ] = useState("");
+  const [dragOd, setDragOd] = useState(null);
   const filtered = useMemo(() => {
     if (!q.trim()) return data;
     const s = q.toLowerCase();
     return data.filter((row) => searchKeys.some((k) => String(row[k] ?? "").toLowerCase().includes(s)));
   }, [q, data, searchKeys]);
+
+  const ispusti = (naIndeks) => {
+    if (dragOd == null || dragOd === naIndeks) { setDragOd(null); return; }
+    const nova = [...filtered];
+    const [maknuto] = nova.splice(dragOd, 1);
+    nova.splice(naIndeks, 0, maknuto);
+    setDragOd(null);
+    onReorder(nova);
+  };
 
   return (
     <div>
@@ -1017,10 +1031,17 @@ function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete
       <div className="card" style={{ overflowX: "auto" }}>
         {filtered.length === 0 ? <EmptyState text="Nema podataka." /> : (
           <table className="erp-table">
-            <thead><tr>{columns.map((c) => <th key={c.key} style={c.width ? { width: c.width } : undefined}>{c.label}</th>)}{!readOnly && <th style={{ width: 90 }}></th>}</tr></thead>
+            <thead><tr>{onReorder && <th style={{ width: 24 }}></th>}{columns.map((c) => <th key={c.key} style={c.width ? { width: c.width } : undefined}>{c.label}</th>)}{!readOnly && <th style={{ width: 90 }}></th>}</tr></thead>
             <tbody>
-              {filtered.map((row) => (
-                <tr key={row.id} className={rowClass ? rowClass(row) : ""}>
+              {filtered.map((row, idx) => (
+                <tr
+                  key={row.id} className={rowClass ? rowClass(row) : ""}
+                  draggable={!!onReorder} style={onReorder ? { cursor: "grab" } : undefined}
+                  onDragStart={onReorder ? () => setDragOd(idx) : undefined}
+                  onDragOver={onReorder ? (e) => e.preventDefault() : undefined}
+                  onDrop={onReorder ? () => ispusti(idx) : undefined}
+                >
+                  {onReorder && <td style={{ textAlign: "center", color: "var(--ink-faint)" }}><GripVertical size={14} /></td>}
                   {columns.map((c) => <td key={c.key}>{c.render ? c.render(row) : row[c.key]}</td>)}
                   {!readOnly && (
                     <td>
@@ -5251,6 +5272,19 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
 
+  // Dok nitko ručno ne posloži redoslijed (povlačenjem), projekti se prirodno sortiraju po
+  // šifri. Čim se bilo koji projekt jednom ručno povuče, SVI projekti dobiju eksplicitan
+  // "poredak" (potpuni snapshot trenutnog redoslijeda) i taj poredak od tad vrijedi umjesto
+  // automatskog sortiranja — dok ga netko ne vrati na automatski.
+  const imaRucniPoredak = db.projekti.some((p) => p.poredak != null);
+  const projektiSortirani = useMemo(() => {
+    const lista = [...db.projekti];
+    lista.sort(imaRucniPoredak ? (a, b) => (a.poredak ?? Infinity) - (b.poredak ?? Infinity) : (a, b) => usporediPrirodno(a.sifra, b.sifra));
+    return lista;
+  }, [db.projekti, imaRucniPoredak]);
+  const rasporediProjekte = (novaLista) => update("projekti", novaLista.map((p, i) => ({ ...p, poredak: i })));
+  const vratiAutomatskoSortiranje = () => update("projekti", db.projekti.map(({ poredak, ...ostalo }) => ostalo));
+
   const noviZadaciIzStandarda = () => (db.standardniZadaci || []).map((t) => ({ id: uid("zad"), naziv: t.naziv, izvrseno: false, izvrsioId: null, datumIzvrsenja: null, planiraniDatum: null }));
   const emptyProj = () => ({ sifra: "", naziv: "", kupacId: db.kupci[0]?.id || "", status: "Ponuda", vrijednost: 0, rokPocetka: todayISO(), rokZavrsetka: todayISO(), opis: "", voditeljId: "", zadaci: noviZadaciIzStandarda(), faze: praznaFazaSati() });
   const [projForm, setProjForm] = useState(emptyProj());
@@ -5380,8 +5414,15 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
       </div>
 
       {tab === "projekti" && (
-        <EntityPage
-          title="" data={db.projekti}
+        <>
+          {imaRucniPoredak && mozeProjekti && (
+            <div style={{ marginBottom: 10 }}>
+              <Btn variant="ghost" size="sm" onClick={vratiAutomatskoSortiranje}>Vrati automatsko sortiranje (po šifri)</Btn>
+            </div>
+          )}
+          <EntityPage
+          title="" data={projektiSortirani}
+          onReorder={mozeProjekti ? rasporediProjekte : undefined}
           onAdd={() => { setProjForm(emptyProj()); setModal("proj"); }}
           onEdit={(row) => { setProjForm({ ...emptyProj(), ...row, zadaci: row.zadaci || noviZadaciIzStandarda(), voditeljId: row.voditeljId || "", faze: { ...praznaFazaSati(), ...(row.faze || {}) } }); setModal("proj"); }}
           onDelete={(r) => setDel({ type: "proj", row: r })}
@@ -5397,7 +5438,8 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
             { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
             { key: "detalji", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setDetalj(r)}>Detalji</Btn> },
           ]}
-        />
+          />
+        </>
       )}
 
       {tab === "ponude" && (
