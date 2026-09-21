@@ -2777,8 +2777,26 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija }) {
           label={del.type === "upit" ? del.row.broj : del.broj}
           onCancel={() => setDel(null)}
           onConfirm={() => {
-            if (del?.type === "upit") patchUpiti([], [del.row.id]);
-            else update("narudzbenice", db.narudzbenice.filter((n) => n.id !== del.id));
+            if (del?.type === "upit") {
+              patchUpiti([], [del.row.id]);
+            } else {
+              // Oslobodi stavke upita zaključane ovom narudžbenicom, da se dobavljač/ponuda mogu
+              // ponovno odabrati i narudžbenica ponovno generirati.
+              const pogodjeniUpiti = db.upitiNabave
+                .filter((u) => u.stavke.some((s) => s.narudzbenicaId === del.id))
+                .map((u) => ({ ...u, stavke: u.stavke.map((s) => (s.narudzbenicaId === del.id ? { ...s, narudzbenicaId: null } : s)) }));
+              if (pogodjeniUpiti.length) patchUpiti(pogodjeniUpiti, []);
+
+              // Ako je roba već zaprimljena, poništi povećanje zaliha prije brisanja narudžbenice.
+              const materijali = del.status === "Primljeno"
+                ? db.materijali.map((m) => {
+                    const stavka = del.stavke.find((s) => s.materijalId === m.id);
+                    return stavka ? { ...m, kolicina: m.kolicina - efektivnaKolicinaMaterijala(stavka, m) } : m;
+                  })
+                : db.materijali;
+              if (materijali !== db.materijali) update("materijali", materijali);
+              update("narudzbenice", db.narudzbenice.filter((n) => n.id !== del.id));
+            }
             setDel(null);
             showToast("Stavka obrisana.");
           }}
