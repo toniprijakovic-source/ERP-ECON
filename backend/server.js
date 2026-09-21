@@ -28,7 +28,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada",
   "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
   "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca",
-  "satiPoNalogu",
+  "satiPoNalogu", "izdatnice",
 ];
 
 // Svaki modul (isti "moduli" popis kao u pozicijeZaposlenika) dijeli se na kartice — iste
@@ -41,9 +41,10 @@ const KARTICE_MODULA = {
     pregled: { citanje: ["cjenikRada", "fakture", "materijali", "ponude", "projekti", "radniNalozi"], pisanje: [] },
   },
   skladiste: {
-    zalihe: { citanje: ["materijali", "katalogProfila", "kvaliteteMaterijala"], pisanje: ["materijali"] },
+    zalihe: { citanje: ["materijali", "katalogProfila", "kvaliteteMaterijala", "projekti", "izdatnice", "zaposlenici"], pisanje: ["materijali", "izdatnice"] },
     katalog: { citanje: ["katalogProfila"], pisanje: ["katalogProfila"] },
     kvaliteta: { citanje: ["kvaliteteMaterijala"], pisanje: ["kvaliteteMaterijala"] },
+    izdatnice: { citanje: ["izdatnice", "materijali", "projekti", "zaposlenici"], pisanje: ["izdatnice", "materijali"] },
   },
   nabava: {
     narudzbenice: { citanje: ["narudzbenice", "dobavljaci", "katalogProfila", "materijali"], pisanje: ["narudzbenice", "materijali"] },
@@ -51,7 +52,7 @@ const KARTICE_MODULA = {
     postavke: { citanje: ["postavkeTvrtke"], pisanje: ["postavkeTvrtke"] },
   },
   proizvodnja: {
-    tablica: { citanje: ["radniNalozi", "projekti", "materijali", "katalogProfila", "narudzbenice", "satiPoNalogu"], pisanje: ["radniNalozi", "materijali"] },
+    tablica: { citanje: ["radniNalozi", "projekti", "materijali", "katalogProfila", "narudzbenice", "satiPoNalogu", "izdatnice", "zaposlenici"], pisanje: ["radniNalozi", "materijali", "izdatnice"] },
     gantogram: { citanje: ["radniNalozi", "radniCentri", "kapacitetiDana", "projekti", "zaposlenici"], pisanje: ["radniNalozi", "radniCentri", "kapacitetiDana"] },
     rezanje: { citanje: ["programiRezanja", "katalogProfila", "materijali", "radniNalozi", "zaposlenici"], pisanje: ["programiRezanja", "kapacitetiDana", "materijali"] },
     isporuke: { citanje: ["projekti"], pisanje: ["projekti"] },

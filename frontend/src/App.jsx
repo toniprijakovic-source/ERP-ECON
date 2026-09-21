@@ -726,7 +726,7 @@ const generirajRfidKod = (ime, prezime, postojeciKodovi) => {
   return kod;
 };
 
-const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi", "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca", "satiPoNalogu"];
+const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi", "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca", "satiPoNalogu", "izdatnice"];
 
 /* ============================== SMALL UI PRIMITIVES ============================== */
 const Btn = ({ variant = "ghost", size, icon: Icon, children, className = "", ...rest }) => (
@@ -1055,7 +1055,7 @@ const MODULI_APLIKACIJE = [
 // (koji ključevi se smiju čitati/mijenjati) živi na backendu — vidi KARTICE_MODULA u server.js.
 const KARTICE_MODULA = {
   dashboard: { kartice: [{ key: "pregled", naziv: "Pregled" }] },
-  skladiste: { kartice: [{ key: "zalihe", naziv: "Zalihe" }, { key: "katalog", naziv: "Katalog profila i limova" }, { key: "kvaliteta", naziv: "Kvaliteta materijala" }] },
+  skladiste: { kartice: [{ key: "zalihe", naziv: "Zalihe" }, { key: "katalog", naziv: "Katalog profila i limova" }, { key: "kvaliteta", naziv: "Kvaliteta materijala" }, { key: "izdatnice", naziv: "Izdatnice" }] },
   nabava: { kartice: [{ key: "narudzbenice", naziv: "Narudžbenice" }, { key: "upiti", naziv: "Upiti materijala" }, { key: "postavke", naziv: "Postavke tvrtke" }] },
   proizvodnja: { kartice: [{ key: "tablica", naziv: "Tablica" }, { key: "gantogram", naziv: "Gantogram" }, { key: "rezanje", naziv: "Plan rezanja" }, { key: "isporuke", naziv: "Isporuke kupaonica" }] },
   projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "ponude", naziv: "Ponude" }, { key: "laser", naziv: "Ponude - Laser" }] },
@@ -1724,9 +1724,15 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
   const mozeZalihe = dozvolaZaKarticu(mojaPozicija, "skladiste", "zalihe").izmjene;
   const mozeKatalog = dozvolaZaKarticu(mojaPozicija, "skladiste", "katalog").izmjene;
   const mozeKvaliteta = dozvolaZaKarticu(mojaPozicija, "skladiste", "kvaliteta").izmjene;
+  const mozeIzdatnice = dozvolaZaKarticu(mojaPozicija, "skladiste", "izdatnice").izmjene;
   const [modal, setModal] = useState(null); // {mode:'add'|'edit', item}
   const [del, setDel] = useState(null);
-  const empty = { sifra: "", naziv: "", tip: TIPOVI_MATERIJALA[0], dimenzije: "", jm: "kg", cijena: 0, kolicina: 0, minZaliha: 0, lokacija: "", kgPoM: 0, kgPoM2: 0 };
+  const [izdajZa, setIzdajZa] = useState(null); // materijalId za predpunjenje IzdatnicaModal, ili true za praznu
+  const [printIzdatnica, setPrintIzdatnica] = useState(null);
+  const [povratZa, setPovratZa] = useState(null);
+  const [delIzdatnica, setDelIzdatnica] = useState(null);
+  const projSifraZaMaterijal = (id) => db.projekti.find((p) => p.id === id)?.sifra || null;
+  const empty = { sifra: "", naziv: "", tip: TIPOVI_MATERIJALA[0], dimenzije: "", jm: "kg", cijena: 0, kolicina: 0, minZaliha: 0, lokacija: "", kgPoM: 0, kgPoM2: 0, projektId: null };
   const [form, setForm] = useState(empty);
   // Opcionalni pomoćni unos "iz kataloga" — bira se profil/lim, upiše dužina (i za lim širina) +
   // komada + kvaliteta materijala, a masa (Trenutno stanje) se sama izračuna umjesto ručnog unosa.
@@ -1811,6 +1817,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
         {dozvKartice.some((k) => k.key === "zalihe") && <div className={`nav-tab ${tab === "zalihe" ? "active" : ""}`} onClick={() => setTab("zalihe")}>Zalihe</div>}
         {dozvKartice.some((k) => k.key === "katalog") && <div className={`nav-tab ${tab === "katalog" ? "active" : ""}`} onClick={() => setTab("katalog")}>Katalog profila i limova</div>}
         {dozvKartice.some((k) => k.key === "kvaliteta") && <div className={`nav-tab ${tab === "kvaliteta" ? "active" : ""}`} onClick={() => setTab("kvaliteta")}>Kvaliteta materijala</div>}
+        {dozvKartice.some((k) => k.key === "izdatnice") && <div className={`nav-tab ${tab === "izdatnice" ? "active" : ""}`} onClick={() => setTab("izdatnice")}>Izdatnice</div>}
       </div>
 
       {tab === "zalihe" && (
@@ -1823,10 +1830,12 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
             { key: "naziv", label: "Naziv" },
             { key: "tip", label: "Tip" },
             { key: "dimenzije", label: "Dimenzije" },
+            { key: "zaProjekt", label: "ZA PROJEKT", render: (r) => projSifraZaMaterijal(r.projektId) || <span style={{ color: "var(--ink-faint)" }}>—</span> },
             { key: "kolicina", label: "Stanje", render: (r) => <span className="f-mono" style={{ color: r.kolicina < r.minZaliha ? "var(--rust)" : "inherit", fontWeight: r.kolicina < r.minZaliha ? 700 : 400 }}>{r.kolicina} {r.jm}{r.kolicina < r.minZaliha && <AlertTriangle size={12} style={{ marginLeft: 4, verticalAlign: -2 }} />}</span> },
             { key: "minZaliha", label: "Min. zaliha", render: (r) => <span className="f-mono">{r.minZaliha} {r.jm}</span> },
             { key: "cijena", label: "Cijena/jed.", render: (r) => <span className="f-mono">{fmtCurDec(r.cijena)}</span> },
             { key: "lokacija", label: "Lokacija" },
+            { key: "izdaj", label: "", render: (r) => mozeIzdatnice && r.kolicina > 0 && <Btn size="sm" variant="ghost" icon={PackageMinus} onClick={() => setIzdajZa(r.id)}>Izdaj na projekt</Btn> },
           ]}
         />
       )}
@@ -1864,6 +1873,40 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
             ]}
           />
         </>
+      )}
+
+      {tab === "izdatnice" && (
+        <EntityPage
+          title="" data={[...db.izdatnice].sort((a, b) => b.datum.localeCompare(a.datum))} onAdd={() => setIzdajZa(true)} onEdit={(row) => setPrintIzdatnica(row)} onDelete={(row) => setDelIzdatnica(row)}
+          addLabel="Nova izdatnica" searchKeys={["broj"]} readOnly={!mozeIzdatnice}
+          columns={[
+            { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
+            { key: "datum", label: "Datum", render: (r) => fmtDate(r.datum) },
+            { key: "projekt", label: "Projekt", render: (r) => { const p = db.projekti.find((pp) => pp.id === r.projektId); return p ? `${p.sifra} — ${p.naziv}` : "—"; } },
+            { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
+            { key: "print", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrintIzdatnica(r)}>Ispis</Btn> },
+            { key: "povrat", label: "", render: (r) => r.status === "Izdano" && mozeIzdatnice ? <Btn size="sm" variant="ghost" onClick={() => setPovratZa(r)}>Zaprimi povrat</Btn> : (r.status === "Zatvoreno" ? <span style={{ fontSize: 11, color: "var(--green)" }}>✓ Povrat zaprimljen</span> : null) },
+          ]}
+        />
+      )}
+
+      {izdajZa && <IzdatnicaModal db={db} update={update} showToast={showToast} initialMaterijalId={izdajZa === true ? null : izdajZa} onClose={() => setIzdajZa(null)} onCreated={(nova) => { setIzdajZa(null); setPrintIzdatnica(nova); }} />}
+      {printIzdatnica && <IzdatnicaPrintModal izdatnica={printIzdatnica} projekt={db.projekti.find((p) => p.id === printIzdatnica.projektId)} izdao={db.zaposlenici.find((z) => z.id === printIzdatnica.izdaoId)} postavkeTvrtke={db.postavkeTvrtke} onClose={() => setPrintIzdatnica(null)} />}
+      {povratZa && <ZaprimiPovratModal izdatnica={povratZa} db={db} update={update} showToast={showToast} onClose={() => setPovratZa(null)} />}
+      {delIzdatnica && (
+        <ConfirmDelete label={delIzdatnica.broj} onCancel={() => setDelIzdatnica(null)} onConfirm={() => {
+          // Brisanje izdatnice mora vratiti na skladište sve što je još "vani" (izdano minus već
+          // zaprimljeni povrat) — inače bi brisanje pogrešno kreirane izdatnice trajno umanjilo
+          // stanje bez traga zašto.
+          const noviMaterijali = db.materijali.map((m) => {
+            const josVani = delIzdatnica.stavke.filter((s) => s.materijalId === m.id).reduce((s, st) => s + (Number(st.kolicinaIzdano) || 0) - (Number(st.kolicinaVraceno) || 0), 0);
+            return josVani > 0 ? { ...m, kolicina: m.kolicina + josVani } : m;
+          });
+          update("materijali", noviMaterijali);
+          update("izdatnice", db.izdatnice.filter((i) => i.id !== delIzdatnica.id));
+          setDelIzdatnica(null);
+          showToast("Izdatnica obrisana, stanje skladišta vraćeno.");
+        }} />
       )}
 
       {modal && (
@@ -1921,7 +1964,15 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
             <Field label="Masa po m² (kg/m²) — za auto-izračun lima">{katalogEntry && jeLimUnos ? <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{katalogEntry.vrijednost}</div> : <input className="input f-mono" type="number" step="0.01" value={form.kgPoM2 || 0} onChange={(e) => setForm({ ...form, kgPoM2: e.target.value })} />}</Field>
             <Field label="Trenutno stanje">{katalogEntry ? <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{izracunataMasaUnos.toFixed(2)}</div> : <input className="input f-mono" type="number" value={form.kolicina} onChange={(e) => setForm({ ...form, kolicina: e.target.value })} />}</Field>
             <Field label="Minimalna zaliha"><input className="input f-mono" type="number" value={form.minZaliha} onChange={(e) => setForm({ ...form, minZaliha: e.target.value })} /></Field>
-            <div style={{ gridColumn: "1 / -1" }}><Field label="Lokacija na skladištu"><input className="input" value={form.lokacija} onChange={(e) => setForm({ ...form, lokacija: e.target.value })} /></Field></div>
+            <Field label="Lokacija na skladištu"><input className="input" value={form.lokacija} onChange={(e) => setForm({ ...form, lokacija: e.target.value })} /></Field>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <Field label="Za projekt (za koji je naručeno — opcionalno)">
+                <select className="select" value={form.projektId || ""} onChange={(e) => setForm({ ...form, projektId: e.target.value || null })}>
+                  <option value="">— Nije rezervirano za projekt —</option>
+                  {db.projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
+                </select>
+              </Field>
+            </div>
           </div>
         </Modal>
       )}
@@ -1948,6 +1999,203 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
       )}
       {kvalDel && <ConfirmDelete label={kvalDel.naziv} onCancel={() => setKvalDel(null)} onConfirm={() => { update("kvaliteteMaterijala", kvaliteteMaterijala.filter((k) => k.id !== kvalDel.id)); setKvalDel(null); showToast("Kvaliteta materijala obrisana."); }} />}
     </div>
+  );
+}
+
+// Izdaje materijal sa skladišta na projekt — bira se projekt, jedan ili više materijala i
+// količine (ograničene na trenutno stanje), stvara se Izdatnica koja se poslije može ispisati i
+// dati u proizvodnju; povrat ostatka rješava se posebno kroz ZaprimiPovratModal.
+function IzdatnicaModal({ db, update, showToast, initialMaterijalId, onClose, onCreated }) {
+  const [projektId, setProjektId] = useState(db.projekti[0]?.id || "");
+  const [izdaoId, setIzdaoId] = useState("");
+  const [napomena, setNapomena] = useState("");
+  const [stavke, setStavke] = useState([{ materijalId: initialMaterijalId || "", kolicina: "" }]);
+  const [saljem, setSaljem] = useState(false);
+
+  const azurirajStavku = (i, patch) => setStavke(stavke.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+  const dodajStavku = () => setStavke([...stavke, { materijalId: "", kolicina: "" }]);
+  const obrisiStavku = (i) => setStavke(stavke.filter((_, idx) => idx !== i));
+
+  const spremi = () => {
+    if (saljem) return; // spriječi dvostruki klik — dvostruko slanje bi dvaput skinulo isto sa skladišta
+    if (!projektId) { showToast("Odaberi projekt."); return; }
+    const validne = stavke.filter((s) => s.materijalId && Number(s.kolicina) > 0);
+    if (validne.length === 0) { showToast("Dodaj barem jednu stavku s materijalom i količinom."); return; }
+    // Zbraja po materijalu — ako je isti materijal odabran u više redaka, provjerava se i skida
+    // ZBROJ svih redaka odjednom, ne svaki redak zasebno (inače bi dva retka od po pola stanja
+    // oba "prošla" provjeru pojedinačno, a zajedno tražila više nego što skladište ima).
+    const zbrojPoMaterijalu = new Map();
+    validne.forEach((s) => zbrojPoMaterijalu.set(s.materijalId, (zbrojPoMaterijalu.get(s.materijalId) || 0) + Number(s.kolicina)));
+    for (const [materijalId, ukupno] of zbrojPoMaterijalu) {
+      const mat = db.materijali.find((m) => m.id === materijalId);
+      if (!mat || ukupno > mat.kolicina) { showToast(`Ukupna količina za "${mat?.naziv || "materijal"}" prelazi trenutno stanje (${mat?.kolicina ?? 0} ${mat?.jm || ""}).`); return; }
+    }
+    setSaljem(true);
+    const noviMaterijali = db.materijali.map((m) => (zbrojPoMaterijalu.has(m.id) ? { ...m, kolicina: m.kolicina - zbrojPoMaterijalu.get(m.id) } : m));
+    const novaIzdatnica = {
+      id: uid("izd"), broj: sljedeciBroj(db.izdatnice, "broj", "IZD-2026-"), datum: todayISO(),
+      projektId, izdaoId: izdaoId || null, napomena, status: "Izdano",
+      stavke: validne.map((s) => {
+        const mat = db.materijali.find((m) => m.id === s.materijalId);
+        return { id: uid("izds"), materijalId: s.materijalId, sifra: mat.sifra, naziv: mat.naziv, jm: mat.jm, kolicinaIzdano: Number(s.kolicina), kolicinaVraceno: null };
+      }),
+    };
+    update("materijali", noviMaterijali);
+    update("izdatnice", [...db.izdatnice, novaIzdatnica]);
+    showToast(`Izdatnica ${novaIzdatnica.broj} kreirana.`);
+    onCreated(novaIzdatnica);
+  };
+
+  return (
+    <Modal wide title="Nova izdatnica — izdaj materijal na projekt" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi} disabled={saljem}>{saljem ? "Spremanje…" : "Kreiraj izdatnicu"}</Btn></>}>
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
+        <Field label="Projekt">
+          <select className="select" value={projektId} onChange={(e) => setProjektId(e.target.value)}>
+            {db.projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
+          </select>
+        </Field>
+        <Field label="Izdao (zaposlenik)">
+          <select className="select" value={izdaoId} onChange={(e) => setIzdaoId(e.target.value)}>
+            <option value="">—</option>
+            {[...db.zaposlenici].sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+          </select>
+        </Field>
+      </div>
+      <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Stavke za izdavanje</div>
+      <table className="erp-table" style={{ marginBottom: 8 }}>
+        <thead><tr><th>Materijal</th><th style={{ width: 140 }}>Količina</th><th style={{ width: 32 }}></th></tr></thead>
+        <tbody>
+          {stavke.map((s, i) => {
+            const mat = db.materijali.find((m) => m.id === s.materijalId);
+            return (
+              <tr key={i}>
+                <td>
+                  <select className="select" value={s.materijalId} onChange={(e) => azurirajStavku(i, { materijalId: e.target.value })}>
+                    <option value="">Odaberi materijal…</option>
+                    {db.materijali.filter((m) => m.kolicina > 0).map((m) => <option key={m.id} value={m.id}>{m.sifra} — {m.naziv} (na stanju: {m.kolicina} {m.jm})</option>)}
+                  </select>
+                </td>
+                <td>
+                  <input className="input f-mono" type="number" min="0" max={mat?.kolicina ?? undefined} step="0.01" value={s.kolicina} onChange={(e) => azurirajStavku(i, { kolicina: e.target.value })} />
+                  {mat && <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 2 }}>Na stanju: {mat.kolicina} {mat.jm}</div>}
+                </td>
+                <td>{stavke.length > 1 && <button className="btn btn-icon btn-ghost" onClick={() => obrisiStavku(i)}><X size={14} /></button>}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajStavku}>Dodaj stavku</Btn>
+      <Field label="Napomena (opcionalno)"><textarea className="textarea" rows={2} value={napomena} onChange={(e) => setNapomena(e.target.value)} /></Field>
+    </Modal>
+  );
+}
+
+function IzdatnicaPrintModal({ izdatnica, projekt, izdao, postavkeTvrtke, onClose }) {
+  const t = postavkeTvrtke || {};
+  const PRAZNI_REDOVI = Math.max(0, 10 - izdatnica.stavke.length);
+  return (
+    <Modal wide title={`Pregled za ispis — Izdatnica ${izdatnica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(izdatnica.broj)}>Ispis / Spremi kao PDF</Btn></>}>
+      <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+          <div style={{ maxWidth: 250 }}>
+            <img src={logoEcon} alt="Econ" style={{ width: 190, display: "block", marginBottom: 4 }} />
+            <div style={{ fontSize: 9, color: "#555", lineHeight: 1.3 }}>Projektiranje, izrada i montaža metalnih<br />konstrukcija i ventiliranih fasada</div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontWeight: 700, fontSize: 20 }}>IZDATNICA</div>
+            <table style={{ fontSize: 11.5, marginTop: 10, marginLeft: "auto", borderCollapse: "collapse" }}>
+              <tbody>
+                <tr><td style={{ paddingRight: 10, color: "#555", textAlign: "right" }}>Broj :</td><td style={{ fontWeight: 600, textAlign: "left" }} className="f-mono">{izdatnica.broj}</td></tr>
+                <tr><td style={{ paddingRight: 10, color: "#555", textAlign: "right" }}>Datum :</td><td style={{ fontWeight: 600, textAlign: "left" }}>{fmtDate(izdatnica.datum)}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <table style={{ fontSize: 11.5, marginBottom: 18, borderCollapse: "collapse" }}>
+          <tbody>
+            <tr><td style={{ paddingRight: 10, color: "#555" }}>Projekt:</td><td style={{ fontWeight: 600 }}>{projekt?.sifra}{projekt?.naziv ? ` — ${projekt.naziv}` : ""}</td></tr>
+            {izdatnica.napomena && <tr><td style={{ paddingRight: 10, color: "#555" }}>Napomena:</td><td>{izdatnica.napomena}</td></tr>}
+          </tbody>
+        </table>
+
+        <table className="doc-table" style={{ marginBottom: 20 }}>
+          <thead>
+            <tr>
+              <th style={{ width: 34 }}>R.br.</th><th style={{ width: 90 }}>Šifra</th><th>Naziv</th><th style={{ width: 60 }}>JM</th>
+              <th style={{ width: 80 }}>Izdano</th><th style={{ width: 110 }}>Vraćeno na skladište</th>
+            </tr>
+          </thead>
+          <tbody>
+            {izdatnica.stavke.map((s, i) => (
+              <tr key={s.id || i}>
+                <td>{i + 1}.</td><td className="f-mono">{s.sifra}</td><td>{s.naziv}</td><td>{s.jm}</td>
+                <td className="f-mono">{s.kolicinaIzdano}</td>
+                <td className="f-mono">{s.kolicinaVraceno != null ? s.kolicinaVraceno : ""}</td>
+              </tr>
+            ))}
+            {Array.from({ length: PRAZNI_REDOVI }).map((_, i) => (
+              <tr key={`prazno-${i}`}><td>{izdatnica.stavke.length + i + 1}.</td><td>&nbsp;</td><td></td><td></td><td></td><td></td></tr>
+            ))}
+          </tbody>
+        </table>
+
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 30, marginBottom: 16, fontSize: 10.5 }}>
+          <div style={{ textAlign: "center", width: "45%" }}><div style={{ borderTop: "1px solid #333", paddingTop: 4 }}>Izdao (skladište){izdao ? ` — ${izdao.prezime} ${izdao.ime}` : ""}</div></div>
+          <div style={{ textAlign: "center", width: "45%" }}><div style={{ borderTop: "1px solid #333", paddingTop: 4 }}>Zaprimio (proizvodnja)</div></div>
+        </div>
+
+        <div style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
+          <strong>OIB</strong>: {t.oib} | <strong>MB</strong>: {t.mb} | <strong>VAT-ID:</strong> {t.vatId} | <strong>IBAN:</strong> {t.iban} | <strong>SWIFT:</strong> {t.swift} | Poduzeće je upisano na {t.sud}, <strong>MBS:</strong> {t.mbs} | <strong>Uprava:</strong> {t.uprava}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Zaprima ostatak vraćen sa proizvodnje natrag na skladište (po izdatnici) — upisana količina po
+// stavci vraća se u materijali.kolicina, a izdatnica se zatvara.
+function ZaprimiPovratModal({ izdatnica, db, update, showToast, onClose }) {
+  const [vraceno, setVraceno] = useState(izdatnica.stavke.map((s) => ({ id: s.id, kolicina: "" })));
+  const [saljem, setSaljem] = useState(false);
+  const azuriraj = (id, val) => setVraceno(vraceno.map((v) => (v.id === id ? { ...v, kolicina: val } : v)));
+
+  const potvrdi = () => {
+    if (saljem) return; // spriječi dvostruki klik — dvostruko slanje bi dvaput vratilo istu količinu na skladište
+    for (const s of izdatnica.stavke) {
+      const kol = Number(vraceno.find((v) => v.id === s.id)?.kolicina) || 0;
+      if (kol < 0 || kol > s.kolicinaIzdano) { showToast(`Vraćena količina za "${s.naziv}" mora biti između 0 i ${s.kolicinaIzdano}.`); return; }
+    }
+    setSaljem(true);
+    let noviMaterijali = [...db.materijali];
+    const noveStavke = izdatnica.stavke.map((s) => {
+      const kol = Number(vraceno.find((v) => v.id === s.id)?.kolicina) || 0;
+      if (kol > 0) noviMaterijali = noviMaterijali.map((m) => (m.id === s.materijalId ? { ...m, kolicina: m.kolicina + kol } : m));
+      return { ...s, kolicinaVraceno: kol };
+    });
+    update("materijali", noviMaterijali);
+    update("izdatnice", db.izdatnice.map((i) => (i.id === izdatnica.id ? { ...i, stavke: noveStavke, status: "Zatvoreno", datumPovrata: todayISO() } : i)));
+    showToast("Povrat zaprimljen, stanje skladišta ažurirano.");
+    onClose();
+  };
+
+  return (
+    <Modal title={`Zaprimi povrat — Izdatnica ${izdatnica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={potvrdi} disabled={saljem}>{saljem ? "Spremanje…" : "Zaprimi povrat"}</Btn></>}>
+      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Upiši koliko se od izdane količine vraća natrag na skladište (ostavi 0 ako je sve utrošeno).</p>
+      <table className="erp-table">
+        <thead><tr><th>Materijal</th><th style={{ width: 100 }}>Izdano</th><th style={{ width: 140 }}>Vraćeno</th></tr></thead>
+        <tbody>
+          {izdatnica.stavke.map((s) => (
+            <tr key={s.id}>
+              <td>{s.sifra} — {s.naziv}</td>
+              <td className="f-mono">{s.kolicinaIzdano} {s.jm}</td>
+              <td><input className="input f-mono" type="number" min="0" max={s.kolicinaIzdano} step="0.01" value={vraceno.find((v) => v.id === s.id)?.kolicina ?? ""} onChange={(e) => azuriraj(s.id, e.target.value)} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Modal>
   );
 }
 
@@ -2202,6 +2450,9 @@ const generirajNarudzbeIzUpita = (upit, db, update, showToast) => {
         id: uid("mat"), sifra: stavka.vrstaMaterijala.replace(/[^A-Za-z0-9]+/g, "-") || uid("sif"),
         naziv: stavka.vrstaMaterijala, tip: "Ostalo", dimenzije: `${formatDimenzijaStavke(stavka)} mm${stavka.kvaliteta ? ", " + stavka.kvaliteta : ""}`,
         jm: "kom", cijena: Number(ponuda.cijena) || 0, kolicina: 0, minZaliha: 0, lokacija: "",
+        // Naruceno je stiglo iz Upita koji je (ako je kreiran iz projekta) nosio izvorProjektaId —
+        // materijal odmah dobiva "ZA PROJEKT" oznaku bez ručnog upisivanja; uvijek se može promijeniti.
+        projektId: upit.izvorProjektaId || null,
       };
       noviMaterijali.push(noviMaterijal);
       materijalIdZaStavku.push({ stavkaId: stavka.id, materijalId: noviMaterijal.id, kolicina: stavka.kolicina });
@@ -3708,9 +3959,12 @@ function ProizvodnjaPage({ db, update, showToast, mojaPozicija }) {
   const [prikaz, setPrikaz] = useState(dozvKartice[0]?.key || "tablica");
   useEffect(() => { if (!dozvKartice.some((k) => k.key === prikaz)) setPrikaz(dozvKartice[0]?.key || "tablica"); }, [dozvKartice, prikaz]);
   const mozeTablica = dozvolaZaKarticu(mojaPozicija, "proizvodnja", "tablica").izmjene;
+  const mozeIzdatnice = dozvolaZaKarticu(mojaPozicija, "skladiste", "izdatnice").izmjene;
   const mozeIsporuke = dozvolaZaKarticu(mojaPozicija, "proizvodnja", "isporuke").izmjene;
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
+  const [izdatnicaModal, setIzdatnicaModal] = useState(false);
+  const [printIzdatnica, setPrintIzdatnica] = useState(null);
   const emptyForm = () => {
     const projekt = db.projekti[0];
     const preostalo = preostaloSatiFaze(projekt, FAZE[0], db.radniNalozi, null);
@@ -3747,7 +4001,10 @@ function ProizvodnjaPage({ db, update, showToast, mojaPozicija }) {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
         <PageHeader title="Proizvodnja" icon={Factory} subtitle="Radni nalozi po fazama izrade i montaže" />
+        {mozeIzdatnice && <Btn variant="ghost" icon={PackageMinus} onClick={() => setIzdatnicaModal(true)}>Izdaj na projekt</Btn>}
       </div>
+      {izdatnicaModal && <IzdatnicaModal db={db} update={update} showToast={showToast} onClose={() => setIzdatnicaModal(false)} onCreated={(nova) => { setIzdatnicaModal(false); setPrintIzdatnica(nova); }} />}
+      {printIzdatnica && <IzdatnicaPrintModal izdatnica={printIzdatnica} projekt={db.projekti.find((p) => p.id === printIzdatnica.projektId)} izdao={db.zaposlenici.find((z) => z.id === printIzdatnica.izdaoId)} postavkeTvrtke={db.postavkeTvrtke} onClose={() => setPrintIzdatnica(null)} />}
       <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
         {dozvKartice.some((k) => k.key === "tablica") && <div className={`nav-tab ${prikaz === "tablica" ? "active" : ""}`} onClick={() => setPrikaz("tablica")}>Tablica</div>}
         {dozvKartice.some((k) => k.key === "gantogram") && <div className={`nav-tab ${prikaz === "gantogram" ? "active" : ""}`} onClick={() => setPrikaz("gantogram")}><CalendarRange size={13} style={{ verticalAlign: -2, marginRight: 4 }} />Gantogram</div>}
