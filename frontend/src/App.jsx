@@ -1519,26 +1519,25 @@ export default function App() {
 
   // Ciljana izmjena JEDNOG projekta (po id-u) — isti razlog kao patchEvidencija: obični update()
   // šalje cijeli popis projekata iz ovog preglednika, koji može biti zastario ako je stranica
-  // dulje otvorena. Projekti se često i često uređuju (raspored isporuka, zadaci, stavke), pa je
-  // šansa da netko drugi u međuvremenu spremi nešto s pravog, novijeg stanja realna — obični
-  // update() bi tu tuđu izmjenu tiho prepisao natrag na staro. Backend patch primjenjuje na
-  // TRENUTNI zapis u bazi (zaključan za vrijeme izmjene), ne na ono što je ovaj preglednik učitao.
-  const patchProjekt = async (projektId, patch) => {
+  // dulje otvorena, pa bi tuđu (ili vlastitu stariju) izmjenu tiho prepisao natrag na staro.
+  // OPTIMISTIČNO: lokalni prikaz se ažurira ODMAH (bez čekanja mreže) — ovo je bitno jer se
+  // ista funkcija koristi i za polja koja se uređuju znak po znak (npr. upisivanje dimenzija
+  // materijala); da se čekao odgovor poslužitelja prije prikaza, svaki bi upisani znak kasnio
+  // sekundu-dvije (točno taj bug je i prijavljen). Zahtjev prema poslužitelju i dalje šalje SAMO
+  // patch (ne cijeli popis), pa zaštita od prepisivanja ostaje — poslužiteljev odgovor naknadno
+  // uskladi lokalno stanje ako se u međuvremenu nešto drugo promijenilo.
+  const patchProjekt = (projektId, patch) => {
+    setDb((prev) => ({ ...prev, projekti: prev.projekti.map((p) => (p.id === projektId ? { ...p, ...patch } : p)) }));
     const token = localStorage.getItem("erp_token");
-    try {
-      const res = await fetch(`${API_URL}/api/projekti/${projektId}/patch`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ patch }),
-      });
-      if (!res.ok) { showToast("Greška pri spremanju projekta."); return false; }
+    fetch(`${API_URL}/api/projekti/${projektId}/patch`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ patch }),
+    }).then(async (res) => {
+      if (!res.ok) { showToast("Greška pri spremanju projekta."); return; }
       const data = await res.json();
       setDb((prev) => ({ ...prev, projekti: data.projekti }));
-      return true;
-    } catch {
-      showToast("Greška pri spremanju — provjeri internetsku vezu.");
-      return false;
-    }
+    }).catch(() => showToast("Greška pri spremanju — provjeri internetsku vezu."));
   };
 
   // Ponovno učitava jedan ključ s backenda i osvježava lokalni state BEZ ponovnog PUT-a —
