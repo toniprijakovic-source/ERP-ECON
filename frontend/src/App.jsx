@@ -2467,7 +2467,10 @@ const kreirajUpitIzMaterijala = (projekt, db, update, showToast) => {
     const jeLim = s.nacinUnosa === "lim";
     return {
       id: uid("us"),
-      kolicina: jeDuzina ? (Number(s.komada) || 0) : (Number(s.kolicina) || 0),
+      // Kod "duzina" i "lim" načina unosa polje s.kolicina drži IZRAČUNATU masu (kg), ne broj
+      // komada — stvarni broj komada je u s.komada. Za obični "kolicina" način unosa, s.kolicina
+      // je stvarno upisana količina, pa se ona koristi izravno.
+      kolicina: (jeDuzina || jeLim) ? (Number(s.komada) || 0) : (Number(s.kolicina) || 0),
       vrstaStavke: jeLim ? "lim" : "profil",
       dimenzijaMM: jeDuzina ? Math.round((Number(s.duzinaM) || 0) * 1000) : jeLim ? Math.round((Number(s.duzinaM) || 0) * 1000) : "",
       sirinaMM: jeLim ? Math.round((Number(s.sirinaM) || 0) * 1000) : "",
