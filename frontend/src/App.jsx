@@ -4804,7 +4804,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
                     <tr key={i.id}>
                       <td className="f-mono">{i.redniBroj}</td>
                       <td>
-                        <select className="select" disabled={!!i.uOtpremniciId} value={`${i.grupa}:${i.stavkaId}`} onChange={(e) => { const [g, id] = e.target.value.split(":"); azurirajIsporuku(i.id, { grupa: g, stavkaId: id }); }}>
+                        <select className="select" disabled={!!i.uOtpremniciId} style={{ color: i.grupa === "stavkePod" ? "var(--steel)" : "var(--rust)", fontWeight: 600 }} value={`${i.grupa}:${i.stavkaId}`} onChange={(e) => { const [g, id] = e.target.value.split(":"); azurirajIsporuku(i.id, { grupa: g, stavkaId: id }); }}>
                           <optgroup label="Pod">
                             {stavkePod.map((s) => <option key={s.id} value={`stavkePod:${s.id}`}>{s.oznaka || "(bez oznake)"}</option>)}
                           </optgroup>
