@@ -1517,6 +1517,30 @@ export default function App() {
     }
   };
 
+  // Ciljana izmjena JEDNOG projekta (po id-u) — isti razlog kao patchEvidencija: obični update()
+  // šalje cijeli popis projekata iz ovog preglednika, koji može biti zastario ako je stranica
+  // dulje otvorena. Projekti se često i često uređuju (raspored isporuka, zadaci, stavke), pa je
+  // šansa da netko drugi u međuvremenu spremi nešto s pravog, novijeg stanja realna — obični
+  // update() bi tu tuđu izmjenu tiho prepisao natrag na staro. Backend patch primjenjuje na
+  // TRENUTNI zapis u bazi (zaključan za vrijeme izmjene), ne na ono što je ovaj preglednik učitao.
+  const patchProjekt = async (projektId, patch) => {
+    const token = localStorage.getItem("erp_token");
+    try {
+      const res = await fetch(`${API_URL}/api/projekti/${projektId}/patch`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ patch }),
+      });
+      if (!res.ok) { showToast("Greška pri spremanju projekta."); return false; }
+      const data = await res.json();
+      setDb((prev) => ({ ...prev, projekti: data.projekti }));
+      return true;
+    } catch {
+      showToast("Greška pri spremanju — provjeri internetsku vezu.");
+      return false;
+    }
+  };
+
   // Ponovno učitava jedan ključ s backenda i osvježava lokalni state BEZ ponovnog PUT-a —
   // koristi se nakon promjena koje backend napravi izravno (npr. hashiranje lozinke), gdje
   // bi obični update() prepisao stvarni hash lokalnom (nepotpunom) kopijom podataka.
@@ -1628,7 +1652,7 @@ export default function App() {
           {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
-          {aktivnaStranica === "projekti" && <ProjektiPage db={db} update={update} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} />}
+          {aktivnaStranica === "projekti" && <ProjektiPage db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "fakturiranje" && <FakturiranjePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "partneri" && <PartneriPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} patchEvidencija={patchEvidencija} mojaPozicija={mojaPozicija} />}
@@ -4575,7 +4599,7 @@ function NormativiModal({ db, update, showToast, onClose }) {
 }
 
 /* ============================== DETALJI PROJEKTA ============================== */
-function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }) {
+function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsync, showToast, setPage, onClose }) {
   const kupac = db.kupci.find((k) => k.id === projekt.kupacId);
   const voditelj = db.zaposlenici.find((z) => z.id === projekt.voditeljId);
   const nalozi = db.radniNalozi.filter((r) => r.projektId === projekt.id);
@@ -4618,7 +4642,7 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
   const isporuke = projekt.isporuke || [];
   const koristiNormativ = !!projekt.koristiNormativ;
   const izracunNorm = useMemo(() => izracunTipskogProjekta({ stavkePod, stavkeKomplet }, db.normativi), [stavkePod, stavkeKomplet, db.normativi]);
-  const patchProjekt = (patch) => update("projekti", db.projekti.map((p) => (p.id === projekt.id ? { ...p, ...patch } : p)));
+  const patchProjekt = (patch) => patchProjektAsync(projekt.id, patch);
   const dodajStavku = (grupa) => patchProjekt({ [grupa]: [...(projekt[grupa] || []), { id: uid("stv"), oznaka: "", masaJed: 0, komada: 0 }] });
   const azurirajStavku = (grupa, id, patch) => patchProjekt({ [grupa]: (projekt[grupa] || []).map((s) => (s.id === id ? { ...s, ...patch } : s)) });
   const obrisiStavku = (grupa, id) => patchProjekt({ [grupa]: (projekt[grupa] || []).filter((s) => s.id !== id), isporuke: isporuke.filter((i) => !(i.grupa === grupa && i.stavkaId === id)) });
@@ -4650,8 +4674,8 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
   const azurirajIsporuku = (id, patch) => patchProjekt({ isporuke: isporuke.map((i) => (i.id === id ? { ...i, ...patch } : i)) });
   const obrisiIsporuku = (id) => patchProjekt({ isporuke: isporuke.filter((i) => i.id !== id) });
 
-  const azurirajZadatke = (noviZadaci) => update("projekti", db.projekti.map((p) => (p.id === projekt.id ? { ...p, zadaci: noviZadaci } : p)));
-  const azurirajMaterijal = (noveStavke) => update("projekti", db.projekti.map((p) => (p.id === projekt.id ? { ...p, materijalStavke: noveStavke } : p)));
+  const azurirajZadatke = (noviZadaci) => patchProjekt({ zadaci: noviZadaci });
+  const azurirajMaterijal = (noveStavke) => patchProjekt({ materijalStavke: noveStavke });
   const pokreniKreiranjeUpita = () => {
     const noviUpit = kreirajUpitIzMaterijala({ ...projekt, materijalStavke }, db, update, showToast);
     if (noviUpit && setPage) setPage("nabava");
@@ -5282,7 +5306,7 @@ function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
   );
 }
 
-function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
+function ProjektiPage({ db, update, patchProjekt, showToast, setPage, mojaPozicija }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "projekti");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "projekti");
   useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "projekti"); }, [dozvKartice, tab]);
@@ -5677,7 +5701,7 @@ function ProjektiPage({ db, update, showToast, setPage, mojaPozicija }) {
 
       {cjenikOpen && <CjenikRadaModal cjenikRada={db.cjenikRada} onSave={saveCjenik} onClose={() => setCjenikOpen(false)} />}
       {zadaciOpen && <StandardniZadaciModal standardniZadaci={db.standardniZadaci} update={update} showToast={showToast} onClose={() => setZadaciOpen(false)} />}
-      {detalj && <ProjektDetaljModal projekt={db.projekti.find((p) => p.id === detalj.id) || detalj} db={db} update={update} showToast={showToast} setPage={setPage} onClose={() => setDetalj(null)} />}
+      {detalj && <ProjektDetaljModal projekt={db.projekti.find((p) => p.id === detalj.id) || detalj} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} setPage={setPage} onClose={() => setDetalj(null)} />}
       {printPonuda && <PonudaPrintModal ponuda={printPonuda} kupac={db.kupci.find((k) => k.id === printPonuda.kupacId)} db={db} onClose={() => setPrintPonuda(null)} />}
       {modal === "laser" && <PonudaLaseraModal form={laserForm} setForm={setLaserForm} db={db} onSave={saveLaser} onClose={() => setModal(null)} />}
       {printLaser && <PonudaLaseraPrintModal ponuda={printLaser} kupac={db.kupci.find((k) => k.id === printLaser.kupacId)} db={db} onClose={() => setPrintLaser(null)} />}

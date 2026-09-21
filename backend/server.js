@@ -348,6 +348,48 @@ app.put("/api/evidencija/patch", autentikacija, async (req, res) => {
   }
 });
 
+// ---------- Ciljana izmjena JEDNOG projekta (po id-u) ----------
+// Isti problem kao kod evidencije: projekt se u ProjektDetaljModalu uređuje često i u sitnim
+// koracima (raspored isporuka, zadaci, stavke materijala) dok je stranica otvorena — obična PUT
+// /api/data/projekti šalje CIJELI popis projekata kakav ga je preglednik zadnji put dohvatio, pa
+// bi svaka takva sitna izmjena s malo starijom kopijom tiho prepisala nečiju noviju izmjenu na
+// ISTOM ili DRUGOM projektu. Ova ruta prima samo koja polja se mijenjaju (patch) za JEDAN projekt
+// i primjenjuje ih (plitko spajanje, kao {...postojeci, ...patch}) na trenutni zapis u bazi,
+// zaključan cijelo vrijeme transakcije.
+app.put("/api/projekti/:id/patch", autentikacija, async (req, res) => {
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  const { pisivo } = izracunajDozvoljeneKljuceve(pozicija);
+  if (!pisivo.has("projekti")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za mijenjanje projekata." });
+
+  const patch = req.body.patch && typeof req.body.patch === "object" ? req.body.patch : {};
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query("SELECT value FROM app_data WHERE key = 'projekti' FOR UPDATE");
+    const trenutno = r.rows[0]?.value || [];
+    if (!trenutno.some((p) => p.id === req.params.id)) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Projekt nije pronađen." });
+    }
+    const rezultat = trenutno.map((p) => (p.id === req.params.id ? { ...p, ...patch } : p));
+
+    await client.query(
+      `INSERT INTO app_data (key, value, updated_at) VALUES ('projekti', $1, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [JSON.stringify(rezultat)]
+    );
+    await client.query("COMMIT");
+    res.json({ ok: true, projekti: rezultat });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Greška kod izmjene projekta:", e);
+    res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+  } finally {
+    client.release();
+  }
+});
+
 // ---------- podaci (sve zaštićeno loginom) ----------
 // Vraća SVE ključeve odjednom — koristi se pri pokretanju aplikacije. Ključevi izvan
 // zaposlenikovih dopuštenih kartica vraćaju se kao prazan placeholder (a ne izostavljeni)
