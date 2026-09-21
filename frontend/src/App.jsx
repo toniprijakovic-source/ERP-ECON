@@ -2534,10 +2534,17 @@ const generirajNarudzbeIzUpita = (upit, db, update, patchUpiti, showToast) => {
   Object.entries(poDobavljacu).forEach(([dobavljacId, stavke]) => {
     const materijalIdZaStavku = [];
     stavke.forEach(({ stavka, ponuda }) => {
+      // Ponuda je unesena po kg ili po m (jedinicaCijene), a skladišni materijal se uvijek vodi po
+      // komadu (jm: "kom") — cijenu treba pretvoriti prema stvarnoj masi/dužini stavke, ne prepisati
+      // sirovu vrijednost iz ponude izravno kao cijenu po komadu.
+      const kolicinaZaCijenu = ponuda.jedinicaCijene === "m" ? duzinaUkupnaMStavke(stavka) : tezinaStavkeUpita(stavka, db.katalogProfila);
+      const cijenaPoKomadu = kolicinaZaCijenu != null
+        ? (kolicinaZaCijenu / (Number(stavka.kolicina) || 1)) * (Number(ponuda.cijena) || 0)
+        : Number(ponuda.cijena) || 0;
       const noviMaterijal = {
         id: uid("mat"), sifra: stavka.vrstaMaterijala.replace(/[^A-Za-z0-9]+/g, "-") || uid("sif"),
         naziv: stavka.vrstaMaterijala, tip: "Ostalo", dimenzije: `${formatDimenzijaStavke(stavka)} mm${stavka.kvaliteta ? ", " + stavka.kvaliteta : ""}`,
-        jm: "kom", cijena: Number(ponuda.cijena) || 0, kolicina: 0, minZaliha: 0, lokacija: "",
+        jm: "kom", cijena: cijenaPoKomadu, kolicina: 0, minZaliha: 0, lokacija: "",
         // Naruceno je stiglo iz Upita koji je (ako je kreiran iz projekta) nosio izvorProjektaId —
         // materijal odmah dobiva "ZA PROJEKT" oznaku bez ručnog upisivanja; uvijek se može promijeniti.
         projektId: upit.izvorProjektaId || null,
