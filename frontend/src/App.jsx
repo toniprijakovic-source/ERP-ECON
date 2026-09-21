@@ -7096,6 +7096,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
   const [datum, setDatum] = useState(todayISO());
   const [uredjivanje, setUredjivanje] = useState(null); // id zaposlenika trenutno otvorenog za unos
   const [redoviUnos, setRedoviUnos] = useState([]);
+  const [delZa, setDelZa] = useState(null); // zaposlenik čiji se unos za taj dan briše
 
   const zaposlenikIme = (id) => { const z = db.zaposlenici.find((zz) => zz.id === id); return z ? `${z.prezime} ${z.ime}` : "—"; };
 
@@ -7158,6 +7159,19 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
     showToast("Sati zabilježeni.");
   };
 
+  // Briše cijeli dnevni unos za radnika (krivo evidentirani sati) — bez provjere poklapanja, jer je
+  // svrha upravo poništiti pogrešan unos, a ne uskladiti ga sa satima prijave.
+  const obrisiUnosZaDan = (zaposlenikId) => {
+    const dotaknuti = new Set(db.satiPoNalogu.filter((s) => s.zaposlenikId === zaposlenikId && s.datum === datum).map((s) => s.radniNalogId));
+    const noviSatiPoNalogu = db.satiPoNalogu.filter((s) => !(s.zaposlenikId === zaposlenikId && s.datum === datum));
+    const noviRadniNalozi = db.radniNalozi.map((n) => (dotaknuti.has(n.id) ? { ...n, utrosenoSati: zbrojSatiZaNalog(n.id, noviSatiPoNalogu) } : n));
+    update("satiPoNalogu", noviSatiPoNalogu);
+    update("radniNalozi", noviRadniNalozi);
+    setDelZa(null);
+    if (uredjivanje === zaposlenikId) setUredjivanje(null);
+    showToast("Unos sati obrisan.");
+  };
+
   return (
     <div>
       <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Dnevni unos po radniku — birani nalozi i sati moraju se točno poklopiti sa satima iz evidencije prijave/odjave prije spremanja.</p>
@@ -7168,7 +7182,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
 
       {radnici.length === 0 ? <EmptyState text="Nitko nije evidentiran kao da je radio taj dan." /> : (
         <table className="erp-table">
-          <thead><tr><th>Zaposlenik</th><th style={{ width: 90 }}>Prijava</th><th style={{ width: 90 }}>Uneseno</th><th style={{ width: 110 }}>Status</th><th style={{ width: 90 }}></th></tr></thead>
+          <thead><tr><th>Zaposlenik</th><th style={{ width: 90 }}>Prijava</th><th style={{ width: 90 }}>Uneseno</th><th style={{ width: 110 }}>Status</th><th style={{ width: 130 }}></th></tr></thead>
           <tbody>
             {radnici.map((r) => {
               const zavrseno = r.uneseno.length > 0 && Math.abs(r.satiUneseno - r.satiPrijave) < 0.01;
@@ -7178,7 +7192,10 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
                   <td className="f-mono">{r.satiPrijave.toFixed(1)} h</td>
                   <td className="f-mono" style={{ color: r.uneseno.length > 0 && !zavrseno ? "var(--rust)" : "inherit" }}>{r.satiUneseno.toFixed(1)} h</td>
                   <td>{zavrseno ? <span style={{ color: "var(--green)", fontSize: 12 }}>✓ Uneseno</span> : r.uneseno.length > 0 ? <span style={{ color: "var(--rust)", fontSize: 12 }}>Ne poklapa se</span> : <span style={{ color: "var(--ink-faint)", fontSize: 12 }}>—</span>}</td>
-                  <td>{mozeMijenjati && <Btn variant="ghost" size="sm" onClick={() => otvoriUnos(r)}>{r.uneseno.length ? "Uredi" : "Unesi"}</Btn>}</td>
+                  <td style={{ display: "flex", gap: 6 }}>
+                    {mozeMijenjati && <Btn variant="ghost" size="sm" onClick={() => otvoriUnos(r)}>{r.uneseno.length ? "Uredi" : "Unesi"}</Btn>}
+                    {mozeMijenjati && r.uneseno.length > 0 && <button className="btn btn-icon btn-ghost" title="Obriši unos za ovaj dan" onClick={() => setDelZa(r.zaposlenik)}><Trash2 size={14} /></button>}
+                  </td>
                 </tr>
               );
             })}
@@ -7218,6 +7235,10 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
             {!poklapaSe && <div style={{ fontSize: 12, color: "var(--rust)", marginTop: 6 }}>Razlika {Math.abs(zbrojUnosa - trenutniRadnik.satiPrijave).toFixed(1)} h — mora se točno poklopiti prije spremanja.</div>}
           </div>
         </Modal>
+      )}
+
+      {delZa && (
+        <ConfirmDelete label={`unos sati za ${zaposlenikIme(delZa.id)} — ${fmtDate(datum)}`} onCancel={() => setDelZa(null)} onConfirm={() => obrisiUnosZaDan(delZa.id)} />
       )}
     </div>
   );
