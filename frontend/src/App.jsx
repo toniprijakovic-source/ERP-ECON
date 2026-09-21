@@ -1091,8 +1091,18 @@ function KioskView({ onPrijava }) {
   const [sat, setSat] = useState(new Date());
   const inputRef = useRef(null);
   const obradjenIzUrla = useRef(false);
-  const uTijeku = useRef(false); // sprječava dvostruku obradu ako netko dvaput brzo prisloni karticu
   const tisinaTimeoutRef = useRef(null);
+  const sakrijTimeoutRef = useRef(null);
+  // Red čekanja za skeniranja + zastavica "worker trenutno radi" — zamjenjuje stari pristup s
+  // jednostavnom "uTijeku" zabranom, koji je imao ozbiljnu manu: dok je zahtjev za JEDNO
+  // skeniranje bio na čekanju (npr. poslužitelj načas sporiji), SLJEDEĆE skeniranje se u
+  // međuvremenu tiho odbacivalo I NJEGOVI ZNAKOVI SU OSTAJALI U POLJU — pa bi se zalijepili s
+  // idućim skeniranjem u jedan pokvaren kod (upravo simptom "čuje se bip, ali se ne registrira",
+  // sporadično, kod bilo koga tko se zatekne u gužvi). Sad se svako dovršeno skeniranje odmah
+  // makne iz polja i doda u red; red se prazni redom, jedno po jedno, pa se ni jedno skeniranje
+  // više ne gubi niti miješa s drugim, bez obzira koliko brzo ljudi dolaze jedno za drugim.
+  const redSkeniranjaRef = useRef([]);
+  const obradaURaduRef = useRef(false);
 
   useEffect(() => {
     const t = setInterval(() => setSat(new Date()), 1000 * 30);
@@ -1111,21 +1121,54 @@ function KioskView({ onPrijava }) {
 
   useEffect(() => { inputRef.current?.focus(); }, [poruka]);
 
-  useEffect(() => () => { if (tisinaTimeoutRef.current) clearTimeout(tisinaTimeoutRef.current); }, []);
+  useEffect(() => () => {
+    if (tisinaTimeoutRef.current) clearTimeout(tisinaTimeoutRef.current);
+    if (sakrijTimeoutRef.current) clearTimeout(sakrijTimeoutRef.current);
+  }, []);
+
+  const kratkaPoruka = (poruka) => {
+    if (sakrijTimeoutRef.current) clearTimeout(sakrijTimeoutRef.current);
+    setPoruka(poruka);
+    sakrijTimeoutRef.current = setTimeout(() => setPoruka(null), 4000);
+  };
 
   const promjenaUnosa = (vrijednost) => {
     if (tisinaTimeoutRef.current) clearTimeout(tisinaTimeoutRef.current);
-    if (vrijednost.length > KIOSK_MAX_DULJINA_KODA) { setUnos(""); return; } // spojena/pokvarena očitanja — odbaci
+    if (vrijednost.length > KIOSK_MAX_DULJINA_KODA) {
+      // Spojeno/pokvareno očitanje — vidljiva poruka umjesto tihog brisanja, da se zna da se
+      // nešto dogodilo (a ne da izgleda kao da kiosk uopće nije reagirao na prislonjenu karticu).
+      setUnos("");
+      kratkaPoruka({ tip: "greska", tekst: "Očitanje nije prepoznato", detalj: "Prisloni karticu ponovno." });
+      return;
+    }
     setUnos(vrijednost);
-    if (vrijednost) tisinaTimeoutRef.current = setTimeout(() => obradiKod(vrijednost), KIOSK_TISINA_MS);
+    if (vrijednost) tisinaTimeoutRef.current = setTimeout(() => zavrsiSkeniranje(vrijednost), KIOSK_TISINA_MS);
   };
 
-  const obradiKod = async (kodSirovi) => {
+  // Dovršeno skeniranje (bilo preko stanke ili preko Entera) odmah se makne iz polja i ubaci u
+  // red — nikad se ne oslanja na to je li poslužitelj trenutno slobodan.
+  const zavrsiSkeniranje = (kodSirovi) => {
     if (tisinaTimeoutRef.current) { clearTimeout(tisinaTimeoutRef.current); tisinaTimeoutRef.current = null; }
-    const kod = (kodSirovi || "").trim().toUpperCase();
-    if (!kod || uTijeku.current) return;
-    uTijeku.current = true;
     setUnos("");
+    const kod = (kodSirovi || "").trim().toUpperCase();
+    if (!kod) return;
+    redSkeniranjaRef.current.push(kod);
+    obradiRed();
+  };
+
+  // Prazni red jedno po jedno — ako je worker već pokrenut (obrađuje prethodni kod), ovaj poziv
+  // samo doda kod na red i vrati se; taj isti worker će ga pokupiti čim dođe na red.
+  const obradiRed = async () => {
+    if (obradaURaduRef.current) return;
+    obradaURaduRef.current = true;
+    while (redSkeniranjaRef.current.length > 0) {
+      const kod = redSkeniranjaRef.current.shift();
+      await obradiKod(kod);
+    }
+    obradaURaduRef.current = false;
+  };
+
+  const obradiKod = async (kod) => {
     setPoruka(null); // bez međuporuke "Obrađujem…" — ekran ostaje miran do stvarnog rezultata
     try {
       const res = await fetch(`${API_URL}/api/kiosk/scan`, {
@@ -1134,7 +1177,7 @@ function KioskView({ onPrijava }) {
         body: JSON.stringify({ rfidKod: kod }),
       });
       if (res.status >= 500) {
-        setPoruka({ tip: "greska", tekst: "Prijava nije uspjela", detalj: "Ponovi prijavu." });
+        kratkaPoruka({ tip: "greska", tekst: "Prijava nije uspjela", detalj: "Ponovi prijavu." });
       } else {
         const data = await res.json();
         if (!res.ok) {
@@ -1143,28 +1186,26 @@ function KioskView({ onPrijava }) {
             // "pričekaj", da se zna da prethodno skeniranje nije propalo.
             const vrijeme = data.zadnjaAkcija?.vrijeme ? new Date(data.zadnjaAkcija.vrijeme).toLocaleTimeString("hr-HR", { hour: "2-digit", minute: "2-digit" }) : "";
             const jeOdlazak = data.zadnjaAkcija?.tip === "odlazak";
-            setPoruka({ tip: jeOdlazak ? "odlazak" : "dolazak", tekst: jeOdlazak ? "VEĆ ODJAVLJENO" : "VEĆ PRIJAVLJENO", detalj: vrijeme ? `u ${vrijeme}` : "" });
+            kratkaPoruka({ tip: jeOdlazak ? "odlazak" : "dolazak", tekst: jeOdlazak ? "VEĆ ODJAVLJENO" : "VEĆ PRIJAVLJENO", detalj: vrijeme ? `u ${vrijeme}` : "" });
           } else {
-            setPoruka({ tip: "greska", tekst: data.error || "Kartica nije prepoznata", detalj: `Kod: ${kod} — javi se administratoru.` });
+            kratkaPoruka({ tip: "greska", tekst: data.error || "Kartica nije prepoznata", detalj: `Kod: ${kod} — javi se administratoru.` });
           }
         } else if (data.tip === "odlazak") {
-          setPoruka({ tip: "odlazak", tekst: "ODJAVA 🙂", detalj: `${data.ime} ${data.prezime}` });
+          kratkaPoruka({ tip: "odlazak", tekst: "ODJAVA 🙂", detalj: `${data.ime} ${data.prezime}` });
         } else {
-          setPoruka({ tip: "dolazak", tekst: "PRIJAVA 🙂", detalj: `${data.ime} ${data.prezime}` });
+          kratkaPoruka({ tip: "dolazak", tekst: "PRIJAVA 🙂", detalj: `${data.ime} ${data.prezime}` });
         }
       }
     } catch {
-      setPoruka({ tip: "greska", tekst: "Prijava nije uspjela", detalj: "Ponovi prijavu." });
+      kratkaPoruka({ tip: "greska", tekst: "Prijava nije uspjela", detalj: "Ponovi prijavu." });
     }
-    uTijeku.current = false;
-    setTimeout(() => setPoruka(null), 4000);
   };
 
   useEffect(() => {
     if (obradjenIzUrla.current) return;
     const params = new URLSearchParams(window.location.search);
     const rfid = params.get("rfid");
-    if (rfid) { obradjenIzUrla.current = true; obradiKod(rfid); }
+    if (rfid) { obradjenIzUrla.current = true; zavrsiSkeniranje(rfid); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1195,7 +1236,7 @@ function KioskView({ onPrijava }) {
         <input
           ref={inputRef} autoFocus value={unos}
           onChange={(e) => promjenaUnosa(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") obradiKod(unos); }}
+          onKeyDown={(e) => { if (e.key === "Enter") zavrsiSkeniranje(unos); }}
           aria-hidden="true"
           style={{ position: "absolute", width: 1, height: 1, opacity: 0, border: "none", padding: 0 }}
         />
