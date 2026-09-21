@@ -6028,7 +6028,17 @@ function OtpremniceTab({ db, update, showToast, mozeMijenjati = true }) {
           onClose={() => setPrintOtp(null)}
         />
       )}
-      {del && <ConfirmDelete label={del.broj} onCancel={() => setDel(null)} onConfirm={() => { update("otpremnice", db.otpremnice.filter((o) => o.id !== del.id)); setDel(null); showToast("Otpremnica obrisana."); }} />}
+      {del && (
+        <ConfirmDelete label={del.broj} onCancel={() => setDel(null)} onConfirm={() => {
+          // Brisanje otpremnice mora osloboditi isporuke tipskog projekta koje je "zaključavala"
+          // (uOtpremniciId) — inače ostaju trajno prikazane kao "U otpremnici" s onemogućenom
+          // kvačicom, iako otpremnica na koju upućuju više ne postoji.
+          update("otpremnice", db.otpremnice.filter((o) => o.id !== del.id));
+          update("projekti", db.projekti.map((p) => (p.id === del.projektId ? { ...p, isporuke: (p.isporuke || []).map((i) => (i.uOtpremniciId === del.id ? { ...i, uOtpremniciId: null } : i)) } : p)));
+          setDel(null);
+          showToast("Otpremnica obrisana, isporuke oslobođene.");
+        }} />
+      )}
     </div>
   );
 }
