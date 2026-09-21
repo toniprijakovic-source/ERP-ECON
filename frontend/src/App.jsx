@@ -56,6 +56,22 @@ const efektivnaKolicinaMaterijala = (st, mat) => {
   return Number(st?.kolicina) || 0;
 };
 
+// Prirodna usporedba brojčanih oznaka (npr. "RN 140-933/2" vs "RN 170-317/10") — niz se rastavi
+// na naizmjenične tekst/broj dijelove i brojevi se uspoređuju kao brojevi (ne slovima), pa "9"
+// ide prije "10"; kod jednakog prvog broja odlučuje sljedeći (ono "nakon -"), pa dalje redom.
+const usporediPrirodno = (a, b) => {
+  const ax = String(a || "").match(/\d+|\D+/g) || [];
+  const bx = String(b || "").match(/\d+|\D+/g) || [];
+  const duljina = Math.max(ax.length, bx.length);
+  for (let i = 0; i < duljina; i++) {
+    const av = ax[i] ?? "", bv = bx[i] ?? "";
+    const abroj = /^\d+$/.test(av), bbroj = /^\d+$/.test(bv);
+    if (abroj && bbroj) { const razlika = Number(av) - Number(bv); if (razlika !== 0) return razlika; }
+    else { const cmp = av.localeCompare(bv, "hr"); if (cmp !== 0) return cmp; }
+  }
+  return 0;
+};
+
 // Generator sljedećeg broja dokumenta (npr. "NAR-2026-101") koji gleda postojeće brojeve umjesto nasumičnog broja — sprječava duplikate
 const sljedeciBroj = (lista, polje, prefiks, sirina = 3) => {
   const brojevi = (lista || []).map((x) => x?.[polje]).filter((b) => b && b.startsWith(prefiks)).map((b) => parseInt(b.slice(prefiks.length), 10)).filter((n) => !isNaN(n));
@@ -4018,7 +4034,7 @@ function ProizvodnjaPage({ db, update, showToast, mojaPozicija }) {
 
       {prikaz === "tablica" && (
       <EntityPage
-        title="" data={db.radniNalozi} onAdd={openAdd} onEdit={openEdit} onDelete={(r) => setDel(r)}
+        title="" data={[...db.radniNalozi].sort((a, b) => usporediPrirodno(a.broj, b.broj))} onAdd={openAdd} onEdit={openEdit} onDelete={(r) => setDel(r)}
         addLabel="Novi radni nalog" searchKeys={["broj", "naziv", "zaduzenTim"]} readOnly={!mozeTablica}
         columns={[
           { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
