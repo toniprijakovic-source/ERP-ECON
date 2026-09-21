@@ -3744,17 +3744,36 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, showToast, onClose
   // za otpremu (isporuceno) i koje još nisu uključene ni u jednu drugu otpremnicu.
   const nazivIsporuke = (i) => {
     const stavka = (i.grupa === "stavkePod" ? projekt.stavkePod : projekt.stavkeKomplet || []).find((s) => s.id === i.stavkaId);
-    return `${i.grupa === "stavkePod" ? "Pod" : "Komplet"} — ${stavka?.oznaka || "(bez oznake)"}`;
+    return `${i.grupa === "stavkePod" ? "Pod" : "Stranica"} — ${stavka?.oznaka || "(bez oznake)"}`;
   };
-  // Naručena količina po stavci — kod normativa je to ukupan broj komada tog tipa (iz Pod/Komplet
+  // Naručena količina po stavci — kod normativa je to ukupan broj komada tog tipa (iz Pod/Stranica
   // tablice), kod obične narudžbe kupca je to unesena kolicina na toj stavci narudžbe.
   const narucenoZaIsporuku = (i) => (i.grupa === "stavkePod" ? projekt.stavkePod : projekt.stavkeKomplet || []).find((s) => s.id === i.stavkaId)?.komada;
   const dostupneIsporuke = koristiNormativ ? (projekt.isporuke || []).filter((i) => i.isporuceno && !i.uOtpremniciId) : [];
+  // Više odvojenih isporuka istog tipa (npr. "Pod — Typ 4A" spreman u tri navrata) spajaju se u
+  // JEDNU stavku otpremnice sa zbrojenom količinom, umjesto da se svaka pojedinačna isporuka
+  // ispiše kao zaseban redak — sve pripadajuće isporukaId i dalje se pamte (isporukaIds) da bi se
+  // pri spremanju sve mogle označiti kao uključene u ovu otpremnicu.
+  const grupirajIsporuke = () => {
+    const poKljucu = new Map();
+    dostupneIsporuke.forEach((i) => {
+      const kljuc = `${i.grupa}:${i.stavkaId}`;
+      const postojeci = poKljucu.get(kljuc);
+      if (postojeci) {
+        postojeci.isporukaIds.push(i.id);
+        postojeci.dostupno += Number(i.komada) || 0;
+        if (i.datum && (!postojeci.datumPlan || i.datum < postojeci.datumPlan)) postojeci.datumPlan = i.datum;
+      } else {
+        poKljucu.set(kljuc, { id: uid("ost"), isporukaIds: [i.id], naziv: nazivIsporuke(i), jm: "kom", datumPlan: i.datum, narucena: narucenoZaIsporuku(i), dostupno: Number(i.komada) || 0 });
+      }
+    });
+    return Array.from(poKljucu.values());
+  };
   const emptyForm = () => ({
     broj: sljedeciBrojOtpremnice(db.otpremnice, todayISO()), datum: todayISO(), mjesto: "Prelog",
     projektId: projekt.id, kupacId: projekt?.kupacId || "", narudzbaId: narudzba?.id || null, izdaoId: "", napomena: "",
     stavke: koristiNormativ
-      ? dostupneIsporuke.map((i) => ({ id: uid("ost"), isporukaId: i.id, naziv: nazivIsporuke(i), jm: "kom", datumPlan: i.datum, narucena: narucenoZaIsporuku(i), kolicina: String(i.komada) }))
+      ? grupirajIsporuke().map((s) => ({ ...s, kolicina: String(s.dostupno) }))
       : (narudzba?.stavke || []).map((s) => ({ id: uid("ost"), narudzbaStavkaId: s.id, naziv: s.naziv, jm: s.jm, narucena: s.kolicina, kolicina: "" })),
   });
   const [form, setForm] = useState(emptyForm());
@@ -3767,7 +3786,7 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, showToast, onClose
     const novaOtpremnica = { ...form, id: uid("otp"), stavke };
     update("otpremnice", [...db.otpremnice, novaOtpremnica]);
     if (koristiNormativ) {
-      const ukljucenIds = new Set(stavke.map((s) => s.isporukaId).filter(Boolean));
+      const ukljucenIds = new Set(stavke.flatMap((s) => s.isporukaIds || []).filter(Boolean));
       if (ukljucenIds.size > 0) {
         update("projekti", db.projekti.map((p) => (p.id === projekt.id ? { ...p, isporuke: (p.isporuke || []).map((i) => (ukljucenIds.has(i.id) ? { ...i, uOtpremniciId: novaOtpremnica.id } : i)) } : p)));
       }
@@ -3807,7 +3826,7 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, showToast, onClose
                   {koristiNormativ && <td className="f-mono">{fmtDate(s.datumPlan) || "—"}</td>}
                   <td className="f-mono">{s.jm}</td>
                   <td className="f-mono">{s.narucena ?? "—"}</td>
-                  <td><input className="input f-mono" type="number" min="0" max={koristiNormativ ? dostupneIsporuke.find((d) => d.id === s.isporukaId)?.komada : undefined} style={{ padding: "5px 8px" }} value={s.kolicina} onChange={(e) => azurirajKolicinu(i, e.target.value)} /></td>
+                  <td><input className="input f-mono" type="number" min="0" max={koristiNormativ ? s.dostupno : undefined} style={{ padding: "5px 8px" }} value={s.kolicina} onChange={(e) => azurirajKolicinu(i, e.target.value)} /></td>
                 </tr>
               ))}
             </tbody>
@@ -3972,7 +3991,7 @@ function IsporukeKupaonicaView({ db, update, mozeMijenjati = true }) {
                 <tr key={i.id}>
                   <td>{projekt.sifra} — {projekt.naziv}</td>
                   <td>{stavka?.oznaka || "(bez oznake)"}</td>
-                  <td>{i.grupa === "stavkePod" ? "Pod" : "Komplet"}</td>
+                  <td>{i.grupa === "stavkePod" ? "Pod" : "Stranica"}</td>
                   <td className="f-mono">{i.komada}</td>
                   <td>{fmtDate(i.datum) || "—"}</td>
                   <td>
@@ -4432,7 +4451,7 @@ function NarudzbaUvozModal({ narudzba, stavkePod, stavkeKomplet, onUvezi, onClos
                 <select className="select" value={izbor[s.id] || ""} onChange={(e) => setIzbor({ ...izbor, [s.id]: e.target.value })}>
                   <option value="">Preskoči</option>
                   <option value="stavkePod">Pod</option>
-                  <option value="stavkeKomplet">Komplet</option>
+                  <option value="stavkeKomplet">Stranica</option>
                 </select>
               </td>
             </tr>
@@ -4765,7 +4784,7 @@ function ProjektDetaljModal({ projekt, db, update, showToast, setPage, onClose }
                           <optgroup label="Pod">
                             {stavkePod.map((s) => <option key={s.id} value={`stavkePod:${s.id}`}>{s.oznaka || "(bez oznake)"}</option>)}
                           </optgroup>
-                          <optgroup label="Komplet">
+                          <optgroup label="Stranica">
                             {stavkeKomplet.map((s) => <option key={s.id} value={`stavkeKomplet:${s.id}`}>{s.oznaka || "(bez oznake)"}</option>)}
                           </optgroup>
                         </select>
