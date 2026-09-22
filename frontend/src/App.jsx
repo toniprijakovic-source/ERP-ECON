@@ -193,13 +193,16 @@ const izracunPonude = (ponuda, materijali, cjenikRada, katalog = [], kvalitete =
     OPERACIJE.forEach((o) => { satiPoOperaciji[o.key] += Number(p.operacije?.[o.key] || 0); });
   });
   const trosakRada = OPERACIJE.reduce((s, o) => s + satiPoOperaciji[o.key] * (Number(cjenikRada?.[o.key]) || 0), 0);
-  // Materijal (iz skladišta) vodi se po poziciji (svaka pozicija ima svoj popis) — zbraja se
-  // preko svih pozicija za ukupan trošak materijala cijele ponude.
-  const trosakMaterijala = (ponuda.pozicije || []).reduce((s, p) => s + (p.materijalStavke || []).reduce((s2, st) => {
-    const m = materijali.find((x) => x.id === st.materijalId);
-    const cijena = st.cijenaPoJed != null ? Number(st.cijenaPoJed) : (m ? m.cijena : 0);
-    return s2 + cijena * efektivnaKolicinaMaterijala(st, m);
-  }, 0), 0) + (ponuda.sirovineStavke || []).reduce((s, st) => s + (Number(st.kolicina) || 0) * (Number(st.cijenaJed) || 0), 0);
+  // Trošak materijala se zbraja iz TRI izvora, sve po poziciji: stavke iz kataloga (profili/limovi,
+  // cijena upisana izravno na stavci), materijal iz skladišta (svoj popis po poziciji), i eventualni
+  // ručni "Materijal iz kalkulacije" (zajednički, za ono što ne pripada nijednoj stavci).
+  const trosakMaterijala = (ponuda.pozicije || []).reduce((s, p) => s
+    + trosakMaterijalaIzKatalogaPozicije(p, katalog, kvalitete)
+    + (p.materijalStavke || []).reduce((s2, st) => {
+      const m = materijali.find((x) => x.id === st.materijalId);
+      const cijena = st.cijenaPoJed != null ? Number(st.cijenaPoJed) : (m ? m.cijena : 0);
+      return s2 + cijena * efektivnaKolicinaMaterijala(st, m);
+    }, 0), 0) + (ponuda.sirovineStavke || []).reduce((s, st) => s + (Number(st.kolicina) || 0) * (Number(st.cijenaJed) || 0), 0);
   // Ostalo (transport, projektiranje…) vodi se po poziciji, isto kao materijal.
   const trosakOstalo = (ponuda.pozicije || []).reduce((s, p) => s + (p.ostaleStavke || []).reduce((s2, st) => s2 + (Number(st.kolicina) || 0) * (Number(st.cijenaJed) || 0), 0), 0);
   const ukupnoSati = OPERACIJE.reduce((s, o) => s + satiPoOperaciji[o.key], 0);
@@ -1817,6 +1820,12 @@ const masaStavkePozicije = (s, katalog, kvalitete) => {
   return Number(s.masaJed) || 0;
 };
 const masaPozicije = (p, katalog, kvalitete) => (p.stavke || []).reduce((sum, s) => sum + masaStavkePozicije(s, katalog, kvalitete) * (Number(s.komada) || 1), 0);
+
+// Trošak materijala jedne stavke (profil/lim) — masa (po komadu) × broj komada × cijena po kg
+// koju korisnik upiše izravno na stavci, umjesto da cijenu naknadno traži u zasebnom popisu.
+const trosakStavkeMaterijala = (s, katalog, kvalitete) => masaStavkePozicije(s, katalog, kvalitete) * (Number(s.komada) || 1) * (Number(s.cijenaKg) || 0);
+// Trošak materijala iz kataloga (profili/limovi) za CIJELU poziciju (sve stavke × količina pozicije).
+const trosakMaterijalaIzKatalogaPozicije = (p, katalog, kvalitete) => (p.stavke || []).reduce((s, st) => s + trosakStavkeMaterijala(st, katalog, kvalitete), 0) * (Number(p.kolicina) || 1);
 
 function SkladistePage({ db, update, showToast, mojaPozicija }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "skladiste");
@@ -4315,12 +4324,20 @@ function StavkaPozicijeRedak({ stavka: s, katalog, grupe, kvalitete, onAzuriraj,
         <label className="label">Masa/kom</label>
         <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{masaJedEfektivna.toFixed(2)} kg</div>
       </div>
+      <div style={{ width: 110 }}>
+        <label className="label">Cijena (€/kg)</label>
+        <input className="input f-mono" type="number" min="0" step="0.01" value={s.cijenaKg ?? 0} onChange={(e) => onAzuriraj({ cijenaKg: e.target.value })} />
+      </div>
+      <div style={{ width: 120 }}>
+        <label className="label">Trošak</label>
+        <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{fmtCurDec(masaJedEfektivna * (Number(s.komada) || 1) * (Number(s.cijenaKg) || 0))}</div>
+      </div>
       <button className="btn btn-icon btn-ghost" onClick={onObrisi}><Trash2 size={14} color="var(--rust)" /></button>
     </div>
   );
 }
 
-function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], kvalitete = [], satnicaMontaza = 0, calc, azurirajOtpadLima, prebaciUMaterijal, sirovineStavke, setSirovineStavke, materijaliSkladiste, narudzbenice, onCreateMaterijal }) {
+function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], kvalitete = [], satnicaMontaza = 0, calc, azurirajOtpadLima, materijaliSkladiste, narudzbenice, onCreateMaterijal }) {
   const [otvorene, setOtvorene] = useState(() => Object.fromEntries(pozicije.map((p) => [p.id, true])));
   const toggle = (id) => setOtvorene((o) => ({ ...o, [id]: !o[id] }));
   const grupe = katalogPoTipu(katalog);
@@ -4330,7 +4347,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
   // skrolanje). Aktivna je uvijek samo jedna kartica.
   const [aktivnaKartica, setAktivnaKartica] = useState(pozicije[0]?.id || "materijal");
 
-  const praznaStavka = () => ({ id: uid("pst"), nacinMase: "rucno", masaJed: 0, komada: 1, katalogId: "", dimenzija: 0, sirinaMM: 0, duzinaMM: 0, kvaliteta: "celik" });
+  const praznaStavka = () => ({ id: uid("pst"), nacinMase: "rucno", masaJed: 0, komada: 1, katalogId: "", dimenzija: 0, sirinaMM: 0, duzinaMM: 0, kvaliteta: "celik", cijenaKg: 0 });
   const praznaAkzStavka = () => ({ id: uid("akz"), tip: AKZ_TIPOVI[0].key, cijenaKg: 0 });
   const addPoz = () => {
     const id = uid("poz");
@@ -4375,7 +4392,9 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
     return (p.stavkeAKZ || []).reduce((s, a) => s + masaUkupnaPoz * (Number(a.cijenaKg) || 0), 0);
   };
   const montazaPozicije = (p) => (Number(p.brojMontera) || 0) * (Number(p.planiraniSatiMontaza) || 0) * (Number(p.kolicina) || 0) * (Number(satnicaMontaza) || 0);
-  const materijalPozicije = (p) => (p.materijalStavke || []).reduce((s, st) => {
+  // Trošak materijala stavke = iz kataloga (profili/limovi, cijena upisana na svakoj stavci) +
+  // materijal iz skladišta (zaseban popis, npr. gotovi kupljeni artikli).
+  const materijalPozicije = (p) => trosakMaterijalaIzKatalogaPozicije(p, katalog, kvalitete) + (p.materijalStavke || []).reduce((s, st) => {
     const m = (materijaliSkladiste || []).find((x) => x.id === st.materijalId);
     const cijena = st.cijenaPoJed != null ? Number(st.cijenaPoJed) : (m ? m.cijena : 0);
     return s + cijena * efektivnaKolicinaMaterijala(st, m);
@@ -4515,10 +4534,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
           svojoj kartici, odvojeno od pojedinih stavki. */}
       {aktivnaKartica === "materijal" && calc && (
         <div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-            <label className="label" style={{ marginBottom: 0 }}>Potreban sirovi materijal (zbrojeno za sve stavke)</label>
-            <Btn variant="ghost" size="sm" icon={Download} onClick={prebaciUMaterijal}>Prebaci u materijal</Btn>
-          </div>
+          <label className="label" style={{ marginBottom: 6, display: "block" }}>Potreban sirovi materijal za cijeli projekt (zbrojeno za sve stavke) — cijena se upisuje na svakoj stavci</label>
           {calc.potrebanMaterijal.profili.length === 0 && calc.potrebanMaterijal.limovi.length === 0 && (
             <div style={{ textAlign: "center", color: "var(--ink-faint)", padding: "16px 0", fontSize: 13 }}>Nema izračunatog materijala — dodaj stavke sa "Stavkama materijala iz kataloga".</div>
           )}
@@ -4553,11 +4569,6 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
                 ))}
               </tbody>
             </table>
-          )}
-          {(sirovineStavke || []).length > 0 && (
-            <Field label="Materijal iz kalkulacije (upiši cijenu €/kg za korištenje u kalkulaciji — ne dira skladište)">
-              <LineItemsEditor mode="custom" rows={sirovineStavke} setRows={setSirovineStavke} />
-            </Field>
           )}
         </div>
       )}
@@ -5784,36 +5795,6 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
 
         const azurirajOtpadLima = (katalogId, postotak) => setPonForm({ ...ponForm, otpadLimPoTipu: { ...(ponForm.otpadLimPoTipu || {}), [katalogId]: postotak } });
 
-        // Prebacuje izračunati sirovi materijal (šipke profila, masa limova) u samostalnu stavku
-        // "Materijal iz kalkulacije" — NE dira skladište (db.materijali), samo daje gotovu količinu
-        // (kg) na koju korisnik ručno upiše cijenu, a to ulazi u trošak materijala ponude. Svaki
-        // redak nosi skriveni _optKljuc (tip + standardna dužina) preko kojeg se ponovni klik
-        // ažurira postojeći redak (osvježi količinu, zadrži već upisanu cijenu) umjesto da ga duplicira.
-        const prebaciUMaterijal = () => {
-          const stavkeZaPrebaciti = [];
-          calc.potrebanMaterijal.profili.forEach((p) => {
-            const entry = db.katalogProfila.find((k) => k.id === p.katalogId);
-            const kgPoM = Number(entry?.vrijednost) || 0;
-            if (p.brojPo6 > 0) stavkeZaPrebaciti.push({ kljuc: `${p.katalogId}::6`, opis: `${p.oznaka} — šipke 6 m (${p.brojPo6} kom)`, jm: "kg", kolicina: Number((p.brojPo6 * 6 * kgPoM).toFixed(1)) });
-            if (p.brojPo12 > 0) stavkeZaPrebaciti.push({ kljuc: `${p.katalogId}::12`, opis: `${p.oznaka} — šipke 12 m (${p.brojPo12} kom)`, jm: "kg", kolicina: Number((p.brojPo12 * 12 * kgPoM).toFixed(1)) });
-          });
-          calc.potrebanMaterijal.limovi.forEach((l) => {
-            stavkeZaPrebaciti.push({ kljuc: `${l.katalogId}::lim`, opis: `${l.oznaka} (lim, s otpadom)`, jm: "kg", kolicina: Number(l.masaKg.toFixed(1)) });
-          });
-
-          if (stavkeZaPrebaciti.length === 0) { showToast("Nema izračunatog materijala za prebacivanje."); return; }
-
-          const kljucevi = new Set(stavkeZaPrebaciti.map((s) => s.kljuc));
-          const postojeceStavke = ponForm.sirovineStavke || [];
-          const zadrzaneStavke = postojeceStavke.filter((s) => !s._optKljuc || !kljucevi.has(s._optKljuc));
-          const azurirane = stavkeZaPrebaciti.map(({ kljuc, ...polja }) => {
-            const stara = postojeceStavke.find((s) => s._optKljuc === kljuc);
-            return { cijenaJed: 0, ...(stara || {}), ...polja, _optKljuc: kljuc };
-          });
-          setPonForm({ ...ponForm, sirovineStavke: [...zadrzaneStavke, ...azurirane] });
-          showToast(`Prebačeno ${azurirane.length} stavki u materijal — upiši cijenu po kg.`);
-        };
-
         return (
           <Modal xwide title={ponForm.id ? `Ponuda ${ponForm.broj}` : "Nova ponuda"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={savePon}>Spremi</Btn></>}>
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
@@ -5829,8 +5810,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
             </div>
             <div style={{ marginTop: 8, marginBottom: 16 }}>
               <PozicijeEditor pozicije={ponForm.pozicije} setPozicije={(rows) => setPonForm({ ...ponForm, pozicije: rows })} cjenikRada={db.cjenikRada} katalog={db.katalogProfila} kvalitete={db.kvaliteteMaterijala} satnicaMontaza={ponForm.satnicaMontaza} calc={calc}
-                azurirajOtpadLima={azurirajOtpadLima} prebaciUMaterijal={prebaciUMaterijal}
-                sirovineStavke={ponForm.sirovineStavke} setSirovineStavke={(rows) => setPonForm({ ...ponForm, sirovineStavke: rows })}
+                azurirajOtpadLima={azurirajOtpadLima}
                 materijaliSkladiste={db.materijali} narudzbenice={db.narudzbenice} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} />
             </div>
 
