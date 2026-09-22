@@ -4482,29 +4482,44 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
         );
       })()}
 
-      {aktivnaKartica === "rekap" && calc && (
-        <div className="card" style={{ padding: 14, background: "var(--surface-alt)" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, fontSize: 12.5, marginBottom: 12 }}>
-            <div><div style={{ color: "var(--ink-soft)" }}>Trošak rada ({calc.ukupnoSati} h)</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.trosakRada)}</div></div>
-            <div><div style={{ color: "var(--ink-soft)" }}>Trošak materijala</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.trosakMaterijala)}</div></div>
-            <div><div style={{ color: "var(--ink-soft)" }}>Ostalo</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.trosakOstalo)}</div></div>
-            <div><div style={{ color: "var(--ink-soft)" }}>Montaža ({calc.satiMontaze.toFixed(1)} h)</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.trosakMontaze)}</div></div>
-            <div><div style={{ color: "var(--ink-soft)" }}>AKZ (sve pozicije)</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.iznosAKZ)}</div></div>
-            <div><div style={{ color: "var(--ink-soft)" }}>Ukupno (bez marže)</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.ukupno)}</div></div>
-          </div>
-          <div style={{ borderTop: "1px solid var(--line-strong)", paddingTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-            <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Uvećanje / marža ({calc.postotakMarze}%): <strong className="f-mono">{fmtCurDec(calc.iznosMarze)}</strong></span>
-            <div>
-              <div style={{ fontSize: 12, color: "var(--ink-soft)", textAlign: "right" }}>Konačna cijena ponude</div>
-              <div className="f-mono" style={{ fontSize: 19, fontWeight: 700, color: "var(--steel)", textAlign: "right" }}>{fmtCurDec(calc.cijenaKonacna)}</div>
-            </div>
-          </div>
-          <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 8 }}>
-            Ukupna masa konstrukcije: <strong className="f-mono">{calc.ukupnaMasaKonstrukcije.toFixed(1)} kg</strong>
-            {calc.iznosAKZ > 0 && <> · AKZ: {calc.akzPoTipu.filter((t) => t.iznos > 0).map((t) => t.label).join(", ")}</>}
-          </div>
-        </div>
-      )}
+      {aktivnaKartica === "rekap" && calc && (() => {
+        // Trošak rada, montaža i AKZ su vezani uz pojedinu poziciju pa se prikazuju po retku;
+        // materijal, ostalo i marža su zajednički za cijelu ponudu (ne vode se po poziciji), pa
+        // idu kao zbirni retci na dnu tablice.
+        const akzPozicije = (p) => {
+            const masaUkupnaPoz = masaPozicije(p, katalog, kvalitete) * (Number(p.kolicina) || 0);
+            return (p.stavkeAKZ || []).reduce((s, a) => s + masaUkupnaPoz * (Number(a.cijenaKg) || 0), 0);
+          };
+        const montazaPozicije = (p) => (Number(p.brojMontera) || 0) * (Number(p.planiraniSatiMontaza) || 0) * (Number(p.kolicina) || 0) * (Number(satnicaMontaza) || 0);
+        return (
+          <table className="erp-table">
+            <thead><tr><th>Pozicija</th><th style={{ width: 120 }}>Trošak rada</th><th style={{ width: 120 }}>Montaža</th><th style={{ width: 120 }}>AKZ</th><th style={{ width: 130 }}>Ukupno pozicija</th></tr></thead>
+            <tbody>
+              {pozicije.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-faint)" }}>Nema pozicija.</td></tr>}
+              {pozicije.map((p) => {
+                const rada = trosakPoz(p);
+                const montaza = montazaPozicije(p);
+                const akz = akzPozicije(p);
+                return (
+                  <tr key={p.id}>
+                    <td>{p.oznaka} {p.naziv && `— ${p.naziv}`}</td>
+                    <td className="f-mono">{fmtCurDec(rada)}</td>
+                    <td className="f-mono">{fmtCurDec(montaza)}</td>
+                    <td className="f-mono">{fmtCurDec(akz)}</td>
+                    <td className="f-mono" style={{ fontWeight: 600 }}>{fmtCurDec(rada + montaza + akz)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr><td colSpan={4} style={{ textAlign: "right", color: "var(--ink-soft)" }}>Trošak materijala</td><td className="f-mono">{fmtCurDec(calc.trosakMaterijala)}</td></tr>
+              <tr><td colSpan={4} style={{ textAlign: "right", color: "var(--ink-soft)" }}>Ostalo</td><td className="f-mono">{fmtCurDec(calc.trosakOstalo)}</td></tr>
+              <tr><td colSpan={4} style={{ textAlign: "right", color: "var(--ink-soft)" }}>Marža ({calc.postotakMarze}%)</td><td className="f-mono">{fmtCurDec(calc.iznosMarze)}</td></tr>
+              <tr style={{ borderTop: "2px solid var(--line-strong)" }}><td colSpan={4} style={{ textAlign: "right", fontWeight: 700 }}>UKUPNA CIJENA (sa maržom)</td><td className="f-mono" style={{ fontWeight: 700, fontSize: 15, color: "var(--steel)" }}>{fmtCurDec(calc.cijenaKonacna)}</td></tr>
+            </tfoot>
+          </table>
+        );
+      })()}
     </div>
   );
 }
