@@ -4317,7 +4317,7 @@ function StavkaPozicijeRedak({ stavka: s, katalog, grupe, kvalitete, onAzuriraj,
   );
 }
 
-function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], kvalitete = [], satnicaMontaza = 0, calc, azurirajOtpadLima, prebaciUMaterijal, sirovineStavke, setSirovineStavke }) {
+function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], kvalitete = [], satnicaMontaza = 0, calc, azurirajOtpadLima, prebaciUMaterijal, sirovineStavke, setSirovineStavke, materijalStavke, setMaterijalStavke, ostaleStavke, setOstaleStavke, materijaliSkladiste, narudzbenice, onCreateMaterijal }) {
   const [otvorene, setOtvorene] = useState(() => Object.fromEntries(pozicije.map((p) => [p.id, true])));
   const toggle = (id) => setOtvorene((o) => ({ ...o, [id]: !o[id] }));
   const grupe = katalogPoTipu(katalog);
@@ -4481,6 +4481,13 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
           </div>
         );
       })()}
+
+      {aktivnaKartica === "rekap" && calc && (
+        <>
+          <Field label="Materijal (iz skladišta)"><LineItemsEditor mode="materijal" rows={materijalStavke} setRows={setMaterijalStavke} materijali={materijaliSkladiste} katalog={katalog} narudzbenice={narudzbenice} onCreateMaterijal={onCreateMaterijal} /></Field>
+          <Field label="Ostale stavke (transport, projektiranje…)"><LineItemsEditor mode="custom" rows={ostaleStavke} setRows={setOstaleStavke} materijali={materijaliSkladiste} /></Field>
+        </>
+      )}
 
       {aktivnaKartica === "rekap" && calc && (() => {
         // Trošak rada, montaža i AKZ su vezani uz pojedinu poziciju pa se prikazuju po retku;
@@ -5793,11 +5800,12 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
             <div style={{ marginTop: 8, marginBottom: 16 }}>
               <PozicijeEditor pozicije={ponForm.pozicije} setPozicije={(rows) => setPonForm({ ...ponForm, pozicije: rows })} cjenikRada={db.cjenikRada} katalog={db.katalogProfila} kvalitete={db.kvaliteteMaterijala} satnicaMontaza={ponForm.satnicaMontaza} calc={calc}
                 azurirajOtpadLima={azurirajOtpadLima} prebaciUMaterijal={prebaciUMaterijal}
-                sirovineStavke={ponForm.sirovineStavke} setSirovineStavke={(rows) => setPonForm({ ...ponForm, sirovineStavke: rows })} />
+                sirovineStavke={ponForm.sirovineStavke} setSirovineStavke={(rows) => setPonForm({ ...ponForm, sirovineStavke: rows })}
+                materijalStavke={ponForm.materijalStavke} setMaterijalStavke={(rows) => setPonForm({ ...ponForm, materijalStavke: rows })}
+                ostaleStavke={ponForm.ostaleStavke} setOstaleStavke={(rows) => setPonForm({ ...ponForm, ostaleStavke: rows })}
+                materijaliSkladiste={db.materijali} narudzbenice={db.narudzbenice} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} />
             </div>
 
-            <Field label="Materijal (iz skladišta)"><LineItemsEditor mode="materijal" rows={ponForm.materijalStavke} setRows={(rows) => setPonForm({ ...ponForm, materijalStavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} /></Field>
-            <Field label="Ostale stavke (transport, projektiranje…)"><LineItemsEditor mode="custom" rows={ponForm.ostaleStavke} setRows={(rows) => setPonForm({ ...ponForm, ostaleStavke: rows })} materijali={db.materijali} /></Field>
             <Field label="Napomena"><textarea className="textarea" rows={2} value={ponForm.napomena} onChange={(e) => setPonForm({ ...ponForm, napomena: e.target.value })} /></Field>
 
             <div className="label" style={{ marginTop: 6 }}>Montaža i uvećanje cijene</div>
