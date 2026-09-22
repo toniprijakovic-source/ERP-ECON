@@ -551,22 +551,8 @@ const obracunMjesecaKooperant = (zaposlenik, mjesec, db) => {
 
 /* ============================== UPOZORENJA EVIDENCIJE ==============================
    Radnik se treba prijaviti do zadanog sata; ako se ne odjavi, sustav ga automatski
-   odjavljuje nakon N sati, ali to ostaje označeno da računovodstvo provjeri. */
-
-const automatskiOdjaviZaostale = (evidencija, postavke) => {
-  const satiDoAutoOdjave = Number(postavke?.autoOdjavaSati) || 12;
-  const sada = new Date();
-  let promijenjeno = false;
-  const nova = evidencija.map((e) => {
-    if (e.vrijemeOdlaska) return e;
-    const proteklo = (sada - new Date(e.vrijemeDolaska)) / 3600000;
-    if (proteklo < satiDoAutoOdjave) return e;
-    promijenjeno = true;
-    const auto = new Date(new Date(e.vrijemeDolaska).getTime() + satiDoAutoOdjave * 3600000);
-    return { ...e, vrijemeOdlaska: auto.toISOString(), autoOdjava: true };
-  });
-  return { nova, promijenjeno };
-};
+   odjavljuje nakon N sati (na backendu — vidi provjeriAutoOdjavu u server.js), ali to
+   ostaje označeno da računovodstvo provjeri. */
 
 const upozorenjaEvidencije = (db) => {
   const danas = todayISO();
@@ -6460,16 +6446,8 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true })
   const [mjesec, setMjesec] = useState(todayISO().slice(0, 7));
   const [urediCeliju, setUrediCeliju] = useState(null); // { zaposlenikId, datum, vrsta, od, do, postojeciId }
 
-  // Automatska odjava zaostalih (nezavršenih) smjena — provjerava se pri otvaranju ovog taba,
-  // gdje korisnik ionako ima ovlasti za uređivanje evidencije. Šalje SAMO zapise koje je stvarno
-  // promijenila (usporedbom reference s automatskiOdjaviZaostale), preko patchEvidencija — ne
-  // cijeli popis — da ne prepiše prijave/odjave koje su u međuvremenu stigle s kioska.
-  useEffect(() => {
-    const izvor = db.evidencijaRada || [];
-    const { nova, promijenjeno } = automatskiOdjaviZaostale(izvor, db.postavkePlaca);
-    if (promijenjeno) patchEvidencija(nova.filter((e, i) => e !== izvor[i]), []);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Automatska odjava zaostalih smjena sad se pokreće sama na backendu (vidi provjeriAutoOdjavu u
+  // server.js) — više ne ovisi o tome je li itko baš otvorio ovaj tab na vrijeme.
 
   const { neprijavljeni, neodjavljeni } = useMemo(() => upozorenjaEvidencije(db), [db]);
   const kioskUrl = `${window.location.origin}${window.location.pathname}?kiosk=1`;

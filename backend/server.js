@@ -468,5 +468,51 @@ app.put("/api/data/:key", autentikacija, async (req, res, next) => {
   res.json({ ok: true });
 });
 
+// ---------- Automatska odjava zaostalih (nezavršenih) smjena ----------
+// Prije se ova provjera pokretala SAMO u pregledniku, kad bi netko otvorio tab "Evidencija rada"
+// u glavnoj aplikaciji — ako to nitko nije napravio na vrijeme (npr. cijeli dan zaokupljen nekim
+// drugim problemom), otvorene smjene bi ostale otvorene satima dulje nego što je prag nalagao,
+// iako bi se, kad se konačno provjeri, vrijeme odlaska ispravno izračunalo kao dolazak+prag.
+// Ovdje se ista logika pokreće sama na serveru, neovisno o tome ima li itko aplikaciju otvorenu.
+async function provjeriAutoOdjavu() {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const [rE, rP] = await Promise.all([
+      client.query("SELECT value FROM app_data WHERE key = 'evidencijaRada' FOR UPDATE"),
+      client.query("SELECT value FROM app_data WHERE key = 'postavkePlaca'"),
+    ]);
+    const evidencija = rE.rows[0]?.value || [];
+    const satiDoAutoOdjave = Number(rP.rows[0]?.value?.autoOdjavaSati) || 12;
+    const sada = Date.now();
+    let promijenjeno = false;
+    const nova = evidencija.map((e) => {
+      if (e.vrijemeOdlaska) return e;
+      const proteklo = (sada - new Date(e.vrijemeDolaska).getTime()) / 3600000;
+      if (proteklo < satiDoAutoOdjave) return e;
+      promijenjeno = true;
+      const auto = new Date(new Date(e.vrijemeDolaska).getTime() + satiDoAutoOdjave * 3600000);
+      return { ...e, vrijemeOdlaska: auto.toISOString(), autoOdjava: true };
+    });
+    if (promijenjeno) {
+      await client.query(
+        `INSERT INTO app_data (key, value, updated_at) VALUES ('evidencijaRada', $1, now())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        [JSON.stringify(nova)]
+      );
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Greška kod automatske odjave:", e);
+  } finally {
+    client.release();
+  }
+}
+
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`ERP backend sluša na portu ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`ERP backend sluša na portu ${PORT}`);
+  provjeriAutoOdjavu();
+  setInterval(provjeriAutoOdjavu, 15 * 60 * 1000);
+});
