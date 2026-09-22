@@ -4317,7 +4317,7 @@ function StavkaPozicijeRedak({ stavka: s, katalog, grupe, kvalitete, onAzuriraj,
   );
 }
 
-function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], kvalitete = [], satnicaMontaza = 0, calc }) {
+function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], kvalitete = [], satnicaMontaza = 0, calc, azurirajOtpadLima, prebaciUMaterijal, sirovineStavke, setSirovineStavke }) {
   const [otvorene, setOtvorene] = useState(() => Object.fromEntries(pozicije.map((p) => [p.id, true])));
   const toggle = (id) => setOtvorene((o) => ({ ...o, [id]: !o[id] }));
   const grupe = katalogPoTipu(katalog);
@@ -4520,6 +4520,54 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
           </table>
         );
       })()}
+
+      {/* Zbrojeno za SVE pozicije zajedno (ne po pojedinoj) — zato živi ovdje, u zajedničkoj
+          kartici, a ne unutar pojedine pozicije, gdje bi izgledalo kao da pripada samo njoj. */}
+      {aktivnaKartica === "rekap" && calc && (calc.potrebanMaterijal.profili.length > 0 || calc.potrebanMaterijal.limovi.length > 0) && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, marginBottom: 6 }}>
+            <label className="label" style={{ marginBottom: 0 }}>Potreban sirovi materijal (zbrojeno za sve pozicije)</label>
+            <Btn variant="ghost" size="sm" icon={Download} onClick={prebaciUMaterijal}>Prebaci u materijal</Btn>
+          </div>
+          {calc.potrebanMaterijal.profili.length > 0 && (
+            <table className="erp-table" style={{ marginBottom: 10 }}>
+              <thead><tr><th>Profil</th><th style={{ width: 70 }}>Komada</th><th style={{ width: 90 }}>Potrebno (m)</th><th style={{ width: 80 }}>Šipki 6m</th><th style={{ width: 80 }}>Šipki 12m</th><th style={{ width: 80 }}>Otpad (m)</th></tr></thead>
+              <tbody>
+                {calc.potrebanMaterijal.profili.map((p) => (
+                  <tr key={p.katalogId}>
+                    <td>{p.oznaka}</td>
+                    <td className="f-mono">{p.brojKomada}</td>
+                    <td className="f-mono">{p.ukupnoPotrebno.toFixed(2)}</td>
+                    <td className="f-mono">{p.brojPo6}</td>
+                    <td className="f-mono">{p.brojPo12}</td>
+                    <td className="f-mono" style={{ color: "var(--ink-faint)" }}>{p.otpadM.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {calc.potrebanMaterijal.limovi.length > 0 && (
+            <table className="erp-table" style={{ marginBottom: 16 }}>
+              <thead><tr><th>Lim</th><th style={{ width: 110 }}>Površina (m²)</th><th style={{ width: 110 }}>Otpad (%)</th><th style={{ width: 110 }}>Masa s otpadom (kg)</th></tr></thead>
+              <tbody>
+                {calc.potrebanMaterijal.limovi.map((l) => (
+                  <tr key={l.katalogId}>
+                    <td>{l.oznaka}</td>
+                    <td className="f-mono">{l.povrsinaM2.toFixed(2)}</td>
+                    <td><input className="input f-mono" type="number" min="0" step="1" value={l.otpadPostotak} onChange={(e) => azurirajOtpadLima(l.katalogId, e.target.value === "" ? 0 : Number(e.target.value))} /></td>
+                    <td className="f-mono">{l.masaKg.toFixed(1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {(sirovineStavke || []).length > 0 && (
+            <Field label="Materijal iz kalkulacije (upiši cijenu €/kg za korištenje u kalkulaciji — ne dira skladište)">
+              <LineItemsEditor mode="custom" rows={sirovineStavke} setRows={setSirovineStavke} />
+            </Field>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -5743,7 +5791,9 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
               <span style={{ fontSize: 11, color: "var(--ink-faint)" }}>Satnice se uređuju putem gumba "Cjenik rada"</span>
             </div>
             <div style={{ marginTop: 8, marginBottom: 16 }}>
-              <PozicijeEditor pozicije={ponForm.pozicije} setPozicije={(rows) => setPonForm({ ...ponForm, pozicije: rows })} cjenikRada={db.cjenikRada} katalog={db.katalogProfila} kvalitete={db.kvaliteteMaterijala} satnicaMontaza={ponForm.satnicaMontaza} calc={calc} />
+              <PozicijeEditor pozicije={ponForm.pozicije} setPozicije={(rows) => setPonForm({ ...ponForm, pozicije: rows })} cjenikRada={db.cjenikRada} katalog={db.katalogProfila} kvalitete={db.kvaliteteMaterijala} satnicaMontaza={ponForm.satnicaMontaza} calc={calc}
+                azurirajOtpadLima={azurirajOtpadLima} prebaciUMaterijal={prebaciUMaterijal}
+                sirovineStavke={ponForm.sirovineStavke} setSirovineStavke={(rows) => setPonForm({ ...ponForm, sirovineStavke: rows })} />
             </div>
 
             <Field label="Materijal (iz skladišta)"><LineItemsEditor mode="materijal" rows={ponForm.materijalStavke} setRows={(rows) => setPonForm({ ...ponForm, materijalStavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} /></Field>
@@ -5760,54 +5810,8 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
                 Ukupna masa konstrukcije: <strong className="f-mono">{calc.ukupnaMasaKonstrukcije.toFixed(1)} kg</strong> · Sati montaže: <strong className="f-mono">{calc.satiMontaze.toFixed(1)} h</strong>
                 {calc.iznosAKZ > 0 && <> · AKZ: <strong className="f-mono">{fmtCurDec(calc.iznosAKZ)}</strong> ({calc.akzPoTipu.filter((t) => t.iznos > 0).map((t) => t.label).join(", ")})</>}
               </div>
-              <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 4 }}>AKZ se sada dodaje po poziciji (vidi karticu "AKZ" unutar svake pozicije iznad).</div>
+              <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 4 }}>AKZ se sada dodaje po poziciji (vidi karticu "AKZ" unutar svake pozicije iznad). Potreban sirovi materijal (zbrojen za sve pozicije) nalazi se u kartici "Rekapitulacija" iznad.</div>
             </div>
-
-            {(calc.potrebanMaterijal.profili.length > 0 || calc.potrebanMaterijal.limovi.length > 0) && (
-              <>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, marginBottom: 6 }}>
-                  <label className="label" style={{ marginBottom: 0 }}>Potreban sirovi materijal (izračunato iz pozicija)</label>
-                  <Btn variant="ghost" size="sm" icon={Download} onClick={prebaciUMaterijal}>Prebaci u materijal</Btn>
-                </div>
-                {calc.potrebanMaterijal.profili.length > 0 && (
-                  <table className="erp-table" style={{ marginBottom: 10 }}>
-                    <thead><tr><th>Profil</th><th style={{ width: 70 }}>Komada</th><th style={{ width: 90 }}>Potrebno (m)</th><th style={{ width: 80 }}>Šipki 6m</th><th style={{ width: 80 }}>Šipki 12m</th><th style={{ width: 80 }}>Otpad (m)</th></tr></thead>
-                    <tbody>
-                      {calc.potrebanMaterijal.profili.map((p) => (
-                        <tr key={p.katalogId}>
-                          <td>{p.oznaka}</td>
-                          <td className="f-mono">{p.brojKomada}</td>
-                          <td className="f-mono">{p.ukupnoPotrebno.toFixed(2)}</td>
-                          <td className="f-mono">{p.brojPo6}</td>
-                          <td className="f-mono">{p.brojPo12}</td>
-                          <td className="f-mono" style={{ color: "var(--ink-faint)" }}>{p.otpadM.toFixed(2)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-                {calc.potrebanMaterijal.limovi.length > 0 && (
-                  <table className="erp-table" style={{ marginBottom: 16 }}>
-                    <thead><tr><th>Lim</th><th style={{ width: 110 }}>Površina (m²)</th><th style={{ width: 110 }}>Otpad (%)</th><th style={{ width: 110 }}>Masa s otpadom (kg)</th></tr></thead>
-                    <tbody>
-                      {calc.potrebanMaterijal.limovi.map((l) => (
-                        <tr key={l.katalogId}>
-                          <td>{l.oznaka}</td>
-                          <td className="f-mono">{l.povrsinaM2.toFixed(2)}</td>
-                          <td><input className="input f-mono" type="number" min="0" step="1" value={l.otpadPostotak} onChange={(e) => azurirajOtpadLima(l.katalogId, e.target.value === "" ? 0 : Number(e.target.value))} /></td>
-                          <td className="f-mono">{l.masaKg.toFixed(1)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-                {(ponForm.sirovineStavke || []).length > 0 && (
-                  <Field label="Materijal iz kalkulacije (upiši cijenu €/kg za korištenje u kalkulaciji — ne dira skladište)">
-                    <LineItemsEditor mode="custom" rows={ponForm.sirovineStavke} setRows={(rows) => setPonForm({ ...ponForm, sirovineStavke: rows })} />
-                  </Field>
-                )}
-              </>
-            )}
           </Modal>
         );
       })()}
