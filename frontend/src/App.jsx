@@ -193,11 +193,13 @@ const izracunPonude = (ponuda, materijali, cjenikRada, katalog = [], kvalitete =
     OPERACIJE.forEach((o) => { satiPoOperaciji[o.key] += Number(p.operacije?.[o.key] || 0); });
   });
   const trosakRada = OPERACIJE.reduce((s, o) => s + satiPoOperaciji[o.key] * (Number(cjenikRada?.[o.key]) || 0), 0);
-  const trosakMaterijala = (ponuda.materijalStavke || []).reduce((s, st) => {
+  // Materijal (iz skladišta) vodi se po poziciji (svaka pozicija ima svoj popis) — zbraja se
+  // preko svih pozicija za ukupan trošak materijala cijele ponude.
+  const trosakMaterijala = (ponuda.pozicije || []).reduce((s, p) => s + (p.materijalStavke || []).reduce((s2, st) => {
     const m = materijali.find((x) => x.id === st.materijalId);
     const cijena = st.cijenaPoJed != null ? Number(st.cijenaPoJed) : (m ? m.cijena : 0);
-    return s + cijena * efektivnaKolicinaMaterijala(st, m);
-  }, 0) + (ponuda.sirovineStavke || []).reduce((s, st) => s + (Number(st.kolicina) || 0) * (Number(st.cijenaJed) || 0), 0);
+    return s2 + cijena * efektivnaKolicinaMaterijala(st, m);
+  }, 0), 0) + (ponuda.sirovineStavke || []).reduce((s, st) => s + (Number(st.kolicina) || 0) * (Number(st.cijenaJed) || 0), 0);
   const trosakOstalo = (ponuda.ostaleStavke || []).reduce((s, st) => s + (Number(st.kolicina) || 0) * (Number(st.cijenaJed) || 0), 0);
   const ukupnoSati = OPERACIJE.reduce((s, o) => s + satiPoOperaciji[o.key], 0);
 
@@ -4317,7 +4319,7 @@ function StavkaPozicijeRedak({ stavka: s, katalog, grupe, kvalitete, onAzuriraj,
   );
 }
 
-function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], kvalitete = [], satnicaMontaza = 0, calc, azurirajOtpadLima, prebaciUMaterijal, sirovineStavke, setSirovineStavke, materijalStavke, setMaterijalStavke, ostaleStavke, setOstaleStavke, materijaliSkladiste, narudzbenice, onCreateMaterijal }) {
+function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], kvalitete = [], satnicaMontaza = 0, calc, azurirajOtpadLima, prebaciUMaterijal, sirovineStavke, setSirovineStavke, ostaleStavke, setOstaleStavke, materijaliSkladiste, narudzbenice, onCreateMaterijal }) {
   const [otvorene, setOtvorene] = useState(() => Object.fromEntries(pozicije.map((p) => [p.id, true])));
   const toggle = (id) => setOtvorene((o) => ({ ...o, [id]: !o[id] }));
   const grupe = katalogPoTipu(katalog);
@@ -4330,7 +4332,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
   const praznaAkzStavka = () => ({ id: uid("akz"), tip: AKZ_TIPOVI[0].key, cijenaKg: 0 });
   const addPoz = () => {
     const id = uid("poz");
-    setPozicije([...pozicije, { id, oznaka: `P${pozicije.length + 1}`, naziv: "", kolicina: 1, stavke: [praznaStavka()], operacije: praznaOperacijaSati(), brojMontera: 0, planiraniSatiMontaza: 0, stavkeAKZ: [] }]);
+    setPozicije([...pozicije, { id, oznaka: `P${pozicije.length + 1}`, naziv: "", kolicina: 1, stavke: [praznaStavka()], operacije: praznaOperacijaSati(), brojMontera: 0, planiraniSatiMontaza: 0, stavkeAKZ: [], materijalStavke: [] }]);
     setOtvorene((o) => ({ ...o, [id]: true }));
     setAktivnaKartica(id);
   };
@@ -4410,6 +4412,11 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
               <Btn variant="ghost" size="sm" icon={Plus} onClick={() => addStavka(p.id)} style={{ marginTop: 8 }}>Dodaj stavku</Btn>
             </div>
 
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line-strong)" }}>
+              <div className="label" style={{ marginBottom: 2 }}>Materijal (iz skladišta) — za ovu poziciju</div>
+              <LineItemsEditor mode="materijal" rows={p.materijalStavke || []} setRows={(rows) => updatePoz(p.id, { materijalStavke: rows })} materijali={materijaliSkladiste} katalog={katalog} narudzbenice={narudzbenice} onCreateMaterijal={onCreateMaterijal} />
+            </div>
+
             {otvorene[p.id] && (
               <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line-strong)" }}>
                 <div className="label" style={{ marginBottom: 8 }}>Predviđeni sati po operaciji</div>
@@ -4483,10 +4490,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
       })()}
 
       {aktivnaKartica === "rekap" && calc && (
-        <>
-          <Field label="Materijal (iz skladišta)"><LineItemsEditor mode="materijal" rows={materijalStavke} setRows={setMaterijalStavke} materijali={materijaliSkladiste} katalog={katalog} narudzbenice={narudzbenice} onCreateMaterijal={onCreateMaterijal} /></Field>
-          <Field label="Ostale stavke (transport, projektiranje…)"><LineItemsEditor mode="custom" rows={ostaleStavke} setRows={setOstaleStavke} materijali={materijaliSkladiste} /></Field>
-        </>
+        <Field label="Ostale stavke (transport, projektiranje…)"><LineItemsEditor mode="custom" rows={ostaleStavke} setRows={setOstaleStavke} materijali={materijaliSkladiste} /></Field>
       )}
 
       {aktivnaKartica === "rekap" && calc && (() => {
@@ -5519,7 +5523,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
   const emptyProj = () => ({ sifra: "", naziv: "", kupacId: db.kupci[0]?.id || "", status: "Ponuda", vrijednost: 0, rokPocetka: todayISO(), rokZavrsetka: todayISO(), opis: "", voditeljId: "", zadaci: noviZadaciIzStandarda(), faze: praznaFazaSati() });
   const [projForm, setProjForm] = useState(emptyProj());
 
-  const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, pozicije: [], materijalStavke: [], sirovineStavke: [], ostaleStavke: [], satnicaMontaza: 0, otpadLimPoTipu: {}, postotakMarze: 0 });
+  const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, pozicije: [], sirovineStavke: [], ostaleStavke: [], satnicaMontaza: 0, otpadLimPoTipu: {}, postotakMarze: 0 });
   const [ponForm, setPonForm] = useState(emptyPon());
   const [cjenikOpen, setCjenikOpen] = useState(false);
   const [zadaciOpen, setZadaciOpen] = useState(false);
@@ -5589,11 +5593,14 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
   };
   const pretvoriUProjekt = (ponuda) => {
     const calc = izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala);
+    // Materijal (iz skladišta) se sad vodi po poziciji ponude — projekt ga i dalje drži kao
+    // JEDAN zajednički popis, pa se ovdje zbraja preko svih pozicija.
+    const sviMaterijalStavke = (ponuda.pozicije || []).flatMap((p) => p.materijalStavke || []);
     const noviProjekt = {
       id: uid("proj"), sifra: sljedeciBroj(db.projekti, "sifra", "PRJ-2026-"), naziv: ponuda.naziv, kupacId: ponuda.kupacId,
       status: "Odobren", vrijednost: Math.round(calc.cijenaKonacna), rokPocetka: todayISO(), rokZavrsetka: addDays(todayISO(), 60),
       opis: `Kreirano iz ponude ${ponuda.broj}.`,
-      izvorPonudaId: ponuda.id, pozicije: ponuda.pozicije || [], materijalStavke: ponuda.materijalStavke || [], ostaleStavke: ponuda.ostaleStavke || [],
+      izvorPonudaId: ponuda.id, pozicije: ponuda.pozicije || [], materijalStavke: sviMaterijalStavke, ostaleStavke: ponuda.ostaleStavke || [],
       voditeljId: "", zadaci: noviZadaciIzStandarda(),
       faze: { ...praznaFazaSati(), ...Object.fromEntries(OPERACIJE.map((o) => [o.label, calc.satiPoOperaciji[o.key]])), "Montaža (teren)": calc.satiMontaze },
     };
@@ -5603,16 +5610,16 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
       id: uid("rn"), broj: sljedeciRnBroj(), projektId: noviProjekt.id,
       naziv: noviProjekt.naziv, faza: o.label, zaduzenTim: "", status: "Planiran",
       planiranoSati: calc.satiPoOperaciji[o.key], utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: addDays(todayISO(), 14),
-      stavke: o.key === "pripremaPozicija" ? ponuda.materijalStavke || [] : [], materijalIzdan: false,
+      stavke: o.key === "pripremaPozicija" ? sviMaterijalStavke : [], materijalIzdan: false,
     }));
     // Osiguraj da materijal iz ponude uvijek završi na nekom radnom nalogu, čak i ako "priprema pozicija" nema planiranih sati
     const imaPripremuNalog = noviNalozi.some((n) => n.faza === "Priprema pozicija za sklapanje");
-    if (!imaPripremuNalog && (ponuda.materijalStavke || []).length > 0) {
+    if (!imaPripremuNalog && sviMaterijalStavke.length > 0) {
       noviNalozi = [...noviNalozi, {
         id: uid("rn"), broj: sljedeciRnBroj(), projektId: noviProjekt.id,
         naziv: noviProjekt.naziv, faza: "Priprema pozicija za sklapanje", zaduzenTim: "", status: "Planiran",
         planiranoSati: 0, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: addDays(todayISO(), 14),
-        stavke: ponuda.materijalStavke || [], materijalIzdan: false,
+        stavke: sviMaterijalStavke, materijalIzdan: false,
       }];
     }
     if (calc.satiMontaze > 0) {
@@ -5676,7 +5683,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
         <EntityPage
           title="" data={db.ponude}
           onAdd={() => { setPonForm(emptyPon()); setModal("pon"); }}
-          onEdit={(row) => { setPonForm({ ...emptyPon(), ...JSON.parse(JSON.stringify(row)), pozicije: row.pozicije || [], materijalStavke: row.materijalStavke || [], ostaleStavke: row.ostaleStavke || [] }); setModal("pon"); }}
+          onEdit={(row) => { setPonForm({ ...emptyPon(), ...JSON.parse(JSON.stringify(row)), pozicije: row.pozicije || [], ostaleStavke: row.ostaleStavke || [] }); setModal("pon"); }}
           onDelete={(r) => setDel({ type: "pon", row: r })}
           addLabel="Nova ponuda" searchKeys={["broj", "naziv"]} readOnly={!mozePonude}
           columns={[
@@ -5802,7 +5809,6 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
               <PozicijeEditor pozicije={ponForm.pozicije} setPozicije={(rows) => setPonForm({ ...ponForm, pozicije: rows })} cjenikRada={db.cjenikRada} katalog={db.katalogProfila} kvalitete={db.kvaliteteMaterijala} satnicaMontaza={ponForm.satnicaMontaza} calc={calc}
                 azurirajOtpadLima={azurirajOtpadLima} prebaciUMaterijal={prebaciUMaterijal}
                 sirovineStavke={ponForm.sirovineStavke} setSirovineStavke={(rows) => setPonForm({ ...ponForm, sirovineStavke: rows })}
-                materijalStavke={ponForm.materijalStavke} setMaterijalStavke={(rows) => setPonForm({ ...ponForm, materijalStavke: rows })}
                 ostaleStavke={ponForm.ostaleStavke} setOstaleStavke={(rows) => setPonForm({ ...ponForm, ostaleStavke: rows })}
                 materijaliSkladiste={db.materijali} narudzbenice={db.narudzbenice} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} />
             </div>
