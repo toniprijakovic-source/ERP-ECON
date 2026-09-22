@@ -4258,8 +4258,8 @@ function StavkaPozicijeRedak({ stavka: s, katalog, grupe, kvalitete, onAzuriraj,
             </>
           ) : (
             <div style={{ width: 120 }}>
-              <label className="label">Dužina/kom (m)</label>
-              <input className="input f-mono" type="number" min="0" step="0.01" value={s.dimenzija} onChange={(e) => onAzuriraj({ dimenzija: e.target.value })} />
+              <label className="label">Dužina/kom (mm)</label>
+              <input className="input f-mono" type="number" min="0" step="1" value={Math.round((Number(s.dimenzija) || 0) * 1000)} onChange={(e) => onAzuriraj({ dimenzija: (Number(e.target.value) || 0) / 1000 })} />
             </div>
           )}
           <div style={{ width: 160 }}>
