@@ -4519,6 +4519,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
               })}
             </tbody>
             <tfoot>
+              <tr style={{ borderTop: "1px solid var(--line-strong)" }}><td colSpan={4} style={{ textAlign: "right", fontWeight: 600 }}>Ukupno pozicije</td><td className="f-mono" style={{ fontWeight: 600 }}>{fmtCurDec(calc.trosakRada + calc.trosakMontaze + calc.iznosAKZ)}</td></tr>
               <tr><td colSpan={4} style={{ textAlign: "right", color: "var(--ink-soft)" }}>Trošak materijala</td><td className="f-mono">{fmtCurDec(calc.trosakMaterijala)}</td></tr>
               <tr><td colSpan={4} style={{ textAlign: "right", color: "var(--ink-soft)" }}>Ostalo</td><td className="f-mono">{fmtCurDec(calc.trosakOstalo)}</td></tr>
               <tr><td colSpan={4} style={{ textAlign: "right", color: "var(--ink-soft)" }}>Marža ({calc.postotakMarze}%)</td><td className="f-mono">{fmtCurDec(calc.iznosMarze)}</td></tr>
@@ -5785,7 +5786,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
         };
 
         return (
-          <Modal wide title={ponForm.id ? `Ponuda ${ponForm.broj}` : "Nova ponuda"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={savePon}>Spremi</Btn></>}>
+          <Modal xwide title={ponForm.id ? `Ponuda ${ponForm.broj}` : "Nova ponuda"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={savePon}>Spremi</Btn></>}>
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
               <Field label="Naziv posla / konstrukcije"><input className="input" placeholder="npr. Nadstrešnica autobusnog kolodvora" value={ponForm.naziv} onChange={(e) => setPonForm({ ...ponForm, naziv: e.target.value })} /></Field>
               <Field label="Kupac"><select className="select" value={ponForm.kupacId} onChange={(e) => setPonForm({ ...ponForm, kupacId: e.target.value })}>{db.kupci.map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}</select></Field>
