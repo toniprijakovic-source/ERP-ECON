@@ -432,6 +432,51 @@ app.put("/api/upiti/patch", autentikacija, async (req, res) => {
   }
 });
 
+// ---------- Ciljana izmjena projekata (upsert po id-u + remove) ----------
+// Isti oblik kao /api/evidencija/patch i /api/upiti/patch — dodavanje/uređivanje/brisanje CIJELOG
+// projekta (kreiranje, uređivanje osnovnih podataka, ručno sortiranje, brisanje). Nadopunjuje
+// /api/projekti/:id/patch (koji mijenja SAMO navedena polja jednog projekta, za česte sitne
+// izmjene poput unosa dimenzija materijala) — ova ruta služi za operacije koje mijenjaju CIJELE
+// zapise ili više projekata odjednom. Bez ovoga, ti pozivi su i dalje slali cijeli popis projekata
+// prema zastarjeloj lokalnoj kopiji preglednika, pa je paralelna izmjena (npr. s kioska ili druge
+// kartice) znala tiho nestati — točno ono što se dogodilo projektu RN 170-314.
+app.put("/api/projekti/patch", autentikacija, async (req, res) => {
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  const { pisivo } = izracunajDozvoljeneKljuceve(pozicija);
+  if (!pisivo.has("projekti")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za mijenjanje projekata." });
+
+  const upsert = Array.isArray(req.body.upsert) ? req.body.upsert : [];
+  const remove = Array.isArray(req.body.remove) ? req.body.remove : [];
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query("SELECT value FROM app_data WHERE key = 'projekti' FOR UPDATE");
+    const trenutno = r.rows[0]?.value || [];
+    const removeSet = new Set(remove);
+    const upsertMap = new Map(upsert.map((p) => [p.id, p]));
+    const postojeciIds = new Set(trenutno.map((p) => p.id));
+    const rezultat = trenutno
+      .filter((p) => !removeSet.has(p.id))
+      .map((p) => (upsertMap.has(p.id) ? upsertMap.get(p.id) : p));
+    upsert.forEach((p) => { if (!postojeciIds.has(p.id)) rezultat.push(p); });
+
+    await client.query(
+      `INSERT INTO app_data (key, value, updated_at) VALUES ('projekti', $1, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [JSON.stringify(rezultat)]
+    );
+    await client.query("COMMIT");
+    res.json({ ok: true, projekti: rezultat });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Greška kod izmjene projekata:", e);
+    res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+  } finally {
+    client.release();
+  }
+});
+
 // ---------- podaci (sve zaštićeno loginom) ----------
 // Vraća SVE ključeve odjednom — koristi se pri pokretanju aplikacije. Ključevi izvan
 // zaposlenikovih dopuštenih kartica vraćaju se kao prazan placeholder (a ne izostavljeni)
