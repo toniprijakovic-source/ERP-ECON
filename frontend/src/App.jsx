@@ -6855,7 +6855,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
   const [postavkeOtvorene, setPostavkeOtvorene] = useState(false);
   const [detalj, setDetalj] = useState(null);
   const [detaljKoop, setDetaljKoop] = useState(null);
-  const [printOtvoren, setPrintOtvoren] = useState(false);
+  const [printGrupa, setPrintGrupa] = useState(null); // "radiona" | "praktikant" | "ostalo" | "kooperant"
 
   const redovi = useMemo(() => db.zaposlenici
     .filter((z) => z.status === "Aktivan" && !jeKooperant(z, db.pozicijeZaposlenika))
@@ -6863,6 +6863,12 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
     .filter((r) => r.brojDana > 0)
     .sort((a, b) => (a.zaposlenik.prezime + a.zaposlenik.ime).localeCompare(b.zaposlenik.prezime + b.zaposlenik.ime, "hr")),
     [db, mjesec]);
+
+  // Ista podjela kao u Evidenciji rada (Radiona / Praktikanti / Tehnički ured i administracija) —
+  // svaka skupina ima svoju tablicu i svoj poseban PDF ispis.
+  const radionaRedovi = useMemo(() => redovi.filter((r) => grupaEvidencije(r.zaposlenik, db.pozicijeZaposlenika) === "radiona"), [redovi, db.pozicijeZaposlenika]);
+  const praktikantiRedovi = useMemo(() => redovi.filter((r) => grupaEvidencije(r.zaposlenik, db.pozicijeZaposlenika) === "praktikant"), [redovi, db.pozicijeZaposlenika]);
+  const tehnickiRedovi = useMemo(() => redovi.filter((r) => grupaEvidencije(r.zaposlenik, db.pozicijeZaposlenika) === "ostalo"), [redovi, db.pozicijeZaposlenika]);
 
   const detaljZaposlenik = detalj ? redovi.find((r) => r.zaposlenik.id === detalj) : null;
 
@@ -6884,7 +6890,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
     .sort((a, b) => (a.zaposlenik.prezime + a.zaposlenik.ime).localeCompare(b.zaposlenik.prezime + b.zaposlenik.ime, "hr")),
     [db, mjesec]);
 
-  const uk = redovi.reduce((s, r) => ({
+  const zbrojiRedove = (lista) => lista.reduce((s, r) => ({
     redovni: s.redovni + r.redovni, prekovremeni: s.prekovremeni + r.prekovremeni,
     putni: s.putni + r.putni, topliObrok: s.topliObrok + r.topliObrok, ukupno: s.ukupno + r.ukupno,
   }), { redovni: 0, prekovremeni: 0, putni: 0, topliObrok: 0, ukupno: 0 });
@@ -6893,6 +6899,61 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
 
   const imaBolovanje = redovi.some((r) => r.dani.some((d) => d.vrsta === "bolovanje"));
 
+  // Jedna tablica za sve tri formulom-obračunate skupine (Radiona / Praktikanti / Tehnički ured) —
+  // Kooperanti imaju drugačiji (jednostavniji) obračun pa zadržavaju svoju zasebnu tablicu.
+  const TablicaObracuna = ({ lista }) => {
+    const uk = zbrojiRedove(lista);
+    return (
+      <table className="erp-table">
+        <thead>
+          <tr>
+            <th>Zaposlenik</th>
+            <th style={{ width: 70 }}>Satnica</th>
+            <th style={{ width: 70 }}>Redovni</th>
+            <th style={{ width: 80 }}>Prekovr.</th>
+            <th style={{ width: 90 }}>God./praz.</th>
+            <th style={{ width: 70 }}>Putni</th>
+            <th style={{ width: 80 }}>Obrok</th>
+            <th style={{ width: 95 }}>Ukupno neto</th>
+            <th style={{ width: 40 }}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {lista.map((r) => (
+            <tr key={r.zaposlenik.id}>
+              <td><strong>{r.zaposlenik.prezime} {r.zaposlenik.ime}</strong><div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{r.bodovi} bodova · staž {r.staz} god.{r.satiSDodatkom > 0 && <span style={{ color: "var(--steel)" }}> · {r.satiSDodatkom.toFixed(1)}h u smjeni s dodatkom</span>}</div></td>
+              <td className="f-mono">{r.satnica.toFixed(2)}</td>
+              <td className="f-mono">{r.redovni.toFixed(1)} h</td>
+              <td className="f-mono" style={{ color: r.prekovremeni > 0 ? "var(--steel)" : "inherit" }}>{r.prekovremeni.toFixed(1)} h</td>
+              <td className="f-mono">{r.placeniNerad.toFixed(1)} h</td>
+              <td className="f-mono">{fmtCurDec(r.putni)}</td>
+              <td className="f-mono">{fmtCurDec(r.topliObrok)}</td>
+              <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(r.ukupno)}</td>
+              <td><button className="btn btn-icon btn-ghost" title="Detalji po danima" onClick={() => setDetalj(r.zaposlenik.id)}><Eye size={14} /></button></td>
+            </tr>
+          ))}
+          <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
+            <td colSpan={2}>UKUPNO ({lista.length})</td>
+            <td className="f-mono">{uk.redovni.toFixed(1)} h</td>
+            <td className="f-mono">{uk.prekovremeni.toFixed(1)} h</td>
+            <td></td>
+            <td className="f-mono">{fmtCurDec(uk.putni)}</td>
+            <td className="f-mono">{fmtCurDec(uk.topliObrok)}</td>
+            <td className="f-mono">{fmtCurDec(uk.ukupno)}</td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
+    );
+  };
+
+  const NaslovSaPdf = ({ naslov, broj, grupa }) => (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+      <div className="label" style={{ marginBottom: 0 }}>{naslov} ({broj})</div>
+      {broj > 0 && <Btn variant="ghost" size="sm" icon={Eye} onClick={() => setPrintGrupa(grupa)}>PDF</Btn>}
+    </div>
+  );
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
@@ -6900,10 +6961,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
           <span className="label">Mjesec</span>
           <input className="input f-mono" type="month" style={{ width: 160 }} value={mjesec} onChange={(e) => setMjesec(e.target.value)} />
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <Btn variant="ghost" icon={Eye} onClick={() => setPrintOtvoren(true)}>PDF obračuna</Btn>
-          {mozeMijenjati && <Btn variant="ghost" icon={Settings} onClick={() => setPostavkeOtvorene(true)}>Postavke plaća</Btn>}
-        </div>
+        {mozeMijenjati && <Btn variant="ghost" icon={Settings} onClick={() => setPostavkeOtvorene(true)}>Postavke plaća</Btn>}
       </div>
 
       {imaBolovanje && (
@@ -6913,56 +6971,22 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
         </div>
       )}
 
-      <div className="label" style={{ marginBottom: 6 }}>Zaposlenici (obračun plaće)</div>
-      {redovi.length === 0 ? <EmptyState text="Nema evidentiranih sati za odabrani mjesec." /> : (
-        <>
-          <table className="erp-table">
-            <thead>
-              <tr>
-                <th>Zaposlenik</th>
-                <th style={{ width: 70 }}>Satnica</th>
-                <th style={{ width: 70 }}>Redovni</th>
-                <th style={{ width: 80 }}>Prekovr.</th>
-                <th style={{ width: 90 }}>God./praz.</th>
-                <th style={{ width: 70 }}>Putni</th>
-                <th style={{ width: 80 }}>Obrok</th>
-                <th style={{ width: 95 }}>Ukupno neto</th>
-                <th style={{ width: 40 }}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {redovi.map((r) => (
-                <tr key={r.zaposlenik.id}>
-                  <td><strong>{r.zaposlenik.prezime} {r.zaposlenik.ime}</strong><div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{r.bodovi} bodova · staž {r.staz} god.{r.satiSDodatkom > 0 && <span style={{ color: "var(--steel)" }}> · {r.satiSDodatkom.toFixed(1)}h u smjeni s dodatkom</span>}</div></td>
-                  <td className="f-mono">{r.satnica.toFixed(2)}</td>
-                  <td className="f-mono">{r.redovni.toFixed(1)} h</td>
-                  <td className="f-mono" style={{ color: r.prekovremeni > 0 ? "var(--steel)" : "inherit" }}>{r.prekovremeni.toFixed(1)} h</td>
-                  <td className="f-mono">{r.placeniNerad.toFixed(1)} h</td>
-                  <td className="f-mono">{fmtCurDec(r.putni)}</td>
-                  <td className="f-mono">{fmtCurDec(r.topliObrok)}</td>
-                  <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(r.ukupno)}</td>
-                  <td><button className="btn btn-icon btn-ghost" title="Detalji po danima" onClick={() => setDetalj(r.zaposlenik.id)}><Eye size={14} /></button></td>
-                </tr>
-              ))}
-              <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
-                <td colSpan={2}>UKUPNO ({redovi.length})</td>
-                <td className="f-mono">{uk.redovni.toFixed(1)} h</td>
-                <td className="f-mono">{uk.prekovremeni.toFixed(1)} h</td>
-                <td></td>
-                <td className="f-mono">{fmtCurDec(uk.putni)}</td>
-                <td className="f-mono">{fmtCurDec(uk.topliObrok)}</td>
-                <td className="f-mono">{fmtCurDec(uk.ukupno)}</td>
-                <td></td>
-              </tr>
-            </tbody>
-          </table>
-          <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 10 }}>
-            Iznosi su <strong>neto</strong>, izračunati prema internim pravilima (bodovi, staž, stvarno odrađeni sati). Ovo nije obračun za poreznu prijavu — doprinosi, porezi i JOPPD nisu obuhvaćeni.
-          </p>
-        </>
+      <NaslovSaPdf naslov="Radiona" broj={radionaRedovi.length} grupa="radiona" />
+      {radionaRedovi.length === 0 ? <EmptyState text="Nema evidentiranih sati za odabrani mjesec." /> : <TablicaObracuna lista={radionaRedovi} />}
+
+      <div style={{ marginTop: 24 }}><NaslovSaPdf naslov="Praktikanti" broj={praktikantiRedovi.length} grupa="praktikant" /></div>
+      {praktikantiRedovi.length === 0 ? <EmptyState text="Nema evidentiranih sati za odabrani mjesec." /> : <TablicaObracuna lista={praktikantiRedovi} />}
+
+      <div style={{ marginTop: 24 }}><NaslovSaPdf naslov="Tehnički ured i administracija" broj={tehnickiRedovi.length} grupa="ostalo" /></div>
+      {tehnickiRedovi.length === 0 ? <EmptyState text="Nema evidentiranih sati za odabrani mjesec." /> : <TablicaObracuna lista={tehnickiRedovi} />}
+
+      {redovi.length > 0 && (
+        <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 10 }}>
+          Iznosi su <strong>neto</strong>, izračunati prema internim pravilima (bodovi, staž, stvarno odrađeni sati). Ovo nije obračun za poreznu prijavu — doprinosi, porezi i JOPPD nisu obuhvaćeni.
+        </p>
       )}
 
-      <div className="label" style={{ marginTop: 24, marginBottom: 6 }}>Kooperanti (isplata po satnici)</div>
+      <div style={{ marginTop: 24 }}><NaslovSaPdf naslov="Kooperanti (isplata po satnici)" broj={redoviKooperanti.length} grupa="kooperant" /></div>
       {redoviKooperanti.length === 0 ? <EmptyState text="Nema evidentiranih sati kooperanata za odabrani mjesec." /> : (
         <>
           <table className="erp-table">
@@ -7075,7 +7099,14 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
       )}
 
       {postavkeOtvorene && <PostavkePlacaModal db={db} update={update} showToast={showToast} onClose={() => setPostavkeOtvorene(false)} />}
-      {printOtvoren && <ObracunPlacaPrintModal redovi={redovi} mjesec={mjesec} db={db} onClose={() => setPrintOtvoren(false)} />}
+      {printGrupa && printGrupa !== "kooperant" && (
+        <ObracunPlacaPrintModal
+          redovi={printGrupa === "radiona" ? radionaRedovi : printGrupa === "praktikant" ? praktikantiRedovi : tehnickiRedovi}
+          naslovGrupe={printGrupa === "radiona" ? "Radiona" : printGrupa === "praktikant" ? "Praktikanti" : "Tehnički ured i administracija"}
+          mjesec={mjesec} db={db} onClose={() => setPrintGrupa(null)}
+        />
+      )}
+      {printGrupa === "kooperant" && <ObracunKooperantiPrintModal redovi={redoviKooperanti} mjesec={mjesec} db={db} onClose={() => setPrintGrupa(null)} />}
     </div>
   );
 }
@@ -7084,7 +7115,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
 // računovodstvo šalje vanjskom knjigovodstvu. Bolovanja se prikazuju kao popis raspona datuma
 // (evidentirano, ali se ne obračunava — vidi obracunDana), a poziv na broj se ne može izvesti
 // automatski pa ostaje ručno polje.
-function ObracunPlacaPrintModal({ redovi, mjesec, db, onClose }) {
+function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
   const t = db.postavkeTvrtke || {};
   const [pozivBroj, setPozivBroj] = useState("");
   const [gmesec, gg] = mjesec.split("-");
@@ -7097,10 +7128,12 @@ function ObracunPlacaPrintModal({ redovi, mjesec, db, onClose }) {
   const ukupnaIsplata = redovi.reduce((s, r) => s + r.isplata, 0);
 
   // Bolovanja (uključujući roditeljski/dulja odsustva evidentirana kao "bolovanje") — raspon
-  // datuma po zaposleniku, prikazuju se svi rasponi koji dodiruju odabrani mjesec.
+  // datuma po zaposleniku, prikazuju se svi rasponi koji dodiruju odabrani mjesec. Samo za
+  // zaposlenike iz OVE skupine (redovi), da PDF jedne skupine ne prikazuje tuđa bolovanja.
   const bolovanja = useMemo(() => {
+    const uSkupini = new Set(redovi.map((r) => r.zaposlenik.id));
     const poZaposleniku = new Map();
-    (db.evidencijaRada || []).filter((e) => e.vrsta === "bolovanje").forEach((e) => {
+    (db.evidencijaRada || []).filter((e) => e.vrsta === "bolovanje" && uSkupini.has(e.zaposlenikId)).forEach((e) => {
       const datum = e.vrijemeDolaska.slice(0, 10);
       const niz = poZaposleniku.get(e.zaposlenikId) || [];
       niz.push(datum);
@@ -7121,18 +7154,18 @@ function ObracunPlacaPrintModal({ redovi, mjesec, db, onClose }) {
         .forEach((r) => rezultat.push({ ime: zap ? `${zap.prezime} ${zap.ime}` : "—", ...r }));
     });
     return rezultat.sort((a, b) => a.ime.localeCompare(b.ime, "hr"));
-  }, [db.evidencijaRada, db.zaposlenici, mjesec]);
+  }, [db.evidencijaRada, db.zaposlenici, mjesec, redovi]);
 
   const tdS = { padding: "3px 4px", fontSize: 9, whiteSpace: "nowrap" };
   const thS = { ...tdS, fontWeight: 700, background: "#f0f0f0" };
 
   return (
-    <Modal wide title={`Pregled za ispis — Obračun plaće ${mjesec}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(`Placa_${gg}${gmesec}`)}>Ispis / Spremi kao PDF</Btn></>}>
+    <Modal wide title={`Pregled za ispis — Obračun plaće ${naslovGrupe} ${mjesec}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(`Placa_${naslovGrupe.replace(/\s+/g, "-")}_${gg}${gmesec}`)}>Ispis / Spremi kao PDF</Btn></>}>
       <style>{"@media print { @page { size: landscape; } }"}</style>
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
         <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 12, marginBottom: 8 }}>
           <span>{t.naziv || "ECON d.o.o."}</span>
-          <span>OBRAČUN PLAĆE - HR</span>
+          <span>OBRAČUN PLAĆE - HR · {naslovGrupe}</span>
           <span>Mjesec obračuna: {gmesec}/{gg}</span>
         </div>
         <div style={{ overflowX: "auto" }}>
@@ -7211,6 +7244,50 @@ function ObracunPlacaPrintModal({ redovi, mjesec, db, onClose }) {
           <input className="f-mono" style={{ border: "1px solid #ccc", width: 70, fontSize: 10.5, padding: "1px 4px" }} value={pozivBroj} onChange={(e) => setPozivBroj(e.target.value)} placeholder="XXXXX" />
           -0
         </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Kooperanti se obračunavaju drugačije (samo sati × ugovorena satnica) pa imaju svoj, jednostavniji ispis.
+function ObracunKooperantiPrintModal({ redovi, mjesec, db, onClose }) {
+  const t = db.postavkeTvrtke || {};
+  const [gmesec, gg] = mjesec.split("-");
+  const tdS = { padding: "3px 4px", fontSize: 9, whiteSpace: "nowrap" };
+  const thS = { ...tdS, fontWeight: 700, background: "#f0f0f0" };
+  const ukupnaIsplata = redovi.reduce((s, r) => s + r.ukupno, 0);
+
+  return (
+    <Modal title={`Pregled za ispis — Obračun kooperanata ${mjesec}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(`Placa_Kooperanti_${gg}${gmesec}`)}>Ispis / Spremi kao PDF</Btn></>}>
+      <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 12, marginBottom: 8 }}>
+          <span>{t.naziv || "ECON d.o.o."}</span>
+          <span>OBRAČUN KOOPERANATA</span>
+          <span>Mjesec obračuna: {gmesec}/{gg}</span>
+        </div>
+        <table style={{ borderCollapse: "collapse", width: "100%" }}>
+          <thead>
+            <tr>
+              <th style={thS}>Red. broj</th>
+              <th style={thS}>Ime i prezime</th>
+              <th style={thS}>Satnica</th>
+              <th style={thS}>Sati</th>
+              <th style={thS}>Za isplatu</th>
+            </tr>
+          </thead>
+          <tbody>
+            {redovi.map((r, i) => (
+              <tr key={r.zaposlenik.id}>
+                <td style={tdS}>{i + 1}</td>
+                <td style={tdS}>{r.zaposlenik.prezime} {r.zaposlenik.ime}</td>
+                <td style={tdS}>{fmtCurDec(r.satnica)}</td>
+                <td style={tdS}>{r.sati.toFixed(1)}</td>
+                <td style={{ ...tdS, fontWeight: 700 }}>{fmtCurDec(r.ukupno)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{ textAlign: "right", fontWeight: 700, fontSize: 11, marginTop: 6, paddingRight: 4 }}>{fmtCurDec(ukupnaIsplata)}</div>
       </div>
     </Modal>
   );
