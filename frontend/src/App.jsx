@@ -522,19 +522,42 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     danaSluzbenogPuta: s.danaSluzbenogPuta + (d.jeSluzbeniPut ? 1 : 0),
   }), { redovni: 0, prekovremeni: 0, placeniNerad: 0, putni: 0, topliObrok: 0, odradjeni: 0, satiSDodatkom: 0, iznosRedovni: 0, iznosPrekovremeni: 0, iznosNerad: 0, praznikSati: 0, godisnjiSati: 0, dopustSati: 0, bolovanjeSati: 0, danaSluzbenogPuta: 0 });
 
-  const ukupno = zbroj.iznosRedovni + zbroj.iznosPrekovremeni + zbroj.iznosNerad + zbroj.putni + zbroj.topliObrok;
-
   // Dnevnica za službeni put + ručni mjesečni dodaci/odbici (stimulacija, kredit, usteg
   // prehrane) — potonji se upisuju ručno po zaposleniku/mjesecu jer ne proizlaze iz sati.
   const dnevnicaTeren = zbroj.danaSluzbenogPuta * (Number(postavke?.dnevnicaTerenEurDan) || 0);
   const doplatak = (db.doplaciPlaca || []).find((d) => d.zaposlenikId === zaposlenik.id && d.mjesec === mjesec) || {};
-  const stimulacija = Number(doplatak.stimulacija) || 0;
+
+  // "Prikaz prekovremenih (h)" — koliko od stvarno ostvarenih prekovremenih sati se PRIKAZUJE u
+  // obračunu/PDF-u; prazno polje ili 0 znači da se ništa ne prikazuje kao prekovremeni, nego se
+  // CIJELA novčana vrijednost prebacuje u stimulaciju. Razlika se uvijek prebacuje po prosječnoj
+  // cijeni sata prekovremenog za taj mjesec (zbroj.iznosPrekovremeni / zbroj.prekovremeni), pa je
+  // isplata zaposleniku ista bez obzira na ovu postavku — mijenja se samo raspodjela prikaza.
+  // Dnevni detalj (dani) ostaje netaknut i uvijek prikazuje stvarne, pune brojke.
+  const stopaPrekovremenog = zbroj.prekovremeni > 0 ? zbroj.iznosPrekovremeni / zbroj.prekovremeni : 0;
+  const prekovremeniPrikaz = Math.max(0, Math.min(Number(doplatak.prikazPrekovremenihSati) || 0, zbroj.prekovremeni));
+  const iznosPrekovremeniPrikaz = prekovremeniPrikaz * stopaPrekovremenog;
+  const visakPrekovremenihSati = zbroj.prekovremeni - prekovremeniPrikaz;
+  const visakPrekovremenihIznos = zbroj.iznosPrekovremeni - iznosPrekovremeniPrikaz;
+
+  const ukupno = zbroj.iznosRedovni + iznosPrekovremeniPrikaz + zbroj.iznosNerad + zbroj.putni + zbroj.topliObrok;
+
+  // stimulacija = ono što se STVARNO isplaćuje (ručno upisano + automatski prebačeni višak
+  // prekovremenih) — stimulacijaRucno je SAMO ručno upisani dio, za uređivanje u obrascu (da se
+  // izbjegne da se prikazana zbrojena vrijednost spremi natrag kao da je sva ručno upisana).
+  const stimulacijaRucno = Number(doplatak.stimulacija) || 0;
+  const stimulacija = stimulacijaRucno + visakPrekovremenihIznos;
   const kredit = Number(doplatak.kredit) || 0;
   const ustegPrehrane = Number(doplatak.ustegPrehrane) || 0;
   const dodaciUkupno = zbroj.topliObrok + dnevnicaTeren + zbroj.putni;
-  const isplata = zbroj.iznosRedovni + zbroj.iznosPrekovremeni + zbroj.iznosNerad + stimulacija + dodaciUkupno - kredit - ustegPrehrane;
+  const isplata = zbroj.iznosRedovni + iznosPrekovremeniPrikaz + zbroj.iznosNerad + stimulacija + dodaciUkupno - kredit - ustegPrehrane;
 
-  return { zaposlenik, satnica, radniDaniMjeseca, ...osnova, ...zbroj, ukupno, brojDana: dani.length, dani, dnevnicaTeren, stimulacija, kredit, ustegPrehrane, dodaciUkupno, isplata };
+  return {
+    zaposlenik, satnica, radniDaniMjeseca, ...osnova, ...zbroj,
+    prekovremeniStvarno: zbroj.prekovremeni, iznosPrekovremeniStvarno: zbroj.iznosPrekovremeni,
+    prekovremeni: prekovremeniPrikaz, iznosPrekovremeni: iznosPrekovremeniPrikaz,
+    prikazPrekovremenihSati: doplatak.prikazPrekovremenihSati ?? "", visakPrekovremenihSati, visakPrekovremenihIznos,
+    ukupno, brojDana: dani.length, dani, dnevnicaTeren, stimulacija, stimulacijaRucno, kredit, ustegPrehrane, dodaciUkupno, isplata,
+  };
 };
 
 // Kooperanti (vanjski suradnici) se ne obračunavaju po formuli plaće (bodovi/staž/topli obrok/
@@ -6879,7 +6902,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
     if (postojeci) {
       update("doplaciPlaca", db.doplaciPlaca.map((d) => (d.id === postojeci.id ? { ...d, ...patch } : d)));
     } else {
-      update("doplaciPlaca", [...(db.doplaciPlaca || []), { id: uid("dpl"), zaposlenikId, mjesec, stimulacija: 0, kredit: 0, ustegPrehrane: 0, ...patch }]);
+      update("doplaciPlaca", [...(db.doplaciPlaca || []), { id: uid("dpl"), zaposlenikId, mjesec, stimulacija: 0, kredit: 0, ustegPrehrane: 0, prikazPrekovremenihSati: "", ...patch }]);
     }
   };
 
@@ -7066,7 +7089,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
           <div className="card" style={{ padding: 12, marginTop: 12, background: "var(--surface-alt)" }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 12.5 }}>
               <span>Redovni rad ({detaljZaposlenik.redovni.toFixed(1)} h)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosRedovni)}</span>
-              <span>Prekovremeni ({detaljZaposlenik.prekovremeni.toFixed(1)} h)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosPrekovremeni)}</span>
+              <span>Prekovremeni ({detaljZaposlenik.prekovremeni.toFixed(1)} h{detaljZaposlenik.visakPrekovremenihSati > 0 && <span style={{ color: "var(--ink-faint)" }}> — stvarno {detaljZaposlenik.prekovremeniStvarno.toFixed(1)} h, {detaljZaposlenik.visakPrekovremenihSati.toFixed(1)} h u stimulaciji</span>})</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosPrekovremeni)}</span>
               <span>Godišnji / praznici / dopust ({detaljZaposlenik.placeniNerad.toFixed(1)} h)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosNerad)}</span>
               <span>Putni troškovi</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.putni)}</span>
               <span>Topli obrok</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.topliObrok)}</span>
@@ -7079,15 +7102,19 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
 
           <div className="label" style={{ marginTop: 16, marginBottom: 6 }}>Ručni dodaci/odbici za {mjesec}</div>
           <div className="card" style={{ padding: 12, background: "var(--surface-alt)" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
-              <Field label="Stimulacija (€)">
-                <input className="input f-mono" type="number" step="0.01" value={detaljZaposlenik.stimulacija || 0} onChange={(e) => spremiDoplatak(detaljZaposlenik.zaposlenik.id, { stimulacija: Number(e.target.value) || 0 })} disabled={!mozeMijenjati} />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+              <Field label="Stimulacija (€, ručno)">
+                <input className="input f-mono" type="number" step="0.01" value={detaljZaposlenik.stimulacijaRucno || 0} onChange={(e) => spremiDoplatak(detaljZaposlenik.zaposlenik.id, { stimulacija: Number(e.target.value) || 0 })} disabled={!mozeMijenjati} />
               </Field>
               <Field label="Odbitak kredita (€)">
                 <input className="input f-mono" type="number" step="0.01" value={detaljZaposlenik.kredit || 0} onChange={(e) => spremiDoplatak(detaljZaposlenik.zaposlenik.id, { kredit: Number(e.target.value) || 0 })} disabled={!mozeMijenjati} />
               </Field>
               <Field label="Usteg prehrane (€)">
                 <input className="input f-mono" type="number" step="0.01" value={detaljZaposlenik.ustegPrehrane || 0} onChange={(e) => spremiDoplatak(detaljZaposlenik.zaposlenik.id, { ustegPrehrane: Number(e.target.value) || 0 })} disabled={!mozeMijenjati} />
+              </Field>
+              <Field label="Prikaz prekovremenih (h)">
+                <input className="input f-mono" type="number" step="0.5" min="0" placeholder="0" value={detaljZaposlenik.prikazPrekovremenihSati} onChange={(e) => spremiDoplatak(detaljZaposlenik.zaposlenik.id, { prikazPrekovremenihSati: e.target.value === "" ? "" : Number(e.target.value) })} disabled={!mozeMijenjati} />
+                <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 3 }}>Stvarno ostvareno: {detaljZaposlenik.prekovremeniStvarno.toFixed(1)} h. Prazno ili 0 = ništa se ne prikazuje, sve ide u stimulaciju.</div>
               </Field>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid var(--line)", paddingTop: 8 }}>
