@@ -1265,7 +1265,7 @@ function KioskView({ onPrijava }) {
         <input
           ref={inputRef} autoFocus value={unos}
           onChange={(e) => promjenaUnosa(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") zavrsiSkeniranje(unos); }}
+          onKeyDown={(e) => { if (e.key === "Enter") zavrsiSkeniranje(e.target.value); }}
           aria-hidden="true"
           style={{ position: "absolute", width: 1, height: 1, opacity: 0, border: "none", padding: 0 }}
         />
