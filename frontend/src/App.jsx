@@ -6914,9 +6914,9 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
     [db, mjesec]);
 
   const zbrojiRedove = (lista) => lista.reduce((s, r) => ({
-    redovni: s.redovni + r.redovni, prekovremeni: s.prekovremeni + r.prekovremeni,
+    redovni: s.redovni + r.redovni, prekovremeni: s.prekovremeni + r.prekovremeni, prekovremeniStvarno: s.prekovremeniStvarno + r.prekovremeniStvarno,
     putni: s.putni + r.putni, topliObrok: s.topliObrok + r.topliObrok, ukupno: s.ukupno + r.ukupno,
-  }), { redovni: 0, prekovremeni: 0, putni: 0, topliObrok: 0, ukupno: 0 });
+  }), { redovni: 0, prekovremeni: 0, prekovremeniStvarno: 0, putni: 0, topliObrok: 0, ukupno: 0 });
 
   const ukKooperanti = redoviKooperanti.reduce((s, r) => ({ sati: s.sati + r.sati, ukupno: s.ukupno + r.ukupno }), { sati: 0, ukupno: 0 });
 
@@ -6933,7 +6933,8 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
             <th>Zaposlenik</th>
             <th style={{ width: 70 }}>Satnica</th>
             <th style={{ width: 70 }}>Redovni</th>
-            <th style={{ width: 80 }}>Prekovr.</th>
+            <th style={{ width: 80 }}>Prekovremeni</th>
+            <th style={{ width: 100 }}>Prikaz prekovremenih</th>
             <th style={{ width: 90 }}>God./praz.</th>
             <th style={{ width: 70 }}>Putni</th>
             <th style={{ width: 80 }}>Obrok</th>
@@ -6947,7 +6948,15 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
               <td><strong>{r.zaposlenik.prezime} {r.zaposlenik.ime}</strong><div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{r.bodovi} bodova · staž {r.staz} god.{r.satiSDodatkom > 0 && <span style={{ color: "var(--steel)" }}> · {r.satiSDodatkom.toFixed(1)}h u smjeni s dodatkom</span>}</div></td>
               <td className="f-mono">{r.satnica.toFixed(2)}</td>
               <td className="f-mono">{r.redovni.toFixed(1)} h</td>
-              <td className="f-mono" style={{ color: r.prekovremeni > 0 ? "var(--steel)" : "inherit" }}>{r.prekovremeni.toFixed(1)} h</td>
+              <td className="f-mono" style={{ color: r.prekovremeniStvarno > 0 ? "var(--steel)" : "inherit" }}>{r.prekovremeniStvarno.toFixed(1)} h</td>
+              <td>
+                <input
+                  className="input f-mono" type="number" step="0.5" min="0" placeholder="0" style={{ width: 80 }}
+                  value={r.prikazPrekovremenihSati}
+                  onChange={(e) => spremiDoplatak(r.zaposlenik.id, { prikazPrekovremenihSati: e.target.value === "" ? "" : Number(e.target.value) })}
+                  disabled={!mozeMijenjati}
+                />
+              </td>
               <td className="f-mono">{r.placeniNerad.toFixed(1)} h</td>
               <td className="f-mono">{fmtCurDec(r.putni)}</td>
               <td className="f-mono">{fmtCurDec(r.topliObrok)}</td>
@@ -6958,6 +6967,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
           <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
             <td colSpan={2}>UKUPNO ({lista.length})</td>
             <td className="f-mono">{uk.redovni.toFixed(1)} h</td>
+            <td className="f-mono">{uk.prekovremeniStvarno.toFixed(1)} h</td>
             <td className="f-mono">{uk.prekovremeni.toFixed(1)} h</td>
             <td></td>
             <td className="f-mono">{fmtCurDec(uk.putni)}</td>
