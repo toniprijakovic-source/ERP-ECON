@@ -4396,7 +4396,7 @@ function StavkaPozicijeRedak({ stavka: s, katalog, grupe, kvalitete, onAzuriraj,
   );
 }
 
-function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], kvalitete = [], satnicaMontaza = 0, calc, azurirajOtpadLima, materijaliSkladiste, narudzbenice, onCreateMaterijal }) {
+function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], kvalitete = [], satnicaMontaza = 0, calc, azurirajOtpadLima, materijaliSkladiste, narudzbenice, onCreateMaterijal, napomenaNjemacki, setNapomenaNjemacki }) {
   const [otvorene, setOtvorene] = useState(() => Object.fromEntries(pozicije.map((p) => [p.id, true])));
   const toggle = (id) => setOtvorene((o) => ({ ...o, [id]: !o[id] }));
   const grupe = katalogPoTipu(katalog);
@@ -4697,6 +4697,13 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
           </table>
         );
       })()}
+
+      {aktivnaKartica === "rekap" && (
+        <div style={{ marginTop: 16 }}>
+          <label className="label">Uvjeti za njemačku ponudu (prikazuje se samo kad je odabran njemački jezik ispisa)</label>
+          <textarea className="textarea f-mono" rows={12} style={{ fontSize: 11.5 }} value={napomenaNjemacki || ""} onChange={(e) => setNapomenaNjemacki(e.target.value)} />
+        </div>
+      )}
     </div>
   );
 }
@@ -5290,6 +5297,26 @@ const PRIJEVODI_PONUDE = {
   },
 };
 
+// Standardni uvjeti za njemačku varijantu ponude — automatski se upiše u novu ponudu, ostaje
+// slobodno uredljiv (Rekapitulacija → "Uvjeti za njemačku ponudu") jer se razlikuje od posla do posla.
+const NJEMACKI_UVJETI_ZADANO = `Allgemein:
+-Material: S235
+-Korrosionsschutz: ohne
+-Transport: nach München
+-Abrechnung: Gemäß den tatsächlichen Längen. Die Länge des Geländers verläuft parallel zur Länge des oberen Flansches des Geländers.
+-Herstellung nach: nach beigefügten Zeichnung
+- Stahlkonstruktion nach EN 1090-2, EXC2
+-Lieferzeit: nach Absprache, ca. 5KW nach nach Erhalt der Zeichnungen
+
+Im Angebot nicht enthalten:
+-\tVerbindungsmaterialien (Bauseits)
+-\tStatische Nachweise (Bauseits)
+-\tMontage (Bauseits)
+
+Zahlung: 14 Kalendertage nach Lieferung
+
+Angebot 30 Tage gültig.`;
+
 function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
   const [jezik, setJezik] = useState("hr");
   const L = PRIJEVODI_PONUDE[jezik];
@@ -5345,6 +5372,14 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
           </table>
         </div>
 
+        {jezik === "de" && (
+          <div style={{ fontSize: 11, marginBottom: 16 }}>
+            <div>Sehr geehrter Herr /Frau {ponuda.kontaktOsoba || "___"},</div>
+            <div style={{ marginTop: 8 }}>vielen Dank auf Ihre Anfrage.</div>
+            <div>Aufgrund Ihrer Anfrage hiermit unsere Angebot für die Material, Herstellung und Lieferung zwar wie folgt:</div>
+          </div>
+        )}
+
         {cijenePozicija.length > 0 && (
           <>
             <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 6 }}>{L.tehnickiOpis}</div>
@@ -5382,10 +5417,14 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
         </div>
         {jezik === "de" && <div style={{ fontSize: 10, color: "#555", textAlign: "right", marginBottom: 20 }}>{L.napomenaPorez}</div>}
 
+        {jezik === "de" && ponuda.napomenaNjemacki && (
+          <div style={{ fontSize: 10.5, marginBottom: 20, whiteSpace: "pre-line" }}>{ponuda.napomenaNjemacki}</div>
+        )}
+
         {ponuda.napomena && <div style={{ fontSize: 11, marginBottom: 16 }}><strong>{L.napomena}</strong> {ponuda.napomena}</div>}
 
         <div style={{ fontSize: 11, marginBottom: 20 }}>
-          <div>{L.uvjeti}</div>
+          {jezik !== "de" && <div>{L.uvjeti}</div>}
           <div style={{ marginTop: 10 }}>{L.postovanje}</div>
           <div style={{ marginTop: 8 }}>
             <div style={{ fontWeight: 700 }}>{t.naziv}</div>
@@ -5641,7 +5680,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
   const emptyProj = () => ({ sifra: "", naziv: "", kupacId: db.kupci[0]?.id || "", status: "Ponuda", vrijednost: 0, rokPocetka: todayISO(), rokZavrsetka: todayISO(), opis: "", voditeljId: "", zadaci: noviZadaciIzStandarda(), faze: praznaFazaSati() });
   const [projForm, setProjForm] = useState(emptyProj());
 
-  const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, izradioId: mojId || "", pozicije: [], sirovineStavke: [], satnicaMontaza: 0, otpadLimPoTipu: {}, postotakMarze: 0 });
+  const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", kontaktOsoba: db.kupci[0]?.kontaktOsoba || "", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, izradioId: mojId || "", pozicije: [], sirovineStavke: [], satnicaMontaza: 0, otpadLimPoTipu: {}, postotakMarze: 0, napomenaNjemacki: NJEMACKI_UVJETI_ZADANO });
   const [ponForm, setPonForm] = useState(emptyPon());
   const [cjenikOpen, setCjenikOpen] = useState(false);
   const [zadaciOpen, setZadaciOpen] = useState(false);
@@ -5802,7 +5841,16 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
         <EntityPage
           title="" data={db.ponude}
           onAdd={() => { setPonForm(emptyPon()); setModal("pon"); }}
-          onEdit={(row) => { setPonForm({ ...emptyPon(), ...JSON.parse(JSON.stringify(row)), pozicije: row.pozicije || [] }); setModal("pon"); }}
+          onEdit={(row) => {
+            setPonForm({
+              ...emptyPon(), ...JSON.parse(JSON.stringify(row)), pozicije: row.pozicije || [],
+              // Stare ponude (prije ovih polja) nemaju kontakt osobu ni njemačke uvjete spremljene —
+              // nadopuni ih razumnim zadanim vrijednostima umjesto emptyPon()-ovog zadanog kupca[0].
+              kontaktOsoba: row.kontaktOsoba || db.kupci.find((k) => k.id === row.kupacId)?.kontaktOsoba || "",
+              napomenaNjemacki: row.napomenaNjemacki || NJEMACKI_UVJETI_ZADANO,
+            });
+            setModal("pon");
+          }}
           onDelete={(r) => setDel({ type: "pon", row: r })}
           addLabel="Nova ponuda" searchKeys={["broj", "naziv"]} readOnly={!mozePonude}
           columns={[
@@ -5885,16 +5933,27 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
           <Modal xwide title={ponForm.id ? `Ponuda ${ponForm.broj}` : "Nova ponuda"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={savePon}>Spremi</Btn></>}>
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
               <Field label="Naziv posla / konstrukcije"><input className="input" placeholder="npr. Nadstrešnica autobusnog kolodvora" value={ponForm.naziv} onChange={(e) => setPonForm({ ...ponForm, naziv: e.target.value })} /></Field>
-              <Field label="Kupac"><select className="select" value={ponForm.kupacId} onChange={(e) => setPonForm({ ...ponForm, kupacId: e.target.value })}>{db.kupci.map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}</select></Field>
+              <Field label="Kupac">
+                <select
+                  className="select" value={ponForm.kupacId}
+                  onChange={(e) => {
+                    const noviKupac = db.kupci.find((k) => k.id === e.target.value);
+                    setPonForm({ ...ponForm, kupacId: e.target.value, kontaktOsoba: noviKupac?.kontaktOsoba || ponForm.kontaktOsoba });
+                  }}
+                >{db.kupci.map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}</select>
+              </Field>
               <Field label="Datum"><input className="input" type="date" value={ponForm.datum} onChange={(e) => setPonForm({ ...ponForm, datum: e.target.value })} /></Field>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
               <Field label="Status"><select className="select" value={ponForm.status} onChange={(e) => setPonForm({ ...ponForm, status: e.target.value })}>{["U izradi", "Poslana", "Prihvaćena", "Odbijena"].map((s) => <option key={s}>{s}</option>)}</select></Field>
               <Field label="Izradio (potpis na ponudi)">
                 <select className="select" value={ponForm.izradioId || ""} onChange={(e) => setPonForm({ ...ponForm, izradioId: e.target.value })}>
                   <option value="">— odaberi —</option>
                   {[...db.zaposlenici].filter((z) => z.status === "Aktivan").sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
                 </select>
+              </Field>
+              <Field label="Kontakt osoba (pozdrav u njem. ponudi)">
+                <input className="input" placeholder="Prezime osobe koja je poslala upit" value={ponForm.kontaktOsoba || ""} onChange={(e) => setPonForm({ ...ponForm, kontaktOsoba: e.target.value })} />
               </Field>
             </div>
 
@@ -5905,7 +5964,8 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
             <div style={{ marginTop: 8, marginBottom: 16 }}>
               <PozicijeEditor pozicije={ponForm.pozicije} setPozicije={(rows) => setPonForm({ ...ponForm, pozicije: rows })} cjenikRada={db.cjenikRada} katalog={db.katalogProfila} kvalitete={db.kvaliteteMaterijala} satnicaMontaza={ponForm.satnicaMontaza} calc={calc}
                 azurirajOtpadLima={azurirajOtpadLima}
-                materijaliSkladiste={db.materijali} narudzbenice={db.narudzbenice} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} />
+                materijaliSkladiste={db.materijali} narudzbenice={db.narudzbenice} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)}
+                napomenaNjemacki={ponForm.napomenaNjemacki} setNapomenaNjemacki={(v) => setPonForm({ ...ponForm, napomenaNjemacki: v })} />
             </div>
 
             <Field label="Napomena"><textarea className="textarea" rows={2} value={ponForm.napomena} onChange={(e) => setPonForm({ ...ponForm, napomena: e.target.value })} /></Field>
