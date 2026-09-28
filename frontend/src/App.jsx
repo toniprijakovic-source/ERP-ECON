@@ -7452,10 +7452,28 @@ function ObracunKooperantiPrintModal({ redovi, mjesec, db, onClose }) {
 // IZVEDENO polje (zbroj ovih redaka) umjesto ručno upisanog broja — vidi zbrojSatiZaNalog i
 // polje "Utrošeno sati" u ProizvodnjaPage.
 function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
+  const [prikaz, setPrikaz] = useState("dnevno"); // "dnevno" (unos) | "mjesecno" (pregled po nalozima/operacijama)
   const [datum, setDatum] = useState(todayISO());
   const [uredjivanje, setUredjivanje] = useState(null); // id zaposlenika trenutno otvorenog za unos
   const [redoviUnos, setRedoviUnos] = useState([]);
   const [delZa, setDelZa] = useState(null); // zaposlenik čiji se unos za taj dan briše
+
+  const [mjesecPregled, setMjesecPregled] = useState(todayISO().slice(0, 7));
+  // Presjek za odabrani mjesec: stupci su radni nalozi koji su TAJ mjesec imali evidentirane sate
+  // (a ne svi postojeći nalozi), retci su operacije/faze — svaki nalog ima točno jednu fazu, pa se
+  // njegov zbroj sati pojavljuje u retku te faze, u stupcu tog naloga.
+  const pregledMjeseca = useMemo(() => {
+    const poNalogu = new Map();
+    db.satiPoNalogu.filter((s) => s.datum.slice(0, 7) === mjesecPregled).forEach((s) => {
+      poNalogu.set(s.radniNalogId, (poNalogu.get(s.radniNalogId) || 0) + (Number(s.sati) || 0));
+    });
+    const nalozi = [...poNalogu.entries()]
+      .map(([radniNalogId, sati]) => ({ nalog: db.radniNalozi.find((n) => n.id === radniNalogId), sati }))
+      .filter((r) => r.nalog)
+      .sort((a, b) => usporediPrirodno(a.nalog.broj, b.nalog.broj));
+    const faze = FAZE.filter((f) => nalozi.some((r) => r.nalog.faza === f));
+    return { nalozi, faze };
+  }, [db.satiPoNalogu, db.radniNalozi, mjesecPregled]);
 
   const zaposlenikIme = (id) => { const z = db.zaposlenici.find((zz) => zz.id === id); return z ? `${z.prezime} ${z.ime}` : "—"; };
 
@@ -7533,6 +7551,13 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
 
   return (
     <div>
+      <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
+        <div className={`nav-tab ${prikaz === "dnevno" ? "active" : ""}`} onClick={() => setPrikaz("dnevno")}>Dnevni unos</div>
+        <div className={`nav-tab ${prikaz === "mjesecno" ? "active" : ""}`} onClick={() => setPrikaz("mjesecno")}>Pregled po mjesecu</div>
+      </div>
+
+      {prikaz === "dnevno" && (
+      <>
       <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Dnevni unos po radniku — birani nalozi i sati moraju se točno poklopiti sa satima iz evidencije prijave/odjave prije spremanja.</p>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
         <span className="label">Dan</span>
@@ -7561,6 +7586,55 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
           </tbody>
         </table>
       )}
+      </>
+      )}
+
+      {prikaz === "mjesecno" && (() => {
+        const { nalozi, faze } = pregledMjeseca;
+        const ukupnoPoNalogu = (nalogId) => nalozi.find((r) => r.nalog.id === nalogId)?.sati || 0;
+        const ukupnoPoFazi = (faza) => nalozi.filter((r) => r.nalog.faza === faza).reduce((s, r) => s + r.sati, 0);
+        const ukupnoSve = nalozi.reduce((s, r) => s + r.sati, 0);
+        return (
+          <>
+            <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Presjek evidentiranih sati po radnom nalogu za odabrani mjesec, grupirano po operaciji (fazi) kojoj nalog pripada. Prikazani su samo nalozi koji su taj mjesec imali unesene sate.</p>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+              <span className="label">Mjesec</span>
+              <input className="input f-mono" type="month" style={{ width: 160 }} value={mjesecPregled} onChange={(e) => setMjesecPregled(e.target.value)} />
+            </div>
+            {nalozi.length === 0 ? <EmptyState text="Nema evidentiranih sati po nalozima za odabrani mjesec." /> : (
+              <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+                <table className="erp-table" style={{ minWidth: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ position: "sticky", left: 0, background: "var(--surface-alt)", zIndex: 1 }}>Operacija</th>
+                      {nalozi.map((r) => <th key={r.nalog.id} style={{ minWidth: 90 }} title={`${r.nalog.broj} — ${r.nalog.naziv}`}>{r.nalog.broj}</th>)}
+                      <th style={{ minWidth: 90, background: "var(--surface-alt)" }}>Ukupno</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {faze.map((faza) => (
+                      <tr key={faza}>
+                        <td style={{ position: "sticky", left: 0, background: "var(--surface)", fontWeight: 600 }}>{faza}</td>
+                        {nalozi.map((r) => (
+                          <td key={r.nalog.id} className="f-mono" style={{ textAlign: "center", color: r.nalog.faza === faza ? "var(--ink)" : "var(--ink-faint)" }}>
+                            {r.nalog.faza === faza ? r.sati.toFixed(1) : "—"}
+                          </td>
+                        ))}
+                        <td className="f-mono" style={{ textAlign: "center", fontWeight: 700, background: "var(--surface-alt)" }}>{ukupnoPoFazi(faza).toFixed(1)}</td>
+                      </tr>
+                    ))}
+                    <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
+                      <td style={{ position: "sticky", left: 0, background: "var(--surface-alt)" }}>UKUPNO</td>
+                      {nalozi.map((r) => <td key={r.nalog.id} className="f-mono" style={{ textAlign: "center" }}>{ukupnoPoNalogu(r.nalog.id).toFixed(1)}</td>)}
+                      <td className="f-mono" style={{ textAlign: "center" }}>{ukupnoSve.toFixed(1)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {uredjivanje && trenutniRadnik && (
         <Modal wide title={`Sati po nalozima — ${zaposlenikIme(uredjivanje)} — ${fmtDate(datum)}`} onClose={() => setUredjivanje(null)}
