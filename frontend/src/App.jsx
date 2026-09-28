@@ -543,6 +543,19 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
 // od redovnog obračuna plaća i od redovne evidencije rada.
 const jeKooperant = (zaposlenik, pozicije) => (pozicije || []).find((p) => p.id === zaposlenik?.pozicijaId)?.naziv?.trim().toLowerCase() === "kooperant";
 
+// Dodatna podjela SAMO za pregled u Evidenciji rada (ne dira obračun plaća) — po nazivu pozicije,
+// istim principom kao jeKooperant. Radiona: voditelj proizvodnje, skladištar, zaposlenik. Sve
+// pozicije koje nisu ni radiona, ni praktikant, ni kooperant, spadaju u "ostalo" (tehnički ured i
+// administracija).
+const RADIONA_POZICIJE = ["voditelj proizvodnje", "skladištar", "zaposlenik"];
+const grupaEvidencije = (zaposlenik, pozicije) => {
+  const naziv = (pozicije || []).find((p) => p.id === zaposlenik?.pozicijaId)?.naziv?.trim().toLowerCase() || "";
+  if (naziv === "kooperant") return "kooperant";
+  if (naziv === "praktikant") return "praktikant";
+  if (RADIONA_POZICIJE.includes(naziv)) return "radiona";
+  return "ostalo";
+};
+
 const obracunMjesecaKooperant = (zaposlenik, mjesec, db) => {
   const postavke = db.postavkePlaca;
   const zapisi = (db.evidencijaRada || []).filter((e) => e.zaposlenikId === zaposlenik.id && e.vrijemeDolaska.slice(0, 7) === mjesec && (e.vrsta || "rad") === "rad" && e.vrijemeOdlaska);
@@ -6582,8 +6595,10 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true })
   const aktivniSort = useMemo(() => db.zaposlenici
     .filter((z) => z.status === "Aktivan")
     .sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")), [db.zaposlenici]);
-  const zaposleniciSort = useMemo(() => aktivniSort.filter((z) => !jeKooperant(z, db.pozicijeZaposlenika)), [aktivniSort, db.pozicijeZaposlenika]);
-  const kooperantiSort = useMemo(() => aktivniSort.filter((z) => jeKooperant(z, db.pozicijeZaposlenika)), [aktivniSort, db.pozicijeZaposlenika]);
+  const radionaSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "radiona"), [aktivniSort, db.pozicijeZaposlenika]);
+  const praktikantiSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "praktikant"), [aktivniSort, db.pozicijeZaposlenika]);
+  const tehnickiSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "ostalo"), [aktivniSort, db.pozicijeZaposlenika]);
+  const kooperantiSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "kooperant"), [aktivniSort, db.pozicijeZaposlenika]);
 
   const otvoriCeliju = (zaposlenikId, datum) => {
     if (!mozeMijenjati) return;
@@ -6765,8 +6780,14 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true })
         );
         return (
           <>
-            <div className="label" style={{ marginBottom: 6 }}>Zaposlenici ({zaposleniciSort.length})</div>
-            {zaposleniciSort.length === 0 ? <EmptyState text="Nema aktivnih zaposlenika." /> : <TablicaEvidencije lista={zaposleniciSort} />}
+            <div className="label" style={{ marginBottom: 6 }}>Radiona ({radionaSort.length})</div>
+            {radionaSort.length === 0 ? <EmptyState text="Nema aktivnih zaposlenika u radioni." /> : <TablicaEvidencije lista={radionaSort} />}
+
+            <div className="label" style={{ marginTop: 20, marginBottom: 6 }}>Praktikanti ({praktikantiSort.length})</div>
+            {praktikantiSort.length === 0 ? <EmptyState text="Nema aktivnih praktikanata." /> : <TablicaEvidencije lista={praktikantiSort} />}
+
+            <div className="label" style={{ marginTop: 20, marginBottom: 6 }}>Tehnički ured i administracija ({tehnickiSort.length})</div>
+            {tehnickiSort.length === 0 ? <EmptyState text="Nema aktivnih zaposlenika u tehničkom uredu." /> : <TablicaEvidencije lista={tehnickiSort} />}
 
             <div className="label" style={{ marginTop: 20, marginBottom: 6 }}>Kooperanti ({kooperantiSort.length})</div>
             {kooperantiSort.length === 0 ? <EmptyState text="Nema aktivnih kooperanata." /> : <TablicaEvidencije lista={kooperantiSort} />}
