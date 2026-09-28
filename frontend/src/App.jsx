@@ -7198,7 +7198,7 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
 
   return (
     <Modal wide title={`Pregled za ispis — Obračun plaće ${naslovGrupe} ${mjesec}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(`Placa_${naslovGrupe.replace(/\s+/g, "-")}_${gg}${gmesec}`)}>Ispis / Spremi kao PDF</Btn></>}>
-      <style>{"@media print { @page { size: landscape; } }"}</style>
+      <style>{"@media print { @page { size: A3 landscape; } }"}</style>
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
         <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 12, marginBottom: 8 }}>
           <span>{t.naziv || "ECON d.o.o."}</span>
