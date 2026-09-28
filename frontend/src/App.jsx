@@ -1731,7 +1731,7 @@ export default function App() {
           {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} />}
-          {aktivnaStranica === "projekti" && <ProjektiPage db={db} update={update} patchProjekt={patchProjekt} patchProjekti={patchProjekti} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} />}
+          {aktivnaStranica === "projekti" && <ProjektiPage db={db} update={update} patchProjekt={patchProjekt} patchProjekti={patchProjekti} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} />}
           {aktivnaStranica === "fakturiranje" && <FakturiranjePage db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "partneri" && <PartneriPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} patchEvidencija={patchEvidencija} mojaPozicija={mojaPozicija} />}
@@ -5294,6 +5294,7 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
   const [jezik, setJezik] = useState("hr");
   const L = PRIJEVODI_PONUDE[jezik];
   const t = db.postavkeTvrtke || {};
+  const izradio = db.zaposlenici.find((z) => z.id === ponuda.izradioId);
   const calc = izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala);
   const pdvStopa = Number(t.pdvStopa ?? 25);
   // Cijena po stavci (sa maržom) — ista formula kao u Rekapitulaciji; osnovica ponude je zbroj
@@ -5386,7 +5387,16 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
         <div style={{ fontSize: 11, marginBottom: 20 }}>
           <div>{L.uvjeti}</div>
           <div style={{ marginTop: 10 }}>{L.postovanje}</div>
-          <div style={{ fontWeight: 700, marginTop: 8 }}>{t.naziv}</div>
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontWeight: 700 }}>{t.naziv}</div>
+            {izradio && (
+              <>
+                <div>{izradio.prezime} {izradio.ime}</div>
+                {izradio.telefon && <div>Mobil: {izradio.telefon}</div>}
+                {izradio.email && <div>e-Mail: {izradio.email}</div>}
+              </>
+            )}
+          </div>
         </div>
 
         <div style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
@@ -5605,7 +5615,7 @@ function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
   );
 }
 
-function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, showToast, setPage, mojaPozicija }) {
+function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, showToast, setPage, mojaPozicija, mojId }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "projekti");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "projekti");
   useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "projekti"); }, [dozvKartice, tab]);
@@ -5631,7 +5641,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
   const emptyProj = () => ({ sifra: "", naziv: "", kupacId: db.kupci[0]?.id || "", status: "Ponuda", vrijednost: 0, rokPocetka: todayISO(), rokZavrsetka: todayISO(), opis: "", voditeljId: "", zadaci: noviZadaciIzStandarda(), faze: praznaFazaSati() });
   const [projForm, setProjForm] = useState(emptyProj());
 
-  const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, pozicije: [], sirovineStavke: [], satnicaMontaza: 0, otpadLimPoTipu: {}, postotakMarze: 0 });
+  const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, izradioId: mojId || "", pozicije: [], sirovineStavke: [], satnicaMontaza: 0, otpadLimPoTipu: {}, postotakMarze: 0 });
   const [ponForm, setPonForm] = useState(emptyPon());
   const [cjenikOpen, setCjenikOpen] = useState(false);
   const [zadaciOpen, setZadaciOpen] = useState(false);
@@ -5878,7 +5888,15 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
               <Field label="Kupac"><select className="select" value={ponForm.kupacId} onChange={(e) => setPonForm({ ...ponForm, kupacId: e.target.value })}>{db.kupci.map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}</select></Field>
               <Field label="Datum"><input className="input" type="date" value={ponForm.datum} onChange={(e) => setPonForm({ ...ponForm, datum: e.target.value })} /></Field>
             </div>
-            <Field label="Status"><select className="select" style={{ maxWidth: 220 }} value={ponForm.status} onChange={(e) => setPonForm({ ...ponForm, status: e.target.value })}>{["U izradi", "Poslana", "Prihvaćena", "Odbijena"].map((s) => <option key={s}>{s}</option>)}</select></Field>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <Field label="Status"><select className="select" value={ponForm.status} onChange={(e) => setPonForm({ ...ponForm, status: e.target.value })}>{["U izradi", "Poslana", "Prihvaćena", "Odbijena"].map((s) => <option key={s}>{s}</option>)}</select></Field>
+              <Field label="Izradio (potpis na ponudi)">
+                <select className="select" value={ponForm.izradioId || ""} onChange={(e) => setPonForm({ ...ponForm, izradioId: e.target.value })}>
+                  <option value="">— odaberi —</option>
+                  {[...db.zaposlenici].filter((z) => z.status === "Aktivan").sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+                </select>
+              </Field>
+            </div>
 
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 6 }}>
               <label className="label" style={{ marginBottom: 0 }}>Pozicije i kalkulacija sati</label>
