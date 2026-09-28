@@ -4,7 +4,7 @@ import {
   Plus, Pencil, Trash2, X, Search, AlertTriangle, CheckCircle2, ArrowRight,
   Clock, ChevronRight, Save, PackageCheck, PackageMinus, Settings, Layers,
   ChevronDown, ChevronUp, FolderInput, Eye, UserCog, CalendarRange,
-  Database, Download, Upload, AlertCircle, Copy, GripVertical
+  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText
 } from "lucide-react";
 import logoEcon from "./assets/logo-econ.jpg";
 
@@ -1862,6 +1862,29 @@ const masaPozicije = (p, katalog, kvalitete) => (p.stavke || []).reduce((sum, s)
 const trosakStavkeMaterijala = (s, katalog, kvalitete) => masaStavkePozicije(s, katalog, kvalitete) * (Number(s.komada) || 1) * (Number(s.cijenaKg) || 0);
 // Trošak materijala iz kataloga (profili/limovi) za CIJELU poziciju (sve stavke × količina pozicije).
 const trosakMaterijalaIzKatalogaPozicije = (p, katalog, kvalitete) => (p.stavke || []).reduce((s, st) => s + trosakStavkeMaterijala(st, katalog, kvalitete), 0) * (Number(p.kolicina) || 1);
+
+// Raščlamba troška jedne stavke (pozicije) ponude — dijeljeno između PozicijeEditor (uređivanje) i
+// PonudaPrintModal (PDF), da obje strane uvijek računaju po ISTOJ formuli.
+const satiPozicije = (p) => OPERACIJE.reduce((s, o) => s + (Number(p.operacije?.[o.key]) || 0), 0);
+const trosakRadaPozicije = (p, cjenikRada) => OPERACIJE.reduce((s, o) => s + (Number(p.operacije?.[o.key]) || 0) * (Number(cjenikRada?.[o.key]) || 0), 0);
+const akzPozicije = (p, katalog, kvalitete) => {
+  const masaUkupnaPoz = masaPozicije(p, katalog, kvalitete) * (Number(p.kolicina) || 0);
+  return (p.stavkeAKZ || []).reduce((s, a) => s + masaUkupnaPoz * (Number(a.cijenaKg) || 0), 0);
+};
+const montazaPozicije = (p, satnicaMontaza) => (Number(p.brojMontera) || 0) * (Number(p.planiraniSatiMontaza) || 0) * (Number(p.kolicina) || 0) * (Number(satnicaMontaza) || 0);
+// Trošak materijala stavke (pozicije) = iz kataloga (profili/limovi, cijena upisana na svakoj
+// stavci) + materijal iz skladišta (zaseban popis, npr. gotovi kupljeni artikli).
+const materijalPozicije = (p, katalog, kvalitete, materijaliSkladiste) => trosakMaterijalaIzKatalogaPozicije(p, katalog, kvalitete) + (p.materijalStavke || []).reduce((s, st) => {
+  const m = (materijaliSkladiste || []).find((x) => x.id === st.materijalId);
+  const cijena = st.cijenaPoJed != null ? Number(st.cijenaPoJed) : (m ? m.cijena : 0);
+  return s + cijena * efektivnaKolicinaMaterijala(st, m);
+}, 0);
+const ostaloPozicije = (p) => (p.ostaleStavke || []).reduce((s, st) => s + (Number(st.kolicina) || 0) * (Number(st.cijenaJed) || 0), 0);
+// Ukupna cijena stavke SA maržom (za cijelu količinu stavke) — isti izračun kao u Rekapitulaciji.
+const cijenaPozicijeSaMarzom = (p, { cjenikRada, katalog, kvalitete, satnicaMontaza, materijaliSkladiste, postotakMarze }) => {
+  const bezMarze = trosakRadaPozicije(p, cjenikRada) + materijalPozicije(p, katalog, kvalitete, materijaliSkladiste) + akzPozicije(p, katalog, kvalitete) + montazaPozicije(p, satnicaMontaza) + ostaloPozicije(p);
+  return bezMarze * (1 + (Number(postotakMarze) || 0) / 100);
+};
 
 function SkladistePage({ db, update, showToast, mojaPozicija }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "skladiste");
@@ -4382,6 +4405,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
   // prikazane odjednom, jedna ispod druge (kod više stavki modal je postajao jako dugačak za
   // skrolanje). Aktivna je uvijek samo jedna kartica.
   const [aktivnaKartica, setAktivnaKartica] = useState(pozicije[0]?.id || "materijal");
+  const [opisOtvoren, setOpisOtvoren] = useState({}); // { [pozicijaId]: true } — red s opisom otvoren u Rekapitulaciji
 
   const praznaStavka = () => ({ id: uid("pst"), nacinMase: "rucno", masaJed: 0, komada: 1, katalogId: "", dimenzija: 0, sirinaMM: 0, duzinaMM: 0, kvaliteta: "celik", cijenaKg: 0 });
   const praznaAkzStavka = () => ({ id: uid("akz"), tip: AKZ_TIPOVI[0].key, cijenaKg: 0 });
@@ -4421,21 +4445,14 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
     updatePoz(pozId, { stavkeAKZ: (poz.stavkeAKZ || []).filter((a) => a.id !== akzId) });
   };
 
-  const satiPoz = (p) => OPERACIJE.reduce((s, o) => s + (Number(p.operacije?.[o.key]) || 0), 0);
-  const trosakPoz = (p) => OPERACIJE.reduce((s, o) => s + (Number(p.operacije?.[o.key]) || 0) * (Number(cjenikRada?.[o.key]) || 0), 0);
-  const akzPozicije = (p) => {
-    const masaUkupnaPoz = masaPozicije(p, katalog, kvalitete) * (Number(p.kolicina) || 0);
-    return (p.stavkeAKZ || []).reduce((s, a) => s + masaUkupnaPoz * (Number(a.cijenaKg) || 0), 0);
-  };
-  const montazaPozicije = (p) => (Number(p.brojMontera) || 0) * (Number(p.planiraniSatiMontaza) || 0) * (Number(p.kolicina) || 0) * (Number(satnicaMontaza) || 0);
-  // Trošak materijala stavke = iz kataloga (profili/limovi, cijena upisana na svakoj stavci) +
-  // materijal iz skladišta (zaseban popis, npr. gotovi kupljeni artikli).
-  const materijalPozicije = (p) => trosakMaterijalaIzKatalogaPozicije(p, katalog, kvalitete) + (p.materijalStavke || []).reduce((s, st) => {
-    const m = (materijaliSkladiste || []).find((x) => x.id === st.materijalId);
-    const cijena = st.cijenaPoJed != null ? Number(st.cijenaPoJed) : (m ? m.cijena : 0);
-    return s + cijena * efektivnaKolicinaMaterijala(st, m);
-  }, 0);
-  const ostaloPozicije = (p) => (p.ostaleStavke || []).reduce((s, st) => s + (Number(st.kolicina) || 0) * (Number(st.cijenaJed) || 0), 0);
+  // Formule su dijeljene na razini modula (koristi ih i PDF ispis ponude) — ovdje samo lokalni
+  // wrapperi koji nadopune trenutni katalog/kvalitete/satnicaMontaza/materijaliSkladiste.
+  const satiPoz = satiPozicije;
+  const trosakPoz = (p) => trosakRadaPozicije(p, cjenikRada);
+  const akzPoz = (p) => akzPozicije(p, katalog, kvalitete);
+  const montazaPoz = (p) => montazaPozicije(p, satnicaMontaza);
+  const materijalPoz = (p) => materijalPozicije(p, katalog, kvalitete, materijaliSkladiste);
+  const ostaloPoz = (p) => ostaloPozicije(p);
 
   const aktivnaPozicija = pozicije.find((p) => p.id === aktivnaKartica);
 
@@ -4546,7 +4563,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
               </div>
               <div style={{ width: 140 }}>
                 <label className="label">Trošak montaže</label>
-                <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{fmtCurDec(montazaPozicije(p))}</div>
+                <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{fmtCurDec(montazaPoz(p))}</div>
               </div>
             </div>
 
@@ -4625,27 +4642,52 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
               {pozicije.length === 0 && <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--ink-faint)" }}>Nema stavki.</td></tr>}
               {pozicije.map((p) => {
                 const rada = trosakPoz(p);
-                const materijal = materijalPozicije(p);
-                const akz = akzPozicije(p);
-                const montaza = montazaPozicije(p);
-                const ostalo = ostaloPozicije(p);
+                const materijal = materijalPoz(p);
+                const akz = akzPoz(p);
+                const montaza = montazaPoz(p);
+                const ostalo = ostaloPoz(p);
                 const bezMarze = rada + materijal + akz + montaza + ostalo;
                 const marza = bezMarze * (postotakMarze / 100);
                 const saMarzom = bezMarze + marza;
                 ukupnoSveStavkeSaMarzom += saMarzom;
                 const kolicina = Number(p.kolicina) || 1;
+                const otvoren = !!opisOtvoren[p.id];
                 return (
-                  <tr key={p.id}>
-                    <td>{p.oznaka} {p.naziv && `— ${p.naziv}`}</td>
-                    <td className="f-mono">{fmtCurDec(rada)}</td>
-                    <td className="f-mono">{fmtCurDec(materijal)}</td>
-                    <td className="f-mono">{fmtCurDec(akz)}</td>
-                    <td className="f-mono">{fmtCurDec(montaza)}</td>
-                    <td className="f-mono">{fmtCurDec(ostalo)}</td>
-                    <td className="f-mono">{fmtCurDec(marza)}</td>
-                    <td className="f-mono">{fmtCurDec(saMarzom / kolicina)}</td>
-                    <td className="f-mono" style={{ fontWeight: 600 }}>{fmtCurDec(saMarzom)}</td>
-                  </tr>
+                  <React.Fragment key={p.id}>
+                    <tr>
+                      <td>
+                        {p.oznaka} {p.naziv && `— ${p.naziv}`}
+                        <button
+                          className="btn btn-icon btn-ghost" style={{ marginLeft: 6, verticalAlign: "middle" }}
+                          title={p.opis ? "Uredi opis stavke za ponudu" : "Dodaj opis stavke za ponudu"}
+                          onClick={() => setOpisOtvoren((o) => ({ ...o, [p.id]: !o[p.id] }))}
+                        >
+                          <FileText size={13} color={p.opis ? "var(--steel)" : "var(--ink-faint)"} />
+                        </button>
+                      </td>
+                      <td className="f-mono">{fmtCurDec(rada)}</td>
+                      <td className="f-mono">{fmtCurDec(materijal)}</td>
+                      <td className="f-mono">{fmtCurDec(akz)}</td>
+                      <td className="f-mono">{fmtCurDec(montaza)}</td>
+                      <td className="f-mono">{fmtCurDec(ostalo)}</td>
+                      <td className="f-mono">{fmtCurDec(marza)}</td>
+                      <td className="f-mono">{fmtCurDec(saMarzom / kolicina)}</td>
+                      <td className="f-mono" style={{ fontWeight: 600 }}>{fmtCurDec(saMarzom)}</td>
+                    </tr>
+                    {otvoren && (
+                      <tr>
+                        <td colSpan={9} style={{ background: "var(--surface-alt)", padding: "8px 10px" }}>
+                          <label className="label" style={{ marginBottom: 4 }}>Opis stavke (vidljivo u ponudi)</label>
+                          <textarea
+                            className="textarea" rows={2} style={{ width: "100%" }}
+                            placeholder="npr. detaljniji tehnički opis konstrukcije za ovu stavku…"
+                            value={p.opis || ""}
+                            onChange={(e) => updatePoz(p.id, { opis: e.target.value })}
+                          />
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 );
               })}
             </tbody>
@@ -5228,25 +5270,21 @@ const PRIJEVODI_PONUDE = {
   hr: {
     ponuda: "PONUDA", broj: "Broj", narucitelj: "Naručitelj:", oib: "OIB",
     datumPonude: "Datum ponude:", vrijediDo: "Ponuda vrijedi do:", predmet: "Predmet:",
-    tehnickiOpis: "Tehnički opis konstrukcije", poz: "Poz.", naziv: "Naziv", kom: "Kom.", masa: "Masa (kg)",
-    komercijalnaPonuda: "Komercijalna ponuda", opis: "Opis", iznos: "Iznos",
+    tehnickiOpis: "Tehnički opis konstrukcije", poz: "Poz.", naziv: "Naziv", kom: "Kom.",
+    jedCijena: "Jedinična cijena", ukupnaCijena: "Ukupna cijena",
     osnovica: "Osnovica:", pdv: "PDV", ukupno: "UKUPNO:", napomena: "Napomena:",
     uvjeti: "Uvjeti plaćanja i rok isporuke definiraju se ugovorom/narudžbom po prihvaćanju ponude.",
     postovanje: "S poštovanjem,",
-    izrada: "Izrada i isporuka čelične konstrukcije (materijal i rad)",
-    montaza: "Montaža konstrukcije", akz: "Antikorozivna zaštita",
     upisano: "Poduzeće je upisano na", mbs: "MBS", uprava: "Uprava",
   },
   de: {
     ponuda: "ANGEBOT", broj: "Nummer", narucitelj: "Auftraggeber:", oib: "USt-IdNr. (HR)",
     datumPonude: "Angebotsdatum:", vrijediDo: "Angebot gültig bis:", predmet: "Betreff:",
-    tehnickiOpis: "Technische Beschreibung der Konstruktion", poz: "Pos.", naziv: "Bezeichnung", kom: "Stk.", masa: "Gewicht (kg)",
-    komercijalnaPonuda: "Kommerzielles Angebot", opis: "Beschreibung", iznos: "Betrag",
+    tehnickiOpis: "Technische Beschreibung der Konstruktion", poz: "Pos.", naziv: "Bezeichnung", kom: "Stk.",
+    jedCijena: "Einzelpreis", ukupnaCijena: "Gesamtpreis",
     osnovica: "Nettobetrag:", pdv: "MwSt.", ukupno: "GESAMT:", napomena: "Anmerkung:",
     uvjeti: "Zahlungsbedingungen und Lieferfrist werden nach Annahme des Angebots im Vertrag/der Bestellung festgelegt.",
     postovanje: "Mit freundlichen Grüßen,",
-    izrada: "Herstellung und Lieferung der Stahlkonstruktion (Material und Arbeit)",
-    montaza: "Montage der Konstruktion", akz: "Korrosionsschutz",
     upisano: "Das Unternehmen ist eingetragen beim", mbs: "MBS", uprava: "Geschäftsführung",
     napomenaPorez: "Preis versteht sich ausschließlich gesetzliche Mehrwertsteuer",
   },
@@ -5258,17 +5296,13 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
   const t = db.postavkeTvrtke || {};
   const calc = izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala);
   const pdvStopa = Number(t.pdvStopa ?? 25);
-  const izradaIznos = calc.trosakRada + calc.trosakMaterijala;
-  // Uvećanje se ne navodi kao posebna stavka — uračunato je izravno u cijenu svake stavke,
-  // pa je zbroj prikazanih iznosa već konačna (uvećana) osnovica.
-  const faktorMarze = 1 + (calc.postotakMarze || 0) / 100;
-  const komercijalneStavke = [
-    { opis: L.izrada, iznos: izradaIznos },
-    ...(ponuda.pozicije || []).flatMap((p) => p.ostaleStavke || []).map((s) => ({ opis: s.opis, iznos: (Number(s.kolicina) || 0) * (Number(s.cijenaJed) || 0) })),
-    ...(calc.trosakMontaze > 0 ? [{ opis: L.montaza, iznos: calc.trosakMontaze }] : []),
-    ...calc.akzPoTipu.filter((t) => t.iznos > 0).map((t) => ({ opis: `${L.akz} – ${t.label}`, iznos: t.iznos })),
-  ].map((r) => ({ ...r, iznos: r.iznos * faktorMarze }));
-  const osnovica = komercijalneStavke.reduce((s, r) => s + r.iznos, 0);
+  // Cijena po stavci (sa maržom) — ista formula kao u Rekapitulaciji; osnovica ponude je zbroj
+  // cijena svih stavki, umjesto zasebnog "Komercijalna ponuda" popisa troškova.
+  const cijenePozicija = (ponuda.pozicije || []).map((p) => ({
+    p,
+    cijena: cijenaPozicijeSaMarzom(p, { cjenikRada: db.cjenikRada, katalog: db.katalogProfila, kvalitete: db.kvaliteteMaterijala, satnicaMontaza: ponuda.satnicaMontaza, materijaliSkladiste: db.materijali, postotakMarze: calc.postotakMarze }),
+  }));
+  const osnovica = cijenePozicija.reduce((s, r) => s + r.cijena, 0);
   const pdvIznos = osnovica * (pdvStopa / 100);
   const ukupno = osnovica + pdvIznos;
 
@@ -5310,26 +5344,25 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
           </table>
         </div>
 
-        {(ponuda.pozicije || []).length > 0 && (
+        {cijenePozicija.length > 0 && (
           <>
             <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 6 }}>{L.tehnickiOpis}</div>
             <table className="doc-table" style={{ marginBottom: 16 }}>
-              <thead><tr><th style={{ width: 34 }}>{L.poz}</th><th>{L.naziv}</th><th style={{ width: 55 }}>{L.kom}</th><th style={{ width: 80 }}>{L.masa}</th></tr></thead>
+              <thead><tr><th style={{ width: 34 }}>{L.poz}</th><th>{L.naziv}</th><th style={{ width: 55 }}>{L.kom}</th><th style={{ width: 95 }}>{L.jedCijena}</th><th style={{ width: 95 }}>{L.ukupnaCijena}</th></tr></thead>
               <tbody>
-                {ponuda.pozicije.map((p) => {
-                  const masaJed = masaPozicije(p, db.katalogProfila, db.kvaliteteMaterijala);
-                  return <tr key={p.id}><td>{p.oznaka}</td><td>{p.naziv}</td><td>{p.kolicina}</td><td>{(masaJed * Number(p.kolicina)).toFixed(1)}</td></tr>;
-                })}
+                {cijenePozicija.map(({ p, cijena }) => (
+                  <tr key={p.id}>
+                    <td>{p.oznaka}</td>
+                    <td>{p.naziv}{p.opis && <div style={{ fontSize: 9.5, color: "#555", marginTop: 2 }}>{p.opis}</div>}</td>
+                    <td>{p.kolicina}</td>
+                    <td>{fmtCurDec(cijena / (Number(p.kolicina) || 1))}</td>
+                    <td>{fmtCurDec(cijena)}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </>
         )}
-
-        <div style={{ fontSize: 11.5, fontWeight: 700, marginBottom: 6 }}>{L.komercijalnaPonuda}</div>
-        <table className="doc-table" style={{ marginBottom: 14 }}>
-          <thead><tr><th>{L.opis}</th><th style={{ width: 100 }}>{L.iznos}</th></tr></thead>
-          <tbody>{komercijalneStavke.map((r, i) => <tr key={i}><td>{r.opis}</td><td>{fmtCurDec(r.iznos)}</td></tr>)}</tbody>
-        </table>
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: jezik === "de" ? 6 : 20 }}>
           <table style={{ borderCollapse: "collapse", fontSize: 12, minWidth: 240 }}>
