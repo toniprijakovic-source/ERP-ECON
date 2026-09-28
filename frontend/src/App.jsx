@@ -5374,7 +5374,7 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
 
         {jezik === "de" && (
           <div style={{ fontSize: 11, marginBottom: 16 }}>
-            <div>Sehr geehrter Herr /Frau {ponuda.kontaktOsoba || "___"},</div>
+            <div>{ponuda.kontaktOsobaTitula === "frau" ? "Sehr geehrte Frau" : "Sehr geehrter Herr"} {ponuda.kontaktOsoba || "___"},</div>
             <div style={{ marginTop: 8 }}>vielen Dank auf Ihre Anfrage.</div>
             <div>Aufgrund Ihrer Anfrage hiermit unsere Angebot für die Material, Herstellung und Lieferung zwar wie folgt:</div>
           </div>
@@ -5680,7 +5680,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
   const emptyProj = () => ({ sifra: "", naziv: "", kupacId: db.kupci[0]?.id || "", status: "Ponuda", vrijednost: 0, rokPocetka: todayISO(), rokZavrsetka: todayISO(), opis: "", voditeljId: "", zadaci: noviZadaciIzStandarda(), faze: praznaFazaSati() });
   const [projForm, setProjForm] = useState(emptyProj());
 
-  const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", kontaktOsoba: db.kupci[0]?.kontaktOsoba || "", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, izradioId: mojId || "", pozicije: [], sirovineStavke: [], satnicaMontaza: 0, otpadLimPoTipu: {}, postotakMarze: 0, napomenaNjemacki: NJEMACKI_UVJETI_ZADANO });
+  const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", kontaktOsoba: db.kupci[0]?.kontaktOsoba || "", kontaktOsobaTitula: "herr", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, izradioId: mojId || "", pozicije: [], sirovineStavke: [], satnicaMontaza: 0, otpadLimPoTipu: {}, postotakMarze: 0, napomenaNjemacki: NJEMACKI_UVJETI_ZADANO });
   const [ponForm, setPonForm] = useState(emptyPon());
   const [cjenikOpen, setCjenikOpen] = useState(false);
   const [zadaciOpen, setZadaciOpen] = useState(false);
@@ -5953,7 +5953,13 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
                 </select>
               </Field>
               <Field label="Kontakt osoba (pozdrav u njem. ponudi)">
-                <input className="input" placeholder="Prezime osobe koja je poslala upit" value={ponForm.kontaktOsoba || ""} onChange={(e) => setPonForm({ ...ponForm, kontaktOsoba: e.target.value })} />
+                <div style={{ display: "flex", gap: 6 }}>
+                  <select className="select" style={{ width: 85, flexShrink: 0 }} value={ponForm.kontaktOsobaTitula || "herr"} onChange={(e) => setPonForm({ ...ponForm, kontaktOsobaTitula: e.target.value })}>
+                    <option value="herr">Herr</option>
+                    <option value="frau">Frau</option>
+                  </select>
+                  <input className="input" placeholder="Prezime osobe koja je poslala upit" value={ponForm.kontaktOsoba || ""} onChange={(e) => setPonForm({ ...ponForm, kontaktOsoba: e.target.value })} />
+                </div>
               </Field>
             </div>
 
