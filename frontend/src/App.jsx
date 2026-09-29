@@ -4,7 +4,7 @@ import {
   Plus, Pencil, Trash2, X, Search, AlertTriangle, CheckCircle2, ArrowRight,
   Clock, ChevronRight, Save, PackageCheck, PackageMinus, Settings, Layers,
   ChevronDown, ChevronUp, FolderInput, Eye, UserCog, CalendarRange,
-  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText
+  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors
 } from "lucide-react";
 import logoEcon from "./assets/logo-econ.jpg";
 
@@ -3384,6 +3384,26 @@ const rasporediProgramRezanja = (programi, kapaciteti, stroj) => {
   return dani;
 };
 
+// Baza broja programa bez brojčanog nastavka "/NN" (npr. "LP-2607-04/02" -> "LP-2607-04"),
+// da se dijeljenjem već podijeljenog programa nastavak broji od iste baze, a ne gomila "/01/01".
+const bazniBrojPrograma = (broj) => {
+  const zadnjaKosa = broj.lastIndexOf("/");
+  if (zadnjaKosa === -1) return broj;
+  const sufiks = broj.slice(zadnjaKosa + 1);
+  return /^\d+$/.test(sufiks) ? broj.slice(0, zadnjaKosa) : broj;
+};
+const sljedeciBrojNastavka = (programi, originalBroj) => {
+  const baza = bazniBrojPrograma(originalBroj);
+  let max = 0;
+  programi.forEach((p) => {
+    if (p.brojPrograma !== baza && bazniBrojPrograma(p.brojPrograma) === baza) {
+      const n = parseInt(p.brojPrograma.slice(baza.length + 1), 10);
+      if (!isNaN(n)) max = Math.max(max, n);
+    }
+  });
+  return `${baza}/${String(max + 1).padStart(2, "0")}`;
+};
+
 function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
   const [stroj, setStroj] = useState("laserProfili");
   const emptyForm = () => ({ brojPrograma: "", trajanjeRezanjaMin: 60, pripremaMin: 0, radniNalogId: "", napomena: "", status: "Na čekanju" });
@@ -3392,6 +3412,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
   const [noveStavkeMaterijala, setNoveStavkeMaterijala] = useState([]);
   const [kapForm, setKapForm] = useState({ datum: addDays(todayISO(), 1), sati: 12 });
   const [materijalModalId, setMaterijalModalId] = useState(null);
+  const [podijeliModalId, setPodijeliModalId] = useState(null);
 
   // Planirani materijal se skida sa skladišta ODMAH (rezervacija) kad se stavka doda programu;
   // ako se stavka ukloni ili program obriše prije nego je stvarno utrošeno evidentirano, planirana
@@ -3520,6 +3541,57 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
       if (noviStatus === "Završeno") zavrsioId = p.operaterId || null;
       return { ...p, status: noviStatus, odradjenoMin, segmentPocetak, pokrenuoId, zavrsioId };
     }));
+  };
+  // Dijeljenje programa: kad jedan operater ne stigne završiti (npr. kraj smjene), program se
+  // zatvara kao "Završeno" s onim što je stvarno odrađeno, a preostalo vrijeme i preostali
+  // (neutrošeni) materijal prelaze na novi program-nastavak (broj/NN) koji čeka sljedećeg operatera.
+  // Stvarno utrošena količina po stavci se upisuje kao i kod redovnog finaliziranja; ako je operater
+  // potrošio više od planiranog, višak se trajno skida sa skladišta (ništa ne prelazi na nastavak).
+  const podijeliProgram = (programId, unosiPoStavci) => {
+    const program = db.programiRezanja.find((p) => p.id === programId);
+    if (!program) return;
+    const sada = new Date().toISOString();
+    let konacnoOdradjenoMin = program.odradjenoMin || 0;
+    if (program.status === "Početak" && program.segmentPocetak) {
+      konacnoOdradjenoMin += Math.max(0, Math.round((new Date(sada) - new Date(program.segmentPocetak)) / 60000));
+    }
+    const preostaloMin = Math.max(0, (Number(program.trajanjeMin) || 0) - konacnoOdradjenoMin);
+
+    let materijaliPromijenjeni = false;
+    let materijali = [...db.materijali];
+    const zatvoreneStavke = [];
+    const noveStavke = [];
+    (program.stavkeMaterijala || []).forEach((s) => {
+      if (s.finalizirano) { zatvoreneStavke.push(s); return; }
+      const stvarno = Number(unosiPoStavci[s.id]) || 0;
+      const razlika = s.planiranoKolicina - stvarno;
+      const netStockPromjena = Math.min(razlika, 0);
+      if (netStockPromjena !== 0) {
+        materijaliPromijenjeni = true;
+        materijali = materijali.map((m) => (m.id === s.materijalId ? { ...m, kolicina: m.kolicina + netStockPromjena } : m));
+      }
+      zatvoreneStavke.push({ ...s, stvarnoKolicina: stvarno, finalizirano: true });
+      const preostaloMaterijala = Math.max(0, razlika);
+      if (preostaloMaterijala > 0) {
+        noveStavke.push({ id: uid("prm"), materijalId: s.materijalId, planiranoKolicina: preostaloMaterijala, stvarnoKolicina: null, finalizirano: false });
+      }
+    });
+
+    const noviBroj = sljedeciBrojNastavka(db.programiRezanja, program.brojPrograma);
+    const noviProgram = {
+      id: uid("pr"), stroj: program.stroj, brojPrograma: noviBroj, trajanjeMin: preostaloMin,
+      radniNalogId: program.radniNalogId, napomena: program.napomena, status: "Na čekanju",
+      stavkeMaterijala: noveStavke, operaterId: "", pokrenuoId: null, zavrsioId: null,
+      segmentPocetak: null, odradjenoMin: 0,
+    };
+    update("programiRezanja", [
+      ...db.programiRezanja.map((p) => (p.id === programId
+        ? { ...p, status: "Završeno", odradjenoMin: konacnoOdradjenoMin, segmentPocetak: null, zavrsioId: p.operaterId || p.zavrsioId || null, stavkeMaterijala: zatvoreneStavke }
+        : p)),
+      noviProgram,
+    ]);
+    if (materijaliPromijenjeni) update("materijali", materijali);
+    showToast(`Program podijeljen — nastavak ${noviBroj} dodan u red čekanja.`);
   };
   const pomakni = (id, smjer) => {
     const svi = [...db.programiRezanja];
@@ -3679,7 +3751,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
           {programiZaStroj.length === 0 ? <EmptyState text="Nema unesenih programa rezanja za ovaj stroj." /> : (
             <div className="card" style={{ overflowX: "auto" }}>
               <table className="erp-table">
-                <thead><tr><th>Program</th><th>Radni nalog</th><th style={{ width: 150 }}>Planirani materijal</th><th style={{ width: 80 }}>Trajanje</th><th style={{ width: 90 }}>Stvarno</th><th style={{ width: 130 }}>Operater</th>{!ogranicen && <th>Napomena</th>}<th style={{ width: 130 }}>Status</th>{!ogranicen && <th style={{ width: 100 }}></th>}</tr></thead>
+                <thead><tr><th>Program</th><th>Radni nalog</th><th style={{ width: 150 }}>Planirani materijal</th><th style={{ width: 80 }}>Trajanje</th><th style={{ width: 90 }}>Stvarno</th><th style={{ width: 130 }}>Operater</th>{!ogranicen && <th>Napomena</th>}<th style={{ width: 130 }}>Status</th><th style={{ width: 110 }}></th>{!ogranicen && <th style={{ width: 100 }}></th>}</tr></thead>
                 <tbody>
                   {programiZaStroj.map((p) => {
                     const stavke = p.stavkeMaterijala || [];
@@ -3707,6 +3779,9 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
                           <select className="select" style={{ fontSize: 12, padding: "4px 6px" }} value={p.status} onChange={(e) => postaviStatus(p.id, e.target.value)}>
                             {REZANJE_STATUSI.map((s) => <option key={s}>{s}</option>)}
                           </select>
+                        </td>
+                        <td>
+                          {p.status !== "Završeno" && <Btn size="sm" variant="ghost" icon={Scissors} onClick={() => setPodijeliModalId(p.id)}>Dijeli program</Btn>}
                         </td>
                         {!ogranicen && (
                         <td>
@@ -3738,6 +3813,16 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
           onObrisi={(stavkaId) => obrisiStavkuMaterijala(materijalModalId, stavkaId)}
           onFinaliziraj={(stavkaId, stvarno) => finalizirajStvarno(materijalModalId, stavkaId, stvarno)}
           onClose={() => setMaterijalModalId(null)}
+        />
+      )}
+
+      {podijeliModalId && (
+        <PodijeliProgramModal
+          program={db.programiRezanja.find((p) => p.id === podijeliModalId)}
+          materijali={db.materijali}
+          programi={db.programiRezanja}
+          onPodijeli={(unosiPoStavci) => { podijeliProgram(podijeliModalId, unosiPoStavci); setPodijeliModalId(null); }}
+          onClose={() => setPodijeliModalId(null)}
         />
       )}
     </div>
@@ -3860,6 +3945,47 @@ function MaterijalProgramaModal({ program, materijali, materijaliZaOdabir, radni
         onDodaj(noviRed.materijalId, efektivnaKolicinaMaterijala(noviRed, mat));
         setNoviRed(prazanRed());
       }}>Dodaj</Btn>
+    </Modal>
+  );
+}
+
+// Dijeljenje programa koji jedan operater ne stigne završiti: zatvara trenutni program kao
+// "Završeno" s upisanom stvarno utrošenom količinom materijala do sada, a preostalo vrijeme i
+// preostali materijal prelaze na novi program-nastavak (broj/NN) za sljedećeg operatera.
+function PodijeliProgramModal({ program, materijali, programi, onPodijeli, onClose }) {
+  const [unosi, setUnosi] = useState({});
+  const stavke = (program?.stavkeMaterijala || []).filter((s) => !s.finalizirano);
+  const matNaziv = (id) => { const m = materijali.find((x) => x.id === id); return m ? `${m.sifra} — ${m.naziv}` : "—"; };
+  const matJm = (id) => materijali.find((x) => x.id === id)?.jm || "";
+
+  const uTijeku = program?.status === "Početak" && program?.segmentPocetak;
+  const odradjenoDoSad = (program?.odradjenoMin || 0) + (uTijeku ? Math.max(0, Math.round((Date.now() - new Date(program.segmentPocetak).getTime()) / 60000)) : 0);
+  const preostaloMin = Math.max(0, (Number(program?.trajanjeMin) || 0) - odradjenoDoSad);
+
+  return (
+    <Modal title={`Podijeli program ${program?.brojPrograma || ""}`} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Scissors} onClick={() => onPodijeli(unosi)}>Podijeli program</Btn></>}>
+      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 12 }}>
+        Program se zatvara kao "Završeno" (odrađeno {fmtMin(odradjenoDoSad)}), a preostalih <strong className="f-mono">{fmtMin(preostaloMin)}</strong> prelazi na novi program <strong className="f-mono">{sljedeciBrojNastavka(programi || [], program?.brojPrograma || "")}</strong> koji čeka sljedećeg operatera.
+      </p>
+      {stavke.length === 0 ? (
+        <p style={{ fontSize: 12.5, color: "var(--ink-faint)" }}>Program nema planiranog materijala za evidentiranje.</p>
+      ) : (
+        <>
+          <div className="label" style={{ marginBottom: 6 }}>Upiši koliko je materijala stvarno potrošeno do sada — ostatak prelazi na novi program</div>
+          <table className="erp-table">
+            <thead><tr><th>Materijal</th><th style={{ width: 100 }}>Planirano</th><th style={{ width: 140 }}>Stvarno potrošeno</th></tr></thead>
+            <tbody>
+              {stavke.map((s) => (
+                <tr key={s.id}>
+                  <td style={{ fontSize: 12.5 }}>{matNaziv(s.materijalId)}</td>
+                  <td className="f-mono">{s.planiranoKolicina} {matJm(s.materijalId)}</td>
+                  <td><input className="input f-mono" style={{ width: 100 }} type="number" min="0" step="0.1" placeholder={matJm(s.materijalId)} value={unosi[s.id] ?? ""} onChange={(e) => setUnosi({ ...unosi, [s.id]: e.target.value })} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
     </Modal>
   );
 }
