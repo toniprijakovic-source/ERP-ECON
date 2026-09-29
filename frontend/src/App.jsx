@@ -3431,9 +3431,17 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
       .filter((e) => (e.vrsta || "rad") === "rad" && !e.vrijemeOdlaska && e.vrijemeDolaska.slice(0, 10) === danas)
       .map((e) => e.zaposlenikId)
   );
+  // Prikazuju se svi s odgovarajućom kompetencijom (ne samo trenutno prijavljeni) — inače je izbornik
+  // prazan čim baš nitko s tom kompetencijom trenutno nije evidentiran na poslu, što onemogućuje unaprijed
+  // odabrati operatera. Trenutno prijavljeni su označeni zvjezdicom i idu na vrh liste.
   const dostupniOperateri = [...db.zaposlenici]
-    .filter((z) => (z.kompetencije || []).includes(fazaZaStroj) && trenutnoPrijavljeniIds.has(z.id))
-    .sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr"));
+    .filter((z) => (z.kompetencije || []).includes(fazaZaStroj))
+    .sort((a, b) => {
+      const prijA = trenutnoPrijavljeniIds.has(a.id) ? 0 : 1;
+      const prijB = trenutnoPrijavljeniIds.has(b.id) ? 0 : 1;
+      if (prijA !== prijB) return prijA - prijB;
+      return (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr");
+    });
   // Trenutno odabrani operater ostaje ponuđen i ako više ne zadovoljava kompetenciju/prijavu
   // (npr. već odabran prije odjave), da se izbor ne obriše ispod korisnika.
   const opcijeOperatera = (trenutniId) => {
@@ -3691,7 +3699,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
                         <td>
                           <select className="select" style={{ fontSize: 12, padding: "4px 6px" }} value={p.operaterId || ""} onChange={(e) => azurirajOperatera(p.id, e.target.value)}>
                             <option value="">—</option>
-                            {opcijeOperatera(p.operaterId).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+                            {opcijeOperatera(p.operaterId).map((z) => <option key={z.id} value={z.id}>{trenutnoPrijavljeniIds.has(z.id) ? "★ " : ""}{z.prezime} {z.ime}</option>)}
                           </select>
                         </td>
                         {!ogranicen && <td style={{ fontSize: 12, color: "var(--ink-soft)" }}>{p.napomena}</td>}
