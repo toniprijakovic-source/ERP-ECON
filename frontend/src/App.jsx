@@ -3996,8 +3996,17 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, patchProjekt, show
   );
 }
 
-function OtpremnicaPrintModal({ otpremnica, kupac, projekt, narudzba, izdao, postavkeTvrtke, onClose }) {
-  const t = postavkeTvrtke || {};
+function OtpremnicaPrintModal({ otpremnica, db, onClose }) {
+  const t = db.postavkeTvrtke || {};
+  const projekt = db.projekti.find((p) => p.id === otpremnica.projektId);
+  const izdao = db.zaposlenici.find((z) => z.id === otpremnica.izdaoId);
+  const jeKooperant = otpremnica.vrsta === "kooperant";
+  // Kupčeva otpremnica ide uz narudžbu; kooperantska (dorada) uz radni nalog i dobavljača kojem
+  // se šalje na doradu (plastifikacija i sl.) — različit kontekst, isti dokument/ispis.
+  const kupac = db.kupci.find((k) => k.id === otpremnica.kupacId);
+  const narudzba = db.narudzbe.find((n) => n.id === otpremnica.narudzbaId);
+  const dobavljac = db.dobavljaci.find((d) => d.id === otpremnica.dobavljacId);
+  const radniNalog = db.radniNalozi.find((n) => n.id === otpremnica.radniNalogId);
   const PRAZNI_REDOVI = Math.max(0, 20 - otpremnica.stavke.length);
   return (
     <Modal wide title={`Pregled za ispis — Otpremnica ${otpremnica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => window.print()}>Ispis / Spremi kao PDF</Btn></>}>
@@ -4024,9 +4033,19 @@ function OtpremnicaPrintModal({ otpremnica, kupac, projekt, narudzba, izdao, pos
 
         <table style={{ fontSize: 11.5, marginBottom: 18, borderCollapse: "collapse" }}>
           <tbody>
-            <tr><td style={{ paddingRight: 10, color: "#555" }}>Kupac / Kunde :</td><td style={{ fontWeight: 600 }}>{kupac?.naziv || "—"}</td></tr>
-            <tr><td style={{ paddingRight: 10, color: "#555" }}>Narudžba / Bestellung :</td><td style={{ fontWeight: 600 }}>{narudzba?.broj || "—"}</td></tr>
+            {jeKooperant ? (
+              <>
+                <tr><td style={{ paddingRight: 10, color: "#555" }}>Primatelj / Empfänger :</td><td style={{ fontWeight: 600 }}>{dobavljac?.naziv || "—"}</td></tr>
+                <tr><td style={{ paddingRight: 10, color: "#555" }}>Radni nalog :</td><td style={{ fontWeight: 600 }}>{radniNalog ? `${radniNalog.broj} — ${radniNalog.faza}` : "—"}</td></tr>
+              </>
+            ) : (
+              <>
+                <tr><td style={{ paddingRight: 10, color: "#555" }}>Kupac / Kunde :</td><td style={{ fontWeight: 600 }}>{kupac?.naziv || "—"}</td></tr>
+                <tr><td style={{ paddingRight: 10, color: "#555" }}>Narudžba / Bestellung :</td><td style={{ fontWeight: 600 }}>{narudzba?.broj || "—"}</td></tr>
+              </>
+            )}
             <tr><td style={{ paddingRight: 10, color: "#555" }}>Projekt :</td><td style={{ fontWeight: 600 }}>{projekt?.sifra}{projekt?.naziv ? ` — ${projekt.naziv}` : ""}</td></tr>
+            {otpremnica.napomena && <tr><td style={{ paddingRight: 10, color: "#555" }}>Napomena :</td><td>{otpremnica.napomena}</td></tr>}
           </tbody>
         </table>
 
@@ -4102,7 +4121,7 @@ function OtpremniceListModal({ projekt, narudzba, db, update, patchProjekt, show
       </Modal>
 
       {otpModal && <OtpremnicaFormModal narudzba={narudzba} projekt={projekt} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} onClose={() => setOtpModal(false)} />}
-      {printOtp && <OtpremnicaPrintModal otpremnica={printOtp} kupac={kupac} projekt={projekt} narudzba={narudzba} izdao={db.zaposlenici.find((z) => z.id === printOtp.izdaoId)} postavkeTvrtke={db.postavkeTvrtke} onClose={() => setPrintOtp(null)} />}
+      {printOtp && <OtpremnicaPrintModal otpremnica={printOtp} db={db} onClose={() => setPrintOtp(null)} />}
       {delOtp && <ConfirmDelete label={delOtp.broj} onCancel={() => setDelOtp(null)} onConfirm={() => {
         update("otpremnice", db.otpremnice.filter((o) => o.id !== delOtp.id));
         if (koristiNormativ) patchProjekt(projekt.id, { isporuke: (projekt.isporuke || []).map((i) => (i.uOtpremniciId === delOtp.id ? { ...i, uOtpremniciId: null } : i)) });
@@ -6437,15 +6456,18 @@ function OtpremniceTab({ db, update, patchProjekt, showToast, mozeMijenjati = tr
       )}
       {db.otpremnice.length === 0 ? <EmptyState text="Nema izdanih otpremnica." /> : (
         <table className="erp-table">
-          <thead><tr><th>Broj</th><th>Projekt</th><th>Kupac</th><th>Datum</th><th>Stavki</th><th></th></tr></thead>
+          <thead><tr><th>Broj</th><th>Projekt</th><th>Primatelj</th><th>Vrsta</th><th>Datum</th><th>Stavki</th><th></th></tr></thead>
           <tbody>
             {[...db.otpremnice].sort((a, b) => b.datum.localeCompare(a.datum)).map((o) => {
               const projekt = projektInfo(o.projektId);
+              const jeKooperant = o.vrsta === "kooperant";
+              const primatelj = jeKooperant ? db.dobavljaci.find((d) => d.id === o.dobavljacId)?.naziv : kupacInfo(o.kupacId)?.naziv;
               return (
                 <tr key={o.id}>
                   <td className="f-mono">{o.broj}</td>
                   <td>{projekt?.sifra}{projekt?.naziv ? ` — ${projekt.naziv}` : ""}</td>
-                  <td>{kupacInfo(o.kupacId)?.naziv || "—"}</td>
+                  <td>{primatelj || "—"}</td>
+                  <td>{jeKooperant ? <span style={{ color: "var(--steel)" }}>Kooperant (dorada)</span> : "Kupac"}</td>
                   <td>{fmtDate(o.datum)}</td>
                   <td className="f-mono">{o.stavke.length}</td>
                   <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
@@ -6458,17 +6480,7 @@ function OtpremniceTab({ db, update, patchProjekt, showToast, mozeMijenjati = tr
           </tbody>
         </table>
       )}
-      {printOtp && (
-        <OtpremnicaPrintModal
-          otpremnica={printOtp}
-          kupac={kupacInfo(printOtp.kupacId)}
-          projekt={projektInfo(printOtp.projektId)}
-          narudzba={db.narudzbe.find((n) => n.id === printOtp.narudzbaId)}
-          izdao={db.zaposlenici.find((z) => z.id === printOtp.izdaoId)}
-          postavkeTvrtke={db.postavkeTvrtke}
-          onClose={() => setPrintOtp(null)}
-        />
-      )}
+      {printOtp && <OtpremnicaPrintModal otpremnica={printOtp} db={db} onClose={() => setPrintOtp(null)} />}
       {del && (
         <ConfirmDelete label={del.broj} onCancel={() => setDel(null)} onConfirm={() => {
           // Brisanje otpremnice mora osloboditi isporuke tipskog projekta koje je "zaključavala"
@@ -6487,34 +6499,133 @@ function OtpremniceTab({ db, update, patchProjekt, showToast, mozeMijenjati = tr
 }
 
 // Otpremnice se inače kreiraju iz detalja pojedinog projekta (OtpremniceListModal) — ovaj modal
-// omogućava isto izravno iz opće liste Otpremnica, samo dodaje jedan korak ispred (odabir kojeg
-// projekta se tiče), pa nakon odabira prikazuje ISTI obrazac (OtpremnicaFormModal) bez dupliciranja
-// njegove logike (tipski projekt s normativom vs obična narudžba kupca).
+// omogućava isto izravno iz opće liste Otpremnica. Prvo pita vrstu: "Kupcu" (postojeći tijek —
+// jedan korak ispred, odabir projekta, pa ISTI obrazac OtpremnicaFormModal) ili "Kooperantu"
+// (dorada poput plastifikacije — slobodan unos stavki vezan uz radni nalog, ne uz narudžbu kupca).
 function NovaOtpremnicaModal({ db, update, patchProjekt, showToast, onClose }) {
+  const [vrsta, setVrsta] = useState(null); // null | "kupac" | "kooperant"
   const [projektId, setProjektId] = useState("");
-  // Nudi samo projekte koji stvarno imaju što otpremiti — ista provjera kao "nemaStavki" u
-  // OtpremniceListModal (per-projektnom prikazu), da izbor ne vodi u prazan obrazac.
-  const projektiZaOtpremu = db.projekti.filter((p) => (p.koristiNormativ
-    ? (p.isporuke || []).some((i) => i.isporuceno && !i.uOtpremniciId)
-    : db.narudzbe.some((n) => n.projektId === p.id)));
-  const projekt = db.projekti.find((p) => p.id === projektId);
 
-  if (projekt) {
-    const narudzba = db.narudzbe.find((n) => n.projektId === projekt.id);
-    return <OtpremnicaFormModal narudzba={narudzba} projekt={projekt} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} onClose={onClose} />;
+  if (vrsta === "kooperant") {
+    return <OtpremnicaKooperantuModal db={db} update={update} showToast={showToast} onClose={onClose} />;
+  }
+
+  if (vrsta === "kupac") {
+    // Nudi samo projekte koji stvarno imaju što otpremiti — ista provjera kao "nemaStavki" u
+    // OtpremniceListModal (per-projektnom prikazu), da izbor ne vodi u prazan obrazac.
+    const projektiZaOtpremu = db.projekti.filter((p) => (p.koristiNormativ
+      ? (p.isporuke || []).some((i) => i.isporuceno && !i.uOtpremniciId)
+      : db.narudzbe.some((n) => n.projektId === p.id)));
+    const projekt = db.projekti.find((p) => p.id === projektId);
+
+    if (projekt) {
+      const narudzba = db.narudzbe.find((n) => n.projektId === projekt.id);
+      return <OtpremnicaFormModal narudzba={narudzba} projekt={projekt} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} onClose={onClose} />;
+    }
+
+    return (
+      <Modal title="Nova otpremnica — odaberi projekt" onClose={onClose} footer={<><Btn onClick={() => setVrsta(null)}>Natrag</Btn><Btn onClick={onClose}>Odustani</Btn></>}>
+        <Field label="Projekt">
+          <select className="select" value={projektId} onChange={(e) => setProjektId(e.target.value)}>
+            <option value="">— odaberi projekt —</option>
+            {projektiZaOtpremu.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
+          </select>
+        </Field>
+        {projektiZaOtpremu.length === 0 && (
+          <p style={{ fontSize: 12.5, color: "var(--ink-faint)" }}>Nema projekata spremnih za otpremu — potrebna je unesena narudžba kupca, ili (za tipske projekte/kupaonice) barem jedna stavka označena kao spremna za otpremu u rasporedu isporuka.</p>
+        )}
+      </Modal>
+    );
   }
 
   return (
-    <Modal title="Nova otpremnica — odaberi projekt" onClose={onClose} footer={<Btn onClick={onClose}>Odustani</Btn>}>
-      <Field label="Projekt">
-        <select className="select" value={projektId} onChange={(e) => setProjektId(e.target.value)}>
-          <option value="">— odaberi projekt —</option>
-          {projektiZaOtpremu.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
-        </select>
-      </Field>
-      {projektiZaOtpremu.length === 0 && (
-        <p style={{ fontSize: 12.5, color: "var(--ink-faint)" }}>Nema projekata spremnih za otpremu — potrebna je unesena narudžba kupca, ili (za tipske projekte/kupaonice) barem jedna stavka označena kao spremna za otpremu u rasporedu isporuka.</p>
-      )}
+    <Modal title="Nova otpremnica" onClose={onClose} footer={<Btn onClick={onClose}>Odustani</Btn>}>
+      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Kome se šalje ova otpremnica?</p>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Btn variant="primary" onClick={() => setVrsta("kupac")}>Kupcu</Btn>
+        <Btn variant="primary" onClick={() => setVrsta("kooperant")}>Kooperantu (dorada)</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+// Otpremnica prema kooperantu (npr. slanje na plastifikaciju/pocinčavanje) — vezana uz radni
+// nalog umjesto uz narudžbu kupca, sa slobodnim unosom naziva stavki jer se često razlikuju od
+// naziva na narudžbenici materijala.
+function OtpremnicaKooperantuModal({ db, update, showToast, onClose }) {
+  const [radniNalogId, setRadniNalogId] = useState("");
+  const [dobavljacId, setDobavljacId] = useState(db.dobavljaci[0]?.id || "");
+  const [datum, setDatum] = useState(todayISO());
+  const [mjesto, setMjesto] = useState("Prelog");
+  const [izdaoId, setIzdaoId] = useState("");
+  const [napomena, setNapomena] = useState("");
+  const prazanRedak = () => ({ id: uid("ost"), naziv: "", jm: "kom", kolicina: "" });
+  const [stavke, setStavke] = useState([prazanRedak()]);
+
+  const aktivniNalozi = [...db.radniNalozi].filter((n) => n.status !== "Završen").sort((a, b) => usporediPrirodno(a.broj, b.broj));
+  const nalog = db.radniNalozi.find((n) => n.id === radniNalogId);
+  const projekt = nalog ? db.projekti.find((p) => p.id === nalog.projektId) : null;
+
+  const azurirajStavku = (i, patch) => setStavke(stavke.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+
+  const spremi = () => {
+    if (!radniNalogId) { showToast("Odaberi radni nalog."); return; }
+    if (!dobavljacId) { showToast("Odaberi kooperanta."); return; }
+    const validne = stavke.filter((s) => s.naziv.trim() && Number(s.kolicina) > 0).map((s) => ({ ...s, kolicina: Number(s.kolicina) }));
+    if (validne.length === 0) { showToast("Dodaj barem jednu stavku s nazivom i količinom."); return; }
+    const nova = {
+      id: uid("otp"), broj: sljedeciBrojOtpremnice(db.otpremnice, datum), datum, mjesto,
+      vrsta: "kooperant", radniNalogId, dobavljacId, projektId: projekt?.id || null,
+      kupacId: null, narudzbaId: null, izdaoId, napomena, stavke: validne,
+    };
+    update("otpremnice", [...db.otpremnice, nova]);
+    showToast("Otpremnica kooperantu kreirana.");
+    onClose();
+  };
+
+  return (
+    <Modal wide title="Nova otpremnica — kooperantu (dorada)" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi}>Kreiraj otpremnicu</Btn></>}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <Field label="Radni nalog">
+          <select className="select" value={radniNalogId} onChange={(e) => setRadniNalogId(e.target.value)}>
+            <option value="">— odaberi —</option>
+            {aktivniNalozi.map((n) => <option key={n.id} value={n.id}>{n.broj} — {n.naziv} ({n.faza})</option>)}
+          </select>
+        </Field>
+        <Field label="Kooperant (dobavljač)">
+          <select className="select" value={dobavljacId} onChange={(e) => setDobavljacId(e.target.value)}>
+            {db.dobavljaci.map((d) => <option key={d.id} value={d.id}>{d.naziv}</option>)}
+          </select>
+        </Field>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+        <Field label="Datum"><input className="input" type="date" value={datum} onChange={(e) => setDatum(e.target.value)} /></Field>
+        <Field label="Mjesto"><input className="input" value={mjesto} onChange={(e) => setMjesto(e.target.value)} /></Field>
+        <Field label="Izdao (zaposlenik)">
+          <select className="select" value={izdaoId} onChange={(e) => setIzdaoId(e.target.value)}>
+            <option value="">—</option>
+            {[...db.zaposlenici].sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+          </select>
+        </Field>
+      </div>
+
+      <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Stavke za otpremu (slobodan unos naziva — ne moraju odgovarati nazivima iz narudžbenice)</div>
+      <table className="erp-table" style={{ marginBottom: 8 }}>
+        <thead><tr><th>Naziv</th><th style={{ width: 90 }}>JM</th><th style={{ width: 130 }}>Količina</th><th style={{ width: 36 }}></th></tr></thead>
+        <tbody>
+          {stavke.map((s, i) => (
+            <tr key={s.id}>
+              <td><input className="input" value={s.naziv} onChange={(e) => azurirajStavku(i, { naziv: e.target.value })} placeholder="npr. Profili za plastifikaciju" /></td>
+              <td><input className="input" value={s.jm} onChange={(e) => azurirajStavku(i, { jm: e.target.value })} /></td>
+              <td><input className="input f-mono" type="number" min="0" value={s.kolicina} onChange={(e) => azurirajStavku(i, { kolicina: e.target.value })} /></td>
+              <td><button className="btn btn-icon btn-ghost" onClick={() => setStavke(stavke.filter((_, idx) => idx !== i))}><X size={14} /></button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <Btn variant="ghost" size="sm" icon={Plus} onClick={() => setStavke([...stavke, prazanRedak()])}>Dodaj stavku</Btn>
+
+      <Field label="Napomena"><textarea className="textarea" rows={2} value={napomena} onChange={(e) => setNapomena(e.target.value)} /></Field>
     </Modal>
   );
 }
