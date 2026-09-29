@@ -6424,12 +6424,18 @@ function PodlogeZaFakturuTab({ db, update, showToast, mozeMijenjati = true }) {
 function OtpremniceTab({ db, update, patchProjekt, showToast, mozeMijenjati = true }) {
   const [printOtp, setPrintOtp] = useState(null);
   const [del, setDel] = useState(null);
+  const [novaOtvorena, setNovaOtvorena] = useState(false);
   const projektInfo = (id) => db.projekti.find((p) => p.id === id);
   const kupacInfo = (id) => db.kupci.find((k) => k.id === id);
 
   return (
     <div>
-      {db.otpremnice.length === 0 ? <EmptyState text="Nema izdanih otpremnica. Otpremnice se kreiraju u Projekti i ponude → detalji projekta." /> : (
+      {mozeMijenjati && (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
+          <Btn variant="primary" icon={Plus} onClick={() => setNovaOtvorena(true)}>Nova otpremnica</Btn>
+        </div>
+      )}
+      {db.otpremnice.length === 0 ? <EmptyState text="Nema izdanih otpremnica." /> : (
         <table className="erp-table">
           <thead><tr><th>Broj</th><th>Projekt</th><th>Kupac</th><th>Datum</th><th>Stavki</th><th></th></tr></thead>
           <tbody>
@@ -6475,7 +6481,41 @@ function OtpremniceTab({ db, update, patchProjekt, showToast, mozeMijenjati = tr
           showToast("Otpremnica obrisana, isporuke oslobođene.");
         }} />
       )}
+      {novaOtvorena && <NovaOtpremnicaModal db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} onClose={() => setNovaOtvorena(false)} />}
     </div>
+  );
+}
+
+// Otpremnice se inače kreiraju iz detalja pojedinog projekta (OtpremniceListModal) — ovaj modal
+// omogućava isto izravno iz opće liste Otpremnica, samo dodaje jedan korak ispred (odabir kojeg
+// projekta se tiče), pa nakon odabira prikazuje ISTI obrazac (OtpremnicaFormModal) bez dupliciranja
+// njegove logike (tipski projekt s normativom vs obična narudžba kupca).
+function NovaOtpremnicaModal({ db, update, patchProjekt, showToast, onClose }) {
+  const [projektId, setProjektId] = useState("");
+  // Nudi samo projekte koji stvarno imaju što otpremiti — ista provjera kao "nemaStavki" u
+  // OtpremniceListModal (per-projektnom prikazu), da izbor ne vodi u prazan obrazac.
+  const projektiZaOtpremu = db.projekti.filter((p) => (p.koristiNormativ
+    ? (p.isporuke || []).some((i) => i.isporuceno && !i.uOtpremniciId)
+    : db.narudzbe.some((n) => n.projektId === p.id)));
+  const projekt = db.projekti.find((p) => p.id === projektId);
+
+  if (projekt) {
+    const narudzba = db.narudzbe.find((n) => n.projektId === projekt.id);
+    return <OtpremnicaFormModal narudzba={narudzba} projekt={projekt} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} onClose={onClose} />;
+  }
+
+  return (
+    <Modal title="Nova otpremnica — odaberi projekt" onClose={onClose} footer={<Btn onClick={onClose}>Odustani</Btn>}>
+      <Field label="Projekt">
+        <select className="select" value={projektId} onChange={(e) => setProjektId(e.target.value)}>
+          <option value="">— odaberi projekt —</option>
+          {projektiZaOtpremu.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
+        </select>
+      </Field>
+      {projektiZaOtpremu.length === 0 && (
+        <p style={{ fontSize: 12.5, color: "var(--ink-faint)" }}>Nema projekata spremnih za otpremu — potrebna je unesena narudžba kupca, ili (za tipske projekte/kupaonice) barem jedna stavka označena kao spremna za otpremu u rasporedu isporuka.</p>
+      )}
+    </Modal>
   );
 }
 
