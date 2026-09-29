@@ -5719,6 +5719,18 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
     const payload = { ...projForm, vrijednost: Number(projForm.vrijednost) };
     const stariProjekt = projForm.id ? db.projekti.find((p) => p.id === projForm.id) : null;
     const voditeljPromijenjen = payload.voditeljId && payload.voditeljId !== stariProjekt?.voditeljId;
+    // Kad projekt prijeđe u "Završen", svi njegovi radni nalozi koji to već nisu automatski dobiju
+    // isti status — projekt time seli u karticu "Završeni projekti", a njegovi radni nalozi nestaju
+    // iz aktivne tablice Radnih naloga (vidi filtar u ProizvodnjaPage). Prije toga se pamti TOČNO
+    // koji su nalozi i s kojeg statusa promijenjeni (autoZavrsenoNalozi) te izvorni status projekta
+    // (statusPrijeZavrsetka) — isključivo da "Vrati u aktivne" (u slučaju pogrešnog klika) može
+    // precizno vratiti SAMO ono što je ova akcija stvarno promijenila, ne i naloge koji su već bili
+    // završeni i prije ovog klika.
+    const prelaziUZavrseno = projForm.id && stariProjekt && stariProjekt.status !== "Završen" && payload.status === "Završen";
+    if (prelaziUZavrseno) {
+      payload.statusPrijeZavrsetka = stariProjekt.status;
+      payload.autoZavrsenoNalozi = db.radniNalozi.filter((r) => r.projektId === projForm.id && r.status !== "Završen").map((r) => ({ id: r.id, staviStatus: r.status }));
+    }
     if (projForm.id) patchProjekti([payload], []);
     else patchProjekti([{ ...payload, id: uid("proj") }], []);
     // Naziv radnog naloga uvijek prati naziv projekta — kad se projekt preimenuje, isto ime
@@ -5726,11 +5738,9 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
     if (projForm.id && stariProjekt && stariProjekt.naziv !== payload.naziv) {
       update("radniNalozi", db.radniNalozi.map((r) => (r.projektId === projForm.id ? { ...r, naziv: payload.naziv } : r)));
     }
-    // Kad projekt prijeđe u "Završen", svi njegovi radni nalozi automatski dobiju isti status
-    // (ako ga već nemaju) — projekt time seli u karticu "Završeni projekti", a njegovi radni
-    // nalozi nestaju iz aktivne tablice Radnih naloga (vidi filtar u ProizvodnjaPage).
-    if (projForm.id && stariProjekt && stariProjekt.status !== "Završen" && payload.status === "Završen") {
-      update("radniNalozi", db.radniNalozi.map((r) => (r.projektId === projForm.id && r.status !== "Završen" ? { ...r, status: "Završen" } : r)));
+    if (prelaziUZavrseno) {
+      const dotaknutiIds = new Set(payload.autoZavrsenoNalozi.map((n) => n.id));
+      update("radniNalozi", db.radniNalozi.map((r) => (dotaknutiIds.has(r.id) ? { ...r, status: "Završen" } : r)));
     }
     setModal(null);
     if (voditeljPromijenjen) {
@@ -5740,6 +5750,21 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
     } else {
       showToast("Projekt spremljen.");
     }
+  };
+
+  // Vraća projekt pogrešno označen kao "Završen" natrag u aktivne — precizno poništava SAMO ono
+  // što je taj klik promijenio: status projekta ide natrag na onaj koji je imao TOČNO prije (ne
+  // uvijek "U izradi"), a nazad se vraćaju SAMO oni radni nalozi koje je taj klik automatski
+  // završio (svaki na svoj točan raniji status) — nalozi koji su bili završeni i prije ostaju
+  // netaknuti.
+  const vratiUAktivne = (projekt) => {
+    const dotaknuti = projekt.autoZavrsenoNalozi || [];
+    if (dotaknuti.length > 0) {
+      const statusPoNalogu = new Map(dotaknuti.map((n) => [n.id, n.staviStatus]));
+      update("radniNalozi", db.radniNalozi.map((r) => (statusPoNalogu.has(r.id) ? { ...r, status: statusPoNalogu.get(r.id) } : r)));
+    }
+    patchProjekti([{ ...projekt, status: projekt.statusPrijeZavrsetka || "U izradi", statusPrijeZavrsetka: null, autoZavrsenoNalozi: [] }], []);
+    showToast("Projekt vraćen u aktivne.");
   };
   const savePon = () => {
     if (!ponForm.naziv.trim()) return;
@@ -5927,6 +5952,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
             { key: "vrijednost", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCur(r.vrijednost)}</span> },
             { key: "rokZavrsetka", label: "Rok završetka", render: (r) => fmtDate(r.rokZavrsetka) },
             { key: "analiza", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setDetaljZavrsen(r)}>Analiza</Btn> },
+            { key: "vrati", label: "", render: (r) => mozeProjekti && <Btn size="sm" variant="ghost" onClick={() => vratiUAktivne(r)}>Vrati u aktivne</Btn> },
           ]}
         />
       )}
