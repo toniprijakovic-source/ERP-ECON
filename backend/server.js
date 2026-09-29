@@ -61,6 +61,7 @@ const KARTICE_MODULA = {
     projekti: { citanje: ["cjenikRada", "katalogProfila", "kupci", "materijali", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "zaposlenici", "upitiNabave", "kvaliteteMaterijala", "narudzbenice"], pisanje: ["projekti", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "materijali", "radniNalozi", "upitiNabave"] },
     ponude: { citanje: ["cjenikRada", "katalogProfila", "materijali", "ponude", "kupci", "kvaliteteMaterijala", "narudzbenice"], pisanje: ["ponude", "cjenikRada", "materijali", "projekti", "radniNalozi"] },
     laser: { citanje: ["ponudeLasera", "kupci", "kvaliteteMaterijala", "postavkeTvrtke"], pisanje: ["ponudeLasera"] },
+    zavrseni: { citanje: ["projekti", "radniNalozi", "ponude", "izdatnice", "materijali", "kupci"], pisanje: [] },
   },
   fakturiranje: {
     fakture: { citanje: ["fakture", "kupci", "projekti"], pisanje: ["fakture"] },

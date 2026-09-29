@@ -1123,7 +1123,7 @@ const KARTICE_MODULA = {
   skladiste: { kartice: [{ key: "zalihe", naziv: "Zalihe" }, { key: "katalog", naziv: "Katalog profila i limova" }, { key: "kvaliteta", naziv: "Kvaliteta materijala" }, { key: "izdatnice", naziv: "Izdatnice" }] },
   nabava: { kartice: [{ key: "narudzbenice", naziv: "Narudžbenice" }, { key: "upiti", naziv: "Upiti materijala" }, { key: "postavke", naziv: "Postavke tvrtke" }] },
   proizvodnja: { kartice: [{ key: "tablica", naziv: "Tablica" }, { key: "gantogram", naziv: "Gantogram" }, { key: "rezanje", naziv: "Plan rezanja" }, { key: "isporuke", naziv: "Isporuke kupaonica" }] },
-  projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "ponude", naziv: "Ponude" }, { key: "laser", naziv: "Ponude - Laser" }] },
+  projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "ponude", naziv: "Ponude" }, { key: "laser", naziv: "Ponude - Laser" }, { key: "zavrseni", naziv: "Završeni projekti" }] },
   fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "otpremnice", naziv: "Otpremnice" }, { key: "podloge", naziv: "Podloge za fakturu" }] },
   partneri: { kartice: [{ key: "kupci", naziv: "Kupci" }, { key: "dobavljaci", naziv: "Dobavljači" }] },
   zaposlenici: { kartice: [{ key: "zaposlenici", naziv: "Zaposlenici" }, { key: "pozicije", naziv: "Pozicije" }, { key: "evidencija", naziv: "Evidencija rada" }, { key: "obracun", naziv: "Obračun plaća" }, { key: "satinalozi", naziv: "Sati po nalozima" }] },
@@ -4235,7 +4235,7 @@ function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija }) 
 
       {prikaz === "tablica" && (
       <EntityPage
-        title="" data={[...db.radniNalozi].sort((a, b) => usporediPrirodno(a.broj, b.broj))} onAdd={openAdd} onEdit={openEdit} onDelete={(r) => setDel(r)}
+        title="" data={db.radniNalozi.filter((r) => r.status !== "Završen").sort((a, b) => usporediPrirodno(a.broj, b.broj))} onAdd={openAdd} onEdit={openEdit} onDelete={(r) => setDel(r)}
         addLabel="Novi radni nalog" searchKeys={["broj", "naziv", "zaduzenTim"]} readOnly={!mozeTablica}
         columns={[
           { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
@@ -5668,11 +5668,14 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
   // "poredak" (potpuni snapshot trenutnog redoslijeda) i taj poredak od tad vrijedi umjesto
   // automatskog sortiranja — dok ga netko ne vrati na automatski.
   const imaRucniPoredak = db.projekti.some((p) => p.poredak != null);
+  // Završeni projekti se ne prikazuju među aktivnim (lista bi inače samo rasla) — imaju svoju
+  // zasebnu karticu "Završeni projekti".
   const projektiSortirani = useMemo(() => {
-    const lista = [...db.projekti];
+    const lista = db.projekti.filter((p) => p.status !== "Završen");
     lista.sort(imaRucniPoredak ? (a, b) => (a.poredak ?? Infinity) - (b.poredak ?? Infinity) : (a, b) => usporediPrirodno(a.sifra, b.sifra));
     return lista;
   }, [db.projekti, imaRucniPoredak]);
+  const projektiZavrseni = useMemo(() => [...db.projekti].filter((p) => p.status === "Završen").sort((a, b) => (b.rokZavrsetka || "").localeCompare(a.rokZavrsetka || "")), [db.projekti]);
   const rasporediProjekte = (novaLista) => patchProjekti(novaLista.map((p, i) => ({ ...p, poredak: i })), []);
   const vratiAutomatskoSortiranje = () => patchProjekti(db.projekti.map(({ poredak, ...ostalo }) => ostalo), []);
 
@@ -5691,6 +5694,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
   const [laserForm, setLaserForm] = useState(emptyLaser());
   const [printLaser, setPrintLaser] = useState(null);
   const mozeLaser = dozvolaZaKarticu(mojaPozicija, "projekti", "laser").izmjene;
+  const [detaljZavrsen, setDetaljZavrsen] = useState(null); // završeni projekt otvoren za analizu plan/stvarno
 
   const kupacNaziv = (id) => db.kupci.find((k) => k.id === id)?.naziv || "—";
   const projSifra = (id) => db.projekti.find((p) => p.id === id)?.sifra || "";
@@ -5706,6 +5710,12 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
     // se prepiše na sve njegove radne naloge da ne ostanu razdvojeni.
     if (projForm.id && stariProjekt && stariProjekt.naziv !== payload.naziv) {
       update("radniNalozi", db.radniNalozi.map((r) => (r.projektId === projForm.id ? { ...r, naziv: payload.naziv } : r)));
+    }
+    // Kad projekt prijeđe u "Završen", svi njegovi radni nalozi automatski dobiju isti status
+    // (ako ga već nemaju) — projekt time seli u karticu "Završeni projekti", a njegovi radni
+    // nalozi nestaju iz aktivne tablice Radnih naloga (vidi filtar u ProizvodnjaPage).
+    if (projForm.id && stariProjekt && stariProjekt.status !== "Završen" && payload.status === "Završen") {
+      update("radniNalozi", db.radniNalozi.map((r) => (r.projektId === projForm.id && r.status !== "Završen" ? { ...r, status: "Završen" } : r)));
     }
     setModal(null);
     if (voditeljPromijenjen) {
@@ -5803,6 +5813,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
           {dozvKartice.some((k) => k.key === "projekti") && <div className={`nav-tab ${tab === "projekti" ? "active" : ""}`} onClick={() => setTab("projekti")}>Projekti</div>}
           {dozvKartice.some((k) => k.key === "ponude") && <div className={`nav-tab ${tab === "ponude" ? "active" : ""}`} onClick={() => setTab("ponude")}>Ponude</div>}
           {dozvKartice.some((k) => k.key === "laser") && <div className={`nav-tab ${tab === "laser" ? "active" : ""}`} onClick={() => setTab("laser")}>Ponude - Laser</div>}
+          {dozvKartice.some((k) => k.key === "zavrseni") && <div className={`nav-tab ${tab === "zavrseni" ? "active" : ""}`} onClick={() => setTab("zavrseni")}>Završeni projekti</div>}
         </div>
         {tab === "ponude" && <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setCjenikOpen(true)}>Cjenik rada</Btn>}
         {tab === "projekti" && <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setZadaciOpen(true)}>Standardni zadaci</Btn>}
@@ -5890,6 +5901,22 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
           ]}
         />
       )}
+
+      {tab === "zavrseni" && (
+        <EntityPage
+          title="" data={projektiZavrseni} readOnly searchKeys={["sifra", "naziv"]}
+          columns={[
+            { key: "sifra", label: "Šifra", render: (r) => <span className="f-mono">{r.sifra}</span> },
+            { key: "naziv", label: "Naziv" },
+            { key: "kupac", label: "Kupac", render: (r) => kupacNaziv(r.kupacId) },
+            { key: "vrijednost", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCur(r.vrijednost)}</span> },
+            { key: "rokZavrsetka", label: "Rok završetka", render: (r) => fmtDate(r.rokZavrsetka) },
+            { key: "analiza", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setDetaljZavrsen(r)}>Analiza</Btn> },
+          ]}
+        />
+      )}
+
+      {detaljZavrsen && <ZavrsenProjektAnalizaModal projekt={detaljZavrsen} db={db} onClose={() => setDetaljZavrsen(null)} />}
 
       {modal === "proj" && (
         <Modal title={projForm.id ? "Uredi projekt" : "Novi projekt"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={saveProj}>Spremi</Btn></>}>
@@ -6013,6 +6040,97 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
         />
       )}
     </div>
+  );
+}
+
+// Analiza završenog projekta: sati po operaciji (planirano iz radnih naloga vs stvarno odrađeno,
+// oboje već izvedeno preko planiranoSati/utrosenoSati) i materijal (planirano iz ponude koja je
+// projekt pretvorila u projekt, vs stvarno iz izdatnica materijala na taj projekt).
+function ZavrsenProjektAnalizaModal({ projekt, db, onClose }) {
+  const nalozi = (db.radniNalozi || []).filter((r) => r.projektId === projekt.id);
+  const poFazi = FAZE.map((faza) => {
+    const zaFazu = nalozi.filter((n) => n.faza === faza);
+    if (zaFazu.length === 0) return null;
+    const planirano = zaFazu.reduce((s, n) => s + (Number(n.planiranoSati) || 0), 0);
+    const stvarno = zaFazu.reduce((s, n) => s + (Number(n.utrosenoSati) || 0), 0);
+    return { faza, planirano, stvarno };
+  }).filter(Boolean);
+  const ukPlanirano = poFazi.reduce((s, r) => s + r.planirano, 0);
+  const ukStvarno = poFazi.reduce((s, r) => s + r.stvarno, 0);
+
+  const ponuda = projekt.izvorPonudaId ? db.ponude.find((p) => p.id === projekt.izvorPonudaId) : null;
+  const planiranoMaterijal = ponuda ? izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala).trosakMaterijala : null;
+
+  const izdatniceZaProjekt = (db.izdatnice || []).filter((i) => i.projektId === projekt.id);
+  const stvarnoMaterijal = izdatniceZaProjekt.reduce((s, izd) => s + (izd.stavke || []).reduce((s2, st) => {
+    const m = db.materijali.find((x) => x.id === st.materijalId);
+    const neto = (Number(st.kolicinaIzdano) || 0) - (Number(st.kolicinaVraceno) || 0);
+    return s2 + neto * (m ? Number(m.cijena) || 0 : 0);
+  }, 0), 0);
+  const razlikaMaterijal = planiranoMaterijal != null ? stvarnoMaterijal - planiranoMaterijal : null;
+
+  return (
+    <Modal wide title={`Analiza projekta — ${projekt.sifra} — ${projekt.naziv}`} onClose={onClose} footer={<Btn onClick={onClose}>Zatvori</Btn>}>
+      <div className="label" style={{ marginBottom: 6 }}>Sati po operaciji (planirano vs stvarno)</div>
+      {poFazi.length === 0 ? <EmptyState text="Nema radnih naloga s planiranim satima na ovom projektu." /> : (
+        <table className="erp-table" style={{ marginBottom: 16 }}>
+          <thead><tr><th>Operacija</th><th style={{ width: 100 }}>Planirano</th><th style={{ width: 100 }}>Stvarno</th><th style={{ width: 100 }}>Razlika</th></tr></thead>
+          <tbody>
+            {poFazi.map((r) => {
+              const razlika = r.stvarno - r.planirano;
+              return (
+                <tr key={r.faza}>
+                  <td>{r.faza}</td>
+                  <td className="f-mono">{r.planirano.toFixed(1)} h</td>
+                  <td className="f-mono">{r.stvarno.toFixed(1)} h</td>
+                  <td className="f-mono" style={{ color: razlika > 0 ? "var(--rust)" : razlika < 0 ? "var(--green)" : "inherit" }}>{razlika > 0 ? "+" : ""}{razlika.toFixed(1)} h</td>
+                </tr>
+              );
+            })}
+            <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
+              <td>UKUPNO</td>
+              <td className="f-mono">{ukPlanirano.toFixed(1)} h</td>
+              <td className="f-mono">{ukStvarno.toFixed(1)} h</td>
+              <td className="f-mono">{(ukStvarno - ukPlanirano) > 0 ? "+" : ""}{(ukStvarno - ukPlanirano).toFixed(1)} h</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
+
+      <div className="label" style={{ marginBottom: 6 }}>Materijal (planirano iz ponude vs stvarno preko izdatnica)</div>
+      {planiranoMaterijal == null ? (
+        <p style={{ fontSize: 12.5, color: "var(--ink-faint)", marginBottom: 10 }}>Projekt nije kreiran iz ponude — planirani trošak materijala nije poznat. Stvarni trošak (izdatnice) prikazan je ispod.</p>
+      ) : null}
+      <div className="card" style={{ padding: 14, background: "var(--surface-alt)" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, fontSize: 12.5 }}>
+          <div><div style={{ color: "var(--ink-soft)" }}>Planirano (ponuda)</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{planiranoMaterijal != null ? fmtCurDec(planiranoMaterijal) : "—"}</div></div>
+          <div><div style={{ color: "var(--ink-soft)" }}>Stvarno (izdatnice)</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(stvarnoMaterijal)}</div></div>
+          <div>
+            <div style={{ color: "var(--ink-soft)" }}>Razlika</div>
+            <div className="f-mono" style={{ fontSize: 15, fontWeight: 700, color: razlikaMaterijal == null ? "inherit" : razlikaMaterijal > 0 ? "var(--rust)" : razlikaMaterijal < 0 ? "var(--green)" : "inherit" }}>
+              {razlikaMaterijal != null ? `${razlikaMaterijal > 0 ? "+" : ""}${fmtCurDec(razlikaMaterijal)}` : "—"}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="label" style={{ marginTop: 16, marginBottom: 6 }}>Radni nalozi projekta ({nalozi.length})</div>
+      {nalozi.length === 0 ? <EmptyState text="Projekt nema radnih naloga." /> : (
+        <table className="erp-table">
+          <thead><tr><th>Broj</th><th>Faza</th><th style={{ width: 90 }}>Planirano</th><th style={{ width: 90 }}>Stvarno</th></tr></thead>
+          <tbody>
+            {[...nalozi].sort((a, b) => usporediPrirodno(a.broj, b.broj)).map((n) => (
+              <tr key={n.id}>
+                <td className="f-mono">{n.broj}</td>
+                <td>{n.faza}</td>
+                <td className="f-mono">{Number(n.planiranoSati || 0).toFixed(1)} h</td>
+                <td className="f-mono">{Number(n.utrosenoSati || 0).toFixed(1)} h</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Modal>
   );
 }
 
