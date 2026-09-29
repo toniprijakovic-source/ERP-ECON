@@ -54,7 +54,7 @@ const KARTICE_MODULA = {
   proizvodnja: {
     tablica: { citanje: ["radniNalozi", "projekti", "materijali", "katalogProfila", "narudzbenice", "satiPoNalogu", "izdatnice", "zaposlenici"], pisanje: ["radniNalozi", "materijali", "izdatnice"] },
     gantogram: { citanje: ["radniNalozi", "radniCentri", "kapacitetiDana", "projekti", "zaposlenici"], pisanje: ["radniNalozi", "radniCentri", "kapacitetiDana"] },
-    rezanje: { citanje: ["programiRezanja", "katalogProfila", "materijali", "radniNalozi", "zaposlenici"], pisanje: ["programiRezanja", "kapacitetiDana", "materijali"] },
+    rezanje: { citanje: ["programiRezanja", "katalogProfila", "materijali", "radniNalozi", "zaposlenici", "evidencijaRada"], pisanje: ["programiRezanja", "kapacitetiDana", "materijali"] },
     isporuke: { citanje: ["projekti"], pisanje: ["projekti"] },
   },
   projekti: {

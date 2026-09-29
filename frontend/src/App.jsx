@@ -3335,8 +3335,8 @@ function PlanProizvodnjeView({ db, update, showToast }) {
 }
 
 /* ============================== PLAN REZANJA (LASER) ============================== */
-const REZANJE_STATUSI = ["Na čekanju", "U tijeku", "Pauzirano", "Završeno"];
-const REZANJE_BOJA = { "Na čekanju": "#F0883E", "U tijeku": "#3B6EE0", "Pauzirano": "#9AA1A8", "Završeno": "#22A05E" };
+const REZANJE_STATUSI = ["Na čekanju", "Početak", "Pauzirano", "Završeno"];
+const REZANJE_BOJA = { "Na čekanju": "#F0883E", "Početak": "#3B6EE0", "Pauzirano": "#9AA1A8", "Završeno": "#22A05E" };
 const DAN_KRATICA = ["ned", "pon", "uto", "sri", "čet", "pet", "sub"];
 const STANDARD_MIN_PO_DANU = 8 * 60; // standard 8h radnog vremena
 
@@ -3382,9 +3382,9 @@ const rasporediProgramRezanja = (programi, kapaciteti, stroj) => {
   return dani;
 };
 
-function PlanRezanjaView({ db, update, showToast }) {
+function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
   const [stroj, setStroj] = useState("laserProfili");
-  const emptyForm = () => ({ brojPrograma: "", trajanjeMin: 60, radniNalogId: "", napomena: "", status: "Na čekanju" });
+  const emptyForm = () => ({ brojPrograma: "", trajanjeRezanjaMin: 60, pripremaMin: 0, radniNalogId: "", napomena: "", status: "Na čekanju" });
   const [form, setForm] = useState(emptyForm());
   const prazanRedMaterijala = () => ({ materijalId: "", nacinUnosa: "kolicina", duzinaM: 6, sirinaM: 1.25, komada: 1, kolicina: "" });
   const [noveStavkeMaterijala, setNoveStavkeMaterijala] = useState([]);
@@ -3421,6 +3421,29 @@ function PlanRezanjaView({ db, update, showToast }) {
   };
   const azurirajOperatera = (programId, operaterId) => update("programiRezanja", db.programiRezanja.map((p) => (p.id === programId ? { ...p, operaterId } : p)));
 
+  const ogranicen = (mojaPozicija?.naziv || "").trim().toLowerCase() === "operater na laseru";
+  const fazaZaStroj = OPERACIJE.find((o) => o.key === stroj)?.label || "";
+  const danas = todayISO();
+  const trenutnoPrijavljeniIds = new Set(
+    db.evidencijaRada
+      .filter((e) => (e.vrsta || "rad") === "rad" && !e.vrijemeOdlaska && e.vrijemeDolaska.slice(0, 10) === danas)
+      .map((e) => e.zaposlenikId)
+  );
+  const dostupniOperateri = [...db.zaposlenici]
+    .filter((z) => (z.kompetencije || []).includes(fazaZaStroj) && trenutnoPrijavljeniIds.has(z.id))
+    .sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr"));
+  // Trenutno odabrani operater ostaje ponuđen i ako više ne zadovoljava kompetenciju/prijavu
+  // (npr. već odabran prije odjave), da se izbor ne obriše ispod korisnika.
+  const opcijeOperatera = (trenutniId) => {
+    const lista = [...dostupniOperateri];
+    if (trenutniId && !lista.some((z) => z.id === trenutniId)) {
+      const z = db.zaposlenici.find((zz) => zz.id === trenutniId);
+      if (z) lista.push(z);
+    }
+    return lista;
+  };
+  const materijaliZaStroj = db.materijali.filter((m) => (stroj === "laserLimovi" ? m.kgPoM2 > 0 : m.kgPoM > 0));
+
   const programiZaStroj = db.programiRezanja.filter((p) => p.stroj === stroj);
   const nezavrseni = programiZaStroj.filter((p) => p.status !== "Završeno");
   const zavrseni = programiZaStroj.filter((p) => p.status === "Završeno");
@@ -3446,7 +3469,9 @@ function PlanRezanjaView({ db, update, showToast }) {
     const stavke = noveStavkeMaterijala
       .filter((s) => s.materijalId && efektivnaKolicinaMaterijala(s, db.materijali.find((m) => m.id === s.materijalId)) > 0)
       .map((s) => ({ id: uid("prm"), materijalId: s.materijalId, planiranoKolicina: efektivnaKolicinaMaterijala(s, db.materijali.find((m) => m.id === s.materijalId)), stvarnoKolicina: null, finalizirano: false }));
-    update("programiRezanja", [...db.programiRezanja, { id: uid("pr"), stroj, brojPrograma: form.brojPrograma.trim(), trajanjeMin: Number(form.trajanjeMin) || 0, radniNalogId: form.radniNalogId, napomena: form.napomena, status: form.status, stavkeMaterijala: stavke, operaterId: "", pokrenuoId: null, zavrsioId: null, segmentPocetak: null, odradjenoMin: 0 }]);
+    const trajanjeRezanjaMin = Number(form.trajanjeRezanjaMin) || 0;
+    const pripremaMin = Number(form.pripremaMin) || 0;
+    update("programiRezanja", [...db.programiRezanja, { id: uid("pr"), stroj, brojPrograma: form.brojPrograma.trim(), trajanjeRezanjaMin, pripremaMin, trajanjeMin: trajanjeRezanjaMin + pripremaMin, radniNalogId: form.radniNalogId, napomena: form.napomena, status: form.status, stavkeMaterijala: stavke, operaterId: "", pokrenuoId: null, zavrsioId: null, segmentPocetak: null, odradjenoMin: 0 }]);
     if (stavke.length > 0) {
       let materijali = [...db.materijali];
       stavke.forEach((s) => { materijali = materijali.map((m) => (m.id === s.materijalId ? { ...m, kolicina: m.kolicina - s.planiranoKolicina } : m)); });
@@ -3466,9 +3491,9 @@ function PlanRezanjaView({ db, update, showToast }) {
     }
     update("programiRezanja", db.programiRezanja.filter((p) => p.id !== id));
   };
-  // Stvarno trajanje = zbroj svih razdoblja dok je status bio "U tijeku" (pauza se ne broji).
-  // Pri prelasku U tijeku→bilo što se zatvara otvoreno razdoblje i pribraja u odradjenoMin;
-  // pri prelasku u "U tijeku" otvara se novo razdoblje. Operater se bilježi iz trenutno
+  // Stvarno trajanje = zbroj svih razdoblja dok je status bio "Početak" (pauza se ne broji).
+  // Pri prelasku Početak→bilo što se zatvara otvoreno razdoblje i pribraja u odradjenoMin;
+  // pri prelasku u "Početak" otvara se novo razdoblje. Operater se bilježi iz trenutno
   // odabranog p.operaterId u tom retku (pokrenuoId kad krene, zavrsioId kad završi).
   const postaviStatus = (id, noviStatus) => {
     const sada = new Date().toISOString();
@@ -3476,12 +3501,12 @@ function PlanRezanjaView({ db, update, showToast }) {
       if (p.id !== id) return p;
       let odradjenoMin = p.odradjenoMin || 0;
       let segmentPocetak = p.segmentPocetak || null;
-      if (p.status === "U tijeku" && segmentPocetak) {
+      if (p.status === "Početak" && segmentPocetak) {
         odradjenoMin += Math.max(0, Math.round((new Date(sada) - new Date(segmentPocetak)) / 60000));
         segmentPocetak = null;
       }
       let pokrenuoId = p.pokrenuoId, zavrsioId = p.zavrsioId;
-      if (noviStatus === "U tijeku") { segmentPocetak = sada; if (!pokrenuoId) pokrenuoId = p.operaterId || null; }
+      if (noviStatus === "Početak") { segmentPocetak = sada; if (!pokrenuoId) pokrenuoId = p.operaterId || null; }
       if (noviStatus === "Završeno") zavrsioId = p.operaterId || null;
       return { ...p, status: noviStatus, odradjenoMin, segmentPocetak, pokrenuoId, zavrsioId };
     }));
@@ -3525,13 +3550,16 @@ function PlanRezanjaView({ db, update, showToast }) {
         <Btn variant={stroj === "laserLimovi" ? "primary" : "ghost"} onClick={() => setStroj("laserLimovi")}>Laser za limove</Btn>
       </div>
 
+      {!ogranicen && (
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12, marginBottom: 16 }}>
         <KpiCard label="Ukupno nezavršenih" value={nezavrseni.length} sub="naloga" />
         <KpiCard label="Ukupno vrijeme" value={fmtMin(ukupnoVrijemeMin)} sub="za rezanje" />
         <KpiCard label="Potrebno dana" value={potrebnoDana} sub={`(${STANDARD_MIN_PO_DANU / 60}h/dan standard)`} />
         <KpiCard label="Završeno ukupno" value={zavrseni.length} sub={fmtMin(zavrsenoVrijemeMin)} />
       </div>
+      )}
 
+      {!ogranicen && (
       <div className="card" style={{ padding: 16, marginBottom: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 8 }}>
           <strong className="f-display" style={{ fontWeight: 600 }}>Ukupno opterećenje</strong>
@@ -3542,6 +3570,7 @@ function PlanRezanjaView({ db, update, showToast }) {
         </div>
         <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 6 }}>{postotakPopunjenosti}% popunjenosti za {dani.length} radnih dana</div>
       </div>
+      )}
 
       <div className="card" style={{ padding: "10px 16px", marginBottom: 16, display: "flex", gap: 20, flexWrap: "wrap" }}>
         {REZANJE_STATUSI.map((s) => (
@@ -3582,14 +3611,17 @@ function PlanRezanjaView({ db, update, showToast }) {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: 16, alignItems: "flex-start" }} className="plan-rezanja-grid">
+      <div style={{ display: "grid", gridTemplateColumns: ogranicen ? "1fr" : "340px 1fr", gap: 16, alignItems: "flex-start" }} className="plan-rezanja-grid">
         <style>{`@media (max-width:900px){ .plan-rezanja-grid{ grid-template-columns:1fr !important; } }`}</style>
 
+        {!ogranicen && (
         <div>
           <div className="card" style={{ padding: 14, marginBottom: 14 }}>
             <div className="label" style={{ marginBottom: 8 }}>Novi program rezanja</div>
             <Field label="Broj programa"><input className="input f-mono" value={form.brojPrograma} onChange={(e) => setForm({ ...form, brojPrograma: e.target.value })} placeholder="npr. LP-2607-04" /></Field>
-            <Field label="Trajanje (minute)"><input className="input f-mono" type="number" min="0" step="5" value={form.trajanjeMin} onChange={(e) => setForm({ ...form, trajanjeMin: e.target.value })} /></Field>
+            <Field label="Trajanje rezanja (minute)"><input className="input f-mono" type="number" min="0" step="5" value={form.trajanjeRezanjaMin} onChange={(e) => setForm({ ...form, trajanjeRezanjaMin: e.target.value })} /></Field>
+            <Field label="Pripremno vrijeme (minute)"><input className="input f-mono" type="number" min="0" step="5" value={form.pripremaMin} onChange={(e) => setForm({ ...form, pripremaMin: e.target.value })} /></Field>
+            <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: -6, marginBottom: 10 }}>Ukupno trajanje: <strong className="f-mono">{fmtMin((Number(form.trajanjeRezanjaMin) || 0) + (Number(form.pripremaMin) || 0))}</strong></div>
             <Field label="Radni nalog">
               <select className="select" value={form.radniNalogId} onChange={(e) => setForm({ ...form, radniNalogId: e.target.value })}>
                 <option value="">Odaberi radni nalog…</option>
@@ -3602,7 +3634,7 @@ function PlanRezanjaView({ db, update, showToast }) {
             <div className="label" style={{ marginTop: 10, marginBottom: 4 }}>Planirani materijal (skida se sa skladišta odmah)</div>
             {noveStavkeMaterijala.map((s, i) => (
               <PlanMaterijalRedak
-                key={i} row={s} materijali={db.materijali}
+                key={i} row={s} materijali={materijaliZaStroj}
                 onChange={(patch) => setNoveStavkeMaterijala(noveStavkeMaterijala.map((x, idx) => (idx === i ? { ...x, ...patch } : x)))}
                 onRemove={() => setNoveStavkeMaterijala(noveStavkeMaterijala.filter((_, idx) => idx !== i))}
               />
@@ -3630,17 +3662,18 @@ function PlanRezanjaView({ db, update, showToast }) {
             )}
           </div>
         </div>
+        )}
 
         <div>
           <div className="label" style={{ marginBottom: 8 }}>Popis programa (redoslijed rezanja)</div>
           {programiZaStroj.length === 0 ? <EmptyState text="Nema unesenih programa rezanja za ovaj stroj." /> : (
             <div className="card" style={{ overflowX: "auto" }}>
               <table className="erp-table">
-                <thead><tr><th>Program</th><th>Radni nalog</th><th style={{ width: 150 }}>Planirani materijal</th><th style={{ width: 80 }}>Trajanje</th><th style={{ width: 90 }}>Stvarno</th><th style={{ width: 130 }}>Operater</th><th>Napomena</th><th style={{ width: 130 }}>Status</th><th style={{ width: 100 }}></th></tr></thead>
+                <thead><tr><th>Program</th><th>Radni nalog</th><th style={{ width: 150 }}>Planirani materijal</th><th style={{ width: 80 }}>Trajanje</th><th style={{ width: 90 }}>Stvarno</th><th style={{ width: 130 }}>Operater</th>{!ogranicen && <th>Napomena</th>}<th style={{ width: 130 }}>Status</th>{!ogranicen && <th style={{ width: 100 }}></th>}</tr></thead>
                 <tbody>
                   {programiZaStroj.map((p) => {
                     const stavke = p.stavkeMaterijala || [];
-                    const uTijeku = p.status === "U tijeku" && p.segmentPocetak;
+                    const uTijeku = p.status === "Početak" && p.segmentPocetak;
                     const odradjenoPrikaz = (p.odradjenoMin || 0) + (uTijeku ? Math.max(0, Math.round((Date.now() - new Date(p.segmentPocetak).getTime()) / 60000)) : 0);
                     return (
                       <tr key={p.id}>
@@ -3651,20 +3684,21 @@ function PlanRezanjaView({ db, update, showToast }) {
                             {stavke.length === 0 ? "Dodaj materijal" : `${stavke.length} stavk${stavke.length === 1 ? "a" : "e"}${stavke.every((s) => s.finalizirano) ? " ✓" : ""}`}
                           </Btn>
                         </td>
-                        <td className="f-mono">{fmtMin(p.trajanjeMin)}</td>
+                        <td className="f-mono" title={p.pripremaMin != null ? `rezanje ${fmtMin(p.trajanjeRezanjaMin)} + priprema ${fmtMin(p.pripremaMin)}` : undefined}>{fmtMin(p.trajanjeMin)}</td>
                         <td className="f-mono" style={{ color: uTijeku ? "var(--steel)" : "inherit" }}>{p.odradjenoMin || uTijeku ? fmtMin(odradjenoPrikaz) : "—"}</td>
                         <td>
                           <select className="select" style={{ fontSize: 12, padding: "4px 6px" }} value={p.operaterId || ""} onChange={(e) => azurirajOperatera(p.id, e.target.value)}>
                             <option value="">—</option>
-                            {[...db.zaposlenici].sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+                            {opcijeOperatera(p.operaterId).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
                           </select>
                         </td>
-                        <td style={{ fontSize: 12, color: "var(--ink-soft)" }}>{p.napomena}</td>
+                        {!ogranicen && <td style={{ fontSize: 12, color: "var(--ink-soft)" }}>{p.napomena}</td>}
                         <td>
                           <select className="select" style={{ fontSize: 12, padding: "4px 6px" }} value={p.status} onChange={(e) => postaviStatus(p.id, e.target.value)}>
                             {REZANJE_STATUSI.map((s) => <option key={s}>{s}</option>)}
                           </select>
                         </td>
+                        {!ogranicen && (
                         <td>
                           <div style={{ display: "flex", gap: 2 }}>
                             <button className="btn btn-icon btn-ghost" onClick={() => pomakni(p.id, -1)}><ChevronUp size={13} /></button>
@@ -3672,6 +3706,7 @@ function PlanRezanjaView({ db, update, showToast }) {
                             <button className="btn btn-icon btn-ghost" onClick={() => obrisiProgram(p.id)}><Trash2 size={13} color="var(--rust)" /></button>
                           </div>
                         </td>
+                        )}
                       </tr>
                     );
                   })}
@@ -3679,7 +3714,7 @@ function PlanRezanjaView({ db, update, showToast }) {
               </table>
             </div>
           )}
-          <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 8 }}>Stvarno vrijeme se mjeri od trenutka kad je program označen "U tijeku" do "Završeno" (vrijeme u statusu "Pauzirano" se ne broji). Operater odabran u retku bilježi se kao tko je pokrenuo/završio.</p>
+          <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 8 }}>Stvarno vrijeme se mjeri od trenutka kad je program označen "Početak" do "Završeno" (vrijeme u statusu "Pauzirano" se ne broji). Operater odabran u retku bilježi se kao tko je pokrenuo/završio.</p>
         </div>
       </div>
 
@@ -3687,6 +3722,7 @@ function PlanRezanjaView({ db, update, showToast }) {
         <MaterijalProgramaModal
           program={db.programiRezanja.find((p) => p.id === materijalModalId)}
           materijali={db.materijali}
+          materijaliZaOdabir={materijaliZaStroj}
           radniNalogLabel={radniNalogLabel}
           onDodaj={(materijalId, kolicina) => dodajStavkuMaterijala(materijalModalId, materijalId, kolicina)}
           onObrisi={(stavkaId) => obrisiStavkuMaterijala(materijalModalId, stavkaId)}
@@ -3764,7 +3800,7 @@ function PlanMaterijalRedak({ row, materijali, onChange, onRemove }) {
 // dodavanju; operater ovdje po stavci upisuje stvarno utrošenu količinu, čime se ta stavka
 // zaključava (finalizira), stvarna količina trajno skida sa skladišta (trošak), a razlika prema
 // planiranom vraća natrag.
-function MaterijalProgramaModal({ program, materijali, radniNalogLabel, onDodaj, onObrisi, onFinaliziraj, onClose }) {
+function MaterijalProgramaModal({ program, materijali, materijaliZaOdabir, radniNalogLabel, onDodaj, onObrisi, onFinaliziraj, onClose }) {
   const prazanRed = () => ({ materijalId: "", nacinUnosa: "kolicina", duzinaM: 6, sirinaM: 1.25, komada: 1, kolicina: "" });
   const [noviRed, setNoviRed] = useState(prazanRed());
   const [uneseno, setUneseno] = useState({});
@@ -3808,7 +3844,7 @@ function MaterijalProgramaModal({ program, materijali, radniNalogLabel, onDodaj,
           )}
         </tbody>
       </table>
-      <PlanMaterijalRedak row={noviRed} materijali={materijali} onChange={(patch) => setNoviRed({ ...noviRed, ...patch })} />
+      <PlanMaterijalRedak row={noviRed} materijali={materijaliZaOdabir || materijali} onChange={(patch) => setNoviRed({ ...noviRed, ...patch })} />
       <Btn variant="ghost" icon={Plus} onClick={() => {
         const mat = materijali.find((m) => m.id === noviRed.materijalId);
         onDodaj(noviRed.materijalId, efektivnaKolicinaMaterijala(noviRed, mat));
@@ -4245,7 +4281,7 @@ function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija }) 
       </div>
 
       {prikaz === "gantogram" && <PlanProizvodnjeView db={db} update={update} showToast={showToast} />}
-      {prikaz === "rezanje" && <PlanRezanjaView db={db} update={update} showToast={showToast} />}
+      {prikaz === "rezanje" && <PlanRezanjaView db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
       {prikaz === "isporuke" && <IsporukeKupaonicaView db={db} patchProjekt={patchProjekt} mozeMijenjati={mozeIsporuke} />}
 
       {prikaz === "tablica" && (
