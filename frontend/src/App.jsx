@@ -4001,12 +4001,11 @@ function OtpremnicaPrintModal({ otpremnica, db, onClose }) {
   const projekt = db.projekti.find((p) => p.id === otpremnica.projektId);
   const izdao = db.zaposlenici.find((z) => z.id === otpremnica.izdaoId);
   const jeKooperant = otpremnica.vrsta === "kooperant";
-  // Kupčeva otpremnica ide uz narudžbu; kooperantska (dorada) uz radni nalog i dobavljača kojem
-  // se šalje na doradu (plastifikacija i sl.) — različit kontekst, isti dokument/ispis.
+  // Kupčeva otpremnica ide uz narudžbu; kooperantska (dorada) uz dobavljača kojem se šalje na
+  // doradu (plastifikacija i sl.) — različit kontekst, isti dokument/ispis.
   const kupac = db.kupci.find((k) => k.id === otpremnica.kupacId);
   const narudzba = db.narudzbe.find((n) => n.id === otpremnica.narudzbaId);
   const dobavljac = db.dobavljaci.find((d) => d.id === otpremnica.dobavljacId);
-  const radniNalog = db.radniNalozi.find((n) => n.id === otpremnica.radniNalogId);
   const PRAZNI_REDOVI = Math.max(0, 20 - otpremnica.stavke.length);
   return (
     <Modal wide title={`Pregled za ispis — Otpremnica ${otpremnica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => window.print()}>Ispis / Spremi kao PDF</Btn></>}>
@@ -4034,10 +4033,7 @@ function OtpremnicaPrintModal({ otpremnica, db, onClose }) {
         <table style={{ fontSize: 11.5, marginBottom: 18, borderCollapse: "collapse" }}>
           <tbody>
             {jeKooperant ? (
-              <>
-                <tr><td style={{ paddingRight: 10, color: "#555" }}>Primatelj / Empfänger :</td><td style={{ fontWeight: 600 }}>{dobavljac?.naziv || "—"}</td></tr>
-                <tr><td style={{ paddingRight: 10, color: "#555" }}>Radni nalog :</td><td style={{ fontWeight: 600 }}>{radniNalog ? `${radniNalog.broj} — ${radniNalog.faza}` : "—"}</td></tr>
-              </>
+              <tr><td style={{ paddingRight: 10, color: "#555" }}>Primatelj / Empfänger :</td><td style={{ fontWeight: 600 }}>{dobavljac?.naziv || "—"}</td></tr>
             ) : (
               <>
                 <tr><td style={{ paddingRight: 10, color: "#555" }}>Kupac / Kunde :</td><td style={{ fontWeight: 600 }}>{kupac?.naziv || "—"}</td></tr>
@@ -6553,7 +6549,7 @@ function NovaOtpremnicaModal({ db, update, patchProjekt, showToast, onClose }) {
 // nalog umjesto uz narudžbu kupca, sa slobodnim unosom naziva stavki jer se često razlikuju od
 // naziva na narudžbenici materijala.
 function OtpremnicaKooperantuModal({ db, update, showToast, onClose }) {
-  const [radniNalogId, setRadniNalogId] = useState("");
+  const [projektId, setProjektId] = useState("");
   const [dobavljacId, setDobavljacId] = useState(db.dobavljaci[0]?.id || "");
   const [datum, setDatum] = useState(todayISO());
   const [mjesto, setMjesto] = useState("Prelog");
@@ -6562,20 +6558,18 @@ function OtpremnicaKooperantuModal({ db, update, showToast, onClose }) {
   const prazanRedak = () => ({ id: uid("ost"), naziv: "", jm: "kom", kolicina: "" });
   const [stavke, setStavke] = useState([prazanRedak()]);
 
-  const aktivniNalozi = [...db.radniNalozi].filter((n) => n.status !== "Završen").sort((a, b) => usporediPrirodno(a.broj, b.broj));
-  const nalog = db.radniNalozi.find((n) => n.id === radniNalogId);
-  const projekt = nalog ? db.projekti.find((p) => p.id === nalog.projektId) : null;
+  const aktivniProjekti = [...db.projekti].filter((p) => p.status !== "Završen").sort((a, b) => usporediPrirodno(a.sifra, b.sifra));
 
   const azurirajStavku = (i, patch) => setStavke(stavke.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
 
   const spremi = () => {
-    if (!radniNalogId) { showToast("Odaberi radni nalog."); return; }
+    if (!projektId) { showToast("Odaberi projekt."); return; }
     if (!dobavljacId) { showToast("Odaberi kooperanta."); return; }
     const validne = stavke.filter((s) => s.naziv.trim() && Number(s.kolicina) > 0).map((s) => ({ ...s, kolicina: Number(s.kolicina) }));
     if (validne.length === 0) { showToast("Dodaj barem jednu stavku s nazivom i količinom."); return; }
     const nova = {
       id: uid("otp"), broj: sljedeciBrojOtpremnice(db.otpremnice, datum), datum, mjesto,
-      vrsta: "kooperant", radniNalogId, dobavljacId, projektId: projekt?.id || null,
+      vrsta: "kooperant", dobavljacId, projektId,
       kupacId: null, narudzbaId: null, izdaoId, napomena, stavke: validne,
     };
     update("otpremnice", [...db.otpremnice, nova]);
@@ -6586,10 +6580,10 @@ function OtpremnicaKooperantuModal({ db, update, showToast, onClose }) {
   return (
     <Modal wide title="Nova otpremnica — kooperantu (dorada)" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi}>Kreiraj otpremnicu</Btn></>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <Field label="Radni nalog">
-          <select className="select" value={radniNalogId} onChange={(e) => setRadniNalogId(e.target.value)}>
+        <Field label="Projekt">
+          <select className="select" value={projektId} onChange={(e) => setProjektId(e.target.value)}>
             <option value="">— odaberi —</option>
-            {aktivniNalozi.map((n) => <option key={n.id} value={n.id}>{n.broj} — {n.naziv} ({n.faza})</option>)}
+            {aktivniProjekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
           </select>
         </Field>
         <Field label="Kooperant (dobavljač)">
