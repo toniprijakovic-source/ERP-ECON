@@ -565,6 +565,8 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
 // njihova ugovorena satnica — zato se posebno prepoznaju po nazivu pozicije i drže odvojeno
 // od redovnog obračuna plaća i od redovne evidencije rada.
 const jeKooperant = (zaposlenik, pozicije) => (pozicije || []).find((p) => p.id === zaposlenik?.pozicijaId)?.naziv?.trim().toLowerCase() === "kooperant";
+// Operater na laseru ima svedeni prikaz (samo Plan rezanja) i ne vidi administrativne alate poput Backupa.
+const jeOperaterLasera = (pozicija) => (pozicija?.naziv || "").trim().toLowerCase() === "operater na laseru";
 
 // Dodatna podjela SAMO za pregled u Evidenciji rada (ne dira obračun plaća) — po nazivu pozicije,
 // istim principom kao jeKooperant. Radiona: voditelj proizvodnje, skladištar, zaposlenik. Sve
@@ -1721,7 +1723,7 @@ export default function App() {
               <div style={{ fontSize: 12.5, fontWeight: 600 }}>{zaposlenik?.ime} {zaposlenik?.prezime}</div>
               <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{mojaPozicija?.naziv || "—"}</div>
             </div>
-            <Btn variant="ghost" size="sm" icon={Database} onClick={() => setBackupOpen(true)}>Backup</Btn>
+            {!jeOperaterLasera(mojaPozicija) && <Btn variant="ghost" size="sm" icon={Database} onClick={() => setBackupOpen(true)}>Backup</Btn>}
             <Btn variant="ghost" size="sm" onClick={odjava}>Odjava</Btn>
           </div>
         </div>
@@ -3421,7 +3423,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
   };
   const azurirajOperatera = (programId, operaterId) => update("programiRezanja", db.programiRezanja.map((p) => (p.id === programId ? { ...p, operaterId } : p)));
 
-  const ogranicen = (mojaPozicija?.naziv || "").trim().toLowerCase() === "operater na laseru";
+  const ogranicen = jeOperaterLasera(mojaPozicija);
   const fazaZaStroj = OPERACIJE.find((o) => o.key === stroj)?.label || "";
   const danas = todayISO();
   const trenutnoPrijavljeniIds = new Set(
@@ -4269,7 +4271,7 @@ function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija }) 
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
         <PageHeader title="Proizvodnja" icon={Factory} subtitle="Radni nalozi po fazama izrade i montaže" />
-        {mozeIzdatnice && <Btn variant="ghost" icon={PackageMinus} onClick={() => setIzdatnicaModal(true)}>Izdaj na projekt</Btn>}
+        {mozeIzdatnice && !jeOperaterLasera(mojaPozicija) && <Btn variant="ghost" icon={PackageMinus} onClick={() => setIzdatnicaModal(true)}>Izdaj na projekt</Btn>}
       </div>
       {izdatnicaModal && <IzdatnicaModal db={db} update={update} showToast={showToast} onClose={() => setIzdatnicaModal(false)} onCreated={(nova) => { setIzdatnicaModal(false); setPrintIzdatnica(nova); }} />}
       {printIzdatnica && <IzdatnicaPrintModal izdatnica={printIzdatnica} projekt={db.projekti.find((p) => p.id === printIzdatnica.projektId)} izdao={db.zaposlenici.find((z) => z.id === printIzdatnica.izdaoId)} postavkeTvrtke={db.postavkeTvrtke} onClose={() => setPrintIzdatnica(null)} />}
