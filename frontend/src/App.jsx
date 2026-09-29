@@ -4008,7 +4008,7 @@ function OtpremnicaPrintModal({ otpremnica, db, onClose }) {
   const dobavljac = db.dobavljaci.find((d) => d.id === otpremnica.dobavljacId);
   const PRAZNI_REDOVI = Math.max(0, 20 - otpremnica.stavke.length);
   return (
-    <Modal wide title={`Pregled za ispis — Otpremnica ${otpremnica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => window.print()}>Ispis / Spremi kao PDF</Btn></>}>
+    <Modal wide title={`Pregled za ispis — Otpremnica ${otpremnica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(otpremnica.broj)}>Ispis / Spremi kao PDF</Btn></>}>
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
           <div style={{ maxWidth: 250 }}>
