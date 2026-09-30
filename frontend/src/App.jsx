@@ -4231,7 +4231,7 @@ function OtpremnicaPrintModal({ otpremnica, db, onClose }) {
             <div style={{ fontSize: 9, color: "#555", lineHeight: 1.3 }}>Projektiranje, izrada i montaža metalnih<br />konstrukcija i ventiliranih fasada</div>
           </div>
           <div style={{ textAlign: "right" }}>
-            <div style={{ fontWeight: 700, fontSize: 20 }}>OTPREMNICA / <span style={{ fontStyle: "italic" }}>LIEFERSCHEIN</span> :&nbsp;<span className="f-mono">{otpremnica.broj}</span></div>
+            <div style={{ fontWeight: 700, fontSize: 20, whiteSpace: "nowrap" }}>OTPREMNICA / <span style={{ fontStyle: "italic" }}>LIEFERSCHEIN</span> :&nbsp;<span className="f-mono">{otpremnica.broj}</span></div>
             <table style={{ fontSize: 11.5, marginTop: 10, marginLeft: "auto", borderCollapse: "collapse" }}>
               <tbody>
                 <tr><td style={{ paddingRight: 10, color: "#555", textAlign: "right" }}>Datum :</td><td style={{ fontWeight: 600, textAlign: "left" }}>{fmtDate(otpremnica.datum)}</td></tr>
