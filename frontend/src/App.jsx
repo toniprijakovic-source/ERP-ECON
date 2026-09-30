@@ -821,19 +821,9 @@ const EmptyState = ({ text }) => (
 );
 
 /* ============================== LINE ITEMS EDITOR ============================== */
-// Kreira novi skladišni artikl na temelju odabranog profila iz kataloga (tako da postane dostupan za odabir kao materijal)
-const kreirajMaterijalIzKataloga = (entry, db, update) => {
-  const noviId = uid("mat");
-  const cijenaDefault = entry.jedinica === "kg/m2" ? 1.25 : 1.15;
-  const noviMaterijal = {
-    id: noviId, sifra: entry.oznaka.replace(/[^A-Za-z0-9]+/g, "-"), naziv: `${entry.tip} ${entry.oznaka}`, tip: entry.tip,
-    dimenzije: `${entry.vrijednost} ${entry.jedinica}`, jm: "kg", cijena: cijenaDefault, kolicina: 0, minZaliha: 0, lokacija: "",
-    kgPoM: entry.jedinica === "kg/m" ? Number(entry.vrijednost) : 0,
-    kgPoM2: entry.jedinica === "kg/m2" ? Number(entry.vrijednost) : 0,
-  };
-  update("materijali", [...db.materijali, noviMaterijal]);
-  return noviId;
-};
+// Šifra izvedena iz oznake kataloške stavke — deterministična, koristi se i za predlaganje šifre
+// kod ručnog unosa materijala i za prepoznavanje "istog materijala" kod zaprimanja narudžbenice.
+const sifraIzKataloga = (entry) => entry.oznaka.replace(/[^A-Za-z0-9]+/g, "-");
 
 // Zadnja poznata nabavna cijena za materijal iz bilo koje narudžbenice (najnovija po datumu) —
 // pouzdanija je od (mogla bi biti zastarjele) cijene upisane na samom skladišnom artiklu.
@@ -844,42 +834,64 @@ const zadnjaCijenaIzNarudzbenice = (materijalId, narudzbenice) => {
   return sve[0]?.cijenaPoJed ?? null;
 };
 
-function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = [], narudzbenice = [], onCreateMaterijal }) {
+function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = [], narudzbenice = [], dozvoliKatalog = false }) {
   const addRow = () => setRows([...rows, mode === "materijal" ? { materijalId: "", nacinUnosa: "kolicina", kolicina: 1, duzinaM: 6, sirinaM: 1.25, komada: 1, cijenaPoJed: 0, kvaliteta: "" } : { opis: "", kolicina: 1, jm: "kom", cijenaJed: 0 }]);
   const removeRow = (i) => setRows(rows.filter((_, idx) => idx !== i));
   const update = (i, patch) => setRows(rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+
+  // Dok materijal još nije stvaran zapis na skladištu (redak referencira samo katalošku stavku —
+  // vidi dozvoliKatalog niže), mase/cijena se za prikaz i izračun uživo izvode iz kataloga umjesto
+  // iz db.materijali. Zapis na skladištu se stvara (ili se poveća postojeći) tek pri "Primi robu".
+  const resolvMat = (r) => {
+    if (r.materijalId) return materijali.find((x) => x.id === r.materijalId);
+    if (r.katalogId) {
+      const k = katalog.find((x) => x.id === r.katalogId);
+      if (!k) return null;
+      return {
+        sifra: sifraIzKataloga(k), naziv: katalogOznakaPuna(k), jm: "kg",
+        cijena: k.jedinica === "kg/m2" ? 1.25 : 1.15,
+        kgPoM: k.jedinica === "kg/m" ? Number(k.vrijednost) : 0,
+        kgPoM2: k.jedinica === "kg/m2" ? Number(k.vrijednost) : 0,
+      };
+    }
+    return null;
+  };
 
   const efektivnaKolicina = (r, mat) => efektivnaKolicinaMaterijala(r, mat);
   const efektivnaCijena = (r, mat) => (r.cijenaPoJed != null ? Number(r.cijenaPoJed) : (mat ? mat.cijena : 0));
 
   const lineTotal = (r) => {
     if (mode === "materijal") {
-      const m = materijali.find((x) => x.id === r.materijalId);
+      const m = resolvMat(r);
       return efektivnaCijena(r, m) * efektivnaKolicina(r, m);
     }
     return (Number(r.cijenaJed) || 0) * (Number(r.kolicina) || 0);
   };
   const total = rows.reduce((s, r) => s + lineTotal(r), 0);
 
-  // Sprema patch na redak i, ako je način unosa "duzina × komada", odmah preračuna i zapiše stvarnu kolicina (kg) — 
+  // Sprema patch na redak i, ako je način unosa "duzina × komada", odmah preračuna i zapiše stvarnu kolicina (kg) —
   // tako svi izračuni (ukupno, trošak ponude, iznos narudžbenice, zaprimanje/izdavanje sa skladišta) rade s točnom vrijednošću.
   const azurirajRedak = (i, patch) => {
     setRows(rows.map((r, idx) => {
       if (idx !== i) return r;
       const merged = { ...r, ...patch };
       if (merged.nacinUnosa === "duzina") {
-        const mat = materijali.find((m) => m.id === merged.materijalId);
-        const kgPoM = mat?.kgPoM > 0 ? Number(mat.kgPoM) : (patch._kgPoM || 0);
+        const mat = resolvMat(merged);
+        const kgPoM = mat?.kgPoM > 0 ? Number(mat.kgPoM) : 0;
         if (kgPoM > 0) merged.kolicina = (Number(merged.duzinaM) || 0) * (Number(merged.komada) || 0) * kgPoM;
       } else if (merged.nacinUnosa === "lim") {
-        const mat = materijali.find((m) => m.id === merged.materijalId);
-        const kgPoM2 = mat?.kgPoM2 > 0 ? Number(mat.kgPoM2) : (patch._kgPoM2 || 0);
+        const mat = resolvMat(merged);
+        const kgPoM2 = mat?.kgPoM2 > 0 ? Number(mat.kgPoM2) : 0;
         if (kgPoM2 > 0) merged.kolicina = (Number(merged.duzinaM) || 0) * (Number(merged.sirinaM) || 0) * (Number(merged.komada) || 0) * kgPoM2;
       }
       return merged;
     }));
   };
 
+  // Odabir "iz kataloga" ovdje NE stvara zapis na skladištu (za razliku od starog ponašanja) —
+  // redak samo pamti na koju se katalošku stavku odnosi (katalogId), a materijalId ostaje prazan
+  // dok se stvarno ne zaprimi (vidi primi() u NabavaPage). Prikazuje se samo tamo gdje dozvoliKatalog
+  // dopušta (narudžbenica) — u projektima/radnim nalozima bira se isključivo postojeća zaliha.
   const odaberiMaterijal = (i, val) => {
     const r = rows[i] || {};
     const duzinaDef = r.duzinaM ?? 6;
@@ -888,12 +900,11 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
     if (val.startsWith("kat::")) {
       const katId = val.slice(5);
       const entry = (katalog || []).find((k) => k.id === katId);
-      if (entry && onCreateMaterijal) {
-        const noviId = onCreateMaterijal(entry);
+      if (entry) {
         const jeDuzina = entry.jedinica === "kg/m";
         const jeLim = entry.jedinica === "kg/m2";
         const nacin = jeDuzina ? "duzina" : jeLim ? "lim" : "kolicina";
-        azurirajRedak(i, { materijalId: noviId, nacinUnosa: nacin, duzinaM: duzinaDef, sirinaM: sirinaDef, komada: komadaDef, cijenaPoJed: jeLim ? 1.25 : 1.15, _kgPoM: jeDuzina ? Number(entry.vrijednost) : 0, _kgPoM2: jeLim ? Number(entry.vrijednost) : 0 });
+        azurirajRedak(i, { materijalId: "", katalogId: katId, nacinUnosa: nacin, duzinaM: duzinaDef, sirinaM: sirinaDef, komada: komadaDef, cijenaPoJed: jeLim ? 1.25 : 1.15 });
       }
     } else {
       const mat = materijali.find((m) => m.id === val);
@@ -901,7 +912,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
       const jeLim = mat?.kgPoM2 > 0;
       const nacin = jeDuzina ? "duzina" : jeLim ? "lim" : "kolicina";
       const cijenaPoJed = zadnjaCijenaIzNarudzbenice(val, narudzbenice) ?? (mat ? mat.cijena : 0);
-      azurirajRedak(i, { materijalId: val, nacinUnosa: nacin, duzinaM: duzinaDef, sirinaM: sirinaDef, komada: komadaDef, cijenaPoJed });
+      azurirajRedak(i, { materijalId: val, katalogId: "", nacinUnosa: nacin, duzinaM: duzinaDef, sirinaM: sirinaDef, komada: komadaDef, cijenaPoJed });
     }
   };
 
@@ -910,7 +921,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
       <div>
         {rows.length === 0 && <div style={{ textAlign: "center", color: "var(--ink-faint)", padding: "14px 0", fontSize: 13 }}>Nema stavki. Dodaj materijal.</div>}
         {rows.map((r, i) => {
-          const mat = materijali.find((x) => x.id === r.materijalId);
+          const mat = resolvMat(r);
           const nacin = r.nacinUnosa || "kolicina";
           const kol = efektivnaKolicina(r, mat);
           return (
@@ -918,13 +929,13 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
               <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
                 <div style={{ flex: 1 }}>
                   <label className="label">Materijal</label>
-                  <select className="select" value={r.materijalId} onChange={(e) => odaberiMaterijal(i, e.target.value)}>
+                  <select className="select" value={r.materijalId || (r.katalogId ? `kat::${r.katalogId}` : "")} onChange={(e) => odaberiMaterijal(i, e.target.value)}>
                     <option value="">Odaberi materijal…</option>
                     <optgroup label="Zalihe (skladište)">
                       {materijali.map((m) => <option key={m.id} value={m.id}>{m.sifra} — {m.naziv}</option>)}
                     </optgroup>
-                    {katalog && katalog.length > 0 && (
-                      <optgroup label="Dodaj iz kataloga profila (svi standardni profili)">
+                    {dozvoliKatalog && katalog && katalog.length > 0 && (
+                      <optgroup label="Naruči iz kataloga profila (stvara se na skladištu tek kad se roba zaprimi)">
                         {katalog.map((k) => <option key={k.id} value={`kat::${k.id}`}>{katalogOznakaPuna(k)} ({k.vrijednost} {k.jedinica})</option>)}
                       </optgroup>
                     )}
@@ -1964,7 +1975,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
   const [povratZa, setPovratZa] = useState(null);
   const [delIzdatnica, setDelIzdatnica] = useState(null);
   const projSifraZaMaterijal = (id) => db.projekti.find((p) => p.id === id)?.sifra || null;
-  const empty = { sifra: "", naziv: "", tip: TIPOVI_MATERIJALA[0], dimenzije: "", jm: "kg", cijena: 0, kolicina: 0, minZaliha: 0, lokacija: "", kgPoM: 0, kgPoM2: 0, projektId: null };
+  const empty = { sifra: "", naziv: "", tip: TIPOVI_MATERIJALA[0], dimenzije: "", jm: "kg", cijena: 0, kolicina: 0, minZaliha: 0, lokacija: "", kgPoM: 0, kgPoM2: 0, projektId: null, kvaliteta: "" };
   const [form, setForm] = useState(empty);
   // Opcionalni pomoćni unos "iz kataloga" — bira se profil/lim, upiše dužina (i za lim širina) +
   // komada + kvaliteta materijala, a masa (Trenutno stanje) se sama izračuna umjesto ručnog unosa.
@@ -1981,9 +1992,9 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
     setKatalogUnos({ ...emptyKatalogUnos, katalogId });
     const entry = db.katalogProfila.find((k) => k.id === katalogId);
     if (entry) {
-      // Šifra se predlaže iz oznake (isti obrazac kao kreirajMaterijalIzKataloga) ali ostaje uredljiva —
+      // Šifra se predlaže iz oznake (isti obrazac kao sifraIzKataloga) ali ostaje uredljiva —
       // predlaže se samo ako korisnik već nije nešto upisao, da ne prepiše ručni unos.
-      const predlozenaSifra = entry.oznaka.replace(/[^A-Za-z0-9]+/g, "-");
+      const predlozenaSifra = sifraIzKataloga(entry);
       setForm((f) => ({ ...f, sifra: f.sifra.trim() ? f.sifra : predlozenaSifra, tip: entry.tip, naziv: `${entry.tip} ${entry.oznaka}`, jm: "kg" }));
     }
   };
@@ -2061,6 +2072,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
             { key: "sifra", label: "Šifra", render: (r) => <span className="f-mono">{r.sifra}</span> },
             { key: "naziv", label: "Naziv" },
             { key: "tip", label: "Tip" },
+            { key: "kvaliteta", label: "Kvaliteta", render: (r) => r.kvaliteta || <span style={{ color: "var(--ink-faint)" }}>—</span> },
             { key: "dimenzije", label: "Dimenzije" },
             { key: "zaProjekt", label: "ZA PROJEKT", render: (r) => projSifraZaMaterijal(r.projektId) || <span style={{ color: "var(--ink-faint)" }}>—</span> },
             { key: "kolicina", label: "Stanje", render: (r) => <span className="f-mono" style={{ color: r.kolicina < r.minZaliha ? "var(--rust)" : "inherit", fontWeight: r.kolicina < r.minZaliha ? 700 : 400 }}>{r.kolicina} {r.jm}{r.kolicina < r.minZaliha && <AlertTriangle size={12} style={{ marginLeft: 4, verticalAlign: -2 }} />}</span> },
@@ -2189,6 +2201,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
             <Field label="Šifra"><input className="input" value={form.sifra} onChange={(e) => setForm({ ...form, sifra: e.target.value })} /></Field>
             <Field label="Naziv"><input className="input" value={form.naziv} onChange={(e) => setForm({ ...form, naziv: e.target.value })} /></Field>
             <Field label="Tip"><select className="select" value={form.tip} onChange={(e) => setForm({ ...form, tip: e.target.value })}>{TIPOVI_MATERIJALA.map((t) => <option key={t}>{t}</option>)}</select></Field>
+            <Field label="Kvaliteta (npr. S235JR) — za prepoznavanje istog materijala kod zaprimanja"><input className="input" value={form.kvaliteta || ""} onChange={(e) => setForm({ ...form, kvaliteta: e.target.value })} /></Field>
             <Field label="Dimenzije">{katalogEntry ? <div className="input" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{jeLimUnos ? `${katalogUnos.duzinaMM || 0}×${katalogUnos.sirinaMM || 0} mm` : `${katalogUnos.duzinaMM || 0} mm`}</div> : <input className="input" value={form.dimenzije} onChange={(e) => setForm({ ...form, dimenzije: e.target.value })} />}</Field>
             <Field label="Jedinica mjere">{katalogEntry ? <div className="input" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>kg</div> : <select className="select" value={form.jm} onChange={(e) => setForm({ ...form, jm: e.target.value })}>{JEDINICE.map((j) => <option key={j}>{j}</option>)}</select>}</Field>
             <Field label={katalogEntry ? "Cijena (€/kg)" : "Cijena po jedinici (€)"}><input className="input f-mono" type="number" step="0.01" value={form.cijena} onChange={(e) => setForm({ ...form, cijena: e.target.value })} /></Field>
@@ -2633,8 +2646,13 @@ const generirajBrojUpita = (upiti) => {
 
 // Kreira novi Upit (RFQ) u Nabavi na temelju popisa potrebnog materijala definiranog na projektu
 const kreirajUpitIzMaterijala = (projekt, db, patchUpiti, showToast) => {
-  const stavke = (projekt.materijalStavke || []).filter((s) => s.materijalId).map((s) => {
-    const m = db.materijali.find((x) => x.id === s.materijalId);
+  // Stavka može referencirati postojeći skladišni artikl (materijalId) ILI, ako je odabrana iz
+  // kataloga a još nije zaprimljena, samo katalošku stavku (katalogId) — naziv se u tom slučaju
+  // izvodi iz kataloga umjesto iz db.materijali.
+  const stavke = (projekt.materijalStavke || []).filter((s) => s.materijalId || s.katalogId).map((s) => {
+    const m = s.materijalId ? db.materijali.find((x) => x.id === s.materijalId) : null;
+    const katEntry = !s.materijalId && s.katalogId ? db.katalogProfila.find((k) => k.id === s.katalogId) : null;
+    const nazivMaterijala = m?.naziv || (katEntry ? katalogOznakaPuna(katEntry) : "");
     const jeDuzina = s.nacinUnosa === "duzina";
     const jeLim = s.nacinUnosa === "lim";
     return {
@@ -2646,7 +2664,7 @@ const kreirajUpitIzMaterijala = (projekt, db, patchUpiti, showToast) => {
       vrstaStavke: jeLim ? "lim" : "profil",
       dimenzijaMM: jeDuzina ? Math.round((Number(s.duzinaM) || 0) * 1000) : jeLim ? Math.round((Number(s.duzinaM) || 0) * 1000) : "",
       sirinaMM: jeLim ? Math.round((Number(s.sirinaM) || 0) * 1000) : "",
-      vrstaMaterijala: m?.naziv || "",
+      vrstaMaterijala: nazivMaterijala,
       kvaliteta: s.kvaliteta || "",
       normaIsporuke: "",
       dodatniZahtjevi: `Za projekt ${projekt.sifra} — ${projekt.naziv}`,
@@ -2688,16 +2706,27 @@ const generirajNarudzbeIzUpita = (upit, db, update, patchUpiti, showToast) => {
       const cijenaPoKomadu = kolicinaZaCijenu != null
         ? (kolicinaZaCijenu / (Number(stavka.kolicina) || 1)) * (Number(ponuda.cijena) || 0)
         : Number(ponuda.cijena) || 0;
-      const noviMaterijal = {
-        id: uid("mat"), sifra: stavka.vrstaMaterijala.replace(/[^A-Za-z0-9]+/g, "-") || uid("sif"),
-        naziv: stavka.vrstaMaterijala, tip: "Ostalo", dimenzije: `${formatDimenzijaStavke(stavka)} mm${stavka.kvaliteta ? ", " + stavka.kvaliteta : ""}`,
-        jm: "kom", cijena: cijenaPoKomadu, kolicina: 0, minZaliha: 0, lokacija: "",
-        // Naruceno je stiglo iz Upita koji je (ako je kreiran iz projekta) nosio izvorProjektaId —
-        // materijal odmah dobiva "ZA PROJEKT" oznaku bez ručnog upisivanja; uvijek se može promijeniti.
-        projektId: upit.izvorProjektaId || null,
-      };
-      noviMaterijali.push(noviMaterijal);
-      materijalIdZaStavku.push({ stavkaId: stavka.id, materijalId: noviMaterijal.id, kolicina: stavka.kolicina });
+      // Ne otvara se nova šifra ako na skladištu već postoji isti materijal (ista šifra izvedena iz
+      // naziva + ista kvaliteta) — u tom slučaju se samo koristi postojeći zapis (količina se
+      // povećava kasnije, pri "Primi robu", istom logikom kao i za ostale narudžbenice).
+      const sifra = stavka.vrstaMaterijala.replace(/[^A-Za-z0-9]+/g, "-") || uid("sif");
+      const trazenaKvaliteta = (stavka.kvaliteta || "").trim().toLowerCase();
+      const postojeci = noviMaterijali.find((m) => m.sifra === sifra && (m.kvaliteta || "").trim().toLowerCase() === trazenaKvaliteta);
+      let materijalId;
+      if (postojeci) {
+        materijalId = postojeci.id;
+      } else {
+        materijalId = uid("mat");
+        noviMaterijali.push({
+          id: materijalId, sifra,
+          naziv: stavka.vrstaMaterijala, tip: "Ostalo", dimenzije: `${formatDimenzijaStavke(stavka)} mm${stavka.kvaliteta ? ", " + stavka.kvaliteta : ""}`,
+          jm: "kom", cijena: cijenaPoKomadu, kolicina: 0, minZaliha: 0, lokacija: "", kvaliteta: stavka.kvaliteta || "",
+          // Naruceno je stiglo iz Upita koji je (ako je kreiran iz projekta) nosio izvorProjektaId —
+          // materijal odmah dobiva "ZA PROJEKT" oznaku bez ručnog upisivanja; uvijek se može promijeniti.
+          projektId: upit.izvorProjektaId || null,
+        });
+      }
+      materijalIdZaStavku.push({ stavkaId: stavka.id, materijalId, kolicina: stavka.kolicina });
     });
     const novaNarudzbenica = {
       id: uid("nab"), broj: `${nabPrefiks}${String(nabBrojac++).padStart(3, "0")}`, dobavljacId, datum: todayISO(), rokIsporuke: addDays(todayISO(), 14),
@@ -2821,14 +2850,47 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija }) {
     setModal(null);
     showToast("Narudžbenica spremljena.");
   };
+  // Zaprimanje robe je JEDINO mjesto gdje materijal koji još nije bio na skladištu (stavka je
+  // birana iz kataloga bez postojećeg materijalId — vidi LineItemsEditor/dozvoliKatalog) stvarno
+  // nastaje na skladištu, i to odmah sa stvarno primljenom količinom (ne s 0). Prije stvaranja
+  // provjerava se postoji li već isti materijal (ista šifra izvedena iz kataloške oznake + ista
+  // kvaliteta) — ako da, samo mu se poveća količina umjesto da se otvori nova šifra.
   const primi = (row) => {
     let materijali = [...db.materijali];
-    row.stavke.forEach((s) => {
-      const mat = materijali.find((m) => m.id === s.materijalId);
-      materijali = materijali.map((m) => (m.id === s.materijalId ? { ...m, kolicina: m.kolicina + efektivnaKolicinaMaterijala(s, mat) } : m));
+    let stavkePromijenjene = false;
+    const noveStavke = row.stavke.map((s) => {
+      if (s.materijalId) {
+        const mat = materijali.find((m) => m.id === s.materijalId);
+        const kolicina = efektivnaKolicinaMaterijala(s, mat);
+        materijali = materijali.map((m) => (m.id === s.materijalId ? { ...m, kolicina: m.kolicina + kolicina } : m));
+        return s;
+      }
+      if (!s.katalogId) return s;
+      const entry = db.katalogProfila.find((k) => k.id === s.katalogId);
+      if (!entry) return s;
+      const virtualniMat = { kgPoM: entry.jedinica === "kg/m" ? Number(entry.vrijednost) : 0, kgPoM2: entry.jedinica === "kg/m2" ? Number(entry.vrijednost) : 0 };
+      const kolicinaPrimljeno = efektivnaKolicinaMaterijala(s, virtualniMat);
+      const sifra = sifraIzKataloga(entry);
+      const trazenaKvaliteta = (s.kvaliteta || "").trim().toLowerCase();
+      const postojeci = materijali.find((m) => m.sifra === sifra && (m.kvaliteta || "").trim().toLowerCase() === trazenaKvaliteta);
+      stavkePromijenjene = true;
+      if (postojeci) {
+        materijali = materijali.map((m) => (m.id === postojeci.id ? { ...m, kolicina: m.kolicina + kolicinaPrimljeno } : m));
+        return { ...s, materijalId: postojeci.id, katalogId: "" };
+      }
+      const noviId = uid("mat");
+      materijali = [...materijali, {
+        id: noviId, sifra, naziv: katalogOznakaPuna(entry), tip: entry.tip,
+        dimenzije: `${entry.vrijednost} ${entry.jedinica}`, jm: "kg",
+        cijena: s.cijenaPoJed != null ? Number(s.cijenaPoJed) : (entry.jedinica === "kg/m2" ? 1.25 : 1.15),
+        kolicina: kolicinaPrimljeno, minZaliha: 0, lokacija: "", kvaliteta: s.kvaliteta || "",
+        kgPoM: entry.jedinica === "kg/m" ? Number(entry.vrijednost) : 0,
+        kgPoM2: entry.jedinica === "kg/m2" ? Number(entry.vrijednost) : 0,
+      }];
+      return { ...s, materijalId: noviId, katalogId: "" };
     });
     update("materijali", materijali);
-    update("narudzbenice", db.narudzbenice.map((n) => (n.id === row.id ? { ...n, status: "Primljeno" } : n)));
+    update("narudzbenice", db.narudzbenice.map((n) => (n.id === row.id ? { ...n, stavke: stavkePromijenjene ? noveStavke : n.stavke, status: "Primljeno" } : n)));
     showToast("Roba zaprimljena, stanje skladišta ažurirano.");
   };
   const dobNaziv = (id) => db.dobavljaci.find((d) => d.id === id)?.naziv || "—";
@@ -2907,7 +2969,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija }) {
           </div>
           <Field label="Status"><select className="select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{["Nacrt", "Poslano", "Djelomično primljeno", "Primljeno"].map((s) => <option key={s}>{s}</option>)}</select></Field>
           <Field label="Stavke narudžbe">
-            <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} />
+            <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} dozvoliKatalog />
           </Field>
           <Field label="Napomena"><textarea className="textarea" rows={2} value={form.napomena} onChange={(e) => setForm({ ...form, napomena: e.target.value })} /></Field>
         </Modal>
@@ -4552,7 +4614,7 @@ function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija }) 
             <Field label="Datum završetka"><input className="input" type="date" value={form.datumZavrsetka} onChange={(e) => setForm({ ...form, datumZavrsetka: e.target.value })} /></Field>
           </div>
           <Field label="Potreban materijal (skladište)">
-            <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} />
+            <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} />
           </Field>
         </Modal>
         );
@@ -4644,7 +4706,7 @@ function StavkaPozicijeRedak({ stavka: s, katalog, grupe, kvalitete, onAzuriraj,
   );
 }
 
-function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], kvalitete = [], satnicaMontaza = 0, calc, azurirajOtpadLima, materijaliSkladiste, narudzbenice, onCreateMaterijal, napomenaNjemacki, setNapomenaNjemacki }) {
+function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], kvalitete = [], satnicaMontaza = 0, calc, azurirajOtpadLima, materijaliSkladiste, narudzbenice, napomenaNjemacki, setNapomenaNjemacki }) {
   const [otvorene, setOtvorene] = useState(() => Object.fromEntries(pozicije.map((p) => [p.id, true])));
   const toggle = (id) => setOtvorene((o) => ({ ...o, [id]: !o[id] }));
   const grupe = katalogPoTipu(katalog);
@@ -4750,7 +4812,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
 
             <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line-strong)" }}>
               <div className="label" style={{ marginBottom: 2 }}>Materijal (iz skladišta) — za ovu stavku</div>
-              <LineItemsEditor mode="materijal" rows={p.materijalStavke || []} setRows={(rows) => updatePoz(p.id, { materijalStavke: rows })} materijali={materijaliSkladiste} katalog={katalog} narudzbenice={narudzbenice} onCreateMaterijal={onCreateMaterijal} />
+              <LineItemsEditor mode="materijal" rows={p.materijalStavke || []} setRows={(rows) => updatePoz(p.id, { materijalStavke: rows })} materijali={materijaliSkladiste} katalog={katalog} narudzbenice={narudzbenice} />
             </div>
 
             {otvorene[p.id] && (
@@ -5477,7 +5539,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
           <div className="label" style={{ marginBottom: 0 }}>Potreban materijal za izradu</div>
           <Btn variant="ghost" size="sm" icon={FolderInput} onClick={pokreniKreiranjeUpita}>Kreiraj upit iz materijala</Btn>
         </div>
-        <LineItemsEditor mode="materijal" rows={materijalStavke} setRows={azurirajMaterijal} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)} />
+        <LineItemsEditor mode="materijal" rows={materijalStavke} setRows={azurirajMaterijal} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} dozvoliKatalog />
       </div>
 
       {ostaleStavke.length > 0 && (
@@ -6459,7 +6521,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
             <div style={{ marginTop: 8, marginBottom: 16 }}>
               <PozicijeEditor pozicije={ponForm.pozicije} setPozicije={(rows) => setPonForm({ ...ponForm, pozicije: rows })} cjenikRada={db.cjenikRada} katalog={db.katalogProfila} kvalitete={db.kvaliteteMaterijala} satnicaMontaza={ponForm.satnicaMontaza} calc={calc}
                 azurirajOtpadLima={azurirajOtpadLima}
-                materijaliSkladiste={db.materijali} narudzbenice={db.narudzbenice} onCreateMaterijal={(entry) => kreirajMaterijalIzKataloga(entry, db, update)}
+                materijaliSkladiste={db.materijali} narudzbenice={db.narudzbenice}
                 napomenaNjemacki={ponForm.napomenaNjemacki} setNapomenaNjemacki={(v) => setPonForm({ ...ponForm, napomenaNjemacki: v })} />
             </div>
 
