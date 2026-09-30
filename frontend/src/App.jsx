@@ -568,11 +568,10 @@ const jeKooperant = (zaposlenik, pozicije) => (pozicije || []).find((p) => p.id 
 // Operater na laseru ima svedeni prikaz (samo Plan rezanja) i ne vidi administrativne alate poput Backupa.
 const jeOperaterLasera = (pozicija) => (pozicija?.naziv || "").trim().toLowerCase() === "operater na laseru";
 
-// Dodatna podjela SAMO za pregled u Evidenciji rada (ne dira obračun plaća) — po nazivu pozicije,
-// istim principom kao jeKooperant. Radiona: voditelj proizvodnje, skladištar, zaposlenik. Sve
-// pozicije koje nisu ni radiona, ni praktikant, ni kooperant, spadaju u "ostalo" (tehnički ured i
-// administracija).
-const RADIONA_POZICIJE = ["voditelj proizvodnje", "skladištar", "zaposlenik"];
+// Dodatna podjela za pregled u Evidenciji rada i Obračunu plaća — po nazivu pozicije, istim
+// principom kao jeKooperant. Sve pozicije koje nisu ni radiona, ni praktikant, ni kooperant,
+// spadaju u "ostalo" (tehnički ured i administracija).
+const RADIONA_POZICIJE = ["voditelj proizvodnje", "skladištar", "zaposlenik", "operater na laseru"];
 const grupaEvidencije = (zaposlenik, pozicije) => {
   const naziv = (pozicije || []).find((p) => p.id === zaposlenik?.pozicijaId)?.naziv?.trim().toLowerCase() || "";
   if (naziv === "kooperant") return "kooperant";
