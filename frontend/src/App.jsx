@@ -583,9 +583,6 @@ const grupaEvidencije = (zaposlenik, pozicije) => {
   if (RADIONA_POZICIJE.includes(naziv)) return "radiona";
   return "ostalo";
 };
-// Redoslijed grupa kao u Evidenciji rada/Obračunu plaća: Radiona, Praktikanti, Tehnički ured i
-// administracija (ostalo), Kooperanti — koristi se i za sortiranje popisa Zaposlenika.
-const GRUPA_EVIDENCIJE_REDOSLIJED = { radiona: 0, praktikant: 1, ostalo: 2, kooperant: 3 };
 
 const obracunMjesecaKooperant = (zaposlenik, mjesec, db) => {
   const postavke = db.postavkePlaca;
@@ -1039,7 +1036,11 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
 // poziva se onReorder(novaLista) s prikazanim redcima u novom poretku, a pozivatelj odlučuje kako
 // tu novu listu trajno spremiti (npr. upisati redni broj na svaki zapis). Povlačenje radi na
 // TRENUTNO PRIKAZANOJ (filtriranoj) listi — ima smisla dok pretraga nije aktivna.
-function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete, columns, searchKeys, addLabel, rowClass, readOnly = false, onReorder }) {
+// grupiraj/redoslijedGrupa/nazivGrupe su opcionalni — kad nisu zadani, ponašanje je identično
+// kao prije (jedna tablica). Kad JESU zadani (npr. popis Zaposlenika po Radiona/Praktikanti/
+// Tehnički ured/Kooperanti, isto kao Evidencija rada), popis se dijeli u zasebne tablice s
+// naslovom grupe iznad svake — pretraga i "Dodaj" ostaju zajednički za cijelu stranicu.
+function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete, columns, searchKeys, addLabel, rowClass, readOnly = false, onReorder, grupiraj, redoslijedGrupa, nazivGrupe }) {
   const [q, setQ] = useState("");
   const [dragOd, setDragOd] = useState(null);
   const filtered = useMemo(() => {
@@ -1057,6 +1058,36 @@ function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete
     onReorder(nova);
   };
 
+  const Tablica = ({ lista }) => (
+    lista.length === 0 ? <EmptyState text="Nema podataka." /> : (
+      <table className="erp-table">
+        <thead><tr>{onReorder && <th style={{ width: 24 }}></th>}{columns.map((c) => <th key={c.key} style={c.width ? { width: c.width } : undefined}>{c.label}</th>)}{!readOnly && <th style={{ width: 90 }}></th>}</tr></thead>
+        <tbody>
+          {lista.map((row, idx) => (
+            <tr
+              key={row.id} className={rowClass ? rowClass(row) : ""}
+              draggable={!!onReorder} style={onReorder ? { cursor: "grab" } : undefined}
+              onDragStart={onReorder ? () => setDragOd(idx) : undefined}
+              onDragOver={onReorder ? (e) => e.preventDefault() : undefined}
+              onDrop={onReorder ? () => ispusti(idx) : undefined}
+            >
+              {onReorder && <td style={{ textAlign: "center", color: "var(--ink-faint)" }}><GripVertical size={14} /></td>}
+              {columns.map((c) => <td key={c.key}>{c.render ? c.render(row) : row[c.key]}</td>)}
+              {!readOnly && (
+                <td>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <button className="btn btn-icon btn-ghost" onClick={() => onEdit(row)}><Pencil size={14} /></button>
+                    <button className="btn btn-icon btn-ghost" onClick={() => onDelete(row)}><Trash2 size={14} color="var(--rust)" /></button>
+                  </div>
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )
+  );
+
   return (
     <div>
       <PageHeader title={title} subtitle={subtitle} icon={Icon} action={readOnly ? null : <Btn variant="primary" icon={Plus} onClick={onAdd}>{addLabel}</Btn>} />
@@ -1064,35 +1095,19 @@ function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete
         <Search size={15} color="var(--ink-faint)" />
         <input className="input" style={{ border: "none", padding: "4px 0" }} placeholder="Pretraži…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-      <div className="card" style={{ overflowX: "auto" }}>
-        {filtered.length === 0 ? <EmptyState text="Nema podataka." /> : (
-          <table className="erp-table">
-            <thead><tr>{onReorder && <th style={{ width: 24 }}></th>}{columns.map((c) => <th key={c.key} style={c.width ? { width: c.width } : undefined}>{c.label}</th>)}{!readOnly && <th style={{ width: 90 }}></th>}</tr></thead>
-            <tbody>
-              {filtered.map((row, idx) => (
-                <tr
-                  key={row.id} className={rowClass ? rowClass(row) : ""}
-                  draggable={!!onReorder} style={onReorder ? { cursor: "grab" } : undefined}
-                  onDragStart={onReorder ? () => setDragOd(idx) : undefined}
-                  onDragOver={onReorder ? (e) => e.preventDefault() : undefined}
-                  onDrop={onReorder ? () => ispusti(idx) : undefined}
-                >
-                  {onReorder && <td style={{ textAlign: "center", color: "var(--ink-faint)" }}><GripVertical size={14} /></td>}
-                  {columns.map((c) => <td key={c.key}>{c.render ? c.render(row) : row[c.key]}</td>)}
-                  {!readOnly && (
-                    <td>
-                      <div style={{ display: "flex", gap: 4 }}>
-                        <button className="btn btn-icon btn-ghost" onClick={() => onEdit(row)}><Pencil size={14} /></button>
-                        <button className="btn btn-icon btn-ghost" onClick={() => onDelete(row)}><Trash2 size={14} color="var(--rust)" /></button>
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {grupiraj ? (
+        redoslijedGrupa.map((kljucGrupe) => {
+          const lista = filtered.filter((row) => grupiraj(row) === kljucGrupe);
+          return (
+            <div key={kljucGrupe} style={{ marginBottom: 20 }}>
+              <div className="label" style={{ marginBottom: 6 }}>{(nazivGrupe ? nazivGrupe(kljucGrupe) : kljucGrupe)} ({lista.length})</div>
+              <div className="card" style={{ overflowX: "auto" }}><Tablica lista={lista} /></div>
+            </div>
+          );
+        })
+      ) : (
+        <div className="card" style={{ overflowX: "auto" }}><Tablica lista={filtered} /></div>
+      )}
     </div>
   );
 }
@@ -8445,12 +8460,10 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
             </div>
           )}
           <EntityPage
-            title="" data={[...db.zaposlenici].sort((a, b) => {
-              const ga = GRUPA_EVIDENCIJE_REDOSLIJED[grupaEvidencije(a, db.pozicijeZaposlenika)];
-              const gb = GRUPA_EVIDENCIJE_REDOSLIJED[grupaEvidencije(b, db.pozicijeZaposlenika)];
-              if (ga !== gb) return ga - gb;
-              return (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr");
-            })}
+            title="" data={[...db.zaposlenici].sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr"))}
+            grupiraj={(z) => grupaEvidencije(z, db.pozicijeZaposlenika)}
+            redoslijedGrupa={["radiona", "praktikant", "ostalo", "kooperant"]}
+            nazivGrupe={(k) => ({ radiona: "Radiona", praktikant: "Praktikanti", ostalo: "Tehnički ured i administracija", kooperant: "Kooperanti" }[k])}
             onAdd={() => { setZapForm(emptyZap); setModal("zap"); }}
             onEdit={(row) => { setZapForm({ ...emptyZap, ...row, kompetencije: row.kompetencije || [], rfidKod: row.rfidKod || "" }); setModal("zap"); }}
             onDelete={(r) => setDel({ type: "zap", row: r })}
