@@ -5744,6 +5744,13 @@ function PonudaLaseraModal({ form, setForm, db, onSave, onClose }) {
   const azurirajStavku = (id, patch) => setForm({ ...form, stavke: form.stavke.map((s) => (s.id === id ? { ...s, ...patch } : s)) });
   const obrisiStavku = (id) => setForm({ ...form, stavke: form.stavke.filter((s) => s.id !== id) });
   const azurirajCjenik = (patch) => setForm({ ...form, cjenik: { ...prazniCjenikLasera(), ...form.cjenik, ...patch } });
+  // Kartice — isti princip kao Pozicije/Materijal/Rekapitulacija kod obične ponude: "Stavke
+  // rezanja" su unos, "Materijal" je izvedeni pregled potrebnog sirovog materijala (bez
+  // optimizacije po standardnim dužinama/limovima jer stavke lasera nemaju katalošku vezu,
+  // za razliku od pozicija konstrukcije), a "Rekapitulacija" je čist pregled troška po stavci.
+  const [aktivnaKartica, setAktivnaKartica] = useState("stavke");
+  const stavkeProfili = calc.stavke.filter((s) => s.tipLasera === "cijevni");
+  const stavkeLimovi = calc.stavke.filter((s) => s.tipLasera !== "cijevni");
 
   return (
     <Modal wide title={form.id ? `Ponuda za laser ${form.broj}` : "Nova ponuda za laser"} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={onSave}>Spremi</Btn></>}>
@@ -5768,36 +5775,119 @@ function PonudaLaseraModal({ form, setForm, db, onSave, onClose }) {
         </div>
       </div>
 
-      <div className="label" style={{ marginBottom: 4 }}>Stavke rezanja</div>
-      {form.stavke.length === 0 && <div style={{ textAlign: "center", color: "var(--ink-faint)", padding: "14px 0", fontSize: 13 }}>Nema stavki. Dodaj stavku rezanja.</div>}
-      {form.stavke.map((s) => (
-        <LaserStavkaRedak key={s.id} stavka={{ ...s, _cjenik: calc.cjenik }} kvalitete={db.kvaliteteMaterijala} onAzuriraj={(patch) => azurirajStavku(s.id, patch)} onObrisi={() => obrisiStavku(s.id)} />
-      ))}
-      <Btn variant="ghost" size="sm" icon={Plus} onClick={() => setForm({ ...form, stavke: [...form.stavke, prazanRed()] })} style={{ marginBottom: 16 }}>Dodaj stavku rezanja</Btn>
-
-      <div className="label" style={{ marginBottom: 4 }}>Savijanje (opcionalno)</div>
-      <div className="card" style={{ padding: 14, background: "var(--surface-alt)", marginBottom: 16, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
-        <Field label="Broj pregiba"><input className="input f-mono" type="number" min="0" value={form.savijanje?.brojPregiba ?? 0} onChange={(e) => setForm({ ...form, savijanje: { ...form.savijanje, brojPregiba: e.target.value } })} /></Field>
-        <Field label="Min. po komadu"><input className="input f-mono" type="number" min="0" step="0.5" value={form.savijanje?.minPoKom ?? 0} onChange={(e) => setForm({ ...form, savijanje: { ...form.savijanje, minPoKom: e.target.value } })} /></Field>
-        <div><div className="label">Trošak savijanja</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700, marginTop: 6 }}>{fmtCurDec(calc.trosakSavijanja)}</div></div>
+      <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--line)", marginBottom: 12 }}>
+        <div className={`nav-tab ${aktivnaKartica === "stavke" ? "active" : ""}`} onClick={() => setAktivnaKartica("stavke")} style={{ padding: "6px 12px", fontSize: 12.5 }}>Stavke rezanja</div>
+        <div className={`nav-tab ${aktivnaKartica === "materijal" ? "active" : ""}`} onClick={() => setAktivnaKartica("materijal")} style={{ padding: "6px 12px", fontSize: 12.5 }}>Materijal</div>
+        <div className={`nav-tab ${aktivnaKartica === "rekap" ? "active" : ""}`} onClick={() => setAktivnaKartica("rekap")} style={{ padding: "6px 12px", fontSize: 12.5, fontWeight: 600 }}>Rekapitulacija</div>
       </div>
 
-      <Field label="Ostale stavke (crtanje, transport…)"><LineItemsEditor mode="custom" rows={form.ostaleStavke} setRows={(rows) => setForm({ ...form, ostaleStavke: rows })} /></Field>
-      <Field label="Napomena"><textarea className="textarea" rows={2} value={form.napomena} onChange={(e) => setForm({ ...form, napomena: e.target.value })} /></Field>
+      {aktivnaKartica === "stavke" && (
+        <>
+          <div className="label" style={{ marginBottom: 4 }}>Stavke rezanja</div>
+          {form.stavke.length === 0 && <div style={{ textAlign: "center", color: "var(--ink-faint)", padding: "14px 0", fontSize: 13 }}>Nema stavki. Dodaj stavku rezanja.</div>}
+          {form.stavke.map((s) => (
+            <LaserStavkaRedak key={s.id} stavka={{ ...s, _cjenik: calc.cjenik }} kvalitete={db.kvaliteteMaterijala} onAzuriraj={(patch) => azurirajStavku(s.id, patch)} onObrisi={() => obrisiStavku(s.id)} />
+          ))}
+          <Btn variant="ghost" size="sm" icon={Plus} onClick={() => setForm({ ...form, stavke: [...form.stavke, prazanRed()] })} style={{ marginBottom: 16 }}>Dodaj stavku rezanja</Btn>
 
-      <div className="card" style={{ padding: 14, background: "var(--surface-alt)", marginTop: 4 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, fontSize: 12.5, marginBottom: 12 }}>
-          <div><div style={{ color: "var(--ink-soft)" }}>Zbroj stavki rezanja</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.zbrojStavki)}</div></div>
-          <div><div style={{ color: "var(--ink-soft)" }}>Dodatak ({calc.dodatakPct}%)</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.iznosDodatka)}</div></div>
-          <div><div style={{ color: "var(--ink-soft)" }}>Savijanje + ostalo</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.trosakSavijanja + calc.trosakOstalo)}</div></div>
-        </div>
-        <div style={{ borderTop: "1px solid var(--line-strong)", paddingTop: 10, display: "flex", justifyContent: "flex-end" }}>
-          <div>
-            <div style={{ fontSize: 12, color: "var(--ink-soft)", textAlign: "right" }}>Konačna cijena ponude</div>
-            <div className="f-mono" style={{ fontSize: 19, fontWeight: 700, color: "var(--steel)", textAlign: "right" }}>{fmtCurDec(calc.cijenaKonacna)}</div>
+          <div className="label" style={{ marginBottom: 4 }}>Savijanje (opcionalno)</div>
+          <div className="card" style={{ padding: 14, background: "var(--surface-alt)", marginBottom: 16, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+            <Field label="Broj pregiba"><input className="input f-mono" type="number" min="0" value={form.savijanje?.brojPregiba ?? 0} onChange={(e) => setForm({ ...form, savijanje: { ...form.savijanje, brojPregiba: e.target.value } })} /></Field>
+            <Field label="Min. po komadu"><input className="input f-mono" type="number" min="0" step="0.5" value={form.savijanje?.minPoKom ?? 0} onChange={(e) => setForm({ ...form, savijanje: { ...form.savijanje, minPoKom: e.target.value } })} /></Field>
+            <div><div className="label">Trošak savijanja</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700, marginTop: 6 }}>{fmtCurDec(calc.trosakSavijanja)}</div></div>
           </div>
+
+          <Field label="Ostale stavke (crtanje, transport…)"><LineItemsEditor mode="custom" rows={form.ostaleStavke} setRows={(rows) => setForm({ ...form, ostaleStavke: rows })} /></Field>
+          <Field label="Napomena"><textarea className="textarea" rows={2} value={form.napomena} onChange={(e) => setForm({ ...form, napomena: e.target.value })} /></Field>
+        </>
+      )}
+
+      {aktivnaKartica === "materijal" && (
+        <div>
+          <div className="label" style={{ marginBottom: 6 }}>Profili (cijevni laser) — potrebna dužina i masa</div>
+          {stavkeProfili.length === 0 ? (
+            <div style={{ textAlign: "center", color: "var(--ink-faint)", padding: "12px 0", fontSize: 13, marginBottom: 16 }}>Nema stavki cijevnog lasera.</div>
+          ) : (
+            <table className="erp-table" style={{ marginBottom: 16 }}>
+              <thead><tr><th>Stavka</th><th style={{ width: 90 }}>Dužina (m)</th><th style={{ width: 70 }}>Komada</th><th style={{ width: 90 }}>Masa (kg)</th><th style={{ width: 110 }}>Trošak materijala</th></tr></thead>
+              <tbody>
+                {stavkeProfili.map((s) => (
+                  <tr key={s.id}>
+                    <td>{s.opis || "—"}</td>
+                    <td className="f-mono">{((Number(s.duzinaMM) || 0) / 1000).toFixed(2)}</td>
+                    <td className="f-mono">{s.komada}</td>
+                    <td className="f-mono">{s.masaKg.toFixed(1)}</td>
+                    <td className="f-mono">{fmtCurDec(s.trosakMaterijala)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{ fontWeight: 700, borderTop: "1px solid var(--line-strong)" }}>
+                  <td>Ukupno</td>
+                  <td className="f-mono">{stavkeProfili.reduce((s, x) => s + ((Number(x.duzinaMM) || 0) / 1000) * (Number(x.komada) || 0), 0).toFixed(2)}</td>
+                  <td className="f-mono">{stavkeProfili.reduce((s, x) => s + (Number(x.komada) || 0), 0)}</td>
+                  <td className="f-mono">{stavkeProfili.reduce((s, x) => s + x.masaKg, 0).toFixed(1)}</td>
+                  <td className="f-mono">{fmtCurDec(stavkeProfili.reduce((s, x) => s + x.trosakMaterijala, 0))}</td>
+                </tr>
+              </tfoot>
+            </table>
+          )}
+
+          <div className="label" style={{ marginBottom: 6 }}>Limovi (pločasti laser) — potrebna površina i masa</div>
+          {stavkeLimovi.length === 0 ? (
+            <div style={{ textAlign: "center", color: "var(--ink-faint)", padding: "12px 0", fontSize: 13 }}>Nema stavki pločastog lasera.</div>
+          ) : (
+            <table className="erp-table">
+              <thead><tr><th>Stavka</th><th style={{ width: 90 }}>Površina (m²)</th><th style={{ width: 70 }}>Komada</th><th style={{ width: 90 }}>Masa (kg)</th><th style={{ width: 110 }}>Trošak materijala</th></tr></thead>
+              <tbody>
+                {stavkeLimovi.map((s) => (
+                  <tr key={s.id}>
+                    <td>{s.opis || "—"}</td>
+                    <td className="f-mono">{(((Number(s.duzinaMM) || 0) * (Number(s.sirinaMM) || 0)) / 1e6 * (Number(s.komada) || 0)).toFixed(2)}</td>
+                    <td className="f-mono">{s.komada}</td>
+                    <td className="f-mono">{s.masaKg.toFixed(1)}</td>
+                    <td className="f-mono">{fmtCurDec(s.trosakMaterijala)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{ fontWeight: 700, borderTop: "1px solid var(--line-strong)" }}>
+                  <td>Ukupno</td>
+                  <td className="f-mono">{stavkeLimovi.reduce((s, x) => s + ((Number(x.duzinaMM) || 0) * (Number(x.sirinaMM) || 0)) / 1e6 * (Number(x.komada) || 0), 0).toFixed(2)}</td>
+                  <td className="f-mono">{stavkeLimovi.reduce((s, x) => s + (Number(x.komada) || 0), 0)}</td>
+                  <td className="f-mono">{stavkeLimovi.reduce((s, x) => s + x.masaKg, 0).toFixed(1)}</td>
+                  <td className="f-mono">{fmtCurDec(stavkeLimovi.reduce((s, x) => s + x.trosakMaterijala, 0))}</td>
+                </tr>
+              </tfoot>
+            </table>
+          )}
         </div>
-      </div>
+      )}
+
+      {aktivnaKartica === "rekap" && (
+        <table className="erp-table">
+          <thead><tr><th>Stavka</th><th style={{ width: 70 }}>Masa (kg)</th><th style={{ width: 90 }}>Rezanje</th><th style={{ width: 90 }}>Priprema</th><th style={{ width: 100 }}>Materijal</th><th style={{ width: 100 }}>Ukupno</th></tr></thead>
+          <tbody>
+            {calc.stavke.length === 0 && <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--ink-faint)" }}>Nema stavki.</td></tr>}
+            {calc.stavke.map((s) => (
+              <tr key={s.id}>
+                <td>{s.opis || "—"} <span style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>({s.tipLasera === "cijevni" ? "cijevni" : "pločasti"})</span></td>
+                <td className="f-mono">{s.masaKg.toFixed(1)}</td>
+                <td className="f-mono">{fmtCurDec(s.trosakRezanja)}</td>
+                <td className="f-mono">{fmtCurDec(s.trosakPripreme)}</td>
+                <td className="f-mono">{fmtCurDec(s.trosakMaterijala)}</td>
+                <td className="f-mono" style={{ fontWeight: 600 }}>{fmtCurDec(s.ukupno)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr style={{ borderTop: "1px solid var(--line-strong)" }}><td colSpan={5} style={{ textAlign: "right" }}>Zbroj stavki rezanja</td><td className="f-mono" style={{ fontWeight: 600 }}>{fmtCurDec(calc.zbrojStavki)}</td></tr>
+            <tr><td colSpan={5} style={{ textAlign: "right" }}>Dodatak ({calc.dodatakPct}%)</td><td className="f-mono">{fmtCurDec(calc.iznosDodatka)}</td></tr>
+            <tr><td colSpan={5} style={{ textAlign: "right" }}>Savijanje + ostalo</td><td className="f-mono">{fmtCurDec(calc.trosakSavijanja + calc.trosakOstalo)}</td></tr>
+            <tr style={{ borderTop: "2px solid var(--line-strong)" }}><td colSpan={5} style={{ textAlign: "right", fontWeight: 700 }}>KONAČNA CIJENA PONUDE</td><td className="f-mono" style={{ fontWeight: 700, fontSize: 15, color: "var(--steel)" }}>{fmtCurDec(calc.cijenaKonacna)}</td></tr>
+          </tfoot>
+        </table>
+      )}
     </Modal>
   );
 }
@@ -5931,7 +6021,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
   const [detalj, setDetalj] = useState(null);
   const [printPonuda, setPrintPonuda] = useState(null);
 
-  const emptyLaser = () => ({ id: null, broj: sljedeciBroj(db.ponudeLasera, "broj", "LAS-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", cjenik: prazniCjenikLasera(), stavke: [], savijanje: { brojPregiba: 0, minPoKom: 0 }, ostaleStavke: [] });
+  const emptyLaser = () => ({ id: null, broj: sljedeciBroj(db.ponudeLasera, "broj", "LAS-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", cjenik: prazniCjenikLasera(), stavke: [], savijanje: { brojPregiba: 0, minPoKom: 0 }, ostaleStavke: [], projektId: null });
   const [laserForm, setLaserForm] = useState(emptyLaser());
   const [printLaser, setPrintLaser] = useState(null);
   const mozeLaser = dozvolaZaKarticu(mojaPozicija, "projekti", "laser").izmjene;
@@ -6014,7 +6104,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
     showToast(`Ponuda kopirana kao ${kopija.broj}.`);
   };
   const kopirajLaser = (ponuda) => {
-    const kopija = { ...JSON.parse(JSON.stringify(ponuda)), id: uid("las"), broj: sljedeciBroj(db.ponudeLasera, "broj", "LAS-2026-"), status: "U izradi", datum: todayISO() };
+    const kopija = { ...JSON.parse(JSON.stringify(ponuda)), id: uid("las"), broj: sljedeciBroj(db.ponudeLasera, "broj", "LAS-2026-"), status: "U izradi", projektId: null, datum: todayISO() };
     update("ponudeLasera", [...db.ponudeLasera, kopija]);
     showToast(`Ponuda za laser kopirana kao ${kopija.broj}.`);
   };
@@ -6068,6 +6158,42 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
     update("radniNalozi", [...db.radniNalozi, ...noviNalozi]);
     update("ponude", db.ponude.map((p) => (p.id === ponuda.id ? { ...p, projektId: noviProjekt.id } : p)));
     showToast(`Projekt ${noviProjekt.sifra} kreiran s ${noviNalozi.length} radnih naloga.`);
+    setTab("projekti");
+  };
+
+  // Analogno pretvoriUProjekt, ali za uslugu laserskog rezanja: nema pozicija/AKZ/montaže, samo
+  // radni nalog(i) za sam posao rezanja — jedan za "Laser za profile" i/ili jedan za "Laser za
+  // limove", ovisno koje vrste stavki ponuda uopće ima, s planiranim satima = zbroj rezanja +
+  // pripreme svih stavki tog tipa.
+  const pretvoriUProjektLaser = (ponuda) => {
+    const calc = izracunPonudeLasera(ponuda, db.kvaliteteMaterijala);
+    const noviProjekt = {
+      id: uid("proj"), sifra: sljedeciBroj(db.projekti, "sifra", "PRJ-2026-"), naziv: ponuda.naziv, kupacId: ponuda.kupacId,
+      status: "Odobren", vrijednost: Math.round(calc.cijenaKonacna), rokPocetka: todayISO(), rokZavrsetka: addDays(todayISO(), 30),
+      opis: `Kreirano iz ponude za laser ${ponuda.broj}.`,
+      izvorPonudaLaseraId: ponuda.id, pozicije: [], materijalStavke: [], ostaleStavke: ponuda.ostaleStavke || [],
+      voditeljId: "", zadaci: noviZadaciIzStandarda(), faze: praznaFazaSati(),
+    };
+    const minPoTipu = { cijevni: 0, plocasti: 0 };
+    calc.stavke.forEach((s) => { minPoTipu[s.tipLasera === "cijevni" ? "cijevni" : "plocasti"] += (Number(s.rezanjeMin) || 0) + (Number(s.pripremaMin) || 0); });
+    let rnBrojac = parseInt(sljedeciBrojRadnogNaloga(db.radniNalozi, noviProjekt.sifra).split("/").pop(), 10);
+    const sljedeciRnBroj = () => `${noviProjekt.sifra}/${rnBrojac++}`;
+    const noviNalozi = [];
+    [{ tip: "cijevni", faza: "Laser za profile" }, { tip: "plocasti", faza: "Laser za limove" }].forEach(({ tip, faza }) => {
+      const sati = Math.round((minPoTipu[tip] / 60) * 100) / 100;
+      if (sati <= 0) return;
+      noviProjekt.faze[faza] = sati;
+      noviNalozi.push({
+        id: uid("rn"), broj: sljedeciRnBroj(), projektId: noviProjekt.id,
+        naziv: noviProjekt.naziv, faza, zaduzenTim: "", status: "Planiran",
+        planiranoSati: sati, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: addDays(todayISO(), 14),
+        stavke: [], materijalIzdan: false,
+      });
+    });
+    patchProjekti([noviProjekt], []);
+    update("radniNalozi", [...db.radniNalozi, ...noviNalozi]);
+    update("ponudeLasera", db.ponudeLasera.map((p) => (p.id === ponuda.id ? { ...p, projektId: noviProjekt.id } : p)));
+    showToast(`Projekt ${noviProjekt.sifra} kreiran${noviNalozi.length ? ` s ${noviNalozi.length} radnih naloga` : ""}.`);
     setTab("projekti");
   };
 
@@ -6164,6 +6290,12 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
             { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
             { key: "pdf", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrintLaser(r)}>PDF ponude</Btn> },
             { key: "kopiraj", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Copy} onClick={() => kopirajLaser(r)}>Kopiraj</Btn> },
+            {
+              key: "akcija", label: "", render: (r) =>
+                r.projektId ? <span style={{ fontSize: 11, color: "var(--green)" }}>→ {projSifra(r.projektId)}</span>
+                : r.status === "Prihvaćena" ? <Btn size="sm" icon={FolderInput} onClick={() => pretvoriUProjektLaser(r)}>Pretvori u projekt</Btn>
+                : null
+            },
           ]}
         />
       )}
