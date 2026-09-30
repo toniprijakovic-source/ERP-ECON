@@ -583,6 +583,9 @@ const grupaEvidencije = (zaposlenik, pozicije) => {
   if (RADIONA_POZICIJE.includes(naziv)) return "radiona";
   return "ostalo";
 };
+// Redoslijed grupa kao u Evidenciji rada/Obračunu plaća: Radiona, Praktikanti, Tehnički ured i
+// administracija (ostalo), Kooperanti — koristi se i za sortiranje popisa Zaposlenika.
+const GRUPA_EVIDENCIJE_REDOSLIJED = { radiona: 0, praktikant: 1, ostalo: 2, kooperant: 3 };
 
 const obracunMjesecaKooperant = (zaposlenik, mjesec, db) => {
   const postavke = db.postavkePlaca;
@@ -8442,7 +8445,12 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
             </div>
           )}
           <EntityPage
-            title="" data={[...db.zaposlenici].sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr"))}
+            title="" data={[...db.zaposlenici].sort((a, b) => {
+              const ga = GRUPA_EVIDENCIJE_REDOSLIJED[grupaEvidencije(a, db.pozicijeZaposlenika)];
+              const gb = GRUPA_EVIDENCIJE_REDOSLIJED[grupaEvidencije(b, db.pozicijeZaposlenika)];
+              if (ga !== gb) return ga - gb;
+              return (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr");
+            })}
             onAdd={() => { setZapForm(emptyZap); setModal("zap"); }}
             onEdit={(row) => { setZapForm({ ...emptyZap, ...row, kompetencije: row.kompetencije || [], rfidKod: row.rfidKod || "" }); setModal("zap"); }}
             onDelete={(r) => setDel({ type: "zap", row: r })}
