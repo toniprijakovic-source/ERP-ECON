@@ -243,26 +243,30 @@ const izracunPonude = (ponuda, materijali, cjenikRada, katalog = [], kvalitete =
    Ponuda za uslugu laserskog rezanja (rezanje tuđeg materijala po nacrtu, ne izrada
    konstrukcije) — masa se za pločasti laser računa iz dimenzija × gustoća odabrane kvalitete
    materijala (isti princip kao pozicije u ponudi), a za cijevni laser iz dužine × mase po m'
-   (isti princip kao profili na skladištu). Vrijeme rezanja/pripreme unosi se ručno po stavci
-   jer ovisi o složenosti reza koju sustav ne može izvesti iz same geometrije. Dodatak (%) se
-   računa na zbroj stavki; savijanje i ostale stavke dodaju se nakon toga bez dodatka (isto
-   kao u predlošku iz kojeg je ovo preuzeto — Excel kalkulacija laserskog rezanja). */
+   (isti princip kao profili na skladištu). Jedna stavka može imati VIŠE formata (različite
+   dimenzije lima ili profila) — masa/trošak materijala se zbraja preko svih formata, dok su
+   vrijeme rezanja/pripreme i opis zajednički za cijelu stavku (ne ovise o pojedinom formatu).
+   Vrijeme rezanja/pripreme unosi se ručno jer ovisi o složenosti reza koju sustav ne može
+   izvesti iz same geometrije. Dodatak (%) se računa na zbroj stavki; savijanje i ostale stavke
+   dodaju se nakon toga bez dodatka (isto kao u predlošku iz kojeg je ovo preuzeto — Excel
+   kalkulacija laserskog rezanja). */
 const prazniCjenikLasera = () => ({ plocastiEurH: 150, pripremaPlocastiEurH: 40, cijevniEurH: 250, pripremaCijevniEurH: 150, savijanjeEurH: 40, dodatakPct: 10 });
 
-const masaStavkeLasera = (s, kvalitete) => {
-  if (s.tipLasera === "cijevni") return ((Number(s.duzinaMM) || 0) / 1000) * (Number(s.komada) || 0) * (Number(s.kgPoM) || 0);
-  const gustocaKgM3 = faktorGustoce(kvalitete, s.kvaliteta) * GUSTOCA_CELIKA * 1000;
-  return ((Number(s.duzinaMM) || 0) / 1000) * ((Number(s.sirinaMM) || 0) / 1000) * ((Number(s.debljinaMM) || 0) / 1000) * gustocaKgM3 * (Number(s.komada) || 0);
+const masaFormataLasera = (f, tipLasera, kvalitete) => {
+  if (tipLasera === "cijevni") return ((Number(f.duzinaMM) || 0) / 1000) * (Number(f.komada) || 0) * (Number(f.kgPoM) || 0);
+  const gustocaKgM3 = faktorGustoce(kvalitete, f.kvaliteta) * GUSTOCA_CELIKA * 1000;
+  return ((Number(f.duzinaMM) || 0) / 1000) * ((Number(f.sirinaMM) || 0) / 1000) * ((Number(f.debljinaMM) || 0) / 1000) * gustocaKgM3 * (Number(f.komada) || 0);
 };
 
 const izracunStavkeLasera = (s, cjenik, kvalitete) => {
-  const masaKg = masaStavkeLasera(s, kvalitete);
+  const formati = (s.formati || []).map((f) => ({ ...f, masaKg: masaFormataLasera(f, s.tipLasera, kvalitete) }));
+  const masaKg = formati.reduce((sum, f) => sum + f.masaKg, 0);
+  const trosakMaterijala = formati.reduce((sum, f) => sum + f.masaKg * (Number(f.cijenaMaterijalaEurKg) || 0), 0);
   const satRezanja = s.tipLasera === "cijevni" ? Number(cjenik.cijevniEurH) || 0 : Number(cjenik.plocastiEurH) || 0;
   const satPripreme = s.tipLasera === "cijevni" ? Number(cjenik.pripremaCijevniEurH) || 0 : Number(cjenik.pripremaPlocastiEurH) || 0;
   const trosakRezanja = ((Number(s.rezanjeMin) || 0) / 60) * satRezanja;
   const trosakPripreme = ((Number(s.pripremaMin) || 0) / 60) * satPripreme;
-  const trosakMaterijala = masaKg * (Number(s.cijenaMaterijalaEurKg) || 0);
-  return { masaKg, trosakRezanja, trosakPripreme, trosakMaterijala, ukupno: trosakRezanja + trosakPripreme + trosakMaterijala };
+  return { formati, masaKg, trosakRezanja, trosakPripreme, trosakMaterijala, ukupno: trosakRezanja + trosakPripreme + trosakMaterijala };
 };
 
 const izracunPonudeLasera = (ponuda, kvalitete = []) => {
@@ -5687,46 +5691,84 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
   );
 }
 
+const prazanFormatLasera = (tipLasera) => (tipLasera === "cijevni"
+  ? { id: uid("frm"), duzinaMM: 1000, komada: 1, kgPoM: 0, cijenaMaterijalaEurKg: 0.9 }
+  : { id: uid("frm"), duzinaMM: 1000, sirinaMM: 1000, debljinaMM: 3, komada: 1, kvaliteta: "celik", cijenaMaterijalaEurKg: 0.9 });
+
+// Jedan format (dimenzija) unutar stavke — stavka može imati više formata (npr. više različitih
+// limova ili profila) koji dijele isti opis i isto vrijeme rezanja/pripreme.
+function FormatLaseraRedak({ format: f, tipLasera, kvalitete, onAzuriraj, onObrisi, jedini }) {
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap", padding: "6px 0", borderBottom: "1px dashed var(--line)" }}>
+      {tipLasera === "cijevni" ? (
+        <>
+          <div style={{ width: 100 }}><label className="label">Dužina (mm)</label><input className="input f-mono" type="number" min="0" value={f.duzinaMM} onChange={(e) => onAzuriraj({ duzinaMM: e.target.value })} /></div>
+          <div style={{ width: 80 }}><label className="label">Komada</label><input className="input f-mono" type="number" min="0" value={f.komada} onChange={(e) => onAzuriraj({ komada: e.target.value })} /></div>
+          <div style={{ width: 100 }}><label className="label">Masa po m' (kg/m)</label><input className="input f-mono" type="number" min="0" step="0.01" value={f.kgPoM} onChange={(e) => onAzuriraj({ kgPoM: e.target.value })} /></div>
+        </>
+      ) : (
+        <>
+          <div style={{ width: 95 }}><label className="label">Dužina (mm)</label><input className="input f-mono" type="number" min="0" value={f.duzinaMM} onChange={(e) => onAzuriraj({ duzinaMM: e.target.value })} /></div>
+          <div style={{ width: 95 }}><label className="label">Širina (mm)</label><input className="input f-mono" type="number" min="0" value={f.sirinaMM} onChange={(e) => onAzuriraj({ sirinaMM: e.target.value })} /></div>
+          <div style={{ width: 85 }}><label className="label">Debljina (mm)</label><input className="input f-mono" type="number" min="0" step="0.1" value={f.debljinaMM} onChange={(e) => onAzuriraj({ debljinaMM: e.target.value })} /></div>
+          <div style={{ width: 70 }}><label className="label">Komada</label><input className="input f-mono" type="number" min="0" value={f.komada} onChange={(e) => onAzuriraj({ komada: e.target.value })} /></div>
+          <div style={{ width: 165 }}>
+            <label className="label">Kvaliteta materijala</label>
+            <select className="select" value={f.kvaliteta} onChange={(e) => onAzuriraj({ kvaliteta: e.target.value })}>
+              {(kvalitete && kvalitete.length ? kvalitete : ZADANE_KVALITETE_MATERIJALA).map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}
+            </select>
+          </div>
+        </>
+      )}
+      <div style={{ width: 110 }}><label className="label">Cijena materijala (€/kg)</label><input className="input f-mono" type="number" min="0" step="0.01" value={f.cijenaMaterijalaEurKg} onChange={(e) => onAzuriraj({ cijenaMaterijalaEurKg: e.target.value })} /></div>
+      <div style={{ marginLeft: "auto", textAlign: "right" }}>
+        <label className="label">Masa</label>
+        <div className="f-mono" style={{ fontWeight: 600, fontSize: 13 }}>{(f.masaKg || 0).toFixed(1)} kg</div>
+      </div>
+      {!jedini && <button className="btn btn-icon btn-ghost" onClick={onObrisi}><X size={14} /></button>}
+    </div>
+  );
+}
+
 // Redak jedne stavke ponude za lasersko rezanje — tip lasera bira koji se uređaj/satnica koristi
 // (pločasti = rezanje limova po dimenzijama i gustoći kvalitete; cijevni = rezanje po dužini i
-// masi po m', isti princip kao profili na skladištu), a masa/trošak se prikazuju uživo.
+// masi po m', isti princip kao profili na skladištu). Jedna stavka može sadržavati više formata
+// (npr. više različitih limova/profila) koji dijele isti opis i isto vrijeme rezanja/pripreme —
+// masa/trošak materijala zbrajaju se preko svih formata, a masa/trošak stavke prikazuju uživo.
 function LaserStavkaRedak({ stavka: s, kvalitete, onAzuriraj, onObrisi }) {
   const izracun = izracunStavkeLasera(s, s._cjenik, kvalitete);
+  const formati = izracun.formati;
+  const promijeniTip = (noviTip) => onAzuriraj({ tipLasera: noviTip, formati: [prazanFormatLasera(noviTip)] });
+  const azurirajFormat = (fid, patch) => onAzuriraj({ formati: (s.formati || []).map((f) => (f.id === fid ? { ...f, ...patch } : f)) });
+  const obrisiFormat = (fid) => onAzuriraj({ formati: (s.formati || []).filter((f) => f.id !== fid) });
+  const dodajFormat = () => onAzuriraj({ formati: [...(s.formati || []), prazanFormatLasera(s.tipLasera)] });
+
   return (
     <div className="card" style={{ padding: 10, marginBottom: 8, background: "var(--surface-alt)" }}>
       <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
         <div style={{ flex: 1 }}><label className="label">Opis stavke</label><input className="input" value={s.opis} onChange={(e) => onAzuriraj({ opis: e.target.value })} /></div>
         <div style={{ width: 150 }}>
           <label className="label">Tip lasera</label>
-          <select className="select" value={s.tipLasera} onChange={(e) => onAzuriraj({ tipLasera: e.target.value })}>
+          <select className="select" value={s.tipLasera} onChange={(e) => promijeniTip(e.target.value)}>
             <option value="plocasti">Pločasti (limovi)</option>
             <option value="cijevni">Cijevni (profili)</option>
           </select>
         </div>
         <button className="btn btn-icon btn-ghost" onClick={onObrisi}><X size={14} /></button>
       </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginTop: 8, flexWrap: "wrap" }}>
-        {s.tipLasera === "cijevni" ? (
-          <>
-            <div style={{ width: 100 }}><label className="label">Dužina (mm)</label><input className="input f-mono" type="number" min="0" value={s.duzinaMM} onChange={(e) => onAzuriraj({ duzinaMM: e.target.value })} /></div>
-            <div style={{ width: 80 }}><label className="label">Komada</label><input className="input f-mono" type="number" min="0" value={s.komada} onChange={(e) => onAzuriraj({ komada: e.target.value })} /></div>
-            <div style={{ width: 100 }}><label className="label">Masa po m' (kg/m)</label><input className="input f-mono" type="number" min="0" step="0.01" value={s.kgPoM} onChange={(e) => onAzuriraj({ kgPoM: e.target.value })} /></div>
-          </>
-        ) : (
-          <>
-            <div style={{ width: 95 }}><label className="label">Dužina (mm)</label><input className="input f-mono" type="number" min="0" value={s.duzinaMM} onChange={(e) => onAzuriraj({ duzinaMM: e.target.value })} /></div>
-            <div style={{ width: 95 }}><label className="label">Širina (mm)</label><input className="input f-mono" type="number" min="0" value={s.sirinaMM} onChange={(e) => onAzuriraj({ sirinaMM: e.target.value })} /></div>
-            <div style={{ width: 85 }}><label className="label">Debljina (mm)</label><input className="input f-mono" type="number" min="0" step="0.1" value={s.debljinaMM} onChange={(e) => onAzuriraj({ debljinaMM: e.target.value })} /></div>
-            <div style={{ width: 70 }}><label className="label">Komada</label><input className="input f-mono" type="number" min="0" value={s.komada} onChange={(e) => onAzuriraj({ komada: e.target.value })} /></div>
-            <div style={{ width: 165 }}>
-              <label className="label">Kvaliteta materijala</label>
-              <select className="select" value={s.kvaliteta} onChange={(e) => onAzuriraj({ kvaliteta: e.target.value })}>
-                {(kvalitete && kvalitete.length ? kvalitete : ZADANE_KVALITETE_MATERIJALA).map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}
-              </select>
-            </div>
-          </>
-        )}
-        <div style={{ width: 110 }}><label className="label">Cijena materijala (€/kg)</label><input className="input f-mono" type="number" min="0" step="0.01" value={s.cijenaMaterijalaEurKg} onChange={(e) => onAzuriraj({ cijenaMaterijalaEurKg: e.target.value })} /></div>
+
+      <div style={{ marginTop: 8 }}>
+        <div className="label" style={{ marginBottom: 2 }}>Formati (limovi/profili u ovoj stavci)</div>
+        {formati.map((f) => (
+          <FormatLaseraRedak
+            key={f.id} format={f} tipLasera={s.tipLasera} kvalitete={kvalitete} jedini={formati.length === 1}
+            onAzuriraj={(patch) => azurirajFormat(f.id, patch)} onObrisi={() => obrisiFormat(f.id)}
+          />
+        ))}
+        <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajFormat} style={{ marginTop: 6 }}>Dodaj format</Btn>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line-strong)" }}>
         <div style={{ width: 90 }}><label className="label">Rezanje (min)</label><input className="input f-mono" type="number" min="0" value={s.rezanjeMin} onChange={(e) => onAzuriraj({ rezanjeMin: e.target.value })} /></div>
         <div style={{ width: 90 }}><label className="label">Priprema (min)</label><input className="input f-mono" type="number" min="0" value={s.pripremaMin} onChange={(e) => onAzuriraj({ pripremaMin: e.target.value })} /></div>
         <div style={{ marginLeft: "auto", textAlign: "right" }}>
@@ -5740,7 +5782,7 @@ function LaserStavkaRedak({ stavka: s, kvalitete, onAzuriraj, onObrisi }) {
 
 function PonudaLaseraModal({ form, setForm, db, onSave, onClose }) {
   const calc = izracunPonudeLasera(form, db.kvaliteteMaterijala);
-  const prazanRed = () => ({ id: uid("lst"), opis: "", tipLasera: "plocasti", duzinaMM: 1000, sirinaMM: 1000, debljinaMM: 3, komada: 1, kvaliteta: "celik", cijenaMaterijalaEurKg: 0.9, kgPoM: 0, rezanjeMin: 0, pripremaMin: 0 });
+  const prazanRed = () => ({ id: uid("lst"), opis: "", tipLasera: "plocasti", rezanjeMin: 0, pripremaMin: 0, formati: [prazanFormatLasera("plocasti")] });
   const azurirajStavku = (id, patch) => setForm({ ...form, stavke: form.stavke.map((s) => (s.id === id ? { ...s, ...patch } : s)) });
   const obrisiStavku = (id) => setForm({ ...form, stavke: form.stavke.filter((s) => s.id !== id) });
   const azurirajCjenik = (patch) => setForm({ ...form, cjenik: { ...prazniCjenikLasera(), ...form.cjenik, ...patch } });
@@ -5749,8 +5791,11 @@ function PonudaLaseraModal({ form, setForm, db, onSave, onClose }) {
   // optimizacije po standardnim dužinama/limovima jer stavke lasera nemaju katalošku vezu,
   // za razliku od pozicija konstrukcije), a "Rekapitulacija" je čist pregled troška po stavci.
   const [aktivnaKartica, setAktivnaKartica] = useState("stavke");
-  const stavkeProfili = calc.stavke.filter((s) => s.tipLasera === "cijevni");
-  const stavkeLimovi = calc.stavke.filter((s) => s.tipLasera !== "cijevni");
+  // Materijal se prikazuje po FORMATU (ne po stavci) jer jedna stavka može sadržavati više
+  // različitih dimenzija — svaki format nosi opis svoje matične stavke radi snalaženja.
+  const uzTrosakFormata = (s) => s.formati.map((f) => ({ ...f, opis: s.opis, trosakMaterijala: f.masaKg * (Number(f.cijenaMaterijalaEurKg) || 0) }));
+  const formatiProfili = calc.stavke.filter((s) => s.tipLasera === "cijevni").flatMap(uzTrosakFormata);
+  const formatiLimovi = calc.stavke.filter((s) => s.tipLasera !== "cijevni").flatMap(uzTrosakFormata);
 
   return (
     <Modal wide title={form.id ? `Ponuda za laser ${form.broj}` : "Nova ponuda za laser"} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={onSave}>Spremi</Btn></>}>
@@ -5805,58 +5850,58 @@ function PonudaLaseraModal({ form, setForm, db, onSave, onClose }) {
       {aktivnaKartica === "materijal" && (
         <div>
           <div className="label" style={{ marginBottom: 6 }}>Profili (cijevni laser) — potrebna dužina i masa</div>
-          {stavkeProfili.length === 0 ? (
+          {formatiProfili.length === 0 ? (
             <div style={{ textAlign: "center", color: "var(--ink-faint)", padding: "12px 0", fontSize: 13, marginBottom: 16 }}>Nema stavki cijevnog lasera.</div>
           ) : (
             <table className="erp-table" style={{ marginBottom: 16 }}>
               <thead><tr><th>Stavka</th><th style={{ width: 90 }}>Dužina (m)</th><th style={{ width: 70 }}>Komada</th><th style={{ width: 90 }}>Masa (kg)</th><th style={{ width: 110 }}>Trošak materijala</th></tr></thead>
               <tbody>
-                {stavkeProfili.map((s) => (
-                  <tr key={s.id}>
-                    <td>{s.opis || "—"}</td>
-                    <td className="f-mono">{((Number(s.duzinaMM) || 0) / 1000).toFixed(2)}</td>
-                    <td className="f-mono">{s.komada}</td>
-                    <td className="f-mono">{s.masaKg.toFixed(1)}</td>
-                    <td className="f-mono">{fmtCurDec(s.trosakMaterijala)}</td>
+                {formatiProfili.map((f) => (
+                  <tr key={f.id}>
+                    <td>{f.opis || "—"}</td>
+                    <td className="f-mono">{((Number(f.duzinaMM) || 0) / 1000).toFixed(2)}</td>
+                    <td className="f-mono">{f.komada}</td>
+                    <td className="f-mono">{f.masaKg.toFixed(1)}</td>
+                    <td className="f-mono">{fmtCurDec(f.trosakMaterijala)}</td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
                 <tr style={{ fontWeight: 700, borderTop: "1px solid var(--line-strong)" }}>
                   <td>Ukupno</td>
-                  <td className="f-mono">{stavkeProfili.reduce((s, x) => s + ((Number(x.duzinaMM) || 0) / 1000) * (Number(x.komada) || 0), 0).toFixed(2)}</td>
-                  <td className="f-mono">{stavkeProfili.reduce((s, x) => s + (Number(x.komada) || 0), 0)}</td>
-                  <td className="f-mono">{stavkeProfili.reduce((s, x) => s + x.masaKg, 0).toFixed(1)}</td>
-                  <td className="f-mono">{fmtCurDec(stavkeProfili.reduce((s, x) => s + x.trosakMaterijala, 0))}</td>
+                  <td className="f-mono">{formatiProfili.reduce((s, x) => s + ((Number(x.duzinaMM) || 0) / 1000) * (Number(x.komada) || 0), 0).toFixed(2)}</td>
+                  <td className="f-mono">{formatiProfili.reduce((s, x) => s + (Number(x.komada) || 0), 0)}</td>
+                  <td className="f-mono">{formatiProfili.reduce((s, x) => s + x.masaKg, 0).toFixed(1)}</td>
+                  <td className="f-mono">{fmtCurDec(formatiProfili.reduce((s, x) => s + x.trosakMaterijala, 0))}</td>
                 </tr>
               </tfoot>
             </table>
           )}
 
           <div className="label" style={{ marginBottom: 6 }}>Limovi (pločasti laser) — potrebna površina i masa</div>
-          {stavkeLimovi.length === 0 ? (
+          {formatiLimovi.length === 0 ? (
             <div style={{ textAlign: "center", color: "var(--ink-faint)", padding: "12px 0", fontSize: 13 }}>Nema stavki pločastog lasera.</div>
           ) : (
             <table className="erp-table">
               <thead><tr><th>Stavka</th><th style={{ width: 90 }}>Površina (m²)</th><th style={{ width: 70 }}>Komada</th><th style={{ width: 90 }}>Masa (kg)</th><th style={{ width: 110 }}>Trošak materijala</th></tr></thead>
               <tbody>
-                {stavkeLimovi.map((s) => (
-                  <tr key={s.id}>
-                    <td>{s.opis || "—"}</td>
-                    <td className="f-mono">{(((Number(s.duzinaMM) || 0) * (Number(s.sirinaMM) || 0)) / 1e6 * (Number(s.komada) || 0)).toFixed(2)}</td>
-                    <td className="f-mono">{s.komada}</td>
-                    <td className="f-mono">{s.masaKg.toFixed(1)}</td>
-                    <td className="f-mono">{fmtCurDec(s.trosakMaterijala)}</td>
+                {formatiLimovi.map((f) => (
+                  <tr key={f.id}>
+                    <td>{f.opis || "—"}</td>
+                    <td className="f-mono">{(((Number(f.duzinaMM) || 0) * (Number(f.sirinaMM) || 0)) / 1e6 * (Number(f.komada) || 0)).toFixed(2)}</td>
+                    <td className="f-mono">{f.komada}</td>
+                    <td className="f-mono">{f.masaKg.toFixed(1)}</td>
+                    <td className="f-mono">{fmtCurDec(f.trosakMaterijala)}</td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
                 <tr style={{ fontWeight: 700, borderTop: "1px solid var(--line-strong)" }}>
                   <td>Ukupno</td>
-                  <td className="f-mono">{stavkeLimovi.reduce((s, x) => s + ((Number(x.duzinaMM) || 0) * (Number(x.sirinaMM) || 0)) / 1e6 * (Number(x.komada) || 0), 0).toFixed(2)}</td>
-                  <td className="f-mono">{stavkeLimovi.reduce((s, x) => s + (Number(x.komada) || 0), 0)}</td>
-                  <td className="f-mono">{stavkeLimovi.reduce((s, x) => s + x.masaKg, 0).toFixed(1)}</td>
-                  <td className="f-mono">{fmtCurDec(stavkeLimovi.reduce((s, x) => s + x.trosakMaterijala, 0))}</td>
+                  <td className="f-mono">{formatiLimovi.reduce((s, x) => s + ((Number(x.duzinaMM) || 0) * (Number(x.sirinaMM) || 0)) / 1e6 * (Number(x.komada) || 0), 0).toFixed(2)}</td>
+                  <td className="f-mono">{formatiLimovi.reduce((s, x) => s + (Number(x.komada) || 0), 0)}</td>
+                  <td className="f-mono">{formatiLimovi.reduce((s, x) => s + x.masaKg, 0).toFixed(1)}</td>
+                  <td className="f-mono">{fmtCurDec(formatiLimovi.reduce((s, x) => s + x.trosakMaterijala, 0))}</td>
                 </tr>
               </tfoot>
             </table>
@@ -5943,7 +5988,7 @@ function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
               <tr key={s.id}>
                 <td>{s.opis || "—"}</td>
                 <td>{s.tipLasera === "cijevni" ? "Cijevni" : "Pločasti"}</td>
-                <td className="f-mono">{s.komada}</td>
+                <td className="f-mono">{s.formati.reduce((sum, f) => sum + (Number(f.komada) || 0), 0)}</td>
                 <td className="f-mono">{fmtCurDec(s.ukupno * faktorDodatka)}</td>
               </tr>
             ))}
