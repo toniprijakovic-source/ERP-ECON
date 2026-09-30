@@ -1570,6 +1570,29 @@ export default function App() {
     }).catch(() => showToast("Greška pri spremanju — provjeri internetsku vezu."));
   };
 
+  // Samostalno označavanje zadatka projekta izvršenim (npr. s nadzorne ploče) — cilja SAMO taj
+  // zadatak na serveru (isti razlog kao patchProjekt), a dopušteno je i zaposleniku bez pristupa
+  // modulu Projekti dok god je zadatak dodijeljen baš njemu (provjerava backend).
+  const patchZadatakIzvrseno = (projektId, zadId, izvrseno) => {
+    setDb((prev) => ({
+      ...prev,
+      projekti: prev.projekti.map((p) => (p.id !== projektId ? p : {
+        ...p,
+        zadaci: (p.zadaci || []).map((z) => (z.id !== zadId ? z : { ...z, izvrseno, datumIzvrsenja: izvrseno ? (z.datumIzvrsenja || todayISO()) : null })),
+      })),
+    }));
+    const token = localStorage.getItem("erp_token");
+    fetch(`${API_URL}/api/projekti/${projektId}/zadatak/${zadId}/izvrseno`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ izvrseno }),
+    }).then(async (res) => {
+      if (!res.ok) { showToast("Greška pri spremanju zadatka."); return; }
+      const data = await res.json();
+      setDb((prev) => ({ ...prev, projekti: data.projekti }));
+    }).catch(() => showToast("Greška pri spremanju — provjeri internetsku vezu."));
+  };
+
   // Ciljana izmjena upitiNabave — isti razlog i isti oblik (upsert/remove po id-u) kao
   // patchEvidencija, uz OPTIMISTIČNO lokalno ažuriranje kao patchProjekt (ponuda dobavljača se
   // uređuje polje po polje, pa se ne smije čekati mreža za svaki unos). upsert prima CIJELI
@@ -1729,7 +1752,7 @@ export default function App() {
         </div>
 
         <div style={{ padding: 24, flex: 1, overflowY: "auto" }}>
-          {aktivnaStranica === "dashboard" && <Dashboard db={db} setPage={setPage} />}
+          {aktivnaStranica === "dashboard" && <Dashboard db={db} setPage={setPage} mojId={zaposlenik?.id} patchZadatakIzvrseno={patchZadatakIzvrseno} />}
           {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} />}
@@ -1753,7 +1776,7 @@ export default function App() {
 }
 
 /* ============================== DASHBOARD ============================== */
-function Dashboard({ db, setPage }) {
+function Dashboard({ db, setPage, mojId, patchZadatakIzvrseno }) {
   const aktivniProjekti = db.projekti.filter((p) => ["U izradi", "Montaža"].includes(p.status));
   const otvorenePonude = db.ponude.filter((p) => p.status === "Poslana" || p.status === "U izradi");
   const vrijednostPonuda = otvorenePonude.reduce((s, p) => s + izracunPonude(p, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala).cijenaKonacna, 0);
@@ -1763,6 +1786,16 @@ function Dashboard({ db, setPage }) {
   const dugovanje = neplaceneFakture.reduce((s, f) => s + izracunFakture(f, db.postavkeTvrtke?.pdvStopa).ukupno, 0);
   const kasneFakture = db.fakture.filter((f) => f.status === "Kasni" || (f.status !== "Plaćeno" && daysUntil(f.rokPlacanja) < 0));
   const uskoroRokovi = db.projekti.filter((p) => !["Završen", "Otkazan"].includes(p.status) && daysUntil(p.rokZavrsetka) <= 30 && daysUntil(p.rokZavrsetka) >= 0).sort((a, b) => daysUntil(a.rokZavrsetka) - daysUntil(b.rokZavrsetka));
+
+  // Zadaci dodijeljeni MENI, na bilo kojem projektu, koji još nisu izvršeni — čim ih netko
+  // označi izvršenima, nestaju odavde (nema arhive na nadzornoj ploči).
+  const mojiZadaci = [];
+  db.projekti.forEach((p) => {
+    (p.zadaci || []).forEach((z) => {
+      if (z.dodijeljenoId === mojId && !z.izvrseno) mojiZadaci.push({ ...z, projektId: p.id, projektNaziv: p.naziv, projektSifra: p.sifra });
+    });
+  });
+  mojiZadaci.sort((a, b) => (a.planiraniDatum || "9999-99-99").localeCompare(b.planiraniDatum || "9999-99-99"));
 
   return (
     <div>
@@ -1796,18 +1829,25 @@ function Dashboard({ db, setPage }) {
 
         <div className="card" style={{ padding: 16 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
-            <AlertTriangle size={15} color="var(--rust)" />
-            <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600 }}>Niska zaliha materijala</h3>
+            <CheckCircle2 size={15} color="var(--steel)" />
+            <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600 }}>Moji zadaci</h3>
           </div>
-          {niskaZaliha.length === 0 ? <EmptyState text="Sve zalihe su iznad minimuma." /> : (
-            <table className="erp-table">
-              <thead><tr><th>Materijal</th><th>Stanje</th><th>Min.</th></tr></thead>
-              <tbody>
-                {niskaZaliha.map((m) => (
-                  <tr key={m.id}><td>{m.naziv}</td><td className="f-mono" style={{ color: "var(--rust)" }}>{m.kolicina} {m.jm}</td><td className="f-mono">{m.minZaliha} {m.jm}</td></tr>
-                ))}
-              </tbody>
-            </table>
+          {mojiZadaci.length === 0 ? <EmptyState text="Nemaš dodijeljenih zadataka." /> : (
+            <div>
+              {mojiZadaci.map((z) => {
+                const kasni = z.planiraniDatum && daysUntil(z.planiraniDatum) < 0;
+                return (
+                  <div key={z.id} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "7px 0", borderBottom: "1px solid var(--line)" }}>
+                    <input type="checkbox" checked={false} onChange={() => patchZadatakIzvrseno(z.projektId, z.id, true)} style={{ width: 15, height: 15, flexShrink: 0, marginTop: 2 }} />
+                    <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={() => setPage("projekti")}>
+                      <div style={{ fontSize: 13 }}>{z.naziv}</div>
+                      <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{z.projektSifra} — {z.projektNaziv}</div>
+                    </div>
+                    {z.planiraniDatum && <span className="f-mono" style={{ fontSize: 11.5, color: kasni ? "var(--rust)" : "var(--ink-soft)", flexShrink: 0, whiteSpace: "nowrap" }}>{fmtDate(z.planiraniDatum)}</span>}
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
 
@@ -5131,8 +5171,12 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
   const ostaleStavke = projekt.ostaleStavke || [];
   const zadaci = projekt.zadaci || [];
   const zadaciDone = zadaci.filter((z) => z.izvrseno).length;
+  // Izvršeni zadaci se sklanjaju s popisa čim se označe (nema arhive) — brojač iznad i dalje
+  // pokazuje ukupni napredak (X/Y), ali sam popis prikazuje samo ono što je još preostalo.
+  const zadaciNedovrseni = zadaci.filter((z) => !z.izvrseno);
   const [noviZadatak, setNoviZadatak] = useState("");
   const [noviZadatakDatum, setNoviZadatakDatum] = useState("");
+  const [noviZadatakKome, setNoviZadatakKome] = useState("");
   const [narudzbaModal, setNarudzbaModal] = useState(false);
   const [otpremniceModal, setOtpremniceModal] = useState(false);
   const narudzba = db.narudzbe.find((n) => n.projektId === projekt.id);
@@ -5185,12 +5229,14 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
   const toggleZadatak = (zadId, checked) => azurirajZadatke(zadaci.map((z) => (z.id === zadId ? { ...z, izvrseno: checked, izvrsioId: checked ? z.izvrsioId : null, datumIzvrsenja: checked ? z.datumIzvrsenja || todayISO() : null } : z)));
   const postaviIzvrsitelja = (zadId, izvrsioId) => azurirajZadatke(zadaci.map((z) => (z.id === zadId ? { ...z, izvrsioId, izvrseno: true, datumIzvrsenja: z.datumIzvrsenja || todayISO() } : z)));
   const postaviPlaniraniDatum = (zadId, datum) => azurirajZadatke(zadaci.map((z) => (z.id === zadId ? { ...z, planiraniDatum: datum } : z)));
+  const postaviDodjelu = (zadId, dodijeljenoId) => azurirajZadatke(zadaci.map((z) => (z.id === zadId ? { ...z, dodijeljenoId: dodijeljenoId || null } : z)));
   const obrisiZadatak = (zadId) => azurirajZadatke(zadaci.filter((z) => z.id !== zadId));
   const dodajZadatak = () => {
     if (!noviZadatak.trim()) return;
-    azurirajZadatke([...zadaci, { id: uid("zad"), naziv: noviZadatak.trim(), izvrseno: false, izvrsioId: null, datumIzvrsenja: null, planiraniDatum: noviZadatakDatum || null }]);
+    azurirajZadatke([...zadaci, { id: uid("zad"), naziv: noviZadatak.trim(), izvrseno: false, izvrsioId: null, datumIzvrsenja: null, planiraniDatum: noviZadatakDatum || null, dodijeljenoId: noviZadatakKome || null }]);
     setNoviZadatak("");
     setNoviZadatakDatum("");
+    setNoviZadatakKome("");
     showToast && showToast("Zadatak dodan.");
   };
 
@@ -5340,9 +5386,9 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
           <span className="f-mono" style={{ fontSize: 12 }}>{zadaciDone}/{zadaci.length}</span>
         </div>
         <div className="card">
-          {zadaci.length === 0 && <EmptyState text="Nema zadataka." />}
-          {zadaci.map((z) => {
-            const zakasnio = z.planiraniDatum && !z.izvrseno && daysUntil(z.planiraniDatum) < 0;
+          {zadaciNedovrseni.length === 0 && <EmptyState text={zadaci.length > 0 ? "Svi zadaci su izvršeni." : "Nema zadataka."} />}
+          {zadaciNedovrseni.map((z) => {
+            const zakasnio = z.planiraniDatum && daysUntil(z.planiraniDatum) < 0;
             return (
               <div key={z.id} style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -5352,6 +5398,11 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
                   <button className="btn btn-icon btn-ghost" onClick={() => obrisiZadatak(z.id)}><X size={14} /></button>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, marginLeft: 25, flexWrap: "wrap" }}>
+                  <label style={{ fontSize: 11, color: "var(--ink-faint)" }}>Dodijeljeno:</label>
+                  <select className="select" style={{ maxWidth: 175, fontSize: 12, padding: "4px 8px" }} value={z.dodijeljenoId || ""} onChange={(e) => postaviDodjelu(z.id, e.target.value)}>
+                    <option value="">Nije dodijeljeno…</option>
+                    {[...db.zaposlenici].sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((zz) => <option key={zz.id} value={zz.id}>{zz.prezime} {zz.ime}</option>)}
+                  </select>
                   <label style={{ fontSize: 11, color: "var(--ink-faint)" }}>Planirano do:</label>
                   <input type="date" className="input f-mono" style={{ width: 145, fontSize: 12, padding: "4px 8px", borderColor: zakasnio ? "var(--rust)" : undefined }} value={z.planiraniDatum || ""} onChange={(e) => postaviPlaniraniDatum(z.id, e.target.value)} />
                   <select className="select" style={{ maxWidth: 175, fontSize: 12, padding: "4px 8px" }} value={z.izvrsioId || ""} onChange={(e) => postaviIzvrsitelja(z.id, e.target.value)}>
@@ -5366,6 +5417,10 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
           <input className="input" placeholder="Dodaj novi zadatak za ovaj projekt…" value={noviZadatak} onChange={(e) => setNoviZadatak(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") dodajZadatak(); }} />
+          <select className="select" style={{ width: 170 }} value={noviZadatakKome} onChange={(e) => setNoviZadatakKome(e.target.value)}>
+            <option value="">Dodijeli…</option>
+            {[...db.zaposlenici].sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((zz) => <option key={zz.id} value={zz.id}>{zz.prezime} {zz.ime}</option>)}
+          </select>
           <input type="date" className="input" style={{ width: 150 }} value={noviZadatakDatum} onChange={(e) => setNoviZadatakDatum(e.target.value)} title="Planirani datum izvršenja" />
           <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajZadatak}>Dodaj</Btn>
         </div>
