@@ -5630,7 +5630,7 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
                 {cijenePozicija.map(({ p, cijena }) => (
                   <tr key={p.id}>
                     <td>{p.oznaka}</td>
-                    <td>{p.naziv}{p.opis && <div style={{ fontSize: 9.5, color: "#555", marginTop: 2 }}>{p.opis}</div>}</td>
+                    <td>{p.naziv}{p.opis && <div style={{ fontSize: 9.5, color: "#555", marginTop: 2, whiteSpace: "pre-line" }}>{p.opis}</div>}</td>
                     <td>{p.kolicina}</td>
                     <td>{fmtCurDec(cijena / (Number(p.kolicina) || 1))}</td>
                     <td>{fmtCurDec(cijena)}</td>
