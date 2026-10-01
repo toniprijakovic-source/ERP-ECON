@@ -5224,7 +5224,7 @@ function NormativiModal({ db, update, showToast, onClose }) {
 }
 
 /* ============================== DETALJI PROJEKTA ============================== */
-function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsync, patchUpiti, showToast, setPage, onClose }) {
+function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsync, patchUpiti, showToast, setPage, onClose, mojId }) {
   const kupac = db.kupci.find((k) => k.id === projekt.kupacId);
   const voditelj = db.zaposlenici.find((z) => z.id === projekt.voditeljId);
   const nalozi = db.radniNalozi.filter((r) => r.projektId === projekt.id);
@@ -5254,9 +5254,9 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
   const ostaleStavke = projekt.ostaleStavke || [];
   const zadaci = projekt.zadaci || [];
   const zadaciDone = zadaci.filter((z) => z.izvrseno).length;
-  // Izvršeni zadaci se sklanjaju s popisa čim se označe (nema arhive) — brojač iznad i dalje
-  // pokazuje ukupni napredak (X/Y), ali sam popis prikazuje samo ono što je još preostalo.
-  const zadaciNedovrseni = zadaci.filter((z) => !z.izvrseno);
+  // Svi zadaci ostaju vidljivi i nakon što su izvršeni (da se vidi tko ih je i kad izvršio) —
+  // samo se izvršeni spuste na dno popisa da nedovršeni ostanu pri vrhu.
+  const zadaciPrikaz = [...zadaci].sort((a, b) => (a.izvrseno === b.izvrseno ? 0 : a.izvrseno ? 1 : -1));
   const [noviZadatak, setNoviZadatak] = useState("");
   const [noviZadatakDatum, setNoviZadatakDatum] = useState("");
   const [noviZadatakKome, setNoviZadatakKome] = useState("");
@@ -5309,7 +5309,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
     const noviUpit = kreirajUpitIzMaterijala({ ...projekt, materijalStavke }, db, patchUpiti, showToast);
     if (noviUpit && setPage) setPage("nabava");
   };
-  const toggleZadatak = (zadId, checked) => azurirajZadatke(zadaci.map((z) => (z.id === zadId ? { ...z, izvrseno: checked, izvrsioId: checked ? z.izvrsioId : null, datumIzvrsenja: checked ? z.datumIzvrsenja || todayISO() : null } : z)));
+  const toggleZadatak = (zadId, checked) => azurirajZadatke(zadaci.map((z) => (z.id === zadId ? { ...z, izvrseno: checked, izvrsioId: checked ? (z.izvrsioId || mojId) : null, datumIzvrsenja: checked ? z.datumIzvrsenja || todayISO() : null } : z)));
   const postaviIzvrsitelja = (zadId, izvrsioId) => azurirajZadatke(zadaci.map((z) => (z.id === zadId ? { ...z, izvrsioId, izvrseno: true, datumIzvrsenja: z.datumIzvrsenja || todayISO() } : z)));
   const postaviPlaniraniDatum = (zadId, datum) => azurirajZadatke(zadaci.map((z) => (z.id === zadId ? { ...z, planiraniDatum: datum } : z)));
   const postaviDodjelu = (zadId, dodijeljenoId) => azurirajZadatke(zadaci.map((z) => (z.id === zadId ? { ...z, dodijeljenoId: dodijeljenoId || null } : z)));
@@ -5469,8 +5469,8 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
           <span className="f-mono" style={{ fontSize: 12 }}>{zadaciDone}/{zadaci.length}</span>
         </div>
         <div className="card">
-          {zadaciNedovrseni.length === 0 && <EmptyState text={zadaci.length > 0 ? "Svi zadaci su izvršeni." : "Nema zadataka."} />}
-          {zadaciNedovrseni.map((z) => {
+          {zadaciPrikaz.length === 0 && <EmptyState text="Nema zadataka." />}
+          {zadaciPrikaz.map((z) => {
             const zakasnio = z.planiraniDatum && daysUntil(z.planiraniDatum) < 0;
             return (
               <div key={z.id} style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>
@@ -6545,7 +6545,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
 
       {cjenikOpen && <CjenikRadaModal cjenikRada={db.cjenikRada} onSave={saveCjenik} onClose={() => setCjenikOpen(false)} />}
       {zadaciOpen && <StandardniZadaciModal standardniZadaci={db.standardniZadaci} update={update} showToast={showToast} onClose={() => setZadaciOpen(false)} />}
-      {detalj && <ProjektDetaljModal projekt={db.projekti.find((p) => p.id === detalj.id) || detalj} db={db} update={update} patchProjekt={patchProjekt} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} onClose={() => setDetalj(null)} />}
+      {detalj && <ProjektDetaljModal projekt={db.projekti.find((p) => p.id === detalj.id) || detalj} db={db} update={update} patchProjekt={patchProjekt} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} onClose={() => setDetalj(null)} mojId={mojId} />}
       {printPonuda && <PonudaPrintModal ponuda={printPonuda} kupac={db.kupci.find((k) => k.id === printPonuda.kupacId)} db={db} onClose={() => setPrintPonuda(null)} />}
       {modal === "laser" && <PonudaLaseraModal form={laserForm} setForm={setLaserForm} db={db} onSave={saveLaser} onClose={() => setModal(null)} />}
       {printLaser && <PonudaLaseraPrintModal ponuda={printLaser} kupac={db.kupci.find((k) => k.id === printLaser.kupacId)} db={db} onClose={() => setPrintLaser(null)} />}

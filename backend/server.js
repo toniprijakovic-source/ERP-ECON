@@ -419,7 +419,11 @@ app.put("/api/projekti/:projektId/zadatak/:zadId/izvrseno", autentikacija, async
     }
     const rezultat = trenutno.map((p) => (p.id !== req.params.projektId ? p : {
       ...p,
-      zadaci: (p.zadaci || []).map((z) => (z.id !== req.params.zadId ? z : { ...z, izvrseno, datumIzvrsenja: izvrseno ? (z.datumIzvrsenja || new Date().toISOString().slice(0, 10)) : null })),
+      zadaci: (p.zadaci || []).map((z) => (z.id !== req.params.zadId ? z : {
+        ...z, izvrseno,
+        datumIzvrsenja: izvrseno ? (z.datumIzvrsenja || new Date().toISOString().slice(0, 10)) : null,
+        izvrsioId: izvrseno ? (z.izvrsioId || req.zaposlenikId) : null,
+      })),
     }));
     await client.query(
       `INSERT INTO app_data (key, value, updated_at) VALUES ('projekti', $1, now())
