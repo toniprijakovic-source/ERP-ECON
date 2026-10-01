@@ -441,15 +441,18 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
   // isti ukupni "placeniNerad" ostaje zbroj svih plaćenih (bolovanje se evidentira, ali NE
   // plaća, pa se ne zbraja u placeniNerad — pravilo obračuna bolovanja još nije definirano).
   let redovni = 0, prekovremeni = 0, placeniNerad = 0;
-  let praznikSati = 0, godisnjiSati = 0, dopustSati = 0, bolovanjeSati = 0;
+  let praznikSati = 0, godisnjiSati = 0, dopustSati = 0, detasmanSati = 0, bolovanjeSati = 0;
   if (praznik) {
     placeniNerad = norma;
     praznikSati = norma;
   } else if (vrsta === "godisnji") {
     placeniNerad = norma;
     godisnjiSati = norma;
-  } else if (vrsta === "detasman" || vrsta === "placeniDopust" || vrsta === "sluzbeniPut") {
-    placeniNerad = norma; // detašman, plaćeni dopust i službeni put plaćaju se kao puna norma
+  } else if (vrsta === "detasman") {
+    placeniNerad = norma; // detašman se plaća kao puna norma, ali se vodi odvojeno od plaćenog dopusta
+    detasmanSati = norma;
+  } else if (vrsta === "placeniDopust" || vrsta === "sluzbeniPut") {
+    placeniNerad = norma; // plaćeni dopust i službeni put plaćaju se kao puna norma
     dopustSati = norma;
   } else if (vrsta === "bolovanje") {
     placeniNerad = 0; // PRAVILO JOŠ NIJE DEFINIRANO — evidentira se, ne ulazi u obračun
@@ -480,7 +483,7 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
   return {
     datum, vrsta, danUTjednu, praznik, smjena, dodatakSmjene, faktorPrekSaSmjenom,
     odradjeniSati, redovni, prekovremeni, placeniNerad, putni, topliObrok,
-    praznikSati, godisnjiSati, dopustSati, bolovanjeSati, jeSluzbeniPut,
+    praznikSati, godisnjiSati, dopustSati, detasmanSati, bolovanjeSati, jeSluzbeniPut,
     iznosRedovni, iznosPrekovremeni, iznosNerad,
     ukupnoDan: iznosRedovni + iznosPrekovremeni + iznosNerad + putni + topliObrok,
   };
@@ -522,9 +525,10 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     praznikSati: s.praznikSati + d.praznikSati,
     godisnjiSati: s.godisnjiSati + d.godisnjiSati,
     dopustSati: s.dopustSati + d.dopustSati,
+    detasmanSati: s.detasmanSati + d.detasmanSati,
     bolovanjeSati: s.bolovanjeSati + d.bolovanjeSati,
     danaSluzbenogPuta: s.danaSluzbenogPuta + (d.jeSluzbeniPut ? 1 : 0),
-  }), { redovni: 0, prekovremeni: 0, placeniNerad: 0, putni: 0, topliObrok: 0, odradjeni: 0, satiSDodatkom: 0, iznosRedovni: 0, iznosPrekovremeni: 0, iznosNerad: 0, praznikSati: 0, godisnjiSati: 0, dopustSati: 0, bolovanjeSati: 0, danaSluzbenogPuta: 0 });
+  }), { redovni: 0, prekovremeni: 0, placeniNerad: 0, putni: 0, topliObrok: 0, odradjeni: 0, satiSDodatkom: 0, iznosRedovni: 0, iznosPrekovremeni: 0, iznosNerad: 0, praznikSati: 0, godisnjiSati: 0, dopustSati: 0, detasmanSati: 0, bolovanjeSati: 0, danaSluzbenogPuta: 0 });
 
   // Dnevnica za službeni put + ručni mjesečni dodaci/odbici (stimulacija, kredit, usteg
   // prehrane) — potonji se upisuju ručno po zaposleniku/mjesecu jer ne proizlaze iz sati.
@@ -564,11 +568,15 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   };
 };
 
-// Kooperanti (vanjski suradnici) se ne obračunavaju po formuli plaće (bodovi/staž/topli obrok/
-// putni) nego jednostavno: odrađeni sati (isto obračunsko zaokruživanje kao za zaposlenike) ×
-// njihova ugovorena satnica — zato se posebno prepoznaju po nazivu pozicije i drže odvojeno
-// od redovnog obračuna plaća i od redovne evidencije rada.
+// Kooperanti se ne obračunavaju po formuli plaće (bodovi/staž/topli obrok/putni) nego
+// jednostavno: odrađeni sati (isto obračunsko zaokruživanje kao za zaposlenike) × njihova
+// ugovorena satnica — zato se posebno prepoznaju po nazivu pozicije i drže odvojeno od
+// redovnog obračuna plaća.
 const jeKooperant = (zaposlenik, pozicije) => (pozicije || []).find((p) => p.id === zaposlenik?.pozicijaId)?.naziv?.trim().toLowerCase() === "kooperant";
+// Vanjski suradnik — zasebna pozicija od Kooperanta: evidencija dolazaka/odlazaka mu se vodi
+// normalno, ali se NE plaća po satu nego fiksnim dogovorenim mjesečnim iznosom (npr. paušal za
+// putne troškove), bez obzira na broj odrađenih sati tog mjeseca.
+const jeVanjskiSuradnik = (zaposlenik, pozicije) => (pozicije || []).find((p) => p.id === zaposlenik?.pozicijaId)?.naziv?.trim().toLowerCase() === "vanjski suradnik";
 // Operater na laseru ima svedeni prikaz (samo Plan rezanja) i ne vidi administrativne alate poput Backupa.
 const jeOperaterLasera = (pozicija) => (pozicija?.naziv || "").trim().toLowerCase() === "operater na laseru";
 
@@ -594,6 +602,21 @@ const obracunMjesecaKooperant = (zaposlenik, mjesec, db) => {
   const sati = dani.reduce((s, d) => s + d.odradjeniSati, 0);
   const satnica = Number(zaposlenik.satnicaKooperant) || 0;
   return { zaposlenik, satnica, sati, ukupno: sati * satnica, brojDana: dani.length, dani };
+};
+
+// Vanjski suradnik — sati se prikazuju informativno (iz evidencije, isto obračunsko
+// zaokruživanje), ali isplata NIJE sati × satnica nego fiksni dogovoreni mjesečni iznos s
+// njegovog zapisa zaposlenika — isplaćuje se svaki mjesec bez obzira na odrađene sate.
+const obracunMjesecaVanjskiSuradnik = (zaposlenik, mjesec, db) => {
+  const postavke = db.postavkePlaca;
+  const zapisi = (db.evidencijaRada || []).filter((e) => e.zaposlenikId === zaposlenik.id && e.vrijemeDolaska.slice(0, 7) === mjesec && (e.vrsta || "rad") === "rad" && e.vrijemeOdlaska);
+  const dani = zapisi.map((z) => {
+    const smjena = odrediSmjenu(z.vrijemeDolaska, postavke);
+    return { datum: z.vrijemeDolaska.slice(0, 10), odradjeniSati: obracunskiSati(z.vrijemeDolaska, z.vrijemeOdlaska, smjena, postavke) };
+  });
+  const sati = dani.reduce((s, d) => s + d.odradjeniSati, 0);
+  const iznos = Number(zaposlenik.fiksniMjesecniIznos) || 0;
+  return { zaposlenik, sati, iznos, brojDana: dani.length, dani };
 };
 
 /* ============================== UPOZORENJA EVIDENCIJE ==============================
@@ -7815,10 +7838,11 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
   const [postavkeOtvorene, setPostavkeOtvorene] = useState(false);
   const [detalj, setDetalj] = useState(null);
   const [detaljKoop, setDetaljKoop] = useState(null);
-  const [printGrupa, setPrintGrupa] = useState(null); // "radiona" | "praktikant" | "ostalo" | "kooperant"
+  const [detaljVanjski, setDetaljVanjski] = useState(null);
+  const [printGrupa, setPrintGrupa] = useState(null); // "radiona" | "praktikant" | "ostalo" | "kooperant" | "vanjski"
 
   const redovi = useMemo(() => db.zaposlenici
-    .filter((z) => z.status === "Aktivan" && !jeKooperant(z, db.pozicijeZaposlenika))
+    .filter((z) => z.status === "Aktivan" && !jeKooperant(z, db.pozicijeZaposlenika) && !jeVanjskiSuradnik(z, db.pozicijeZaposlenika))
     .map((z) => obracunMjeseca(z, mjesec, db))
     .filter((r) => r.brojDana > 0)
     .sort((a, b) => (a.zaposlenik.prezime + a.zaposlenik.ime).localeCompare(b.zaposlenik.prezime + b.zaposlenik.ime, "hr")),
@@ -7856,6 +7880,16 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
   }), { redovni: 0, prekovremeni: 0, prekovremeniStvarno: 0, putni: 0, topliObrok: 0, ukupno: 0 });
 
   const ukKooperanti = redoviKooperanti.reduce((s, r) => ({ sati: s.sati + r.sati, ukupno: s.ukupno + r.ukupno }), { sati: 0, ukupno: 0 });
+
+  // Vanjski suradnici se isplaćuju fiksnim iznosom bez obzira na odrađene sate, pa se (za
+  // razliku od ostalih skupina) prikazuju svaki mjesec dok god su aktivni — ne samo mjesece u
+  // kojima imaju bar jedan zapis u evidenciji.
+  const redoviVanjski = useMemo(() => db.zaposlenici
+    .filter((z) => z.status === "Aktivan" && jeVanjskiSuradnik(z, db.pozicijeZaposlenika))
+    .map((z) => obracunMjesecaVanjskiSuradnik(z, mjesec, db))
+    .sort((a, b) => (a.zaposlenik.prezime + a.zaposlenik.ime).localeCompare(b.zaposlenik.prezime + b.zaposlenik.ime, "hr")),
+    [db, mjesec]);
+  const ukVanjski = redoviVanjski.reduce((s, r) => ({ sati: s.sati + r.sati, iznos: s.iznos + r.iznos }), { sati: 0, iznos: 0 });
 
   const imaBolovanje = redovi.some((r) => r.dani.some((d) => d.vrsta === "bolovanje"));
 
@@ -7994,6 +8028,58 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
         </>
       )}
 
+      <div style={{ marginTop: 24 }}><NaslovSaPdf naslov="Vanjski suradnici (fiksni mjesečni iznos)" broj={redoviVanjski.length} grupa="vanjski" /></div>
+      {redoviVanjski.length === 0 ? <EmptyState text="Nema aktivnih vanjskih suradnika." /> : (
+        <>
+          <table className="erp-table">
+            <thead>
+              <tr>
+                <th>Vanjski suradnik</th>
+                <th style={{ width: 90 }}>Sati (evidencija)</th>
+                <th style={{ width: 110 }}>Fiksni iznos</th>
+                <th style={{ width: 40 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {redoviVanjski.map((r) => (
+                <tr key={r.zaposlenik.id}>
+                  <td><strong>{r.zaposlenik.prezime} {r.zaposlenik.ime}</strong></td>
+                  <td className="f-mono">{r.sati.toFixed(1)} h</td>
+                  <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(r.iznos)}</td>
+                  <td><button className="btn btn-icon btn-ghost" title="Detalji po danima" onClick={() => setDetaljVanjski(r)}><Eye size={14} /></button></td>
+                </tr>
+              ))}
+              <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
+                <td>UKUPNO ({redoviVanjski.length})</td>
+                <td className="f-mono">{ukVanjski.sati.toFixed(1)} h</td>
+                <td className="f-mono">{fmtCurDec(ukVanjski.iznos)}</td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+          <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 10 }}>
+            Vanjski suradnici se ne obračunavaju po satu — isplaćuje im se fiksni dogovoreni mjesečni iznos (npr. paušal za putne troškove), bez obzira na odrađene sate. Sati su prikazani samo informativno iz evidencije rada.
+          </p>
+        </>
+      )}
+
+      {detaljVanjski && (
+        <Modal title={`Evidencija — ${detaljVanjski.zaposlenik.prezime} ${detaljVanjski.zaposlenik.ime} (${mjesec})`} onClose={() => setDetaljVanjski(null)} footer={<Btn onClick={() => setDetaljVanjski(null)}>Zatvori</Btn>}>
+          <table className="erp-table">
+            <thead><tr><th>Datum</th><th style={{ width: 90 }}>Sati</th></tr></thead>
+            <tbody>
+              {[...detaljVanjski.dani].sort((a, b) => a.datum.localeCompare(b.datum)).map((d) => (
+                <tr key={d.datum}><td className="f-mono">{fmtDate(d.datum)}</td><td className="f-mono">{d.odradjeniSati.toFixed(1)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="card" style={{ padding: 12, marginTop: 12, background: "var(--surface-alt)", display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
+            <span>Fiksni mjesečni iznos (ne ovisi o satima)</span>
+            <strong className="f-mono">{fmtCurDec(detaljVanjski.iznos)}</strong>
+          </div>
+        </Modal>
+      )}
+
       {detaljKoop && (
         <Modal title={`Odrađeni sati — ${detaljKoop.zaposlenik.prezime} ${detaljKoop.zaposlenik.ime} (${mjesec})`} onClose={() => setDetaljKoop(null)} footer={<Btn onClick={() => setDetaljKoop(null)}>Zatvori</Btn>}>
           <table className="erp-table">
@@ -8037,7 +8123,8 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 12.5 }}>
               <span>Redovni rad ({detaljZaposlenik.redovni.toFixed(1)} h)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosRedovni)}</span>
               <span>Prekovremeni ({detaljZaposlenik.prekovremeni.toFixed(1)} h{detaljZaposlenik.visakPrekovremenihSati > 0 && <span style={{ color: "var(--ink-faint)" }}> — stvarno {detaljZaposlenik.prekovremeniStvarno.toFixed(1)} h, {detaljZaposlenik.visakPrekovremenihSati.toFixed(1)} h u stimulaciji</span>})</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosPrekovremeni)}</span>
-              <span>Godišnji / praznici / dopust ({detaljZaposlenik.placeniNerad.toFixed(1)} h)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosNerad)}</span>
+              <span>Godišnji / praznici / dopust / detašman ({detaljZaposlenik.placeniNerad.toFixed(1)} h)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosNerad)}</span>
+              {detaljZaposlenik.detasmanSati > 0 && <><span style={{ color: "var(--ink-faint)", fontSize: 11 }}>— od toga detašman: {detaljZaposlenik.detasmanSati.toFixed(1)} h</span><span></span></>}
               <span>Putni troškovi</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.putni)}</span>
               <span>Topli obrok</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.topliObrok)}</span>
               {detaljZaposlenik.danaSluzbenogPuta > 0 && <><span>Dnevnica službeni put ({detaljZaposlenik.danaSluzbenogPuta} dana)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.dnevnicaTeren)}</span></>}
@@ -8073,7 +8160,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
       )}
 
       {postavkeOtvorene && <PostavkePlacaModal db={db} update={update} showToast={showToast} onClose={() => setPostavkeOtvorene(false)} />}
-      {printGrupa && printGrupa !== "kooperant" && (
+      {printGrupa && printGrupa !== "kooperant" && printGrupa !== "vanjski" && (
         <ObracunPlacaPrintModal
           redovi={printGrupa === "radiona" ? radionaRedovi : printGrupa === "praktikant" ? praktikantiRedovi : tehnickiRedovi}
           naslovGrupe={printGrupa === "radiona" ? "Radiona" : printGrupa === "praktikant" ? "Praktikanti" : "Tehnički ured i administracija"}
@@ -8081,6 +8168,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
         />
       )}
       {printGrupa === "kooperant" && <ObracunKooperantiPrintModal redovi={redoviKooperanti} mjesec={mjesec} db={db} onClose={() => setPrintGrupa(null)} />}
+      {printGrupa === "vanjski" && <ObracunVanjskiPrintModal redovi={redoviVanjski} mjesec={mjesec} db={db} onClose={() => setPrintGrupa(null)} />}
     </div>
   );
 }
@@ -8095,7 +8183,7 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
   const [gmesec, gg] = mjesec.split("-");
 
   const brojDanaSObrokom = (r) => r.dani.filter((d) => d.topliObrok > 0).length;
-  const ukupnoSati = (r) => r.redovni + r.prekovremeni + r.praznikSati + r.godisnjiSati + r.dopustSati + r.bolovanjeSati;
+  const ukupnoSati = (r) => r.redovni + r.prekovremeni + r.praznikSati + r.godisnjiSati + r.dopustSati + r.detasmanSati + r.bolovanjeSati;
   const ukupnoFondSatiEur = (r) => r.iznosRedovni + r.iznosPrekovremeni + r.iznosNerad;
   const ukupnoPdf = (r) => r.stimulacija + r.dodatakStaz + ukupnoFondSatiEur(r);
 
@@ -8153,6 +8241,7 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
                 <th style={thS}>Sati preko</th>
                 <th style={thS}>Praznik</th>
                 <th style={thS}>Plaćeni dopust</th>
+                <th style={thS}>Detašman</th>
                 <th style={thS}>GO sati</th>
                 <th style={thS}>BO sati</th>
                 <th style={thS}>Ukupno sati</th>
@@ -8181,6 +8270,7 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
                   <td style={tdS}>{r.prekovremeni.toFixed(2)}</td>
                   <td style={tdS}>{r.praznikSati.toFixed(0)}</td>
                   <td style={tdS}>{r.dopustSati.toFixed(0)}</td>
+                  <td style={tdS}>{r.detasmanSati.toFixed(0)}</td>
                   <td style={tdS}>{r.godisnjiSati.toFixed(0)}</td>
                   <td style={tdS}>{r.bolovanjeSati.toFixed(0)}</td>
                   <td style={tdS}>{ukupnoSati(r).toFixed(2)}</td>
@@ -8257,6 +8347,47 @@ function ObracunKooperantiPrintModal({ redovi, mjesec, db, onClose }) {
                 <td style={tdS}>{fmtCurDec(r.satnica)}</td>
                 <td style={tdS}>{r.sati.toFixed(1)}</td>
                 <td style={{ ...tdS, fontWeight: 700 }}>{fmtCurDec(r.ukupno)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{ textAlign: "right", fontWeight: 700, fontSize: 11, marginTop: 6, paddingRight: 4 }}>{fmtCurDec(ukupnaIsplata)}</div>
+      </div>
+    </Modal>
+  );
+}
+
+function ObracunVanjskiPrintModal({ redovi, mjesec, db, onClose }) {
+  const t = db.postavkeTvrtke || {};
+  const [gmesec, gg] = mjesec.split("-");
+  const tdS = { padding: "3px 4px", fontSize: 9, whiteSpace: "nowrap" };
+  const thS = { ...tdS, fontWeight: 700, background: "#f0f0f0" };
+  const ukupnaIsplata = redovi.reduce((s, r) => s + r.iznos, 0);
+
+  return (
+    <Modal title={`Pregled za ispis — Obračun vanjskih suradnika ${mjesec}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(`Placa_Vanjski-suradnici_${gg}${gmesec}`)}>Ispis / Spremi kao PDF</Btn></>}>
+      <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 12, marginBottom: 8 }}>
+          <span>{t.naziv || "ECON d.o.o."}</span>
+          <span>OBRAČUN VANJSKIH SURADNIKA</span>
+          <span>Mjesec obračuna: {gmesec}/{gg}</span>
+        </div>
+        <table style={{ borderCollapse: "collapse", width: "100%" }}>
+          <thead>
+            <tr>
+              <th style={thS}>Red. broj</th>
+              <th style={thS}>Ime i prezime</th>
+              <th style={thS}>Sati (evidencija)</th>
+              <th style={thS}>Fiksni iznos</th>
+            </tr>
+          </thead>
+          <tbody>
+            {redovi.map((r, i) => (
+              <tr key={r.zaposlenik.id}>
+                <td style={tdS}>{i + 1}</td>
+                <td style={tdS}>{r.zaposlenik.prezime} {r.zaposlenik.ime}</td>
+                <td style={tdS}>{r.sati.toFixed(1)}</td>
+                <td style={{ ...tdS, fontWeight: 700 }}>{fmtCurDec(r.iznos)}</td>
               </tr>
             ))}
           </tbody>
@@ -8507,7 +8638,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
   const [del, setDel] = useState(null);
   const [lozinkaZa, setLozinkaZa] = useState(null);
 
-  const emptyZap = { ime: "", prezime: "", pozicijaId: db.pozicijeZaposlenika[0]?.id || "", email: "", telefon: "", status: "Aktivan", datumZaposlenja: todayISO(), kompetencije: [], rfidKod: "", bodovi: 0, udaljenostKm: 0, koristiPrehranuUTvrtki: false, satnicaKooperant: 0, maticniBroj: "", dodatniStazGodine: 0, radnoVrijeme: "puno" };
+  const emptyZap = { ime: "", prezime: "", pozicijaId: db.pozicijeZaposlenika[0]?.id || "", email: "", telefon: "", status: "Aktivan", datumZaposlenja: todayISO(), kompetencije: [], rfidKod: "", bodovi: 0, udaljenostKm: 0, koristiPrehranuUTvrtki: false, satnicaKooperant: 0, fiksniMjesecniIznos: 0, maticniBroj: "", dodatniStazGodine: 0, radnoVrijeme: "puno" };
   const [zapForm, setZapForm] = useState(emptyZap);
 
   const emptyPoz = { naziv: "", opis: "", moduli: [], karticeDozvole: {} };
@@ -8665,6 +8796,8 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
             </Field>
             {db.pozicijeZaposlenika.find((p) => p.id === zapForm.pozicijaId)?.naziv?.trim().toLowerCase() === "kooperant" ? (
               <Field label="Satnica kooperanta (€/h)"><input className="input f-mono" type="number" min="0" step="0.5" value={zapForm.satnicaKooperant ?? 0} onChange={(e) => setZapForm({ ...zapForm, satnicaKooperant: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
+            ) : db.pozicijeZaposlenika.find((p) => p.id === zapForm.pozicijaId)?.naziv?.trim().toLowerCase() === "vanjski suradnik" ? (
+              <Field label="Fiksni mjesečni iznos (€)"><input className="input f-mono" type="number" min="0" step="1" value={zapForm.fiksniMjesecniIznos ?? 0} onChange={(e) => setZapForm({ ...zapForm, fiksniMjesecniIznos: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
             ) : (
               <Field label="Bodovi (za satnicu)"><input className="input f-mono" type="number" min="0" value={zapForm.bodovi ?? 0} onChange={(e) => setZapForm({ ...zapForm, bodovi: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
             )}
