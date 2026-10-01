@@ -7470,6 +7470,26 @@ function PostavkePlacaModal({ db, update, showToast, onClose }) {
   );
 }
 
+const NAZIVI_MJESECI = ["Siječanj", "Veljača", "Ožujak", "Travanj", "Svibanj", "Lipanj", "Srpanj", "Kolovoz", "Rujan", "Listopad", "Studeni", "Prosinac"];
+
+// Zamjena za <input type="month"> — taj nativni kontrol je neintuitivan za klik/upis (lako se
+// promijeni pogrešan dio datuma), pa je ovdje dva obična padajuća izbornika (mjesec + godina).
+function MjesecOdabir({ value, onChange, style }) {
+  const [godina, mjesec] = value.split("-");
+  const godinaSad = new Date().getFullYear();
+  const godine = Array.from({ length: 4 }, (_, i) => godinaSad - 2 + i);
+  return (
+    <div style={{ display: "flex", gap: 6, ...style }}>
+      <select className="select f-mono" style={{ width: 132 }} value={mjesec} onChange={(e) => onChange(`${godina}-${e.target.value}`)}>
+        {NAZIVI_MJESECI.map((naziv, i) => <option key={naziv} value={String(i + 1).padStart(2, "0")}>{naziv}</option>)}
+      </select>
+      <select className="select f-mono" style={{ width: 84 }} value={godina} onChange={(e) => onChange(`${e.target.value}-${mjesec}`)}>
+        {godine.map((g) => <option key={g} value={g}>{g}</option>)}
+      </select>
+    </div>
+  );
+}
+
 /* ============================== EVIDENCIJA RADA — MJESEČNA MREŽA ============================== */
 function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true }) {
   const [mjesec, setMjesec] = useState(todayISO().slice(0, 7));
@@ -7642,7 +7662,7 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true })
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span className="label">Mjesec</span>
-          <input className="input f-mono" type="month" style={{ width: 160 }} value={mjesec} onChange={(e) => setMjesec(e.target.value)} />
+          <MjesecOdabir value={mjesec} onChange={setMjesec} />
         </div>
         <div style={{ display: "flex", gap: 12, fontSize: 11, color: "var(--ink-soft)", flexWrap: "wrap" }}>
           {Object.values(OZNAKA_VRSTE_DANA).map((o) => (
@@ -7881,7 +7901,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span className="label">Mjesec</span>
-          <input className="input f-mono" type="month" style={{ width: 160 }} value={mjesec} onChange={(e) => setMjesec(e.target.value)} />
+          <MjesecOdabir value={mjesec} onChange={setMjesec} />
         </div>
         {mozeMijenjati && <Btn variant="ghost" icon={Settings} onClick={() => setPostavkeOtvorene(true)}>Postavke plaća</Btn>}
       </div>
