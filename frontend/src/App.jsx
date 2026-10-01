@@ -6151,6 +6151,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
   const [printLaser, setPrintLaser] = useState(null);
   const mozeLaser = dozvolaZaKarticu(mojaPozicija, "projekti", "laser").izmjene;
   const [detaljZavrsen, setDetaljZavrsen] = useState(null); // završeni projekt otvoren za analizu plan/stvarno
+  const [pretvorba, setPretvorba] = useState(null); // { ponuda, tip: "standard"|"laser", broj, naziv } — prije kreiranja projekta iz ponude pita se za broj naloga (šifru) jer taj broj slijedi vlastitu, ručno vođenu numeraciju tvrtke (serije po vrsti posla), a ne može se pouzdano pogoditi automatski
 
   const kupacNaziv = (id) => db.kupci.find((k) => k.id === id)?.naziv || "—";
   const projSifra = (id) => db.projekti.find((p) => p.id === id)?.sifra || "";
@@ -6239,14 +6240,14 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
     setCjenikOpen(false);
     showToast("Cjenik rada ažuriran.");
   };
-  const pretvoriUProjekt = (ponuda) => {
+  const pretvoriUProjekt = (ponuda, sifra, naziv) => {
     const calc = izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala);
     // Materijal (iz skladišta) i Ostalo se sad vode po stavci ponude — projekt ih i dalje drži
     // kao JEDAN zajednički popis, pa se ovdje zbrajaju preko svih stavki.
     const sviMaterijalStavke = (ponuda.pozicije || []).flatMap((p) => p.materijalStavke || []);
     const sveOstaleStavke = (ponuda.pozicije || []).flatMap((p) => p.ostaleStavke || []);
     const noviProjekt = {
-      id: uid("proj"), sifra: sljedeciBroj(db.projekti, "sifra", "PRJ-2026-"), naziv: ponuda.naziv, kupacId: ponuda.kupacId,
+      id: uid("proj"), sifra, naziv, kupacId: ponuda.kupacId,
       status: "Odobren", vrijednost: Math.round(calc.cijenaKonacna), rokPocetka: todayISO(), rokZavrsetka: addDays(todayISO(), 60),
       opis: `Kreirano iz ponude ${ponuda.broj}.`,
       izvorPonudaId: ponuda.id, pozicije: ponuda.pozicije || [], materijalStavke: sviMaterijalStavke, ostaleStavke: sveOstaleStavke,
@@ -6290,10 +6291,10 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
   // radni nalog(i) za sam posao rezanja — jedan za "Laser za profile" i/ili jedan za "Laser za
   // limove", ovisno koje vrste stavki ponuda uopće ima, s planiranim satima = zbroj rezanja +
   // pripreme svih stavki tog tipa.
-  const pretvoriUProjektLaser = (ponuda) => {
+  const pretvoriUProjektLaser = (ponuda, sifra, naziv) => {
     const calc = izracunPonudeLasera(ponuda, db.kvaliteteMaterijala);
     const noviProjekt = {
-      id: uid("proj"), sifra: sljedeciBroj(db.projekti, "sifra", "PRJ-2026-"), naziv: ponuda.naziv, kupacId: ponuda.kupacId,
+      id: uid("proj"), sifra, naziv, kupacId: ponuda.kupacId,
       status: "Odobren", vrijednost: Math.round(calc.cijenaKonacna), rokPocetka: todayISO(), rokZavrsetka: addDays(todayISO(), 30),
       opis: `Kreirano iz ponude za laser ${ponuda.broj}.`,
       izvorPonudaLaseraId: ponuda.id, pozicije: [], materijalStavke: [], ostaleStavke: ponuda.ostaleStavke || [],
@@ -6320,6 +6321,17 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
     update("ponudeLasera", db.ponudeLasera.map((p) => (p.id === ponuda.id ? { ...p, projektId: noviProjekt.id } : p)));
     showToast(`Projekt ${noviProjekt.sifra} kreiran${noviNalozi.length ? ` s ${noviNalozi.length} radnih naloga` : ""}.`);
     setTab("projekti");
+  };
+
+  const potvrdiPretvorbu = () => {
+    const sifra = pretvorba.broj.trim();
+    const naziv = pretvorba.naziv.trim();
+    if (!sifra) { showToast("Upiši broj naloga."); return; }
+    if (!naziv) { showToast("Upiši naziv projekta."); return; }
+    if (db.projekti.some((p) => p.sifra.trim().toLowerCase() === sifra.toLowerCase())) { showToast(`Broj naloga ${sifra} je već iskorišten na drugom projektu.`); return; }
+    if (pretvorba.tip === "laser") pretvoriUProjektLaser(pretvorba.ponuda, sifra, naziv);
+    else pretvoriUProjekt(pretvorba.ponuda, sifra, naziv);
+    setPretvorba(null);
   };
 
   return (
@@ -6393,7 +6405,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
             {
               key: "akcija", label: "", render: (r) =>
                 r.projektId ? <span style={{ fontSize: 11, color: "var(--green)" }}>→ {projSifra(r.projektId)}</span>
-                : r.status === "Prihvaćena" ? <Btn size="sm" icon={FolderInput} onClick={() => pretvoriUProjekt(r)}>Pretvori u projekt</Btn>
+                : r.status === "Prihvaćena" ? <Btn size="sm" icon={FolderInput} onClick={() => setPretvorba({ ponuda: r, tip: "standard", broj: "", naziv: r.naziv })}>Pretvori u projekt</Btn>
                 : null
             },
           ]}
@@ -6418,7 +6430,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
             {
               key: "akcija", label: "", render: (r) =>
                 r.projektId ? <span style={{ fontSize: 11, color: "var(--green)" }}>→ {projSifra(r.projektId)}</span>
-                : r.status === "Prihvaćena" ? <Btn size="sm" icon={FolderInput} onClick={() => pretvoriUProjektLaser(r)}>Pretvori u projekt</Btn>
+                : r.status === "Prihvaćena" ? <Btn size="sm" icon={FolderInput} onClick={() => setPretvorba({ ponuda: r, tip: "laser", broj: "", naziv: r.naziv })}>Pretvori u projekt</Btn>
                 : null
             },
           ]}
@@ -6546,6 +6558,22 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
       {cjenikOpen && <CjenikRadaModal cjenikRada={db.cjenikRada} onSave={saveCjenik} onClose={() => setCjenikOpen(false)} />}
       {zadaciOpen && <StandardniZadaciModal standardniZadaci={db.standardniZadaci} update={update} showToast={showToast} onClose={() => setZadaciOpen(false)} />}
       {detalj && <ProjektDetaljModal projekt={db.projekti.find((p) => p.id === detalj.id) || detalj} db={db} update={update} patchProjekt={patchProjekt} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} onClose={() => setDetalj(null)} mojId={mojId} />}
+
+      {pretvorba && (
+        <Modal title="Pretvori ponudu u projekt" onClose={() => setPretvorba(null)}
+          footer={<>
+            <Btn onClick={() => setPretvorba(null)}>Odustani</Btn>
+            <Btn variant="primary" icon={FolderInput} onClick={potvrdiPretvorbu}>Kreiraj projekt</Btn>
+          </>}>
+          <Field label="Broj naloga (šifra projekta)">
+            <input className="input f-mono" autoFocus placeholder="npr. RN 170-322" value={pretvorba.broj} onChange={(e) => setPretvorba({ ...pretvorba, broj: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") potvrdiPretvorbu(); }} />
+          </Field>
+          <Field label="Naziv projekta">
+            <input className="input" value={pretvorba.naziv} onChange={(e) => setPretvorba({ ...pretvorba, naziv: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") potvrdiPretvorbu(); }} />
+          </Field>
+          <p style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Broj naloga je šifra pod kojom će se voditi projekt i svi njegovi radni nalozi (npr. RN 170-322/1, /2, …) — upiši ga po vašoj uobičajenoj numeraciji.</p>
+        </Modal>
+      )}
       {printPonuda && <PonudaPrintModal ponuda={printPonuda} kupac={db.kupci.find((k) => k.id === printPonuda.kupacId)} db={db} onClose={() => setPrintPonuda(null)} />}
       {modal === "laser" && <PonudaLaseraModal form={laserForm} setForm={setLaserForm} db={db} onSave={saveLaser} onClose={() => setModal(null)} />}
       {printLaser && <PonudaLaseraPrintModal ponuda={printLaser} kupac={db.kupci.find((k) => k.id === printLaser.kupacId)} db={db} onClose={() => setPrintLaser(null)} />}
