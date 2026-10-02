@@ -6240,6 +6240,23 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
     patchProjekti([{ ...projekt, status: projekt.statusPrijeZavrsetka || "U izradi", statusPrijeZavrsetka: null, autoZavrsenoNalozi: [] }], []);
     showToast("Projekt vraćen u aktivne.");
   };
+  // Izravna promjena statusa iz tablice — ista pravila kao u obrascu (prelazak u "Završen"
+  // automatski završava otvorene radne naloge i pamti što je promijenjeno za "Vrati u aktivne").
+  const promijeniStatusProjekta = (projekt, noviStatus) => {
+    if (noviStatus === projekt.status) return;
+    const payload = { ...projekt, status: noviStatus };
+    const prelaziUZavrseno = projekt.status !== "Završen" && noviStatus === "Završen";
+    if (prelaziUZavrseno) {
+      payload.statusPrijeZavrsetka = projekt.status;
+      payload.autoZavrsenoNalozi = db.radniNalozi.filter((r) => r.projektId === projekt.id && r.status !== "Završen").map((r) => ({ id: r.id, staviStatus: r.status }));
+    }
+    patchProjekti([payload], []);
+    if (prelaziUZavrseno) {
+      const dotaknutiIds = new Set(payload.autoZavrsenoNalozi.map((n) => n.id));
+      update("radniNalozi", db.radniNalozi.map((r) => (dotaknutiIds.has(r.id) ? { ...r, status: "Završen" } : r)));
+    }
+    showToast(`Status projekta ${projekt.sifra}: ${noviStatus}.`);
+  };
   const savePon = () => {
     if (!ponForm.naziv.trim()) return;
     if (ponForm.id) update("ponude", db.ponude.map((p) => (p.id === ponForm.id ? ponForm : p)));
@@ -6402,7 +6419,13 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
             { key: "vrijednost", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCur(r.vrijednost)}</span> },
             { key: "zadaci", label: "Zadaci", render: (r) => { const z = r.zadaci || []; const done = z.filter((x) => x.izvrseno).length; return z.length ? <span className="f-mono">{done}/{z.length}</span> : "—"; } },
             { key: "rokZavrsetka", label: "Rok završetka", render: (r) => fmtDate(r.rokZavrsetka) },
-            { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
+            {
+              key: "status", label: "Status", render: (r) => mozeProjekti ? (
+                <select className="select" style={{ fontSize: 12, padding: "4px 8px", width: 120 }} value={r.status} onClick={(e) => e.stopPropagation()} onChange={(e) => promijeniStatusProjekta(r, e.target.value)}>
+                  {["Ponuda", "Odobren", "U izradi", "Montaža", "Završen", "Otkazan"].map((s) => <option key={s}>{s}</option>)}
+                </select>
+              ) : <Badge status={r.status} />
+            },
             { key: "detalji", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setDetalj(r)}>Detalji</Btn> },
           ]}
           />
