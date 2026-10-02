@@ -237,83 +237,84 @@ const KIOSK_BLOKADA_MIN = 3;
 app.post("/api/kiosk/scan", async (req, res) => {
   const kod = (req.body.rfidKod || "").trim().toUpperCase();
   if (!kod) return res.status(404).json({ error: "Kartica nije prepoznata." });
-  // Brzina je bitna (osoba čeka ispred čitača): ne dohvaća se cijeli popis zaposlenika ni cijela
-  // evidencija (~300 KB) — baza sama filtrira i vraća samo traženog zaposlenika odnosno samo
-  // njegove zapise, a izmjena (dodavanje/zatvaranje zapisa) se također izvodi u bazi.
-  const rz = await pool.query(
-    "SELECT elem FROM app_data, jsonb_array_elements(value) elem WHERE key = 'zaposlenici' AND upper(elem->>'rfidKod') = $1 LIMIT 1",
-    [kod]
-  );
-  const zaposlenik = rz.rows[0]?.elem;
-  if (!zaposlenik) return res.status(404).json({ error: "Kartica nije prepoznata." });
-
-  // Kad više ljudi skenira u kratkom razmaku (npr. gužva na početku smjene), obična
-  // "pročitaj cijeli niz -> izmijeni -> spremi cijeli niz" sekvenca gubi zapise. SELECT ...
-  // FOR UPDATE zaključava red za cijelo trajanje transakcije — drugi zahtjev čeka da prvi
-  // završi (COMMIT) i tek onda čita već ažurirano stanje. Zaključava se red (ne samo vraćeni
-  // zapisi) pa zaključavanje radi i kad zaposlenik još nema nijedan zapis.
-  const client = await pool.connect();
+  // Brzina je bitna (osoba čeka ispred čitača), a svaki upit prema bazi košta mrežno putovanje —
+  // zato su ovdje samo DVA upita i baza sama filtrira i mijenja samo potrebno (ne prenosi se cijela
+  // evidencija ni popis zaposlenika):
+  //  1) jedan upit vraća zaposlenika s tom karticom i samo njegove zapise evidencije;
+  //  2) jedan jedini UPDATE upis (dodaj dolazak / zatvori otvoreni zapis) koji se izvršava samo
+  //     ako se u međuvremenu nije promijenilo stanje tog zaposlenika (broj zapisa, otvoren zapis).
+  // Drugi istovremeni zahtjev čeka zaključani red, vidi da uvjet više ne vrijedi, ne upisuje ništa
+  // i cijeli postupak ponavlja na svježim podacima — dakle nijedan upis se ne gubi niti dupla.
   try {
-    await client.query("BEGIN");
-    const r = await client.query(
-      `SELECT (SELECT coalesce(jsonb_agg(elem), '[]'::jsonb) FROM jsonb_array_elements(value) elem WHERE elem->>'zaposlenikId' = $1) AS moji
-       FROM app_data WHERE key = 'evidencijaRada' FOR UPDATE`,
-      [zaposlenik.id]
-    );
-    const postojiRed = r.rows.length > 0;
-    const moji = r.rows[0]?.moji || [];
-    const otvorena = moji.find((e) => !e.vrijemeOdlaska);
-    const sada = new Date();
-
-    // Blokada slučajnog dvostrukog očitanja kartice — ista osoba ne može ponovno
-    // prijaviti dolazak/odlazak unutar KIOSK_BLOKADA_MIN minuta od svoje zadnje akcije.
-    const zadnjaAkcija = moji.reduce((naj, e) => {
-      const vrijeme = e.vrijemeOdlaska || e.vrijemeDolaska;
-      return vrijeme && (!naj || new Date(vrijeme) > new Date(naj)) ? vrijeme : naj;
-    }, null);
-    if (zadnjaAkcija) {
-      const proteklaMin = (sada - new Date(zadnjaAkcija)) / 60000;
-      if (proteklaMin < KIOSK_BLOKADA_MIN) {
-        await client.query("ROLLBACK");
-        // Ne samo "pričekaj" — javi i ŠTO je zadnja akcija bila i kada, da osoba vidi da je
-        // njeno prethodno skeniranje stvarno uspjelo (a ne da izgleda kao nova greška).
-        return res.status(429).json({
-          error: "Već zabilježeno.",
-          cooldown: true,
-          zadnjaAkcija: { tip: otvorena ? "dolazak" : "odlazak", vrijeme: zadnjaAkcija },
-          ime: zaposlenik.ime, prezime: zaposlenik.prezime,
-        });
-      }
-    }
-
-    const sadaISO = sada.toISOString();
-    let odgovor;
-    if (otvorena) {
-      await client.query(
-        `UPDATE app_data SET updated_at = now(), value = (
-           SELECT coalesce(jsonb_agg(CASE WHEN e.elem->>'id' = $1 THEN e.elem || jsonb_build_object('vrijemeOdlaska', $2::text) ELSE e.elem END ORDER BY e.ord), '[]'::jsonb)
-           FROM jsonb_array_elements(value) WITH ORDINALITY AS e(elem, ord))
-         WHERE key = 'evidencijaRada'`,
-        [otvorena.id, sadaISO]
+    for (let pokusaj = 0; pokusaj < 3; pokusaj++) {
+      const r = await pool.query(
+        `SELECT z.elem AS zaposlenik,
+           (SELECT coalesce(jsonb_agg(e), '[]'::jsonb) FROM app_data a, jsonb_array_elements(a.value) e WHERE a.key = 'evidencijaRada' AND e->>'zaposlenikId' = z.elem->>'id') AS moji,
+           (SELECT count(*) FROM app_data WHERE key = 'evidencijaRada') AS ima_red
+         FROM (SELECT elem FROM app_data, jsonb_array_elements(value) elem WHERE key = 'zaposlenici' AND upper(elem->>'rfidKod') = $1 LIMIT 1) z`,
+        [kod]
       );
-      odgovor = { tip: "odlazak", ime: zaposlenik.ime, prezime: zaposlenik.prezime, vrijeme: sadaISO, dolazak: otvorena.vrijemeDolaska };
-    } else {
-      const nova = { id: `evr-${Date.now()}`, zaposlenikId: zaposlenik.id, vrijemeDolaska: sadaISO, vrijemeOdlaska: null, vrsta: "rad", autoOdjava: false, potvrdenoRacunovodstvo: false, unioRucnoId: null };
-      if (postojiRed) {
-        await client.query("UPDATE app_data SET value = value || $1::jsonb, updated_at = now() WHERE key = 'evidencijaRada'", [JSON.stringify([nova])]);
-      } else {
-        await client.query("INSERT INTO app_data (key, value, updated_at) VALUES ('evidencijaRada', $1, now())", [JSON.stringify([nova])]);
+      const red = r.rows[0];
+      if (!red) return res.status(404).json({ error: "Kartica nije prepoznata." });
+      const zaposlenik = red.zaposlenik;
+      const moji = red.moji || [];
+      const otvorena = moji.find((e) => !e.vrijemeOdlaska);
+      const sada = new Date();
+
+      // Blokada slučajnog dvostrukog očitanja kartice — ista osoba ne može ponovno
+      // prijaviti dolazak/odlazak unutar KIOSK_BLOKADA_MIN minuta od svoje zadnje akcije.
+      const zadnjaAkcija = moji.reduce((naj, e) => {
+        const vrijeme = e.vrijemeOdlaska || e.vrijemeDolaska;
+        return vrijeme && (!naj || new Date(vrijeme) > new Date(naj)) ? vrijeme : naj;
+      }, null);
+      if (zadnjaAkcija) {
+        const proteklaMin = (sada - new Date(zadnjaAkcija)) / 60000;
+        if (proteklaMin < KIOSK_BLOKADA_MIN) {
+          // Ne samo "pričekaj" — javi i ŠTO je zadnja akcija bila i kada, da osoba vidi da je
+          // njeno prethodno skeniranje stvarno uspjelo (a ne da izgleda kao nova greška).
+          return res.status(429).json({
+            error: "Već zabilježeno.",
+            cooldown: true,
+            zadnjaAkcija: { tip: otvorena ? "dolazak" : "odlazak", vrijeme: zadnjaAkcija },
+            ime: zaposlenik.ime, prezime: zaposlenik.prezime,
+          });
+        }
       }
-      odgovor = { tip: "dolazak", ime: zaposlenik.ime, prezime: zaposlenik.prezime, vrijeme: sadaISO };
+
+      const sadaISO = sada.toISOString();
+      let odgovor, upisano;
+      if (otvorena) {
+        const u = await pool.query(
+          `UPDATE app_data SET updated_at = now(), value = (
+             SELECT coalesce(jsonb_agg(CASE WHEN e.elem->>'id' = $1 THEN e.elem || jsonb_build_object('vrijemeOdlaska', $2::text) ELSE e.elem END ORDER BY e.ord), '[]'::jsonb)
+             FROM jsonb_array_elements(value) WITH ORDINALITY AS e(elem, ord))
+           WHERE key = 'evidencijaRada'
+             AND EXISTS (SELECT 1 FROM jsonb_array_elements(value) x WHERE x->>'id' = $1 AND x->>'vrijemeOdlaska' IS NULL)
+             AND (SELECT count(*) FROM jsonb_array_elements(value) x WHERE x->>'zaposlenikId' = $3) = $4`,
+          [otvorena.id, sadaISO, zaposlenik.id, moji.length]
+        );
+        upisano = u.rowCount === 1;
+        odgovor = { tip: "odlazak", ime: zaposlenik.ime, prezime: zaposlenik.prezime, vrijeme: sadaISO, dolazak: otvorena.vrijemeDolaska };
+      } else {
+        const nova = { id: `evr-${Date.now()}`, zaposlenikId: zaposlenik.id, vrijemeDolaska: sadaISO, vrijemeOdlaska: null, vrsta: "rad", autoOdjava: false, potvrdenoRacunovodstvo: false, unioRucnoId: null };
+        const u = Number(red.ima_red) > 0
+          ? await pool.query(
+              `UPDATE app_data SET value = value || $1::jsonb, updated_at = now()
+               WHERE key = 'evidencijaRada'
+                 AND (SELECT count(*) FROM jsonb_array_elements(value) x WHERE x->>'zaposlenikId' = $2) = $3`,
+              [JSON.stringify([nova]), zaposlenik.id, moji.length]
+            )
+          : await pool.query("INSERT INTO app_data (key, value, updated_at) VALUES ('evidencijaRada', $1, now()) ON CONFLICT (key) DO NOTHING", [JSON.stringify([nova])]);
+        upisano = u.rowCount === 1;
+        odgovor = { tip: "dolazak", ime: zaposlenik.ime, prezime: zaposlenik.prezime, vrijeme: sadaISO };
+      }
+      if (upisano) return res.json(odgovor);
+      // stanje tog zaposlenika se u međuvremenu promijenilo (istovremeno skeniranje) — ponovi na svježim podacima
     }
-    await client.query("COMMIT");
-    res.json(odgovor);
+    res.status(503).json({ error: "Poslužitelj je zauzet — pokušaj ponovno." });
   } catch (e) {
-    await client.query("ROLLBACK").catch(() => {});
     console.error("Greška kod kiosk skeniranja:", e);
     res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
-  } finally {
-    client.release();
   }
 });
 
