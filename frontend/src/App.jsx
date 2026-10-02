@@ -575,7 +575,33 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   // "satnica za taj mjesec" se korigira na ostvareno / fond — samo za prikaz.
   const mjesecniFond = radniDaniMjeseca * (Number(postavke?.normaSatiDan) || 8);
   const ostvareniSati = zbroj.redovni + zbroj.placeniNerad;
-  const satnicaKorigirana = mjesecniFond > 0 ? (ostvareniSati * satnica) / mjesecniFond : satnica;
+  const satnicaKorigirana = mjesecniFond > 0 ? (ostvareniSati * satnica) / mjesecniFond : satnica; // za ured se ne koristi (fiksna plaća)
+  // TEHNIČKI URED I ADMINISTRACIJA: neto plaća (bodovi × bod) je FIKSNI iznos za mjesečni fond
+  // sati — ne množi se satima. Razmjerno se umanjuje za dane bolovanja/očinskog/roditeljskog te za
+  // radne dane prije datuma zaposlenja. Godišnji, praznici i sl. su unutar fiksnog iznosa.
+  // Prekovremeni se računaju kao i svima: sati × satnica × 1,5.
+  const jeUred = grupaEvidencije(zaposlenik, db.pozicijeZaposlenika) === "ostalo";
+  const norma = Number(postavke?.normaSatiDan) || 8;
+  let neplaceniDaniUred = 0;
+  let fiksnaPlacaPuna = 0, fiksnaPlaca = 0, faktorFiksne = 1;
+  if (jeUred) {
+    const radniDanVrijednost = (d) => d.danUTjednu >= 1 && d.danUTjednu <= 5;
+    const daniBolovanja = dani.filter((d) => radniDanVrijednost(d) && !(zaposlenik.datumZaposlenja && d.datum < zaposlenik.datumZaposlenja) && (d.bolovanjeSati > 0 || d.ocinskiSati > 0 || d.roditeljskiSati > 0)).length;
+    let daniPrijeZaposlenja = 0;
+    if (zaposlenik.datumZaposlenja && zaposlenik.datumZaposlenja > `${mjesec}-01`) {
+      for (let dan = 1; dan <= brojDanaMjeseca; dan++) {
+        const datum = `${mjesec}-${String(dan).padStart(2, "0")}`;
+        const dow = new Date(g, m - 1, dan).getDay();
+        if (dow >= 1 && dow <= 5 && datum < zaposlenik.datumZaposlenja) daniPrijeZaposlenja++;
+      }
+    }
+    neplaceniDaniUred = daniBolovanja + daniPrijeZaposlenja;
+    fiksnaPlacaPuna = osnova.osnovica;
+    faktorFiksne = mjesecniFond > 0 ? Math.max(0, 1 - (neplaceniDaniUred * norma) / mjesecniFond) : 1;
+    fiksnaPlaca = fiksnaPlacaPuna * faktorFiksne;
+  }
+  const iznosRedovni = jeUred ? fiksnaPlaca : zbroj.iznosRedovni;
+  const iznosNerad = jeUred ? 0 : zbroj.iznosNerad;
   const dnevnicaTeren = zbroj.danaSluzbenogPuta * (Number(postavke?.dnevnicaTerenEurDan) || 0);
   const doplatak = (db.doplaciPlaca || []).find((d) => d.zaposlenikId === zaposlenik.id && d.mjesec === mjesec) || {};
 
@@ -604,7 +630,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   const topliObrok = zbroj.topliObrok - prebacenoObrok;
   const daniObroka = dani.filter((d) => d.topliObrok > 0).length - Math.round(suboteRad.filter((d) => d.topliObrok > 0).length * udioSubotaUStimulaciji);
 
-  const ukupno = zbroj.iznosRedovni + iznosPrekovremeniPrikaz + zbroj.iznosNerad + dodatakStaz + putni + topliObrok;
+  const ukupno = iznosRedovni + iznosPrekovremeniPrikaz + iznosNerad + dodatakStaz + putni + topliObrok;
 
   // stimulacija = ono što se STVARNO isplaćuje (ručno upisano + automatski prebačeni višak
   // prekovremenih) — stimulacijaRucno je SAMO ručno upisani dio, za uređivanje u obrascu (da se
@@ -614,7 +640,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   const kredit = Number(doplatak.kredit) || 0;
   const ustegPrehrane = Number(doplatak.ustegPrehrane) || 0;
   const dodaciUkupno = topliObrok + dnevnicaTeren + putni;
-  const isplata = zbroj.iznosRedovni + iznosPrekovremeniPrikaz + zbroj.iznosNerad + dodatakStaz + stimulacija + dodaciUkupno - kredit - ustegPrehrane;
+  const isplata = iznosRedovni + iznosPrekovremeniPrikaz + iznosNerad + dodatakStaz + stimulacija + dodaciUkupno - kredit - ustegPrehrane;
 
   return {
     zaposlenik, satnica, satnicaKorigirana, mjesecniFond, ostvareniSati, dodatakStaz, radniDaniMjeseca, ...osnova, ...zbroj,
@@ -622,6 +648,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     prekovremeni: prekovremeniPrikaz, iznosPrekovremeni: iznosPrekovremeniPrikaz,
     prikazPrekovremenihSati: doplatak.prikazPrekovremenihSati ?? "", visakPrekovremenihSati, visakPrekovremenihIznos,
     putni, topliObrok, daniObroka, prebacenoPutni, prebacenoObrok, prebacenoSubota,
+    jeUred, iznosRedovni, iznosNerad, fiksnaPlacaPuna, fiksnaPlaca, faktorFiksne, neplaceniDaniUred,
     ukupno, brojDana: dani.length, dani, dnevnicaTeren, stimulacija, stimulacijaRucno, kredit, ustegPrehrane, dodaciUkupno, isplata,
   };
 };
@@ -8074,7 +8101,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
         <tbody>
           {lista.map((r) => (
             <tr key={r.zaposlenik.id}>
-              <td><strong>{r.zaposlenik.prezime} {r.zaposlenik.ime}</strong><div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{r.bodovi} bodova · staž {r.staz} god.{r.satiSDodatkom > 0 && <span style={{ color: "var(--steel)" }}> · {r.satiSDodatkom.toFixed(1)}h u smjeni s dodatkom</span>}</div></td>
+              <td><strong>{r.zaposlenik.prezime} {r.zaposlenik.ime}</strong><div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{r.bodovi} bodova · staž {r.staz} god.{r.jeUred && <span style={{ color: "var(--steel)" }}> · fiksna plaća {fmtCurDec(r.fiksnaPlaca)}</span>}{r.satiSDodatkom > 0 && <span style={{ color: "var(--steel)" }}> · {r.satiSDodatkom.toFixed(1)}h u smjeni s dodatkom</span>}</div></td>
               <td className="f-mono">{r.satnica.toFixed(2)}{Math.abs(r.satnicaKorigirana - r.satnica) > 0.005 && <div style={{ fontSize: 10, color: "var(--steel)" }} title="Satnica za ovaj mjesec korigirana na ostvareni / mjesečni fond sati">{r.satnicaKorigirana.toFixed(2)} u mj.</div>}</td>
               <td className="f-mono">{r.redovni.toFixed(1)} h</td>
               <td className="f-mono" style={{ color: r.prekovremeniStvarno > 0 ? "var(--steel)" : "inherit" }}>{r.prekovremeniStvarno.toFixed(1)} h</td>
@@ -8269,7 +8296,14 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
         <Modal wide title={`Obračun po danima — ${detaljZaposlenik.zaposlenik.prezime} ${detaljZaposlenik.zaposlenik.ime} (${mjesec})`} onClose={() => setDetalj(null)} footer={<Btn onClick={() => setDetalj(null)}>Zatvori</Btn>}>
           <div className="card" style={{ padding: 12, marginBottom: 12, background: "var(--surface-alt)", fontSize: 12.5 }}>
             {detaljZaposlenik.bodovi} bodova × {db.postavkePlaca?.vrijednostBoda} € = <strong className="f-mono">{fmtCurDec(detaljZaposlenik.osnovica)}</strong> ÷ {db.postavkePlaca?.fondSatiMjesec} h (godišnji fond) = <strong className="f-mono" style={{ color: "var(--steel)" }}>{detaljZaposlenik.satnica.toFixed(3)} €/h</strong>
-            <div style={{ marginTop: 6, color: "var(--ink-soft)" }}>Fond sati ovog mjeseca: <strong className="f-mono">{detaljZaposlenik.mjesecniFond} h</strong> ({detaljZaposlenik.radniDaniMjeseca} radnih dana × 8) · ostvareno <strong className="f-mono">{detaljZaposlenik.ostvareniSati.toFixed(1)} h</strong> → satnica za ovaj mjesec <strong className="f-mono" style={{ color: "var(--steel)" }}>{detaljZaposlenik.satnicaKorigirana.toFixed(3)} €/h</strong> (plaća se samo ostvareno: sati × {detaljZaposlenik.satnica.toFixed(3)} €/h)</div>
+            {detaljZaposlenik.jeUred && (
+              <div style={{ marginTop: 6, color: "var(--ink-soft)" }}>
+                <strong>Ured — fiksna neto plaća:</strong> {detaljZaposlenik.bodovi} bodova × {db.postavkePlaca?.vrijednostBoda} € = <strong className="f-mono">{fmtCurDec(detaljZaposlenik.fiksnaPlacaPuna)}</strong> za cijeli mjesečni fond ({detaljZaposlenik.mjesecniFond} h)
+                {detaljZaposlenik.neplaceniDaniUred > 0 && <> · umanjeno za <strong className="f-mono">{detaljZaposlenik.neplaceniDaniUred}</strong> neplaćenih radnih dana (bolovanje/očinski/roditeljski/prije zaposlenja) = <strong className="f-mono">{fmtCurDec(detaljZaposlenik.fiksnaPlaca)}</strong></>}
+                . Prekovremeni se računaju po satnici ({detaljZaposlenik.satnica.toFixed(3)} €/h × 1,5).
+              </div>
+            )}
+            {!detaljZaposlenik.jeUred && <div style={{ marginTop: 6, color: "var(--ink-soft)" }}>Fond sati ovog mjeseca: <strong className="f-mono">{detaljZaposlenik.mjesecniFond} h</strong> ({detaljZaposlenik.radniDaniMjeseca} radnih dana × 8) · ostvareno <strong className="f-mono">{detaljZaposlenik.ostvareniSati.toFixed(1)} h</strong> → satnica za ovaj mjesec <strong className="f-mono" style={{ color: "var(--steel)" }}>{detaljZaposlenik.satnicaKorigirana.toFixed(3)} €/h</strong> (plaća se samo ostvareno: sati × {detaljZaposlenik.satnica.toFixed(3)} €/h)</div>}
           </div>
           <table className="erp-table">
             <thead><tr><th style={{ width: 100 }}>Datum</th><th style={{ width: 85 }}>Vrsta</th><th style={{ width: 95 }}>Smjena</th><th style={{ width: 65 }}>Sati</th><th style={{ width: 65 }}>Redovni</th><th style={{ width: 75 }}>Prekovr.</th><th style={{ width: 65 }}>Putni</th><th style={{ width: 65 }}>Obrok</th></tr></thead>
@@ -8290,7 +8324,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
           </table>
           <div className="card" style={{ padding: 12, marginTop: 12, background: "var(--surface-alt)" }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 12.5 }}>
-              <span>Redovni rad ({detaljZaposlenik.redovni.toFixed(1)} h)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosRedovni)}</span>
+              <span>{detaljZaposlenik.jeUred ? "Fiksna neto plaća (ured)" : `Redovni rad (${detaljZaposlenik.redovni.toFixed(1)} h)`}</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosRedovni)}</span>
               <span>Prekovremeni ({detaljZaposlenik.prekovremeni.toFixed(1)} h{detaljZaposlenik.visakPrekovremenihSati > 0 && <span style={{ color: "var(--ink-faint)" }}> — stvarno {detaljZaposlenik.prekovremeniStvarno.toFixed(1)} h, {detaljZaposlenik.visakPrekovremenihSati.toFixed(1)} h u stimulaciji</span>})</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosPrekovremeni)}</span>
               <span>Godišnji / praznici / dopust / detašman ({detaljZaposlenik.placeniNerad.toFixed(1)} h)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosNerad)}</span>
               {detaljZaposlenik.detasmanSati > 0 && <><span style={{ color: "var(--ink-faint)", fontSize: 11 }}>— od toga detašman: {detaljZaposlenik.detasmanSati.toFixed(1)} h</span><span></span></>}
