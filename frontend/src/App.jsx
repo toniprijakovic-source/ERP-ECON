@@ -1890,7 +1890,7 @@ export default function App() {
         </div>
 
         <div style={{ padding: 24, flex: 1, overflowY: "auto" }}>
-          {aktivnaStranica === "dashboard" && <Dashboard db={db} setPage={setPage} mojId={zaposlenik?.id} patchZadatakIzvrseno={patchZadatakIzvrseno} />}
+          {aktivnaStranica === "dashboard" && <Dashboard db={db} setPage={setPage} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} />}
           {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} />}
@@ -1914,7 +1914,8 @@ export default function App() {
 }
 
 /* ============================== DASHBOARD ============================== */
-function Dashboard({ db, setPage, mojId, patchZadatakIzvrseno }) {
+function Dashboard({ db, setPage, mojId, mojaPozicija, patchZadatakIzvrseno }) {
+  const [zadaciZa, setZadaciZa] = useState("moji"); // "moji" | "svi" | id zaposlenika
   const aktivniProjekti = db.projekti.filter((p) => ["U izradi", "Montaža"].includes(p.status));
   const otvorenePonude = db.ponude.filter((p) => p.status === "Poslana" || p.status === "U izradi");
   const vrijednostPonuda = otvorenePonude.reduce((s, p) => s + izracunPonude(p, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala).cijenaKonacna, 0);
@@ -1927,13 +1928,23 @@ function Dashboard({ db, setPage, mojId, patchZadatakIzvrseno }) {
 
   // Zadaci dodijeljeni MENI, na bilo kojem projektu, koji još nisu izvršeni — čim ih netko
   // označi izvršenima, nestaju odavde (nema arhive na nadzornoj ploči).
-  const mojiZadaci = [];
+  // Tko ima pristup projektima može izabrati i zadatke bilo koje druge osobe (samo pregled).
+  const mozeVidjetiTudje = (mojaPozicija?.moduli || []).includes("projekti") && dozvolaZaKarticu(mojaPozicija, "projekti", "projekti").pristup;
+  const imeZaposlenika = (id) => { const z = db.zaposlenici.find((x) => x.id === id); return z ? `${z.prezime} ${z.ime}` : "—"; };
+  const sviOtvoreniZadaci = [];
   db.projekti.forEach((p) => {
     (p.zadaci || []).forEach((z) => {
-      if (z.dodijeljenoId === mojId && !z.izvrseno) mojiZadaci.push({ ...z, projektId: p.id, projektNaziv: p.naziv, projektSifra: p.sifra });
+      if (z.dodijeljenoId && !z.izvrseno) sviOtvoreniZadaci.push({ ...z, projektId: p.id, projektNaziv: p.naziv, projektSifra: p.sifra });
     });
   });
-  mojiZadaci.sort((a, b) => (a.planiraniDatum || "9999-99-99").localeCompare(b.planiraniDatum || "9999-99-99"));
+  const brojPoOsobi = new Map();
+  sviOtvoreniZadaci.forEach((z) => brojPoOsobi.set(z.dodijeljenoId, (brojPoOsobi.get(z.dodijeljenoId) || 0) + 1));
+  const osobeSaZadacima = [...brojPoOsobi.keys()].filter((id) => id !== mojId).sort((a, b) => imeZaposlenika(a).localeCompare(imeZaposlenika(b), "hr"));
+  const odabrano = mozeVidjetiTudje ? zadaciZa : "moji";
+  const mojiZadaci = sviOtvoreniZadaci
+    .filter((z) => (odabrano === "svi" ? true : z.dodijeljenoId === (odabrano === "moji" ? mojId : odabrano)))
+    .sort((a, b) => (a.planiraniDatum || "9999-99-99").localeCompare(b.planiraniDatum || "9999-99-99"));
+  const gledamTudje = odabrano !== "moji";
 
   return (
     <div>
@@ -1968,18 +1979,27 @@ function Dashboard({ db, setPage, mojId, patchZadatakIzvrseno }) {
         <div className="card" style={{ padding: 16 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
             <CheckCircle2 size={15} color="var(--steel)" />
-            <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600 }}>Moji zadaci</h3>
+            <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600 }}>{odabrano === "moji" ? "Moji zadaci" : odabrano === "svi" ? "Zadaci svih zaposlenika" : `Zadaci: ${imeZaposlenika(odabrano)}`}</h3>
+            {mozeVidjetiTudje && (
+              <select className="select" style={{ marginLeft: "auto", width: 210, fontSize: 12, padding: "4px 8px" }} value={zadaciZa} onChange={(e) => setZadaciZa(e.target.value)}>
+                <option value="moji">Moji zadaci</option>
+                <option value="svi">Svi zaposlenici ({sviOtvoreniZadaci.length})</option>
+                {osobeSaZadacima.map((id) => <option key={id} value={id}>{imeZaposlenika(id)} ({brojPoOsobi.get(id)})</option>)}
+              </select>
+            )}
           </div>
-          {mojiZadaci.length === 0 ? <EmptyState text="Nemaš dodijeljenih zadataka." /> : (
+          {mojiZadaci.length === 0 ? <EmptyState text={gledamTudje ? "Nema otvorenih zadataka." : "Nemaš dodijeljenih zadataka."} /> : (
             <div>
               {mojiZadaci.map((z) => {
                 const kasni = z.planiraniDatum && daysUntil(z.planiraniDatum) < 0;
                 return (
                   <div key={z.id} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "7px 0", borderBottom: "1px solid var(--line)" }}>
-                    <input type="checkbox" checked={false} onChange={() => patchZadatakIzvrseno(z.projektId, z.id, true)} style={{ width: 15, height: 15, flexShrink: 0, marginTop: 2 }} />
+                    {z.dodijeljenoId === mojId
+                      ? <input type="checkbox" checked={false} onChange={() => patchZadatakIzvrseno(z.projektId, z.id, true)} style={{ width: 15, height: 15, flexShrink: 0, marginTop: 2 }} />
+                      : <span style={{ width: 15, flexShrink: 0 }} />}
                     <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={() => setPage("projekti")}>
                       <div style={{ fontSize: 13 }}>{z.naziv}</div>
-                      <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{z.projektSifra} — {z.projektNaziv}</div>
+                      <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{z.projektSifra} — {z.projektNaziv}{odabrano === "svi" && z.dodijeljenoId !== mojId && <> · <strong style={{ color: "var(--steel)" }}>{imeZaposlenika(z.dodijeljenoId)}</strong></>}</div>
                     </div>
                     {z.planiraniDatum && <span className="f-mono" style={{ fontSize: 11.5, color: kasni ? "var(--rust)" : "var(--ink-soft)", flexShrink: 0, whiteSpace: "nowrap" }}>{fmtDate(z.planiraniDatum)}</span>}
                   </div>
