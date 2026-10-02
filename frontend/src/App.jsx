@@ -4548,6 +4548,7 @@ function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija }) 
     showToast("Materijal izdan, skladište ažurirano.");
   };
   const projNaziv = (id) => db.projekti.find((p) => p.id === id)?.naziv || "—";
+  const promijeniStatus = (row, noviStatus) => update("radniNalozi", db.radniNalozi.map((r) => (r.id === row.id ? { ...r, status: noviStatus } : r)));
 
   return (
     <div>
@@ -4578,7 +4579,13 @@ function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija }) 
           { key: "faza", label: "Faza" },
           { key: "zaduzenTim", label: "Tim" },
           { key: "sati", label: "Sati (utr./plan.)", render: (r) => <span className="f-mono">{r.utrosenoSati} / {r.planiranoSati}</span> },
-          { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
+          {
+            key: "status", label: "Status", render: (r) => mozeTablica ? (
+              <select className="select" style={{ fontSize: 12, padding: "4px 8px", width: 130 }} value={r.status} onClick={(e) => e.stopPropagation()} onChange={(e) => promijeniStatus(r, e.target.value)}>
+                {["Planiran", "U tijeku", "Pauziran", "Završen"].map((s) => <option key={s}>{s}</option>)}
+              </select>
+            ) : <Badge status={r.status} />
+          },
           { key: "materijal", label: "", render: (r) => r.stavke.length > 0 && !r.materijalIzdan ? <Btn size="sm" icon={PackageMinus} onClick={() => izdaj(r)}>Izdaj materijal</Btn> : (r.materijalIzdan ? <span style={{ fontSize: 11, color: "var(--green)" }}>Materijal izdan ✓</span> : null) },
         ]}
       />
