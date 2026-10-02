@@ -16,7 +16,10 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_URL?.includes("supabase") ? { rejectUnauthorized: false } : undefined });
+// Veza prema bazi se drži otvorenom (idle 10 min + redovit SELECT 1): kiosk skenira rijetko, a nova
+// veza prema Supabase poolera košta ~0,3-0,8 s koje bi osoba čekala ispred čitača.
+const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_URL?.includes("supabase") ? { rejectUnauthorized: false } : undefined, idleTimeoutMillis: 10 * 60 * 1000, keepAlive: true });
+setInterval(() => { pool.query("SELECT 1").catch(() => {}); }, 30 * 1000);
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) { console.error("JWT_SECRET nije postavljen u .env — vidi .env.example"); process.exit(1); }
@@ -233,22 +236,32 @@ app.put("/api/zaposlenici/:id/lozinka", autentikacija, async (req, res) => {
 const KIOSK_BLOKADA_MIN = 3;
 app.post("/api/kiosk/scan", async (req, res) => {
   const kod = (req.body.rfidKod || "").trim().toUpperCase();
-  const zaposlenici = (await ucitajKljuc("zaposlenici")) || [];
-  const zaposlenik = zaposlenici.find((z) => (z.rfidKod || "").toUpperCase() === kod);
+  if (!kod) return res.status(404).json({ error: "Kartica nije prepoznata." });
+  // Brzina je bitna (osoba čeka ispred čitača): ne dohvaća se cijeli popis zaposlenika ni cijela
+  // evidencija (~300 KB) — baza sama filtrira i vraća samo traženog zaposlenika odnosno samo
+  // njegove zapise, a izmjena (dodavanje/zatvaranje zapisa) se također izvodi u bazi.
+  const rz = await pool.query(
+    "SELECT elem FROM app_data, jsonb_array_elements(value) elem WHERE key = 'zaposlenici' AND upper(elem->>'rfidKod') = $1 LIMIT 1",
+    [kod]
+  );
+  const zaposlenik = rz.rows[0]?.elem;
   if (!zaposlenik) return res.status(404).json({ error: "Kartica nije prepoznata." });
 
   // Kad više ljudi skenira u kratkom razmaku (npr. gužva na početku smjene), obična
-  // "pročitaj cijeli niz -> izmijeni -> spremi cijeli niz" sekvenca gubi zapise: dok drugi
-  // zahtjev čita niz, prvi još nije stigao spremiti svoju izmjenu, pa drugi zahtjev
-  // naknadno prepiše cijeli niz BEZ prvog upisa. SELECT ... FOR UPDATE zaključava red za
-  // cijelo trajanje transakcije — drugi zahtjev čeka da prvi završi (COMMIT) i tek onda
-  // čita već ažurirani niz, umjesto da radi na zastarjeloj kopiji.
+  // "pročitaj cijeli niz -> izmijeni -> spremi cijeli niz" sekvenca gubi zapise. SELECT ...
+  // FOR UPDATE zaključava red za cijelo trajanje transakcije — drugi zahtjev čeka da prvi
+  // završi (COMMIT) i tek onda čita već ažurirano stanje. Zaključava se red (ne samo vraćeni
+  // zapisi) pa zaključavanje radi i kad zaposlenik još nema nijedan zapis.
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const r = await client.query("SELECT value FROM app_data WHERE key = 'evidencijaRada' FOR UPDATE");
-    const evidencija = r.rows[0]?.value || [];
-    const moji = evidencija.filter((e) => e.zaposlenikId === zaposlenik.id);
+    const r = await client.query(
+      `SELECT (SELECT coalesce(jsonb_agg(elem), '[]'::jsonb) FROM jsonb_array_elements(value) elem WHERE elem->>'zaposlenikId' = $1) AS moji
+       FROM app_data WHERE key = 'evidencijaRada' FOR UPDATE`,
+      [zaposlenik.id]
+    );
+    const postojiRed = r.rows.length > 0;
+    const moji = r.rows[0]?.moji || [];
     const otvorena = moji.find((e) => !e.vrijemeOdlaska);
     const sada = new Date();
 
@@ -274,19 +287,25 @@ app.post("/api/kiosk/scan", async (req, res) => {
     }
 
     const sadaISO = sada.toISOString();
-    let nova, odgovor;
+    let odgovor;
     if (otvorena) {
-      nova = evidencija.map((e) => (e.id === otvorena.id ? { ...e, vrijemeOdlaska: sadaISO } : e));
+      await client.query(
+        `UPDATE app_data SET updated_at = now(), value = (
+           SELECT coalesce(jsonb_agg(CASE WHEN e.elem->>'id' = $1 THEN e.elem || jsonb_build_object('vrijemeOdlaska', $2::text) ELSE e.elem END ORDER BY e.ord), '[]'::jsonb)
+           FROM jsonb_array_elements(value) WITH ORDINALITY AS e(elem, ord))
+         WHERE key = 'evidencijaRada'`,
+        [otvorena.id, sadaISO]
+      );
       odgovor = { tip: "odlazak", ime: zaposlenik.ime, prezime: zaposlenik.prezime, vrijeme: sadaISO, dolazak: otvorena.vrijemeDolaska };
     } else {
-      nova = [...evidencija, { id: `evr-${Date.now()}`, zaposlenikId: zaposlenik.id, vrijemeDolaska: sadaISO, vrijemeOdlaska: null, vrsta: "rad", autoOdjava: false, potvrdenoRacunovodstvo: false, unioRucnoId: null }];
+      const nova = { id: `evr-${Date.now()}`, zaposlenikId: zaposlenik.id, vrijemeDolaska: sadaISO, vrijemeOdlaska: null, vrsta: "rad", autoOdjava: false, potvrdenoRacunovodstvo: false, unioRucnoId: null };
+      if (postojiRed) {
+        await client.query("UPDATE app_data SET value = value || $1::jsonb, updated_at = now() WHERE key = 'evidencijaRada'", [JSON.stringify([nova])]);
+      } else {
+        await client.query("INSERT INTO app_data (key, value, updated_at) VALUES ('evidencijaRada', $1, now())", [JSON.stringify([nova])]);
+      }
       odgovor = { tip: "dolazak", ime: zaposlenik.ime, prezime: zaposlenik.prezime, vrijeme: sadaISO };
     }
-    await client.query(
-      `INSERT INTO app_data (key, value, updated_at) VALUES ('evidencijaRada', $1, now())
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      [JSON.stringify(nova)]
-    );
     await client.query("COMMIT");
     res.json(odgovor);
   } catch (e) {
