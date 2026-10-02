@@ -1629,7 +1629,30 @@ export default function App() {
 
   useEffect(() => { ucitajPodatke(); }, []);
 
+  // Otpremnice se NE šalju kao cijeli popis (zastarjela kopija je znala obrisati otpremnicu koju je
+  // netko drugi upravo izdao, a nova bi dobila isti broj) — šalje se samo razlika po id-u, a
+  // server zaključava popis i dodjeljuje sljedeći slobodan broj ako je broj već zauzet.
+  const patchOtpremnice = (newArr) => {
+    const stare = new Map((db.otpremnice || []).map((o) => [o.id, JSON.stringify(o)]));
+    const noveIds = new Set(newArr.map((o) => o.id));
+    const upsert = newArr.filter((o) => stare.get(o.id) !== JSON.stringify(o));
+    const remove = (db.otpremnice || []).filter((o) => !noveIds.has(o.id)).map((o) => o.id);
+    setDb((prev) => ({ ...prev, otpremnice: newArr }));
+    if (upsert.length === 0 && remove.length === 0) return;
+    fetch(`${API_URL}/api/otpremnice/patch`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` },
+      body: JSON.stringify({ upsert, remove }),
+    }).then(async (res) => {
+      if (!res.ok) { showToast("Greška pri spremanju otpremnice."); return; }
+      const data = await res.json();
+      setDb((prev) => ({ ...prev, otpremnice: data.otpremnice }));
+      (data.promijenjeniBrojevi || []).forEach((p) => showToast(`Broj ${p.staro} je već bio zauzet — otpremnica je spremljena kao ${p.novo}.`));
+    }).catch(() => showToast("Greška pri spremanju — provjeri internetsku vezu."));
+  };
+
   const update = (key, newArr) => {
+    if (key === "otpremnice") { patchOtpremnice(newArr); return; }
     setDb((prev) => ({ ...prev, [key]: newArr }));
     fetch(`${API_URL}/api/data/${key}`, {
       method: "PUT",
