@@ -591,16 +591,29 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   const visakPrekovremenihSati = zbroj.prekovremeni - prekovremeniPrikaz;
   const visakPrekovremenihIznos = zbroj.iznosPrekovremeni - iznosPrekovremeniPrikaz;
 
-  const ukupno = zbroj.iznosRedovni + iznosPrekovremeniPrikaz + zbroj.iznosNerad + dodatakStaz + zbroj.putni + zbroj.topliObrok;
+  // Višak prekovremenih (koji se ne prikazuje) uzima se prvo iz SUBOTNJIH sati — za te subote
+  // naknada za prijevoz i topli obrok također idu u stimulaciju (razmjerno udjelu subotnjih
+  // sati koji se ne prikazuju), da se subotnji rad ne vidi u prikazanim stavkama.
+  const suboteRad = dani.filter((d) => d.danUTjednu === 6 && d.prekovremeni > 0);
+  const suboteSati = suboteRad.reduce((s, d) => s + d.prekovremeni, 0);
+  const udioSubotaUStimulaciji = suboteSati > 0 ? Math.min(visakPrekovremenihSati, suboteSati) / suboteSati : 0;
+  const prebacenoPutni = suboteRad.reduce((s, d) => s + d.putni, 0) * udioSubotaUStimulaciji;
+  const prebacenoObrok = suboteRad.reduce((s, d) => s + d.topliObrok, 0) * udioSubotaUStimulaciji;
+  const prebacenoSubota = prebacenoPutni + prebacenoObrok;
+  const putni = zbroj.putni - prebacenoPutni;
+  const topliObrok = zbroj.topliObrok - prebacenoObrok;
+  const daniObroka = dani.filter((d) => d.topliObrok > 0).length - Math.round(suboteRad.filter((d) => d.topliObrok > 0).length * udioSubotaUStimulaciji);
+
+  const ukupno = zbroj.iznosRedovni + iznosPrekovremeniPrikaz + zbroj.iznosNerad + dodatakStaz + putni + topliObrok;
 
   // stimulacija = ono što se STVARNO isplaćuje (ručno upisano + automatski prebačeni višak
   // prekovremenih) — stimulacijaRucno je SAMO ručno upisani dio, za uređivanje u obrascu (da se
   // izbjegne da se prikazana zbrojena vrijednost spremi natrag kao da je sva ručno upisana).
   const stimulacijaRucno = Number(doplatak.stimulacija) || 0;
-  const stimulacija = stimulacijaRucno + visakPrekovremenihIznos;
+  const stimulacija = stimulacijaRucno + visakPrekovremenihIznos + prebacenoSubota;
   const kredit = Number(doplatak.kredit) || 0;
   const ustegPrehrane = Number(doplatak.ustegPrehrane) || 0;
-  const dodaciUkupno = zbroj.topliObrok + dnevnicaTeren + zbroj.putni;
+  const dodaciUkupno = topliObrok + dnevnicaTeren + putni;
   const isplata = zbroj.iznosRedovni + iznosPrekovremeniPrikaz + zbroj.iznosNerad + dodatakStaz + stimulacija + dodaciUkupno - kredit - ustegPrehrane;
 
   return {
@@ -608,6 +621,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     prekovremeniStvarno: zbroj.prekovremeni, iznosPrekovremeniStvarno: zbroj.iznosPrekovremeni,
     prekovremeni: prekovremeniPrikaz, iznosPrekovremeni: iznosPrekovremeniPrikaz,
     prikazPrekovremenihSati: doplatak.prikazPrekovremenihSati ?? "", visakPrekovremenihSati, visakPrekovremenihIznos,
+    putni, topliObrok, daniObroka, prebacenoPutni, prebacenoObrok, prebacenoSubota,
     ukupno, brojDana: dani.length, dani, dnevnicaTeren, stimulacija, stimulacijaRucno, kredit, ustegPrehrane, dodaciUkupno, isplata,
   };
 };
@@ -8214,6 +8228,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
               <span>Dodatak na staž ({detaljZaposlenik.staz} god. × {detaljZaposlenik.daniStaza} dana)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.dodatakStaz)}</span>
               <span>Putni troškovi</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.putni)}</span>
               <span>Topli obrok</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.topliObrok)}</span>
+              {detaljZaposlenik.prebacenoSubota > 0 && <><span style={{ color: "var(--ink-faint)", fontSize: 11 }}>— subotnji putni ({fmtCurDec(detaljZaposlenik.prebacenoPutni)}) i topli obrok ({fmtCurDec(detaljZaposlenik.prebacenoObrok)}) prebačeni u stimulaciju</span><span></span></>}
               {detaljZaposlenik.danaSluzbenogPuta > 0 && <><span>Dnevnica službeni put ({detaljZaposlenik.danaSluzbenogPuta} dana)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.dnevnicaTeren)}</span></>}
               {detaljZaposlenik.ocinskiSati > 0 && <><span style={{ color: "var(--ink-faint)" }}>Očinski ({detaljZaposlenik.ocinskiSati.toFixed(1)} h, evidentirano)</span><span className="f-mono" style={{ textAlign: "right", color: "var(--ink-faint)" }}>0,00 €</span></>}
               {detaljZaposlenik.roditeljskiSati > 0 && <><span style={{ color: "var(--ink-faint)" }}>Roditeljski ({detaljZaposlenik.roditeljskiSati.toFixed(1)} h, evidentirano)</span><span className="f-mono" style={{ textAlign: "right", color: "var(--ink-faint)" }}>0,00 €</span></>}
@@ -8301,7 +8316,7 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
   const [pozivBroj, setPozivBroj] = useState("");
   const [gmesec, gg] = mjesec.split("-");
 
-  const brojDanaSObrokom = (r) => r.dani.filter((d) => d.topliObrok > 0).length;
+  const brojDanaSObrokom = (r) => r.daniObroka;
   const ukupnoSati = (r) => r.redovni + r.prekovremeni + r.praznikSati + r.godisnjiSati + r.dopustSati + r.detasmanSati + r.bolovanjeSati + r.ocinskiSati + r.roditeljskiSati;
   const ukupnoFondSatiEur = (r) => r.iznosRedovni + r.iznosPrekovremeni + r.iznosNerad;
   const ukupnoPdf = (r) => r.stimulacija + r.dodatakStaz + ukupnoFondSatiEur(r);
