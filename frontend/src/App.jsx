@@ -4359,6 +4359,8 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, patchProjekt, show
   const [form, setForm] = useState(emptyForm());
 
   const azurirajKolicinu = (i, val) => setForm({ ...form, stavke: form.stavke.map((s, idx) => (idx === i ? { ...s, kolicina: val } : s)) });
+  const azurirajOpis = (i, val) => setForm({ ...form, stavke: form.stavke.map((s, idx) => (idx === i ? { ...s, opis: val } : s)) });
+  const [opisOtvoren, setOpisOtvoren] = useState({}); // { [stavkaId]: true } — red s dodatnim opisom stavke je otvoren
 
   const spremi = () => {
     const stavke = form.stavke.filter((s) => Number(s.kolicina) > 0).map((s) => ({ ...s, kolicina: Number(s.kolicina) }));
@@ -4401,13 +4403,37 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, patchProjekt, show
             <thead><tr><th>Naziv</th>{koristiNormativ && <th style={{ width: 110 }}>Planirano</th>}<th style={{ width: 80 }}>JM</th><th style={{ width: 90 }}>Naručeno</th><th style={{ width: 130 }}>Količina</th></tr></thead>
             <tbody>
               {form.stavke.map((s, i) => (
-                <tr key={s.id}>
-                  <td>{s.naziv}</td>
-                  {koristiNormativ && <td className="f-mono">{fmtDate(s.datumPlan) || "—"}</td>}
-                  <td className="f-mono">{s.jm}</td>
-                  <td className="f-mono">{s.narucena ?? "—"}</td>
-                  <td><input className="input f-mono" type="number" min="0" max={koristiNormativ ? s.dostupno : undefined} style={{ padding: "5px 8px" }} value={s.kolicina} onChange={(e) => azurirajKolicinu(i, e.target.value)} /></td>
-                </tr>
+                <React.Fragment key={s.id}>
+                  <tr>
+                    <td>
+                      {s.naziv}
+                      <button
+                        className="btn btn-icon btn-ghost" style={{ marginLeft: 6, verticalAlign: "middle" }}
+                        title={s.opis ? "Uredi dodatni opis stavke" : "Dodaj dodatni opis stavke"}
+                        onClick={() => setOpisOtvoren((o) => ({ ...o, [s.id]: !o[s.id] }))}
+                      >
+                        <FileText size={13} color={s.opis ? "var(--steel)" : "var(--ink-faint)"} />
+                      </button>
+                    </td>
+                    {koristiNormativ && <td className="f-mono">{fmtDate(s.datumPlan) || "—"}</td>}
+                    <td className="f-mono">{s.jm}</td>
+                    <td className="f-mono">{s.narucena ?? "—"}</td>
+                    <td><input className="input f-mono" type="number" min="0" max={koristiNormativ ? s.dostupno : undefined} style={{ padding: "5px 8px" }} value={s.kolicina} onChange={(e) => azurirajKolicinu(i, e.target.value)} /></td>
+                  </tr>
+                  {(opisOtvoren[s.id] || (s.opis && opisOtvoren[s.id] === undefined)) && (
+                    <tr>
+                      <td colSpan={koristiNormativ ? 5 : 4} style={{ background: "var(--surface-alt)", padding: "8px 10px" }}>
+                        <label className="label" style={{ marginBottom: 4 }}>Dodatni opis stavke (vidljivo na otpremnici)</label>
+                        <textarea
+                          className="textarea" rows={2} style={{ width: "100%" }}
+                          placeholder="npr. dimenzije, oznaka pozicije, napomena uz ovu stavku…"
+                          value={s.opis || ""}
+                          onChange={(e) => azurirajOpis(i, e.target.value)}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
@@ -4478,7 +4504,7 @@ function OtpremnicaPrintModal({ otpremnica, db, onClose }) {
           <tbody>
             {otpremnica.stavke.map((s, i) => (
               <tr key={s.id || i}>
-                <td>{i + 1}.</td><td>{s.naziv}</td><td>{s.jm}</td><td className="f-mono">{s.kolicina}</td>
+                <td>{i + 1}.</td><td>{s.naziv}{s.opis && <div style={{ fontSize: 9.5, color: "#555", marginTop: 2, whiteSpace: "pre-line" }}>{s.opis}</div>}</td><td>{s.jm}</td><td className="f-mono">{s.kolicina}</td>
               </tr>
             ))}
             {Array.from({ length: PRAZNI_REDOVI }).map((_, i) => (
