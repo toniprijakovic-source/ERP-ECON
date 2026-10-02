@@ -475,8 +475,9 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
   // Dodatak na staž ide za svaki dan stvarnog rada od 4+ sata i za plaćene izostanke (praznik,
   // godišnji, detašman, plaćeni dopust, službeni put) — NE za bolovanje, očinski i roditeljski,
   // i samo od ponedjeljka do petka (radne subote se ne računaju).
-  const radniDanUTjednu = danUTjednu >= 1 && danUTjednu <= 5;
-  const danStaza = radniDanUTjednu && (praznik || (vrsta === "rad" ? odradjeniSati >= 4 : !["bolovanje", "ocinski", "roditeljski"].includes(vrsta)));
+  // Odluka se donosi po DATUMU (ne po zapisu) u obracunMjeseca, jer dan može imati više zapisa.
+  const placenIzostanak = praznik || (vrsta !== "rad" && !["bolovanje", "ocinski", "roditeljski"].includes(vrsta));
+  const satiZaStaz = vrsta === "rad" && !praznik ? odradjeniSati : 0;
 
   // Zaposlenici na pola radnog vremena dobivaju putni trošak i topli obrok prepolovljene.
   const faktorRadnogVremena = zaposlenik?.radnoVrijeme === "pola" ? 0.5 : 1;
@@ -496,7 +497,7 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
   return {
     datum, vrsta, danUTjednu, praznik, smjena, dodatakSmjene, faktorPrekSaSmjenom,
     odradjeniSati, redovni, prekovremeni, placeniNerad, putni, topliObrok,
-    praznikSati, godisnjiSati, dopustSati, detasmanSati, bolovanjeSati, ocinskiSati, roditeljskiSati, jeSluzbeniPut, danStaza,
+    praznikSati, godisnjiSati, dopustSati, detasmanSati, bolovanjeSati, ocinskiSati, roditeljskiSati, jeSluzbeniPut, placenIzostanak, satiZaStaz,
     iznosRedovni, iznosPrekovremeni, iznosNerad,
     ukupnoDan: iznosRedovni + iznosPrekovremeni + iznosNerad + putni + topliObrok,
   };
@@ -507,7 +508,17 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   const postavke = db.postavkePlaca;
   const radniDaniMjeseca = radniDaniUMjesecu(mjesec);
   const { satnica, ...osnova } = satnicaZaposlenika(zaposlenik, postavke, `${mjesec}-01`);
-  const zapisi = (db.evidencijaRada || []).filter((e) => e.zaposlenikId === zaposlenik.id && e.vrijemeDolaska.slice(0, 7) === mjesec);
+  const sviZapisi = (db.evidencijaRada || []).filter((e) => e.zaposlenikId === zaposlenik.id && e.vrijemeDolaska.slice(0, 7) === mjesec);
+  // Cjelodnevna vrsta (godišnji, bolovanje, detašman...) vrijedi JEDNOM po datumu — ako je
+  // greškom unesena dvaput, drugi zapis se ignorira da se dan ne plati/ne računa dvostruko.
+  const vidjenoPosebno = new Set();
+  const zapisi = sviZapisi.filter((e) => {
+    if ((e.vrsta || "rad") === "rad") return true;
+    const k = e.vrijemeDolaska.slice(0, 10);
+    if (vidjenoPosebno.has(k)) return false;
+    vidjenoPosebno.add(k);
+    return true;
+  });
   const dani = zapisi.map((z) => obracunDana(z, zaposlenik, postavke, db.praznici, satnica));
 
   // Praznici u mjesecu za koje zaposlenik nema NIKAKAV zapis (npr. cijela tvrtka ne radi tog
@@ -542,9 +553,19 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     bolovanjeSati: s.bolovanjeSati + d.bolovanjeSati,
     ocinskiSati: s.ocinskiSati + d.ocinskiSati,
     roditeljskiSati: s.roditeljskiSati + d.roditeljskiSati,
-    daniStaza: s.daniStaza + (d.danStaza ? 1 : 0),
     danaSluzbenogPuta: s.danaSluzbenogPuta + (d.jeSluzbeniPut ? 1 : 0),
-  }), { redovni: 0, prekovremeni: 0, placeniNerad: 0, putni: 0, topliObrok: 0, odradjeni: 0, satiSDodatkom: 0, iznosRedovni: 0, iznosPrekovremeni: 0, iznosNerad: 0, praznikSati: 0, godisnjiSati: 0, dopustSati: 0, detasmanSati: 0, bolovanjeSati: 0, ocinskiSati: 0, roditeljskiSati: 0, daniStaza: 0, danaSluzbenogPuta: 0 });
+  }), { redovni: 0, prekovremeni: 0, placeniNerad: 0, putni: 0, topliObrok: 0, odradjeni: 0, satiSDodatkom: 0, iznosRedovni: 0, iznosPrekovremeni: 0, iznosNerad: 0, praznikSati: 0, godisnjiSati: 0, dopustSati: 0, detasmanSati: 0, bolovanjeSati: 0, ocinskiSati: 0, roditeljskiSati: 0, danaSluzbenogPuta: 0 });
+
+  // Dani za dodatak na staž (po jedinstvenom datumu, samo pon-pet): dan stvarnog rada 4+ h
+  // (zbroj svih segmenata tog dana) ili plaćeni izostanak.
+  const poDatumuStaz = new Map();
+  dani.forEach((d) => {
+    const e = poDatumuStaz.get(d.datum) || { sati: 0, izostanak: false, dow: d.danUTjednu };
+    e.sati += d.satiZaStaz;
+    e.izostanak = e.izostanak || d.placenIzostanak;
+    poDatumuStaz.set(d.datum, e);
+  });
+  zbroj.daniStaza = [...poDatumuStaz.values()].filter((e) => e.dow >= 1 && e.dow <= 5 && (e.izostanak || e.sati >= 4)).length;
 
   // Dnevnica za službeni put + ručni mjesečni dodaci/odbici (stimulacija, kredit, usteg
   // prehrane) — potonji se upisuju ručno po zaposleniku/mjesecu jer ne proizlaze iz sati.
