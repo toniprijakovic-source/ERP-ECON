@@ -473,8 +473,10 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
   }
   const jeSluzbeniPut = vrsta === "sluzbeniPut";
   // Dodatak na staž ide za svaki dan stvarnog rada od 4+ sata i za plaćene izostanke (praznik,
-  // godišnji, detašman, plaćeni dopust, službeni put) — NE za bolovanje, očinski i roditeljski.
-  const danStaza = praznik || (vrsta === "rad" ? odradjeniSati >= 4 : !["bolovanje", "ocinski", "roditeljski"].includes(vrsta));
+  // godišnji, detašman, plaćeni dopust, službeni put) — NE za bolovanje, očinski i roditeljski,
+  // i samo od ponedjeljka do petka (radne subote se ne računaju).
+  const radniDanUTjednu = danUTjednu >= 1 && danUTjednu <= 5;
+  const danStaza = radniDanUTjednu && (praznik || (vrsta === "rad" ? odradjeniSati >= 4 : !["bolovanje", "ocinski", "roditeljski"].includes(vrsta)));
 
   // Zaposlenici na pola radnog vremena dobivaju putni trošak i topli obrok prepolovljene.
   const faktorRadnogVremena = zaposlenik?.radnoVrijeme === "pola" ? 0.5 : 1;
