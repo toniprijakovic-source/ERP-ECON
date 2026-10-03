@@ -4,7 +4,7 @@ import {
   Plus, Pencil, Trash2, X, Search, AlertTriangle, CheckCircle2, ArrowRight,
   Clock, ChevronRight, Save, PackageCheck, PackageMinus, Settings, Layers,
   ChevronDown, ChevronUp, FolderInput, Eye, UserCog, CalendarRange,
-  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors
+  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors, Printer
 } from "lucide-react";
 import logoEcon from "./assets/logo-econ.jpg";
 
@@ -6408,6 +6408,22 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
     return lista;
   }, [db.projekti, imaRucniPoredak]);
   const projektiZavrseni = useMemo(() => [...db.projekti].filter((p) => p.status === "Završen").sort((a, b) => (b.rokZavrsetka || "").localeCompare(a.rokZavrsetka || "")), [db.projekti]);
+  // Ispis popisa projekata u PDF (novi prozor + dijalog za ispis, "Spremi kao PDF") — isti stupci kao na ekranu.
+  const ispisiProjekte = (lista, naslov) => {
+    const imeVoditelja = (id) => { const v = db.zaposlenici.find((z) => z.id === id); return v ? `${v.prezime} ${v.ime}` : ""; };
+    const redovi = lista.map((p) => {
+      const brojevi = db.narudzbe.filter((n) => n.projektId === p.id && n.broj).map((n) => n.broj).join(", ");
+      return `<tr><td class="m">${escHtml(p.sifra)}</td><td>${escHtml(p.naziv)}</td><td>${escHtml(imeVoditelja(p.voditeljId))}</td><td>${escHtml(db.kupci.find((k) => k.id === p.kupacId)?.naziv || "")}</td><td class="m">${escHtml(brojevi)}</td><td class="m">${p.rokZavrsetka ? escHtml(fmtDate(p.rokZavrsetka)) : ""}</td><td>${escHtml(p.status)}</td></tr>`;
+    }).join("");
+    const css = "body{font-family:Arial,Helvetica,sans-serif;color:#111;font-size:10px;margin:0}h1{font-size:15px;margin:0 0 2px}.sub{color:#555;margin-bottom:8px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:3px 5px;text-align:left;vertical-align:top}th{background:#eee;font-size:9.5px}thead{display:table-header-group}tr{page-break-inside:avoid}.m{font-family:Consolas,monospace;white-space:nowrap}@page{size:A4 landscape;margin:10mm}";
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escHtml(naslov)}</title><style>${css}</style></head><body><h1>${escHtml(db.postavkeTvrtke?.naziv || "ECON d.o.o.")} — ${escHtml(naslov)}</h1><div class="sub">Ispisano ${escHtml(fmtDate(todayISO()))} · ${lista.length} projekata</div><table><thead><tr><th>Šifra</th><th>Naziv</th><th>Voditelj</th><th>Kupac</th><th>Broj narudžbe</th><th>Rok završetka</th><th>Status</th></tr></thead><tbody>${redovi}</tbody></table></body></html>`;
+    const w = window.open("", "_blank");
+    if (!w) { showToast("Preglednik je blokirao novi prozor — dozvoli skočne prozore za ovu stranicu i pokušaj ponovno."); return; }
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 400);
+  };
   const rasporediProjekte = (novaLista) => patchProjekti(novaLista.map((p, i) => ({ ...p, poredak: i })), []);
   const vratiAutomatskoSortiranje = () => patchProjekti(db.projekti.map(({ poredak, ...ostalo }) => ostalo), []);
 
@@ -6646,7 +6662,13 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
           {dozvKartice.some((k) => k.key === "zavrseni") && <div className={`nav-tab ${tab === "zavrseni" ? "active" : ""}`} onClick={() => setTab("zavrseni")}>Završeni projekti</div>}
         </div>
         {tab === "ponude" && <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setCjenikOpen(true)}>Cjenik rada</Btn>}
-        {tab === "projekti" && <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setZadaciOpen(true)}>Standardni zadaci</Btn>}
+        {tab === "projekti" && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn variant="ghost" size="sm" icon={Printer} onClick={() => ispisiProjekte(projektiSortirani, "Popis projekata")}>Ispis / PDF</Btn>
+            <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setZadaciOpen(true)}>Standardni zadaci</Btn>
+          </div>
+        )}
+        {tab === "zavrseni" && <Btn variant="ghost" size="sm" icon={Printer} onClick={() => ispisiProjekte(projektiZavrseni, "Završeni projekti")}>Ispis / PDF</Btn>}
       </div>
 
       {tab === "projekti" && (
@@ -6666,10 +6688,9 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
           columns={[
             { key: "sifra", label: "Šifra", render: (r) => <span className="f-mono">{r.sifra}</span> },
             { key: "naziv", label: "Naziv" },
-            { key: "kupac", label: "Kupac", render: (r) => kupacNaziv(r.kupacId) },
             { key: "voditelj", label: "Voditelj", render: (r) => { const v = db.zaposlenici.find((z) => z.id === r.voditeljId); return v ? `${v.prezime} ${v.ime}` : <span style={{ color: "var(--ink-faint)" }}>—</span>; } },
-            { key: "vrijednost", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCur(r.vrijednost)}</span> },
-            { key: "zadaci", label: "Zadaci", render: (r) => { const z = r.zadaci || []; const done = z.filter((x) => x.izvrseno).length; return z.length ? <span className="f-mono">{done}/{z.length}</span> : "—"; } },
+            { key: "kupac", label: "Kupac", render: (r) => kupacNaziv(r.kupacId) },
+            { key: "brojNarudzbe", label: "Broj narudžbe", render: (r) => { const brojevi = db.narudzbe.filter((n) => n.projektId === r.id && n.broj).map((n) => n.broj); return brojevi.length ? <span className="f-mono">{brojevi.join(", ")}</span> : <span style={{ color: "var(--ink-faint)" }}>—</span>; } },
             { key: "rokZavrsetka", label: "Rok završetka", render: (r) => fmtDate(r.rokZavrsetka) },
             {
               key: "status", label: "Status", render: (r) => mozeProjekti ? (
