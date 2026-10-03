@@ -1294,7 +1294,7 @@ const dozvoljeneKarticeModula = (pozicija, modulKey) => (KARTICE_MODULA[modulKey
 const KIOSK_TISINA_MS = 300;
 const KIOSK_MAX_DULJINA_KODA = 15;
 // Koliko dugo poruka o prijavi/odjavi ostaje na zaslonu kiosa (ms).
-const KIOSK_PRIKAZ_PORUKE_MS = 2000;
+const KIOSK_PRIKAZ_PORUKE_MS = 1000;
 
 function KioskView({ onPrijava }) {
   const [unos, setUnos] = useState("");
