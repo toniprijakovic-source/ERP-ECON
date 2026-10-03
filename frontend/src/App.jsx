@@ -1938,7 +1938,7 @@ export default function App() {
               <div style={{ fontSize: 12.5, fontWeight: 600 }}>{zaposlenik?.ime} {zaposlenik?.prezime}</div>
               <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{mojaPozicija?.naziv || "—"}</div>
             </div>
-            {!jeOperaterLasera(mojaPozicija) && <Btn variant="ghost" size="sm" icon={Database} onClick={() => setBackupOpen(true)}>Backup</Btn>}
+            {mojaPozicija?.id === "poz-administrator" && <Btn variant="ghost" size="sm" icon={Database} onClick={() => setBackupOpen(true)}>Backup</Btn>}
             <Btn variant="ghost" size="sm" onClick={odjava}>Odjava</Btn>
           </div>
         </div>
@@ -6408,21 +6408,32 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
     return lista;
   }, [db.projekti, imaRucniPoredak]);
   const projektiZavrseni = useMemo(() => [...db.projekti].filter((p) => p.status === "Završen").sort((a, b) => (b.rokZavrsetka || "").localeCompare(a.rokZavrsetka || "")), [db.projekti]);
-  // Ispis popisa projekata u PDF (novi prozor + dijalog za ispis, "Spremi kao PDF") — isti stupci kao na ekranu.
-  const ispisiProjekte = (lista, naslov) => {
-    const imeVoditelja = (id) => { const v = db.zaposlenici.find((z) => z.id === id); return v ? `${v.prezime} ${v.ime}` : ""; };
-    const redovi = lista.map((p) => {
-      const brojevi = db.narudzbe.filter((n) => n.projektId === p.id && n.broj).map((n) => n.broj).join(", ");
-      return `<tr><td class="m">${escHtml(p.sifra)}</td><td>${escHtml(p.naziv)}</td><td>${escHtml(imeVoditelja(p.voditeljId))}</td><td>${escHtml(db.kupci.find((k) => k.id === p.kupacId)?.naziv || "")}</td><td class="m">${escHtml(brojevi)}</td><td class="m">${p.rokZavrsetka ? escHtml(fmtDate(p.rokZavrsetka)) : ""}</td><td>${escHtml(p.status)}</td></tr>`;
-    }).join("");
+  // Ispis popisa u PDF (novi prozor + dijalog za ispis, "Spremi kao PDF"). zaglavlja: [naziv stupca],
+  // redovi: [[ćelije kao tekst]]; ćelije u zaglavlju koje počinju s "#" ispisuju se monospace fontom.
+  const ispisiTablicu = (naslov, zaglavlja, redovi) => {
     const css = "body{font-family:Arial,Helvetica,sans-serif;color:#111;font-size:10px;margin:0}h1{font-size:15px;margin:0 0 2px}.sub{color:#555;margin-bottom:8px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:3px 5px;text-align:left;vertical-align:top}th{background:#eee;font-size:9.5px}thead{display:table-header-group}tr{page-break-inside:avoid}.m{font-family:Consolas,monospace;white-space:nowrap}@page{size:A4 landscape;margin:10mm}";
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escHtml(naslov)}</title><style>${css}</style></head><body><h1>${escHtml(db.postavkeTvrtke?.naziv || "ECON d.o.o.")} — ${escHtml(naslov)}</h1><div class="sub">Ispisano ${escHtml(fmtDate(todayISO()))} · ${lista.length} projekata</div><table><thead><tr><th>Šifra</th><th>Naziv</th><th>Voditelj</th><th>Kupac</th><th>Broj narudžbe</th><th>Rok završetka</th><th>Status</th></tr></thead><tbody>${redovi}</tbody></table></body></html>`;
+    const mono = zaglavlja.map((z) => z.startsWith("#"));
+    const tijelo = redovi.map((r) => "<tr>" + r.map((c, i) => `<td${mono[i] ? " class=\"m\"" : ""}>${escHtml(c)}</td>`).join("") + "</tr>").join("");
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escHtml(naslov)}</title><style>${css}</style></head><body><h1>${escHtml(db.postavkeTvrtke?.naziv || "ECON d.o.o.")} — ${escHtml(naslov)}</h1><div class="sub">Ispisano ${escHtml(fmtDate(todayISO()))} · ${redovi.length} zapisa</div><table><thead><tr>${zaglavlja.map((z) => `<th>${escHtml(z.replace(/^#/, ""))}</th>`).join("")}</tr></thead><tbody>${tijelo}</tbody></table></body></html>`;
     const w = window.open("", "_blank");
     if (!w) { showToast("Preglednik je blokirao novi prozor — dozvoli skočne prozore za ovu stranicu i pokušaj ponovno."); return; }
     w.document.write(html);
     w.document.close();
     w.focus();
     setTimeout(() => w.print(), 400);
+  };
+  const ispisiProjekte = (lista, naslov) => {
+    const imeVoditelja = (id) => { const v = db.zaposlenici.find((z) => z.id === id); return v ? `${v.prezime} ${v.ime}` : ""; };
+    ispisiTablicu(naslov, ["#Šifra", "Naziv", "Voditelj", "Kupac", "#Broj narudžbe", "#Rok završetka", "Status"], lista.map((p) => [
+      p.sifra, p.naziv, imeVoditelja(p.voditeljId), db.kupci.find((k) => k.id === p.kupacId)?.naziv || "",
+      db.narudzbe.filter((n) => n.projektId === p.id && n.broj).map((n) => n.broj).join(", "), p.rokZavrsetka ? fmtDate(p.rokZavrsetka) : "", p.status,
+    ]));
+  };
+  const ispisiPonude = (lista, naslov, laser) => {
+    ispisiTablicu(naslov, ["#Broj", "Naziv posla", "Kupac", ...(laser ? [] : ["#Sati"]), "#Vrijednost", "Status", "Projekt"], lista.map((p) => {
+      const izr = laser ? izracunPonudeLasera(p, db.kvaliteteMaterijala) : izracunPonude(p, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala);
+      return [p.broj, p.naziv, kupacNaziv(p.kupacId), ...(laser ? [] : [`${izr.ukupnoSati} h`]), fmtCurDec(izr.cijenaKonacna), p.status, p.projektId ? projSifra(p.projektId) : ""];
+    }));
   };
   const rasporediProjekte = (novaLista) => patchProjekti(novaLista.map((p, i) => ({ ...p, poredak: i })), []);
   const vratiAutomatskoSortiranje = () => patchProjekti(db.projekti.map(({ poredak, ...ostalo }) => ostalo), []);
@@ -6661,7 +6672,12 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
           {dozvKartice.some((k) => k.key === "laser") && <div className={`nav-tab ${tab === "laser" ? "active" : ""}`} onClick={() => setTab("laser")}>Ponude - Laser</div>}
           {dozvKartice.some((k) => k.key === "zavrseni") && <div className={`nav-tab ${tab === "zavrseni" ? "active" : ""}`} onClick={() => setTab("zavrseni")}>Završeni projekti</div>}
         </div>
-        {tab === "ponude" && <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setCjenikOpen(true)}>Cjenik rada</Btn>}
+        {tab === "ponude" && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn variant="ghost" size="sm" icon={Printer} onClick={() => ispisiPonude(db.ponude, "Popis ponuda", false)}>Ispis / PDF</Btn>
+            <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setCjenikOpen(true)}>Cjenik rada</Btn>
+          </div>
+        )}
         {tab === "projekti" && (
           <div style={{ display: "flex", gap: 8 }}>
             <Btn variant="ghost" size="sm" icon={Printer} onClick={() => ispisiProjekte(projektiSortirani, "Popis projekata")}>Ispis / PDF</Btn>
@@ -6669,6 +6685,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
           </div>
         )}
         {tab === "zavrseni" && <Btn variant="ghost" size="sm" icon={Printer} onClick={() => ispisiProjekte(projektiZavrseni, "Završeni projekti")}>Ispis / PDF</Btn>}
+        {tab === "laser" && <Btn variant="ghost" size="sm" icon={Printer} onClick={() => ispisiPonude(db.ponudeLasera, "Popis ponuda — laser", true)}>Ispis / PDF</Btn>}
       </div>
 
       {tab === "projekti" && (
