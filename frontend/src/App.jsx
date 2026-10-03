@@ -1293,6 +1293,8 @@ const dozvoljeneKarticeModula = (pozicija, modulKey) => (KARTICE_MODULA[modulKey
 // razraste preko razumne duljine za jednu karticu, odbacuje se kao pokvaren umjesto da se šalje.
 const KIOSK_TISINA_MS = 300;
 const KIOSK_MAX_DULJINA_KODA = 15;
+// Koliko dugo poruka o prijavi/odjavi ostaje na zaslonu kiosa (ms).
+const KIOSK_PRIKAZ_PORUKE_MS = 2000;
 
 function KioskView({ onPrijava }) {
   const [unos, setUnos] = useState("");
@@ -1338,7 +1340,7 @@ function KioskView({ onPrijava }) {
   const kratkaPoruka = (poruka) => {
     if (sakrijTimeoutRef.current) clearTimeout(sakrijTimeoutRef.current);
     setPoruka(poruka);
-    sakrijTimeoutRef.current = setTimeout(() => setPoruka(null), 4000);
+    sakrijTimeoutRef.current = setTimeout(() => setPoruka(null), KIOSK_PRIKAZ_PORUKE_MS);
   };
 
   const promjenaUnosa = (vrijednost) => {
