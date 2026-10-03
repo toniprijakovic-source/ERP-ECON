@@ -1296,7 +1296,7 @@ const KIOSK_MAX_DULJINA_KODA = 15;
 // Koliko dugo poruka o prijavi/odjavi ostaje na zaslonu kiosa (ms).
 const KIOSK_PRIKAZ_PORUKE_MS = 1000;
 // Svakih koliko kiosk provjerava je li izašla nova verzija aplikacije (pa se sam osvježi).
-const KIOSK_PROVJERA_VERZIJE_MS = 90 * 1000;
+const KIOSK_PROVJERA_VERZIJE_MS = 33 * 60 * 1000;
 
 function KioskView({ onPrijava }) {
   const [unos, setUnos] = useState("");
