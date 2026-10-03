@@ -31,7 +31,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada",
   "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
   "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca",
-  "satiPoNalogu", "izdatnice", "cmr",
+  "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci",
 ];
 
 // Svaki modul (isti "moduli" popis kao u pozicijeZaposlenika) dijeli se na kartice — iste
@@ -41,7 +41,7 @@ const DOZVOLJENI_KLJUCEVI = [
 // može suziti po poziciji preko pozicija.karticeDozvole (postavljeno kroz "Pozicije" ekran).
 const KARTICE_MODULA = {
   dashboard: {
-    pregled: { citanje: ["cjenikRada", "fakture", "materijali", "ponude", "projekti", "radniNalozi"], pisanje: [] },
+    pregled: { citanje: ["cjenikRada", "fakture", "materijali", "ponude", "projekti", "radniNalozi", "slobodniZadaci"], pisanje: [] },
   },
   skladiste: {
     zalihe: { citanje: ["materijali", "katalogProfila", "kvaliteteMaterijala", "projekti", "izdatnice", "zaposlenici"], pisanje: ["materijali", "izdatnice"] },
@@ -456,6 +456,73 @@ app.put("/api/projekti/:projektId/zadatak/:zadId/izvrseno", autentikacija, async
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
     console.error("Greška kod označavanja zadatka:", e);
+    res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+  } finally {
+    client.release();
+  }
+});
+
+// ---------- Zadaci na nadzornoj ploči koji nisu vezani uz projekt ("slobodniZadaci") ----------
+// Svaki zaposlenik smije dodati zadatak sebi i označiti svoje zadatke izvršenima (bez obzira na
+// module), a tko ima pravo mijenjati projekte smije ih zadavati i drugima te uređivati/brisati
+// bilo čiji. Isti oblik kao ostali patch endpointi (upsert po id-u + remove), primijenjen na
+// trenutni zaključani popis u bazi, da istodobne izmjene ne prepišu jedna drugu.
+app.put("/api/slobodniZadaci/patch", autentikacija, async (req, res) => {
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  const upravitelj = izracunajDozvoljeneKljuceve(pozicija).pisivo.has("projekti");
+  const upsert = Array.isArray(req.body.upsert) ? req.body.upsert : [];
+  const remove = Array.isArray(req.body.remove) ? req.body.remove : [];
+  const danas = new Date().toISOString().slice(0, 10);
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query("SELECT value FROM app_data WHERE key = 'slobodniZadaci' FOR UPDATE");
+    const trenutno = r.rows[0]?.value || [];
+    const postojeci = new Map(trenutno.map((z) => [z.id, z]));
+    const mojeJe = (z) => z && (z.dodijeljenoId === req.zaposlenikId || z.kreiraoId === req.zaposlenikId);
+
+    for (const u of upsert) {
+      const staro = postojeci.get(u.id);
+      if (!upravitelj) {
+        if (staro ? !mojeJe(staro) : u.dodijeljenoId !== req.zaposlenikId) {
+          await client.query("ROLLBACK");
+          return res.status(403).json({ error: "Zadatak možeš dodati samo sebi, a mijenjati samo svoje zadatke." });
+        }
+        if (u.dodijeljenoId !== req.zaposlenikId && u.dodijeljenoId !== staro?.dodijeljenoId) {
+          await client.query("ROLLBACK");
+          return res.status(403).json({ error: "Zadatke drugima mogu zadavati samo korisnici s pristupom projektima." });
+        }
+      }
+    }
+    for (const id of remove) {
+      if (!upravitelj && postojeci.has(id) && postojeci.get(id).kreiraoId !== req.zaposlenikId) {
+        await client.query("ROLLBACK");
+        return res.status(403).json({ error: "Zadatak može obrisati samo osoba koja ga je dodala." });
+      }
+    }
+
+    const removeSet = new Set(remove);
+    const upsertMap = new Map(upsert.map((u) => [u.id, u]));
+    const obradi = (u, staro) => {
+      const z = { ...u, kreiraoId: staro?.kreiraoId || u.kreiraoId || req.zaposlenikId };
+      if (z.izvrseno) { z.datumIzvrsenja = staro?.datumIzvrsenja || z.datumIzvrsenja || danas; z.izvrsioId = staro?.izvrsioId || req.zaposlenikId; }
+      else { z.datumIzvrsenja = null; z.izvrsioId = null; }
+      return z;
+    };
+    const rezultat = trenutno.filter((z) => !removeSet.has(z.id)).map((z) => (upsertMap.has(z.id) ? obradi(upsertMap.get(z.id), z) : z));
+    upsert.forEach((u) => { if (!postojeci.has(u.id) && !removeSet.has(u.id)) rezultat.push(obradi(u, null)); });
+
+    await client.query(
+      `INSERT INTO app_data (key, value, updated_at) VALUES ('slobodniZadaci', $1, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [JSON.stringify(rezultat)]
+    );
+    await client.query("COMMIT");
+    res.json({ ok: true, slobodniZadaci: rezultat });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Greška kod izmjene zadataka:", e);
     res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
   } finally {
     client.release();
