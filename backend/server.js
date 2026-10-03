@@ -88,6 +88,13 @@ const KARTICE_MODULA = {
 // Ključevi koje App.jsx čita na najvišoj razini (zaglavlje, navigacija, prijava) —
 // potrebni SVAKOM prijavljenom zaposleniku bez obzira na modul, inače se aplikacija
 // uopće ne može ispravno prikazati (ime tvrtke, vlastita pozicija/navigacija).
+// Zadatke svih zaposlenika (slobodniZadaci) vide samo ove pozicije; ostali dobivaju samo zadatke
+// koji su njima dodijeljeni ili koje su sami dodali.
+const POZICIJE_SVI_ZADACI = ["poz-direktor", "poz-administrator"];
+const filtrirajSlobodneZadatke = (zadaci, pozicija, zaposlenikId) => (Array.isArray(zadaci) && !POZICIJE_SVI_ZADACI.includes(pozicija?.id)
+  ? zadaci.filter((z) => z.dodijeljenoId === zaposlenikId || z.kreiraoId === zaposlenikId)
+  : zadaci);
+
 const UVIJEK_CITLJIVO = ["zaposlenici", "pozicijeZaposlenika", "postavkeTvrtke"];
 
 // Ključevi čija je vrijednost objekt (ne niz) — koristi se za ispravan "prazan" placeholder.
@@ -519,7 +526,7 @@ app.put("/api/slobodniZadaci/patch", autentikacija, async (req, res) => {
       [JSON.stringify(rezultat)]
     );
     await client.query("COMMIT");
-    res.json({ ok: true, slobodniZadaci: rezultat });
+    res.json({ ok: true, slobodniZadaci: filtrirajSlobodneZadatke(rezultat, pozicija, req.zaposlenikId) });
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
     console.error("Greška kod izmjene zadataka:", e);
@@ -688,6 +695,7 @@ app.get("/api/data", autentikacija, async (req, res) => {
   DOZVOLJENI_KLJUCEVI.forEach((key) => {
     rezultat[key] = citljivo.has(key) ? (stvarno[key] ?? (OBJEKT_KLJUCEVI.has(key) ? {} : [])) : (OBJEKT_KLJUCEVI.has(key) ? {} : []);
   });
+  rezultat.slobodniZadaci = filtrirajSlobodneZadatke(rezultat.slobodniZadaci, pozicija, req.zaposlenikId);
   res.json(rezultat);
 });
 
@@ -697,7 +705,8 @@ app.get("/api/data/:key", autentikacija, async (req, res) => {
   const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
   const { citljivo } = izracunajDozvoljeneKljuceve(pozicija);
   if (!citljivo.has(key)) return res.status(403).json({ error: "Vaša pozicija nema pristup ovim podacima." });
-  res.json(await ucitajKljuc(key));
+  const vrijednost = await ucitajKljuc(key);
+  res.json(key === "slobodniZadaci" ? filtrirajSlobodneZadatke(vrijednost, pozicija, req.zaposlenikId) : vrijednost);
 });
 
 app.put("/api/data/:key", autentikacija, async (req, res, next) => {

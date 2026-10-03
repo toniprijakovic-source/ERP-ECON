@@ -1985,7 +1985,10 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
   // Zadaci dodijeljeni MENI, na bilo kojem projektu, koji još nisu izvršeni — čim ih netko
   // označi izvršenima, nestaju odavde (nema arhive na nadzornoj ploči).
   // Tko ima pristup projektima može izabrati i zadatke bilo koje druge osobe (samo pregled).
-  const mozeVidjetiTudje = (mojaPozicija?.moduli || []).includes("projekti") && dozvolaZaKarticu(mojaPozicija, "projekti", "projekti").pristup;
+  // Zadatke svih zaposlenika vide samo direktor i glavni administrator; ostali vide samo svoje.
+  const mozeVidjetiTudje = ["poz-direktor", "poz-administrator"].includes(mojaPozicija?.id);
+  // Zadavati zadatke drugoj osobi (i brisati tuđe) smiju još i korisnici s pristupom projektima.
+  const mozeZadavatiDrugima = mozeVidjetiTudje || ((mojaPozicija?.moduli || []).includes("projekti") && dozvolaZaKarticu(mojaPozicija, "projekti", "projekti").pristup);
   const imeZaposlenika = (id) => { const z = db.zaposlenici.find((x) => x.id === id); return z ? `${z.prezime} ${z.ime}` : "—"; };
   const sviOtvoreniZadaci = [];
   db.projekti.forEach((p) => {
@@ -2001,7 +2004,7 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
   const dodajSlobodniZadatak = () => {
     const naziv = noviSlobodni.naziv.trim();
     if (!naziv) return;
-    const kome = mozeVidjetiTudje && noviSlobodni.kome ? noviSlobodni.kome : mojId;
+    const kome = mozeZadavatiDrugima && noviSlobodni.kome ? noviSlobodni.kome : mojId;
     update("slobodniZadaci", [...slobodniZadaci, { id: uid("sz"), naziv, dodijeljenoId: kome, planiraniDatum: noviSlobodni.datum || null, izvrseno: false, izvrsioId: null, datumIzvrsenja: null, kreiraoId: mojId }]);
     setNoviSlobodni({ naziv: "", datum: "", kome: "" });
   };
@@ -2062,7 +2065,7 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
           {dodajZadatakOtvoreno && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10, padding: 8, background: "var(--surface-alt)", borderRadius: 3 }}>
               <input className="input" style={{ flex: "1 1 200px" }} autoFocus placeholder="Zadatak (nije vezan uz projekt)…" value={noviSlobodni.naziv} onChange={(e) => setNoviSlobodni({ ...noviSlobodni, naziv: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") dodajSlobodniZadatak(); }} />
-              {mozeVidjetiTudje && (
+              {mozeZadavatiDrugima && (
                 <select className="select" style={{ width: 170 }} value={noviSlobodni.kome} onChange={(e) => setNoviSlobodni({ ...noviSlobodni, kome: e.target.value })}>
                   <option value="">Meni</option>
                   {[...db.zaposlenici].filter((z) => z.id !== mojId).sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
@@ -2086,7 +2089,7 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
                       <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{z.slobodan ? "Bez projekta" : `${z.projektSifra} — ${z.projektNaziv}`}{z.slobodan && z.kreiraoId && z.kreiraoId !== z.dodijeljenoId && <> · zadano od: {imeZaposlenika(z.kreiraoId)}</>}{odabrano === "svi" && z.dodijeljenoId !== mojId && <> · <strong style={{ color: "var(--steel)" }}>{imeZaposlenika(z.dodijeljenoId)}</strong></>}</div>
                     </div>
                     {z.planiraniDatum && <span className="f-mono" style={{ fontSize: 11.5, color: kasni ? "var(--rust)" : "var(--ink-soft)", flexShrink: 0, whiteSpace: "nowrap" }}>{fmtDate(z.planiraniDatum)}</span>}
-                    {z.slobodan && (mozeVidjetiTudje || z.kreiraoId === mojId) && <button type="button" onClick={() => obrisiSlobodni(z.id)} title="Obriši zadatak" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-faint)", padding: 0, flexShrink: 0 }}><Trash2 size={13} /></button>}
+                    {z.slobodan && (mozeZadavatiDrugima || z.kreiraoId === mojId) && <button type="button" onClick={() => obrisiSlobodni(z.id)} title="Obriši zadatak" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-faint)", padding: 0, flexShrink: 0 }}><Trash2 size={13} /></button>}
                   </div>
                 );
               })}
