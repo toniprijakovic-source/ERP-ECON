@@ -3661,6 +3661,14 @@ const kapacitetZaDanMin = (kapaciteti, stroj, datum) => {
   return STANDARD_MIN_PO_DANU;
 };
 
+// Preostalo vrijeme programa = planirano − već odrađeno (uključujući segment koji upravo traje).
+// Tako se gantogram sam korigira: program koji je već u tijeku zauzima samo ono što mu još ostaje.
+const preostaloMinPrograma = (p, sada = Date.now()) => {
+  let odradjeno = Number(p.odradjenoMin) || 0;
+  if (p.status === "Početak" && p.segmentPocetak) odradjeno += Math.max(0, Math.round((sada - new Date(p.segmentPocetak).getTime()) / 60000));
+  return Math.max(0, (Number(p.trajanjeMin) || 0) - odradjeno);
+};
+
 // Raspoređuje NEZAVRŠENE programe (redom) u dane: dan se puni do kapaciteta, a program koji se
 // ne stane u ostatak dana nastavlja se sljedeći radni dan (svaki dan dobiva svoj dio programa).
 const rasporediProgramRezanja = (programi, kapaciteti, stroj) => {
@@ -3674,7 +3682,7 @@ const rasporediProgramRezanja = (programi, kapaciteti, stroj) => {
   const dani = [];
   let trenutni = sljedeciRadniDan(todayISO());
   listaZaStroj.forEach((p) => {
-    let preostalo = Number(p.trajanjeMin) || 0;
+    let preostalo = preostaloMinPrograma(p);
     const ukupno = preostalo;
     let prviDio = true;
     if (preostalo <= 0) { trenutni.stavke.push({ ...p, segmentMin: 0, nastavak: false, nastavlja: false }); return; }
@@ -3724,6 +3732,9 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
   const [kapForm, setKapForm] = useState({ datum: addDays(todayISO(), 1), sati: 12 });
   const [materijalModalId, setMaterijalModalId] = useState(null);
   const [podijeliModalId, setPodijeliModalId] = useState(null);
+  // Gantogram računa preostalo vrijeme programa koji je u tijeku, pa se osvježava svake minute.
+  const [, setMinutniTik] = useState(0);
+  useEffect(() => { const t = setInterval(() => setMinutniTik((n) => n + 1), 60000); return () => clearInterval(t); }, []);
 
   // Planirani materijal se skida sa skladišta ODMAH (rezervacija) kad se stavka doda programu;
   // ako se stavka ukloni ili program obriše prije nego je stvarno utrošeno evidentirano, planirana
@@ -3792,7 +3803,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
   const dani = rasporediProgramRezanja(db.programiRezanja, db.kapacitetiDana, stroj);
   const kapacitetiZaStroj = [...db.kapacitetiDana].filter((k) => k.stroj === stroj).sort((a, b) => a.datum.localeCompare(b.datum));
 
-  const ukupnoVrijemeMin = nezavrseni.reduce((s, p) => s + (Number(p.trajanjeMin) || 0), 0);
+  const ukupnoVrijemeMin = nezavrseni.reduce((s, p) => s + preostaloMinPrograma(p), 0);
   const zavrsenoVrijemeMin = zavrseni.reduce((s, p) => s + (Number(p.trajanjeMin) || 0), 0);
   const potrebnoDana = Math.ceil(ukupnoVrijemeMin / STANDARD_MIN_PO_DANU) || 0;
   const ukupnoKapacitetMin = dani.reduce((s, d) => s + d.kapacitetMin, 0);
@@ -3992,7 +4003,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
                   </div>
                   <div style={{ minHeight: 90, padding: 4, display: "flex", flexDirection: "column", gap: 3 }}>
                     {(dan?.stavke || []).map((p, i) => (
-                      <div key={`${p.id}-${i}`} title={`${p.brojPrograma} — ${p.nastavak || p.nastavlja ? `${fmtMin(p.segmentMin)} ovaj dan od ukupno ${fmtMin(p.ukupnoMin)}` : fmtMin(p.trajanjeMin)} · ${p.status}`} style={{ fontSize: 9.5, padding: "3px 4px", borderRadius: 2, background: REZANJE_BOJA[p.status], color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} className="f-mono">
+                      <div key={`${p.id}-${i}`} title={`${p.brojPrograma} — ${p.nastavak || p.nastavlja ? `${fmtMin(p.segmentMin)} ovaj dan od preostalih ${fmtMin(p.ukupnoMin)}` : `${fmtMin(p.segmentMin)}${p.ukupnoMin < (Number(p.trajanjeMin) || 0) ? ` preostalo (planirano ${fmtMin(p.trajanjeMin)})` : ""}`} · ${p.status}`} style={{ fontSize: 9.5, padding: "3px 4px", borderRadius: 2, background: REZANJE_BOJA[p.status], color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} className="f-mono">
                         {p.nastavak ? "↳ " : ""}{p.brojPrograma}{p.nastavlja ? " →" : ""}
                         {(p.nastavak || p.nastavlja) && <div style={{ fontSize: 9, opacity: 0.9 }}>{fmtMin(p.segmentMin)}</div>}
                       </div>
