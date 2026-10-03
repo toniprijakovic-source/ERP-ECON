@@ -7732,6 +7732,137 @@ function PostavkePlacaModal({ db, update, showToast, onClose }) {
   );
 }
 
+/* ============================== EVIDENCIJA RADA — sažetak dana, zbrojevi i ispis ============================== */
+const hhmmISO = (iso) => (iso ? new Date(iso).toTimeString().slice(0, 5) : "—");
+
+// Sažetak jednog dana jednog zaposlenika (iz svih njegovih zapisa za taj datum) — koristi se i za
+// ćeliju u mreži i za ispis u PDF, da oba uvijek prikazuju isto.
+const sazetakDanaEvidencije = (zapisi, postavkePlaca) => {
+  if (!zapisi.length) return null;
+  const posebna = zapisi.find((z) => z.vrsta !== "rad");
+  if (posebna) return { posebna: posebna.vrsta };
+  const radni = zapisi.filter((z) => z.vrsta === "rad").sort((a, b) => a.vrijemeDolaska.localeCompare(b.vrijemeDolaska));
+  const sati = radni.reduce((s, z) => s + obracunskiSati(z.vrijemeDolaska, z.vrijemeOdlaska, odrediSmjenu(z.vrijemeDolaska, postavkePlaca), postavkePlaca), 0);
+  return {
+    prvi: radni[0].vrijemeDolaska,
+    zadnji: radni[radni.length - 1].vrijemeOdlaska,
+    sati,
+    popodne: radni.some((z) => odrediSmjenu(z.vrijemeDolaska, postavkePlaca)?.dodatakPostotak > 0),
+    autoOdjava: radni.some((z) => z.autoOdjava && !z.potvrdenoRacunovodstvo),
+    brojSegmenata: radni.length,
+  };
+};
+
+// Mjesečni zbrojevi uz mrežu evidencije — isti izračun kao u obračunu plaće (pa se brojke slažu):
+// "Ukupno sati" = redovni + prekovremeni + plaćeni izostanci (praznik, godišnji, dopust, detašman);
+// bolovanje/očinski/roditeljski se ne zbrajaju u sate nego se prikazuju kao broj dana.
+const zbrojeviEvidencije = (zaposlenik, mjesec, db) => {
+  const r = obracunMjeseca(zaposlenik, mjesec, db);
+  return {
+    ukupno: r.redovni + r.prekovremeniStvarno + r.praznikSati + r.godisnjiSati + r.dopustSati + r.detasmanSati,
+    redovni: r.redovni,
+    prekovremeni: r.prekovremeniStvarno,
+    praznikDana: r.dani.filter((d) => d.praznikSati > 0).length,
+    goDana: r.dani.filter((d) => d.godisnjiSati > 0).length,
+    boDana: r.dani.filter((d) => d.bolovanjeSati > 0).length,
+  };
+};
+
+const escHtml = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const EVP_CSS = `
+.evp{font-family:Arial,Helvetica,sans-serif;color:#111;font-size:8px}
+.evp *{box-sizing:border-box}
+.evp-zag{display:flex;justify-content:space-between;font-weight:700;font-size:11px;margin-bottom:6px}
+.evp-t{border-collapse:collapse;width:100%}
+.evp-t th,.evp-t td{border:1px solid #999;padding:1px 2px;text-align:center;vertical-align:middle;white-space:nowrap;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.evp-t th{background:#eee;font-size:7.5px}
+.evp-t td div{font-size:6.5px;color:#555;line-height:1.15}
+.evp-t td b{font-size:8px}
+.evp-t .evp-ime{text-align:left;min-width:110px;font-weight:600;padding:1px 4px}
+.evp-t .evp-vk{background:#f0f0f0}
+.evp-t .evp-pr{background:#fbeae6}
+.evp-t .evp-pod{background:#d6f0dd}
+.evp-t .evp-pod b{color:#1b6e36}
+.evp-t .evp-auto{background:#fbeae6}
+.evp-t .evp-zb{background:#f6f6f6}
+.evp-t .evp-uk td{font-weight:700;background:#eee}
+.evp-t tr{page-break-inside:avoid}
+.evp-t thead{display:table-header-group}
+.evp-nova{page-break-before:always}
+.evp-leg{margin-top:6px;font-size:8px;display:flex;flex-wrap:wrap;gap:12px}
+.evp-leg i{display:inline-block;width:9px;height:9px;border:1px solid #999;vertical-align:middle;margin-right:3px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+`;
+
+// grupe: [{ naziv, zaposlenici }]; sazetci: Map(zaposlenikId -> zbrojeviEvidencije); dani: dani u mjesecu.
+const evidencijaPrintHtml = ({ mjesec, grupe, dani, zapisiMapa, sazetci, db }) => {
+  const [g, m] = mjesec.split("-");
+  const nazivDana = ["ned", "pon", "uto", "sri", "čet", "pet", "sub"];
+  const t = db.postavkeTvrtke || {};
+  const celija = (z, d) => {
+    const razred = d.praznik ? "evp-pr" : d.vikend ? "evp-vk" : "";
+    const sd = sazetakDanaEvidencije(zapisiMapa.get(`${z.id}|${d.datum}`) || [], db.postavkePlaca);
+    if (!sd) return `<td class="${razred}">${d.praznik ? "P" : ""}</td>`;
+    if (sd.posebna) {
+      const o = OZNAKA_VRSTE_DANA[sd.posebna];
+      return `<td style="background:${o?.bg || "#eee"};color:${o?.boja || "#000"};font-weight:700">${escHtml(o?.kratica || "?")}</td>`;
+    }
+    const cls = sd.autoOdjava ? "evp-auto" : sd.popodne ? "evp-pod" : razred;
+    return `<td class="${cls}"><div>${hhmmISO(sd.prvi)}</div><div>${hhmmISO(sd.zadnji)}</div><b>${sd.sati.toFixed(1)}</b></td>`;
+  };
+  const f1 = (n) => (Number(n) || 0).toFixed(1);
+  let html = `<style>${EVP_CSS}</style><div class="evp">`;
+  let prva = true;
+  grupe.forEach((grupa) => {
+    if (grupa.zaposlenici.length === 0) return;
+    const uk = { ukupno: 0, redovni: 0, prekovremeni: 0, praznikDana: 0, goDana: 0, boDana: 0 };
+    let redovi = "";
+    grupa.zaposlenici.forEach((z) => {
+      const s = sazetci.get(z.id) || uk;
+      Object.keys(uk).forEach((k) => { uk[k] += s[k] || 0; });
+      redovi += `<tr><td class="evp-ime">${escHtml(`${z.prezime} ${z.ime}`)}</td>${dani.map((d) => celija(z, d)).join("")}`
+        + `<td class="evp-zb"><b>${f1(s.ukupno)}</b></td><td class="evp-zb">${f1(s.redovni)}</td><td class="evp-zb">${f1(s.prekovremeni)}</td>`
+        + `<td class="evp-zb">${s.praznikDana}</td><td class="evp-zb">${s.goDana}</td><td class="evp-zb">${s.boDana}</td></tr>`;
+    });
+    html += `<div class="${prva ? "" : "evp-nova"}"><div class="evp-zag"><span>${escHtml(t.naziv || "ECON d.o.o.")}</span><span>EVIDENCIJA RADNOG VREMENA · ${escHtml(grupa.naziv)}</span><span>Mjesec: ${m}/${g}</span></div>`
+      + `<table class="evp-t"><thead><tr><th class="evp-ime">Zaposlenik</th>`
+      + dani.map((d) => `<th class="${d.praznik ? "evp-pr" : d.vikend ? "evp-vk" : ""}"><b>${d.dan}</b><br>${nazivDana[d.dow]}</th>`).join("")
+      + `<th>Ukupno<br>sati</th><th>Redovni<br>rad</th><th>Prekovre-<br>mene</th><th>Praznik<br>(dana)</th><th>GO<br>(dana)</th><th>BO<br>(dana)</th></tr></thead><tbody>${redovi}`
+      + `<tr class="evp-uk"><td class="evp-ime">UKUPNO (${grupa.zaposlenici.length})</td>${dani.map(() => "<td></td>").join("")}`
+      + `<td>${f1(uk.ukupno)}</td><td>${f1(uk.redovni)}</td><td>${f1(uk.prekovremeni)}</td><td>${uk.praznikDana}</td><td>${uk.goDana}</td><td>${uk.boDana}</td></tr></tbody></table>`
+      + `<div class="evp-leg"><span><i style="background:#d6f0dd"></i>popodnevna smjena</span><span><i style="background:#fbeae6"></i>praznik / automatska odjava</span><span><i style="background:#f0f0f0"></i>vikend</span>`
+      + Object.values(OZNAKA_VRSTE_DANA).map((o) => `<span><b style="color:${o.boja}">${escHtml(o.kratica)}</b> ${escHtml(o.naziv.toLowerCase())}</span>`).join("")
+      + `</div></div>`;
+    prva = false;
+  });
+  return `${html}</div>`;
+};
+
+// Ispis u novom prozoru (a ne preko aplikacije) — tablica s ~35 stupaca i više skupina mora se
+// moći prelomiti na više stranica, što ne radi unutar modala aplikacije.
+const otvoriIspisEvidencije = (html, naslov) => {
+  const w = window.open("", "_blank");
+  if (!w) return false;
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escHtml(naslov)}</title><style>@page{size:A3 landscape;margin:10mm}body{margin:0}</style></head><body>${html}</body></html>`);
+  w.document.close();
+  w.focus();
+  setTimeout(() => w.print(), 400);
+  return true;
+};
+
+function EvidencijaPrintModal({ mjesec, grupe, dani, zapisiMapa, sazetci, db, showToast, onClose }) {
+  const html = useMemo(() => evidencijaPrintHtml({ mjesec, grupe, dani, zapisiMapa, sazetci, db }), [mjesec, grupe, dani, zapisiMapa, sazetci, db]);
+  const [g, m] = mjesec.split("-");
+  const ispisi = () => {
+    if (!otvoriIspisEvidencije(html, `Evidencija_rada_${m}${g}`)) showToast("Preglednik je blokirao novi prozor — dozvoli skočne prozore za ovu stranicu i pokušaj ponovno.");
+  };
+  return (
+    <Modal wide title={`Pregled za ispis — Evidencija rada ${mjesec}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={ispisi}>Ispis / Spremi kao PDF</Btn></>}>
+      <div style={{ overflow: "auto", zoom: 1.3, background: "#fff", padding: 6 }} dangerouslySetInnerHTML={{ __html: html }} />
+    </Modal>
+  );
+}
+
 const NAZIVI_MJESECI = ["Siječanj", "Veljača", "Ožujak", "Travanj", "Svibanj", "Lipanj", "Srpanj", "Kolovoz", "Rujan", "Listopad", "Studeni", "Prosinac"];
 
 // Zamjena za <input type="month"> — taj nativni kontrol je neintuitivan za klik/upis (lako se
@@ -7762,6 +7893,7 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true })
 
   const { neprijavljeni, neodjavljeni } = useMemo(() => upozorenjaEvidencije(db), [db]);
   const kioskUrl = `${window.location.origin}${window.location.pathname}?kiosk=1`;
+  const [printOtvoren, setPrintOtvoren] = useState(false);
 
   // Dani u odabranom mjesecu
   const dani = useMemo(() => {
@@ -7793,6 +7925,15 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true })
   const praktikantiSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "praktikant"), [aktivniSort, db.pozicijeZaposlenika]);
   const tehnickiSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "ostalo"), [aktivniSort, db.pozicijeZaposlenika]);
   const kooperantiSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "kooperant"), [aktivniSort, db.pozicijeZaposlenika]);
+
+  // Mjesečni zbrojevi za desne stupce mreže (i ispis) — isti izračun kao obračun plaće.
+  const sazetci = useMemo(() => new Map(aktivniSort.map((z) => [z.id, zbrojeviEvidencije(z, mjesec, db)])), [aktivniSort, mjesec, db]);
+  const grupeZaIspis = useMemo(() => [
+    { naziv: "Radiona", zaposlenici: radionaSort },
+    { naziv: "Praktikanti", zaposlenici: praktikantiSort },
+    { naziv: "Tehnički ured i administracija", zaposlenici: tehnickiSort },
+    { naziv: "Kooperanti", zaposlenici: kooperantiSort },
+  ], [radionaSort, praktikantiSort, tehnickiSort, kooperantiSort]);
 
   const otvoriCeliju = (zaposlenikId, datum) => {
     if (!mozeMijenjati) return;
@@ -7860,25 +8001,21 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true })
       </td>;
     }
 
-    const posebna = zapisi.find((z) => z.vrsta !== "rad");
-    const oznaka = posebna && OZNAKA_VRSTE_DANA[posebna.vrsta];
+    const sd = sazetakDanaEvidencije(zapisi, db.postavkePlaca);
+    const oznaka = sd.posebna && OZNAKA_VRSTE_DANA[sd.posebna];
     if (oznaka) {
       return <td style={{ ...stil, background: oznaka.bg }} onClick={() => otvoriCeliju(zaposlenik.id, dan.datum)} title={oznaka.naziv}>
         <span className="f-mono" style={{ fontSize: 11, fontWeight: 700, color: oznaka.boja }}>{oznaka.kratica}</span>
       </td>;
     }
 
-    const radni = zapisi.filter((z) => z.vrsta === "rad").sort((a, b) => a.vrijemeDolaska.localeCompare(b.vrijemeDolaska));
-    const sati = radni.reduce((s, z) => s + obracunskiSati(z.vrijemeDolaska, z.vrijemeOdlaska, odrediSmjenu(z.vrijemeDolaska, db.postavkePlaca), db.postavkePlaca), 0);
-    const imaDodatak = radni.some((z) => odrediSmjenu(z.vrijemeDolaska, db.postavkePlaca)?.dodatakPostotak > 0);
-    const imaAutoOdjavu = radni.some((z) => z.autoOdjava && !z.potvrdenoRacunovodstvo);
-    const hhmm = (iso) => (iso ? new Date(iso).toTimeString().slice(0, 5) : "—");
-    const prvi = radni[0], zadnji = radni[radni.length - 1];
+    // Popodnevna smjena je zeleno označena; automatska odjava (crveno) ima prednost jer traži provjeru.
+    const pozadina = sd.autoOdjava ? "#FBEAE6" : sd.popodne ? "#D6F0DD" : bgBase;
     return (
-      <td style={{ ...stil, background: imaAutoOdjavu ? "#FBEAE6" : bgBase }} onClick={() => otvoriCeliju(zaposlenik.id, dan.datum)} title={imaAutoOdjavu ? "Automatska odjava — provjeri" : radni.length > 1 ? `${radni.length} segmenta — klikni za izmjenu` : "Klikni za izmjenu"}>
-        <div className="f-mono" style={{ fontSize: 9, color: "var(--ink-faint)", lineHeight: 1.25 }}>{hhmm(prvi.vrijemeDolaska)}</div>
-        <div className="f-mono" style={{ fontSize: 9, color: imaAutoOdjavu ? "var(--rust)" : "var(--ink-faint)", lineHeight: 1.25 }}>{hhmm(zadnji.vrijemeOdlaska)}</div>
-        <div className="f-mono" style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.3, color: imaDodatak ? "var(--steel)" : "var(--ink)" }}>{sati.toFixed(1)}{radni.length > 1 && <sup style={{ fontSize: 8 }}>+{radni.length - 1}</sup>}</div>
+      <td style={{ ...stil, background: pozadina }} onClick={() => otvoriCeliju(zaposlenik.id, dan.datum)} title={sd.autoOdjava ? "Automatska odjava — provjeri" : sd.popodne ? "Popodnevna smjena" : sd.brojSegmenata > 1 ? `${sd.brojSegmenata} segmenta — klikni za izmjenu` : "Klikni za izmjenu"}>
+        <div className="f-mono" style={{ fontSize: 9, color: "var(--ink-faint)", lineHeight: 1.25 }}>{hhmmISO(sd.prvi)}</div>
+        <div className="f-mono" style={{ fontSize: 9, color: sd.autoOdjava ? "var(--rust)" : "var(--ink-faint)", lineHeight: 1.25 }}>{hhmmISO(sd.zadnji)}</div>
+        <div className="f-mono" style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.3, color: sd.popodne && !sd.autoOdjava ? "#1B6E36" : "var(--ink)" }}>{sd.sati.toFixed(1)}{sd.brojSegmenata > 1 && <sup style={{ fontSize: 8 }}>+{sd.brojSegmenata - 1}</sup>}</div>
       </td>
     );
   };
@@ -7925,13 +8062,14 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true })
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span className="label">Mjesec</span>
           <MjesecOdabir value={mjesec} onChange={setMjesec} />
+          <Btn variant="ghost" icon={Eye} onClick={() => setPrintOtvoren(true)}>Ispis / PDF</Btn>
         </div>
         <div style={{ display: "flex", gap: 12, fontSize: 11, color: "var(--ink-soft)", flexWrap: "wrap" }}>
           {Object.values(OZNAKA_VRSTE_DANA).map((o) => (
             <span key={o.kratica}><span className="f-mono" style={{ fontWeight: 700, color: o.boja }}>{o.kratica}</span> {o.naziv.toLowerCase()}</span>
           ))}
           <span><span style={{ display: "inline-block", width: 9, height: 9, background: "#FBEAE6", border: "1px solid #F0C2B5", borderRadius: 2 }} /> praznik / auto odjava</span>
-          <span><span className="f-mono" style={{ color: "var(--steel)", fontWeight: 700 }}>8.0</span> popodnevna smjena</span>
+          <span><span style={{ display: "inline-block", width: 9, height: 9, background: "#D6F0DD", border: "1px solid #9CCFAB", borderRadius: 2 }} /> <span className="f-mono" style={{ color: "#1B6E36", fontWeight: 700 }}>8.0</span> popodnevna smjena</span>
         </div>
       </div>
 
@@ -7948,15 +8086,15 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true })
                       <div style={{ fontSize: 9, color: "var(--ink-faint)", textTransform: "uppercase" }}>{["ned", "pon", "uto", "sri", "čet", "pet", "sub"][d.dow]}</div>
                     </th>
                   ))}
-                  <th style={{ padding: "4px 8px", textAlign: "center", minWidth: 64, background: "var(--surface-alt)", fontSize: 11, color: "var(--ink-soft)" }}>Ukupno</th>
+                  {["Ukupno sati", "Redovni rad", "Prekovremene", "Praznik (dana)", "GO (dana)", "BO (dana)"].map((naslov) => (
+                    <th key={naslov} style={{ padding: "4px 8px", textAlign: "center", minWidth: 64, background: "var(--surface-alt)", fontSize: 10.5, color: "var(--ink-soft)", borderLeft: naslov === "Ukupno sati" ? "2px solid var(--line-strong)" : undefined }}>{naslov}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
                 {lista.map((z) => {
-                  const ukupnoSati = dani.reduce((s, d) => {
-                    const zapisi = zapisiMapa.get(`${z.id}|${d.datum}`) || [];
-                    return zapisi.filter((zap) => zap.vrsta === "rad").reduce((s2, zap) => s2 + obracunskiSati(zap.vrijemeDolaska, zap.vrijemeOdlaska, odrediSmjenu(zap.vrijemeDolaska, db.postavkePlaca), db.postavkePlaca), s);
-                  }, 0);
+                  const zb = sazetci.get(z.id) || { ukupno: 0, redovni: 0, prekovremeni: 0, praznikDana: 0, goDana: 0, boDana: 0 };
+                  const stilZb = { textAlign: "center", background: "var(--surface-alt)" };
                   return (
                     <tr key={z.id} style={{ borderTop: "1px solid var(--line)" }}>
                       <td style={stilPrviStupac}>
@@ -7964,7 +8102,12 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true })
                         <div style={{ fontSize: 9.5, color: "var(--ink-faint)" }}>{z.rfidKod}</div>
                       </td>
                       {dani.map((d) => <Celija key={d.datum} zaposlenik={z} dan={d} />)}
-                      <td className="f-mono" style={{ textAlign: "center", fontWeight: 700, background: "var(--surface-alt)" }}>{ukupnoSati.toFixed(1)}</td>
+                      <td className="f-mono" style={{ ...stilZb, fontWeight: 700, borderLeft: "2px solid var(--line-strong)" }}>{zb.ukupno.toFixed(1)}</td>
+                      <td className="f-mono" style={stilZb}>{zb.redovni.toFixed(1)}</td>
+                      <td className="f-mono" style={{ ...stilZb, color: zb.prekovremeni > 0 ? "var(--steel)" : undefined }}>{zb.prekovremeni.toFixed(1)}</td>
+                      <td className="f-mono" style={stilZb}>{zb.praznikDana}</td>
+                      <td className="f-mono" style={stilZb}>{zb.goDana}</td>
+                      <td className="f-mono" style={stilZb}>{zb.boDana}</td>
                     </tr>
                   );
                 })}
@@ -7989,6 +8132,8 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true })
         );
       })()}
       <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 8 }}>Klikni bilo koju ćeliju za unos ili izmjenu. Sati su obračunski (zaokruženo na {db.postavkePlaca?.obracunskaJedinicaMin || 30} min, raniji dolazak od početka smjene se ne priznaje).</p>
+
+      {printOtvoren && <EvidencijaPrintModal mjesec={mjesec} grupe={grupeZaIspis} dani={dani} zapisiMapa={zapisiMapa} sazetci={sazetci} db={db} showToast={showToast} onClose={() => setPrintOtvoren(false)} />}
 
       {urediCeliju && (
         <Modal title={`${zaposlenikIme(urediCeliju.zaposlenikId)} — ${fmtDate(urediCeliju.datum)}`} onClose={() => setUrediCeliju(null)}
