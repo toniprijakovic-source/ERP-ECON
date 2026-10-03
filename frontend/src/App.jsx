@@ -5547,6 +5547,14 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
             Voditelj projekta: <strong style={{ color: "var(--ink)" }}>{voditelj ? `${voditelj.prezime} ${voditelj.ime}` : "nije dodijeljen"}</strong>
             {voditelj && <Btn variant="ghost" size="sm" onClick={() => { const ok = posaljiObavijestVoditelju(projekt, voditelj); showToast && showToast(ok ? "Otvoren e-mail za slanje obavijesti." : "Voditelj nema unesen e-mail."); }}>Pošalji obavijest</Btn>}
           </div>
+          {(projekt.kontaktOsoba || projekt.kontaktEmail || projekt.kontaktTelefon) && (
+            <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>
+              Kontakt: <strong style={{ color: "var(--ink)" }}>{projekt.kontaktOsoba || "—"}</strong>
+              {projekt.kontaktEmail && <> · <a href={`mailto:${projekt.kontaktEmail}`}>{projekt.kontaktEmail}</a></>}
+              {projekt.kontaktTelefon && <> · {projekt.kontaktTelefon}</>}
+            </div>
+          )}
+          {projekt.mjestoIsporuke && <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>Mjesto isporuke: <strong style={{ color: "var(--ink)" }}>{projekt.mjestoIsporuke}</strong></div>}
           {projekt.izvorPonudaId && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2 }}>Kreirano iz ponude {db.ponude.find((p) => p.id === projekt.izvorPonudaId)?.broj || projekt.izvorPonudaId}</div>}
         </div>
         <div style={{ textAlign: "right" }}>
@@ -6349,7 +6357,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
   const vratiAutomatskoSortiranje = () => patchProjekti(db.projekti.map(({ poredak, ...ostalo }) => ostalo), []);
 
   const noviZadaciIzStandarda = () => (db.standardniZadaci || []).map((t) => ({ id: uid("zad"), naziv: t.naziv, izvrseno: false, izvrsioId: null, datumIzvrsenja: null, planiraniDatum: null }));
-  const emptyProj = () => ({ sifra: "", naziv: "", kupacId: db.kupci[0]?.id || "", status: "Ponuda", vrijednost: 0, rokPocetka: todayISO(), rokZavrsetka: todayISO(), opis: "", voditeljId: "", zadaci: noviZadaciIzStandarda(), faze: praznaFazaSati() });
+  const emptyProj = () => ({ sifra: "", naziv: "", kupacId: db.kupci[0]?.id || "", status: "Ponuda", vrijednost: 0, rokPocetka: todayISO(), rokZavrsetka: todayISO(), opis: "", voditeljId: "", kontaktOsoba: "", kontaktEmail: "", kontaktTelefon: "", mjestoIsporuke: "", zadaci: noviZadaciIzStandarda(), faze: praznaFazaSati() });
   const [projForm, setProjForm] = useState(emptyProj());
 
   const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", kontaktOsoba: db.kupci[0]?.kontaktOsoba || "", kontaktOsobaTitula: "herr", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, izradioId: mojId || "", pozicije: [], sirovineStavke: [], satnicaMontaza: 0, otpadLimPoTipu: {}, postotakMarze: 0, napomenaNjemacki: NJEMACKI_UVJETI_ZADANO });
@@ -6711,6 +6719,13 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
               {[...db.zaposlenici].filter((z) => z.status === "Aktivan").sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
             </select>
           </Field>
+          <div className="label" style={{ marginTop: 6 }}>Kontakt i isporuka</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+            <Field label="Kontakt osoba"><input className="input" value={projForm.kontaktOsoba || ""} onChange={(e) => setProjForm({ ...projForm, kontaktOsoba: e.target.value })} /></Field>
+            <Field label="E-mail"><input className="input" type="email" value={projForm.kontaktEmail || ""} onChange={(e) => setProjForm({ ...projForm, kontaktEmail: e.target.value })} /></Field>
+            <Field label="Telefon"><input className="input" value={projForm.kontaktTelefon || ""} onChange={(e) => setProjForm({ ...projForm, kontaktTelefon: e.target.value })} /></Field>
+          </div>
+          <Field label="Mjesto isporuke"><input className="input" placeholder="npr. ulica i broj, poštanski broj, grad, država" value={projForm.mjestoIsporuke || ""} onChange={(e) => setProjForm({ ...projForm, mjestoIsporuke: e.target.value })} /></Field>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
             <Field label="Status"><select className="select" value={projForm.status} onChange={(e) => setProjForm({ ...projForm, status: e.target.value })}>{["Ponuda", "Odobren", "U izradi", "Montaža", "Završen", "Otkazan"].map((s) => <option key={s}>{s}</option>)}</select></Field>
             <Field label="Vrijednost (€)"><input className="input f-mono" type="number" value={projForm.vrijednost} onChange={(e) => setProjForm({ ...projForm, vrijednost: e.target.value })} /></Field>
