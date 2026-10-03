@@ -31,7 +31,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada",
   "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
   "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca",
-  "satiPoNalogu", "izdatnice",
+  "satiPoNalogu", "izdatnice", "cmr",
 ];
 
 // Svaki modul (isti "moduli" popis kao u pozicijeZaposlenika) dijeli se na kartice — iste
@@ -70,6 +70,7 @@ const KARTICE_MODULA = {
     fakture: { citanje: ["fakture", "kupci", "projekti"], pisanje: ["fakture"] },
     otpremnice: { citanje: ["otpremnice", "projekti", "kupci", "narudzbe"], pisanje: ["otpremnice"] },
     podloge: { citanje: ["podlogeZaFakturu", "projekti", "materijali"], pisanje: ["podlogeZaFakturu"] },
+    cmr: { citanje: ["cmr", "otpremnice", "projekti", "kupci", "dobavljaci", "narudzbe", "postavkeTvrtke"], pisanje: ["cmr"] },
   },
   partneri: {
     kupci: { citanje: ["kupci"], pisanje: ["kupci"] },
@@ -503,15 +504,15 @@ app.put("/api/upiti/patch", autentikacija, async (req, res) => {
   }
 });
 
-// ---------- Ciljana izmjena otpremnica (upsert po id-u + remove) ----------
-// Isti oblik kao /api/upiti/patch. Cijeli popis otpremnica poslan iz zastarjele kopije preglednika
-// znao je tiho obrisati otpremnicu koju je netko drugi upravo izdao — a pritom bi nova dobila
-// ISTI broj (broj se računao iz zastarjelog popisa). Zato server primjenjuje izmjenu na trenutni
-// zaključani popis, a nova otpremnica čiji je broj već zauzet dobiva sljedeći slobodan broj.
-app.put("/api/otpremnice/patch", autentikacija, async (req, res) => {
+// ---------- Ciljana izmjena popisa dokumenata s brojem (otpremnice, CMR): upsert po id-u + remove ----------
+// Isti oblik kao /api/upiti/patch. Cijeli popis poslan iz zastarjele kopije preglednika znao je tiho
+// obrisati dokument koji je netko drugi upravo izdao — a pritom bi novi dobio ISTI broj (broj se
+// računao iz zastarjelog popisa). Zato server primjenjuje izmjenu na trenutni zaključani popis, a
+// novi dokument čiji je broj već zauzet dobiva sljedeći slobodan broj.
+const patchPoIdHandler = (kljuc, brojRegex, naziv) => async (req, res) => {
   const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
   const { pisivo } = izracunajDozvoljeneKljuceve(pozicija);
-  if (!pisivo.has("otpremnice")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za mijenjanje otpremnica." });
+  if (!pisivo.has(kljuc)) return res.status(403).json({ error: `Vaša pozicija nema ovlaštenje za mijenjanje: ${naziv}.` });
 
   const upsert = Array.isArray(req.body.upsert) ? req.body.upsert : [];
   const remove = Array.isArray(req.body.remove) ? req.body.remove : [];
@@ -519,7 +520,7 @@ app.put("/api/otpremnice/patch", autentikacija, async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const r = await client.query("SELECT value FROM app_data WHERE key = 'otpremnice' FOR UPDATE");
+    const r = await client.query("SELECT value FROM app_data WHERE key = $1 FOR UPDATE", [kljuc]);
     const trenutno = r.rows[0]?.value || [];
     const removeSet = new Set(remove);
     const upsertMap = new Map(upsert.map((u) => [u.id, u]));
@@ -530,7 +531,7 @@ app.put("/api/otpremnice/patch", autentikacija, async (req, res) => {
     const promijenjeniBrojevi = [];
     upsert.forEach((u) => {
       if (postojeciIds.has(u.id)) return;
-      const m = /^(OTP-\d{2}-\d{2}-)(\d+)(\/\d{2})$/.exec(u.broj || "");
+      const m = brojRegex.exec(u.broj || "");
       if (m && rezultat.some((o) => o.broj === u.broj)) {
         const brojevi = rezultat.filter((o) => o.broj && o.broj.startsWith(m[1]) && o.broj.endsWith(m[3])).map((o) => parseInt(o.broj.slice(m[1].length, o.broj.length - m[3].length), 10)).filter((n) => !isNaN(n));
         const novi = `${m[1]}${Math.max(...brojevi) + 1}${m[3]}`;
@@ -542,20 +543,22 @@ app.put("/api/otpremnice/patch", autentikacija, async (req, res) => {
     });
 
     await client.query(
-      `INSERT INTO app_data (key, value, updated_at) VALUES ('otpremnice', $1, now())
+      `INSERT INTO app_data (key, value, updated_at) VALUES ($1, $2, now())
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      [JSON.stringify(rezultat)]
+      [kljuc, JSON.stringify(rezultat)]
     );
     await client.query("COMMIT");
-    res.json({ ok: true, otpremnice: rezultat, promijenjeniBrojevi });
+    res.json({ ok: true, [kljuc]: rezultat, promijenjeniBrojevi });
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
-    console.error("Greška kod izmjene otpremnica:", e);
+    console.error(`Greška kod izmjene (${kljuc}):`, e);
     res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
   } finally {
     client.release();
   }
-});
+};
+app.put("/api/otpremnice/patch", autentikacija, patchPoIdHandler("otpremnice", /^(OTP-\d{2}-\d{2}-)(\d+)(\/\d{2})$/, "otpremnica"));
+app.put("/api/cmr/patch", autentikacija, patchPoIdHandler("cmr", /^(CMR-\d{2}-\d{2}-)(\d+)(\/\d{2})$/, "CMR-a"));
 
 // ---------- Ciljana izmjena projekata (upsert po id-u + remove) ----------
 // Isti oblik kao /api/evidencija/patch i /api/upiti/patch — dodavanje/uređivanje/brisanje CIJELOG

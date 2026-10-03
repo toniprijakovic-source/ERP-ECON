@@ -886,7 +886,7 @@ const generirajRfidKod = (ime, prezime, postojeciKodovi) => {
   return kod;
 };
 
-const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi", "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca", "satiPoNalogu", "izdatnice"];
+const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi", "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca", "satiPoNalogu", "izdatnice", "cmr"];
 
 /* ============================== SMALL UI PRIMITIVES ============================== */
 const Btn = ({ variant = "ghost", size, icon: Icon, children, className = "", ...rest }) => (
@@ -1269,7 +1269,7 @@ const KARTICE_MODULA = {
   nabava: { kartice: [{ key: "narudzbenice", naziv: "Narudžbenice" }, { key: "upiti", naziv: "Upiti materijala" }, { key: "postavke", naziv: "Postavke tvrtke" }] },
   proizvodnja: { kartice: [{ key: "tablica", naziv: "Tablica" }, { key: "gantogram", naziv: "Gantogram" }, { key: "rezanje", naziv: "Plan rezanja" }, { key: "isporuke", naziv: "Isporuke kupaonica" }] },
   projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "ponude", naziv: "Ponude" }, { key: "laser", naziv: "Ponude - Laser" }, { key: "zavrseni", naziv: "Završeni projekti" }] },
-  fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "otpremnice", naziv: "Otpremnice" }, { key: "podloge", naziv: "Podloge za fakturu" }] },
+  fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "otpremnice", naziv: "Otpremnice" }, { key: "cmr", naziv: "CMR" }, { key: "podloge", naziv: "Podloge za fakturu" }] },
   partneri: { kartice: [{ key: "kupci", naziv: "Kupci" }, { key: "dobavljaci", naziv: "Dobavljači" }] },
   zaposlenici: { kartice: [{ key: "zaposlenici", naziv: "Zaposlenici" }, { key: "pozicije", naziv: "Pozicije" }, { key: "evidencija", naziv: "Evidencija rada" }, { key: "obracun", naziv: "Obračun plaća" }, { key: "satinalozi", naziv: "Sati po nalozima" }] },
 };
@@ -1686,27 +1686,27 @@ export default function App() {
   // Otpremnice se NE šalju kao cijeli popis (zastarjela kopija je znala obrisati otpremnicu koju je
   // netko drugi upravo izdao, a nova bi dobila isti broj) — šalje se samo razlika po id-u, a
   // server zaključava popis i dodjeljuje sljedeći slobodan broj ako je broj već zauzet.
-  const patchOtpremnice = (newArr) => {
-    const stare = new Map((db.otpremnice || []).map((o) => [o.id, JSON.stringify(o)]));
+  const patchOtpremnice = (newArr, kljuc = "otpremnice") => {
+    const stare = new Map((db[kljuc] || []).map((o) => [o.id, JSON.stringify(o)]));
     const noveIds = new Set(newArr.map((o) => o.id));
     const upsert = newArr.filter((o) => stare.get(o.id) !== JSON.stringify(o));
-    const remove = (db.otpremnice || []).filter((o) => !noveIds.has(o.id)).map((o) => o.id);
-    setDb((prev) => ({ ...prev, otpremnice: newArr }));
+    const remove = (db[kljuc] || []).filter((o) => !noveIds.has(o.id)).map((o) => o.id);
+    setDb((prev) => ({ ...prev, [kljuc]: newArr }));
     if (upsert.length === 0 && remove.length === 0) return;
-    fetch(`${API_URL}/api/otpremnice/patch`, {
+    fetch(`${API_URL}/api/${kljuc}/patch`, {
       method: "PUT",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` },
       body: JSON.stringify({ upsert, remove }),
     }).then(async (res) => {
-      if (!res.ok) { showToast("Greška pri spremanju otpremnice."); return; }
+      if (!res.ok) { showToast(kljuc === "cmr" ? "Greška pri spremanju CMR-a." : "Greška pri spremanju otpremnice."); return; }
       const data = await res.json();
-      setDb((prev) => ({ ...prev, otpremnice: data.otpremnice }));
-      (data.promijenjeniBrojevi || []).forEach((p) => showToast(`Broj ${p.staro} je već bio zauzet — otpremnica je spremljena kao ${p.novo}.`));
+      setDb((prev) => ({ ...prev, [kljuc]: data[kljuc] }));
+      (data.promijenjeniBrojevi || []).forEach((p) => showToast(`Broj ${p.staro} je već bio zauzet — spremljeno kao ${p.novo}.`));
     }).catch(() => showToast("Greška pri spremanju — provjeri internetsku vezu."));
   };
 
   const update = (key, newArr) => {
-    if (key === "otpremnice") { patchOtpremnice(newArr); return; }
+    if (key === "otpremnice" || key === "cmr") { patchOtpremnice(newArr, key); return; }
     setDb((prev) => ({ ...prev, [key]: newArr }));
     fetch(`${API_URL}/api/data/${key}`, {
       method: "PUT",
@@ -2716,6 +2716,7 @@ function PostavkeTvrtkeModal({ postavke, onSave, onClose }) {
   const polja = [
     ["naziv", "Naziv tvrtke"], ["djelatnost", "Djelatnost"], ["adresa", "Adresa"], ["telefon", "Telefon"], ["faks", "Faks"], ["email", "E-mail"], ["web", "Web"],
     ["oib", "OIB"], ["mb", "MB"], ["vatId", "VAT-ID"], ["ziroRacun", "Žiro račun"], ["iban", "IBAN"], ["swift", "SWIFT"], ["sud", "Trgovački sud"], ["mbs", "MBS"], ["temeljniKapital", "Temeljni kapital"], ["uprava", "Uprava"], ["pdvStopa", "Stopa PDV-a (%)"],
+    ["cmrStatistickiBroj", "CMR: zadana carinska tarifna oznaka (npr. 73089098)"], ["cmrUvjetIsporuke", "CMR: zadani uvjet isporuke (npr. DAP)"],
   ];
   return (
     <Modal wide title="Postavke tvrtke (podaci za dokumente)" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={() => onSave(form)}>Spremi</Btn></>}>
@@ -4454,7 +4455,7 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, patchProjekt, show
         <>
           <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Stavke za isporuku (upiši količinu koja se sada šalje)</div>
           <table className="erp-table">
-            <thead><tr><th>Naziv</th>{koristiNormativ && <th style={{ width: 110 }}>Planirano</th>}<th style={{ width: 80 }}>JM</th><th style={{ width: 90 }}>Naručeno</th><th style={{ width: 130 }}>Količina</th></tr></thead>
+            <thead><tr><th>Naziv</th>{koristiNormativ && <th style={{ width: 110 }}>Planirano</th>}<th style={{ width: 80 }}>JM</th><th style={{ width: 90 }}>Naručeno</th><th style={{ width: 130 }}>Količina</th><th style={{ width: 110 }} title="Ukupna masa te stavke — koristi se za težinu na CMR-u (po želji)">Masa (kg)</th></tr></thead>
             <tbody>
               {form.stavke.map((s, i) => (
                 <React.Fragment key={s.id}>
@@ -4473,10 +4474,11 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, patchProjekt, show
                     <td className="f-mono">{s.jm}</td>
                     <td className="f-mono">{s.narucena ?? "—"}</td>
                     <td><input className="input f-mono" type="number" min="0" max={koristiNormativ ? s.dostupno : undefined} style={{ padding: "5px 8px" }} value={s.kolicina} onChange={(e) => azurirajKolicinu(i, e.target.value)} /></td>
+                    <td><input className="input f-mono" type="number" min="0" step="0.1" style={{ padding: "5px 8px" }} placeholder={(() => { const nst = narudzba?.stavke?.find((x) => x.id === s.narudzbaStavkaId); const auto = (Number(nst?.masaJed) || 0) * (Number(s.kolicina) || 0); return auto > 0 ? String(Math.round(auto * 10) / 10) : "—"; })()} value={s.masaKg ?? ""} onChange={(e) => setForm({ ...form, stavke: form.stavke.map((st, idx) => (idx === i ? { ...st, masaKg: e.target.value } : st)) })} /></td>
                   </tr>
                   {(opisOtvoren[s.id] || (s.opis && opisOtvoren[s.id] === undefined)) && (
                     <tr>
-                      <td colSpan={koristiNormativ ? 5 : 4} style={{ background: "var(--surface-alt)", padding: "8px 10px" }}>
+                      <td colSpan={koristiNormativ ? 6 : 5} style={{ background: "var(--surface-alt)", padding: "8px 10px" }}>
                         <label className="label" style={{ marginBottom: 4 }}>Dodatni opis stavke (vidljivo na otpremnici)</label>
                         <textarea
                           className="textarea" rows={2} style={{ width: "100%" }}
@@ -7420,6 +7422,342 @@ function OtpremnicaKooperantuModal({ db, update, showToast, onClose }) {
   );
 }
 
+/* ============================== CMR (međunarodni teretni list za izvoz) ============================== */
+// Sljedeći broj CMR-a, format CMR-DD-MM-N/YY (isti princip kao otpremnice). Server dodatno
+// jamči jedinstvenost (vidi /api/cmr/patch).
+const sljedeciBrojCmr = (lista, datumISO) => {
+  const d = new Date(datumISO);
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yy = String(d.getFullYear()).slice(-2);
+  const prefiks = `CMR-${dd}-${mm}-`;
+  const sufiks = `/${yy}`;
+  const brojevi = (lista || []).map((c) => c?.broj).filter((b) => b && b.startsWith(prefiks) && b.endsWith(sufiks))
+    .map((b) => parseInt(b.slice(prefiks.length, b.length - sufiks.length), 10)).filter((n) => !isNaN(n));
+  return `${prefiks}${(brojevi.length ? Math.max(...brojevi) : 0) + 1}${sufiks}`;
+};
+
+// Težina otpremnice: po stavci uzima masu upisanu na otpremnici (masaKg), a ako nje nema, masu iz
+// narudžbe kupca (masa po jedinici × količina). Stavke bez ijednog podatka se broje u "nedostaje".
+const tezinaOtpremnice = (otpremnica, db) => {
+  const narudzba = db.narudzbe.find((n) => n.id === otpremnica.narudzbaId);
+  let ukupno = 0, nedostaje = 0;
+  (otpremnica.stavke || []).forEach((s) => {
+    const upisana = Number(s.masaKg);
+    if (upisana > 0) { ukupno += upisana; return; }
+    const nst = narudzba?.stavke?.find((x) => x.id === s.narudzbaStavkaId);
+    const izNarudzbe = (Number(nst?.masaJed) || 0) * (Number(s.kolicina) || 0);
+    if (izNarudzbe > 0) ukupno += izNarudzbe; else nedostaje += 1;
+  });
+  return { ukupno, nedostaje };
+};
+
+const CMR_STATUSI = ["Izdan", "Potpisao prijevoznik", "Isporučeno (potpisao primatelj)"];
+
+// Prijedlog svih polja CMR-a iz projekta i odabranih otpremnica — sve se kasnije može ručno urediti.
+const cmrPrijedlog = (db, projekt, otpremniceIds, datum) => {
+  const t = db.postavkeTvrtke || {};
+  const kupac = db.kupci.find((k) => k.id === projekt?.kupacId);
+  const odabrane = db.otpremnice.filter((o) => otpremniceIds.includes(o.id));
+  const primatelj = [kupac?.naziv, kupac?.adresa].filter(Boolean).join("\n");
+  const mjestoIsporuke = projekt?.mjestoIsporuke || primatelj;
+  const zadnjaLinija = mjestoIsporuke.split("\n").map((l) => l.trim()).filter(Boolean).pop() || "";
+  const tezina = odabrane.reduce((s, o) => s + tezinaOtpremnice(o, db).ukupno, 0);
+  return {
+    projektId: projekt?.id || "", kupacId: projekt?.kupacId || "", otpremniceIds, datum,
+    posiljatelj: [t.naziv, t.adresa, "CRO"].filter(Boolean).join("\n"),
+    primatelj, mjestoIsporuke,
+    mjestoPreuzimanja: [t.adresa, fmtDate(datum)].filter(Boolean).join("\n"),
+    dokumenti: odabrane.length ? `Otpremnice: ${odabrane.map((o) => String(o.broj).replace(/^OTP-/, "")).join("; ")}` : "",
+    prijevoznikId: "", registracija: "", vozac: "", prijevoznikTekst: "",
+    napomenePrijevoznika: "", posebniDogovori: "",
+    oznake: projekt?.sifra || "", brojKoleta: "", vrstaPakiranja: "",
+    opisRobe: projekt?.cmrOpisRobe || "Stahlkonstruktion",
+    statistickiBroj: t.cmrStatistickiBroj || "73089098",
+    brutoTezina: tezina > 0 ? String(Math.round(tezina * 10) / 10) : "", volumen: "",
+    upute: [t.naziv ? `Exp: ${t.naziv}` : "", kupac?.naziv ? `Imp: ${kupac.naziv}` : ""].filter(Boolean).join("\n"),
+    uvjetIsporuke: `${t.cmrUvjetIsporuke || "DAP"}${zadnjaLinija ? `: ${zadnjaLinija}` : ""}`,
+    placanjeVozarine: "", mjestoIzdavanja: "Prelog",
+  };
+};
+
+const CMR_NASLOVI_PRIMJERAKA = [
+  "Primjerak 1 — pošiljatelj / Exemplar 1 — Absender / Copy 1 — Sender",
+  "Primjerak 2 — primatelj / Exemplar 2 — Empfänger / Copy 2 — Consignee",
+  "Primjerak 3 — prijevoznik / Exemplar 3 — Frachtführer / Copy 3 — Carrier",
+];
+
+const CMR_CSS = `
+.cmr-page{position:relative;width:595pt;height:842pt;font-family:Arial,Helvetica,sans-serif;color:#000;page-break-after:always;overflow:hidden;background:#fff}
+.cmr-page:last-child{page-break-after:auto}
+.cmr-traka{position:absolute;left:0;top:0;width:595pt;height:24pt;background:#000;color:#fff;font-size:8pt;line-height:24pt;padding-left:32pt;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.cmr-b{position:absolute;border:0.8pt solid #000;box-sizing:border-box;overflow:hidden}
+.cmr-b.teska{border-width:1.6pt}
+.cmr-n{position:absolute;left:3pt;top:2pt;font-size:7pt;font-weight:700}
+.cmr-l{position:absolute;left:14pt;top:2pt;right:3pt;font-size:5.6pt;line-height:1.15;color:#222}
+.cmr-l i{display:block;font-style:normal;color:#444}
+.cmr-v{position:absolute;left:5pt;right:4pt;white-space:pre-line;font-size:9.5pt;line-height:1.2}
+.cmr-c{position:absolute;border-left:0.8pt solid #000;box-sizing:border-box}
+.cmr-r{position:absolute;border-top:0.8pt solid #000;box-sizing:border-box}
+.cmr-mali{font-size:5.6pt;line-height:1.15}
+.cmr-podnozje{position:absolute;left:0;top:800pt;width:595pt;height:34pt;background:#000;color:#fff;font-size:5.8pt;line-height:1.4;padding:6pt 0 0 32pt;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+`;
+
+const cmrStranicaHtml = (c, db, naslovPrimjerka) => {
+  const prijevoznik = db.dobavljaci.find((d) => d.id === c.prijevoznikId);
+  const L = (de, en) => `<div class="cmr-l">${de}<i>${en}</i></div>`;
+  // x, y, w, h u pt (A4 595×842); n = broj polja; v = tekst; vTop = odmak teksta od vrha
+  const kutija = (n, de, en, x, y, w, h, v, o = {}) =>
+    `<div class="cmr-b${o.teska ? " teska" : ""}" style="left:${x}pt;top:${y}pt;width:${w}pt;height:${h}pt"><span class="cmr-n">${n}</span>${L(de, en)}`
+    + (v ? `<div class="cmr-v" style="top:${o.vTop ?? 22}pt;${o.vStil || ""}">${escHtml(v)}</div>` : "") + (o.extra || "") + `</div>`;
+  const tez = c.brutoTezina ? `${c.brutoTezina} kg` : "";
+  // Tablica 19 (naknade) — samo prazna mreža, popunjava se ručno
+  const naknade = ["Fracht|Carriage", "Ermäßigung|Reductions", "Zwischensumme|Balance", "Zuschläge|Supplement charges", "Nebengebühren|Additional charges", "Sonstiges|Miscellaneous", "Gesamtbetrag|Total to be paid"];
+  const redakNaknade = (txt, i) => {
+    const [de, en] = txt.split("|"); const top = 30 + i * 13.5;
+    return `<div class="cmr-r" style="left:0;top:${top}pt;width:240pt;height:13.5pt"></div><div class="cmr-mali" style="position:absolute;left:3pt;top:${top + 1.5}pt;width:60pt">${de}<br>${en}</div>`;
+  };
+  const tablica19 = `<div class="cmr-mali" style="position:absolute;left:62pt;top:3pt;width:60pt;font-weight:700">Zu bezahlen vom<br>To be paid by</div>`
+    + `<div class="cmr-mali" style="position:absolute;left:122pt;top:3pt;width:58pt;text-align:center">Absender<br>Sender</div><div class="cmr-mali" style="position:absolute;left:150pt;top:3pt;width:50pt;text-align:center">Währung<br>Currency</div><div class="cmr-mali" style="position:absolute;left:200pt;top:3pt;width:40pt;text-align:center">Empfänger<br>Consignee</div>`
+    + `<div class="cmr-r" style="left:0;top:26pt;width:240pt;height:0"></div>`
+    + naknade.map(redakNaknade).join("")
+    + [61, 121, 149, 177, 205].map((x) => `<div class="cmr-c" style="left:${x}pt;top:26pt;height:96pt"></div>`).join("");
+  const kolone = [[0, 98, "6", "Kennzeichen u. Nummern", "Marks and Nos"], [98, 84, "7", "Anzahl der Pakete", "Number of packages"], [182, 88, "8", "Art der Verpackung", "Method of packing"], [270, 86, "9", "Bezeichnung des Gutes*", "Nature of the goods*"], [356, 58, "10", "Statistiknr.", "Statistical nr."], [414, 54, "11", "Bruttogew. kg", "Gross weight kg"], [468, 67, "12", "Volumen in m³", "Volume in m³"]];
+  const vrijednostiRobe = [c.oznake, c.brojKoleta, c.vrstaPakiranja, c.opisRobe, c.statistickiBroj, tez, c.volumen];
+  const roba = `<div class="cmr-b" style="left:32pt;top:318pt;width:535pt;height:176pt">`
+    + kolone.map(([x, w, n, de, en], i) => `<div class="cmr-c" style="left:${x}pt;top:0;width:${w}pt;height:154pt;${i === 0 ? "border-left:none" : ""}"><span class="cmr-n">${n}</span>${L(de, en)}<div class="cmr-v" style="top:26pt;left:3pt;font-size:9pt">${escHtml(vrijednostiRobe[i])}</div></div>`).join("")
+    + `<div class="cmr-r" style="left:0;top:154pt;width:535pt;height:22pt"></div>`
+    + `<div class="cmr-mali" style="position:absolute;left:4pt;top:156pt;width:520pt">UN-Nr. / UN No. &nbsp;&nbsp;&nbsp; Ben. s. Nr. 9 / name s. nr. 9 &nbsp;&nbsp;&nbsp; Gefahrzettelmuster-Nr. / Hazard label sample no. &nbsp;&nbsp;&nbsp; Verp.-Grp. / Pack. group &nbsp;&nbsp;&nbsp;(*Bei gefährlichen Gütern: Klasse, UN-Nr., Verpackungsgruppe — In case of dangerous goods: class, UN number, packing group)</div></div>`;
+  const kvacica = (oznaceno) => (oznaceno ? "X" : "&nbsp;");
+  return `<div class="cmr-page"><div class="cmr-traka">${escHtml(naslovPrimjerka)}</div>`
+    + kutija("1", "Absender (Name, Adresse, Land)", "Sender (name, address, country)", 32, 40, 295, 64, c.posiljatelj)
+    + `<div class="cmr-b" style="left:327pt;top:40pt;width:240pt;height:64pt"><div style="position:absolute;left:5pt;top:3pt;font-size:7.5pt;font-weight:700;line-height:1.15">INTERNATIONALER FRACHTBRIEF<br>INTERNATIONAL CONSIGNMENT NOTE</div>`
+    + `<div style="position:absolute;right:6pt;top:3pt;width:30pt;height:14pt;border:1pt solid #000;border-radius:7pt;text-align:center;font-size:8pt;font-weight:700;line-height:14pt">CMR</div><div style="position:absolute;right:6pt;top:19pt;font-size:10pt;font-weight:700">№ ${escHtml(c.broj || "")}</div>`
+    + `<div class="cmr-mali" style="position:absolute;left:5pt;top:32pt;width:112pt">Diese Beförderung unterliegt, unbeschadet anders lautender Bestimmungen, dem Übereinkommen über den Vertrag über den internationalen Güterkraftverkehr (CMR).</div>`
+    + `<div class="cmr-mali" style="position:absolute;left:122pt;top:32pt;width:114pt">This carriage is subject, notwithstanding any clause to the contrary, to the Convention on the Contract for the international Carriage of goods by road (CMR).</div></div>`
+    + kutija("2", "Empfänger (Name, Adresse, Land)", "Consignee (name, address, country)", 32, 104, 295, 62, c.primatelj)
+    + kutija("16", "Frachtführer (Name, Adresse, Land)", "Carrier (name, address, country)", 327, 104, 240, 62, c.prijevoznikTekst || [prijevoznik?.naziv, prijevoznik?.adresa].filter(Boolean).join("\n"), { teska: true })
+    + kutija("3", "Auslieferort des Gutes (Ort, Land)", "Place of delivery of the goods (place, country)", 32, 166, 295, 62, c.mjestoIsporuke)
+    + kutija("17", "Nachfolgender Frachtführer (Name, Adresse, Land)", "Successive carriers (name, address, country)", 327, 166, 240, 62, "")
+    + kutija("4", "Ort und Datum der Übernahme des Gutes (Ort, Land, Datum)", "Place and date of taking over the goods (place, country, date)", 32, 228, 295, 48, c.mjestoPreuzimanja)
+    + kutija("18", "Vorbehalte und Bemerkungen der Frachtführer", "Carrier's reservations and observations", 327, 228, 240, 90, c.napomenePrijevoznika, { teska: true })
+    + kutija("5", "Beigefügte Dokumente", "Documents attached", 32, 276, 295, 42, c.dokumenti, { vTop: 17 })
+    + roba
+    + kutija("13", "Anweisungen des Absenders (Zoll-, amtl. Behandlungen, Sondervorschriften, etc.)", "Sender's instructions (customs and other formalities)", 32, 494, 295, 134, c.upute)
+    + `<div class="cmr-b" style="left:327pt;top:494pt;width:240pt;height:134pt"><span class="cmr-n">19</span>${tablica19}</div>`
+    + kutija("14", "Rückerstattung", "Cash on delivery", 32, 628, 535, 24, c.uvjetIsporuke, { vTop: 8, vStil: "left:90pt;" })
+    + kutija("15", "Frachtzahlungsanweisungen", "Instruction as to payment carriage", 32, 652, 295, 36, "", { extra: `<div class="cmr-mali" style="position:absolute;left:14pt;top:17pt">Frei / Carriage paid: <b>${kvacica(c.placanjeVozarine === "frei")}</b> &nbsp;&nbsp;&nbsp; Unfrei / Carriage forward: <b>${kvacica(c.placanjeVozarine === "unfrei")}</b></div>` })
+    + kutija("21", "Ausgefertigt in", "Established in", 32, 688, 295, 26, "", { extra: `<div style="position:absolute;left:62pt;top:7pt;font-size:10pt">${escHtml(c.mjestoIzdavanja || "")}</div><div class="cmr-mali" style="position:absolute;left:170pt;top:5pt">am / on</div><div style="position:absolute;left:200pt;top:7pt;font-size:10pt">${escHtml(fmtDate(c.datum))}</div>` })
+    + kutija("20", "Besondere Vereinbarungen", "Special agreements", 327, 652, 240, 62, c.posebniDogovori)
+    + kutija("22", "Signatur und Stempel des Absenders", "Signature and stamp of the sender", 32, 714, 215, 84, "", { extra: `<div class="cmr-mali" style="position:absolute;left:14pt;bottom:2pt">Signatur und Stempel des Absenders<br>Signature and stamp of the sender</div>` })
+    + kutija("23", "Unterschrift und Stempel des Frachtführers", "Signature and stamp of the carrier", 247, 714, 190, 84, "", { teska: true })
+    + kutija("24", "Gut empfangen", "Goods received", 437, 714, 130, 84, "", { extra: `<div class="cmr-mali" style="position:absolute;left:5pt;top:20pt">Ort / Place</div><div class="cmr-mali" style="position:absolute;left:5pt;top:34pt">am / on</div><div class="cmr-mali" style="position:absolute;left:5pt;bottom:2pt">Unterschrift und Stempel des Empfängers<br>Signature and stamp of the consignee</div>` })
+    + `<div class="cmr-podnozje">Das CMR/IRU/Polen-Modell von 1976 für den internationalen Straßenverkehr entspricht den Regelungen der Internationalen Straßenverkehrsunion /IRU/.<br>The 1976 CMR/IRU/Poland model for international road transport complies with the rules of the International Road Transport Union /IRU/.</div></div>`;
+};
+
+const cmrPrintHtml = (c, db) => `<style>${CMR_CSS}</style>${CMR_NASLOVI_PRIMJERAKA.map((n) => cmrStranicaHtml(c, db, n)).join("")}`;
+
+const otvoriIspisCmr = (html, naslov) => {
+  const w = window.open("", "_blank");
+  if (!w) return false;
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escHtml(naslov)}</title><style>@page{size:A4 portrait;margin:0}body{margin:0}</style></head><body>${html}</body></html>`);
+  w.document.close();
+  w.focus();
+  setTimeout(() => w.print(), 400);
+  return true;
+};
+
+function CmrPrintModal({ cmr, db, showToast, onClose }) {
+  const html = useMemo(() => cmrPrintHtml(cmr, db), [cmr, db]);
+  const projekt = db.projekti.find((p) => p.id === cmr.projektId);
+  const naslov = `${String(cmr.datum || "").slice(2).replace(/-/g, "")}_CMR_${(projekt?.sifra || "").replace(/\s+/g, "_")}`;
+  const ispisi = () => { if (!otvoriIspisCmr(html, naslov)) showToast("Preglednik je blokirao novi prozor — dozvoli skočne prozore za ovu stranicu i pokušaj ponovno."); };
+  return (
+    <Modal wide title={`Pregled za ispis — ${cmr.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={ispisi}>Ispis / Spremi kao PDF (3 primjerka)</Btn></>}>
+      <div style={{ overflow: "auto", maxHeight: "70vh", background: "#ddd", padding: 8 }}>
+        <div style={{ transform: "scale(0.95)", transformOrigin: "top left" }} dangerouslySetInnerHTML={{ __html: html.replace(/page-break-after:always/g, "margin-bottom:10px") }} />
+      </div>
+    </Modal>
+  );
+}
+
+function CmrFormModal({ db, pocetni, onSpremi, onClose }) {
+  const [f, setF] = useState(pocetni);
+  const projekt = db.projekti.find((p) => p.id === f.projektId);
+  const otpremniceProjekta = db.otpremnice.filter((o) => o.projektId === f.projektId && o.vrsta !== "kooperant").sort((a, b) => a.datum.localeCompare(b.datum));
+  const prijevoznici = db.dobavljaci.filter((d) => d.prijevoznik);
+  const set = (patch) => setF((p) => ({ ...p, ...patch }));
+  const odaberiProjekt = (id) => {
+    const p = db.projekti.find((x) => x.id === id);
+    setF((prev) => ({ ...prev, ...cmrPrijedlog(db, p, [], prev.datum), id: prev.id, broj: prev.broj, status: prev.status, statusDatumi: prev.statusDatumi,
+      prijevoznikId: prev.prijevoznikId, registracija: prev.registracija, vozac: prev.vozac, prijevoznikTekst: prev.prijevoznikTekst }));
+  };
+  const promijeniOtpremnice = (ids) => {
+    const odabrane = db.otpremnice.filter((o) => ids.includes(o.id));
+    const tezina = odabrane.reduce((s, o) => s + tezinaOtpremnice(o, db).ukupno, 0);
+    set({ otpremniceIds: ids,
+      dokumenti: odabrane.length ? `Otpremnice: ${odabrane.map((o) => String(o.broj).replace(/^OTP-/, "")).join("; ")}` : "",
+      brutoTezina: tezina > 0 ? String(Math.round(tezina * 10) / 10) : f.brutoTezina });
+  };
+  const tekstPrijevoznika = (id, reg, vozac) => {
+    const d = db.dobavljaci.find((x) => x.id === id);
+    return [d?.naziv, d?.adresa, reg ? `Reg. oznaka / Kennzeichen: ${reg}` : "", vozac ? `Vozač / Fahrer: ${vozac}` : ""].filter(Boolean).join("\n");
+  };
+  const promijeniPrijevoz = (patch) => { const n = { ...f, ...patch }; set({ ...patch, prijevoznikTekst: tekstPrijevoznika(n.prijevoznikId, n.registracija, n.vozac) }); };
+  const odabraneTezine = db.otpremnice.filter((o) => f.otpremniceIds.includes(o.id)).map((o) => tezinaOtpremnice(o, db));
+  const bezTezine = odabraneTezine.reduce((s, t) => s + t.nedostaje, 0);
+  const T = (label, k, rows = 2) => (
+    <Field label={label}><textarea className="textarea" rows={rows} value={f[k] || ""} onChange={(e) => set({ [k]: e.target.value })} /></Field>
+  );
+  const I = (label, k, mono) => <Field label={label}><input className={`input${mono ? " f-mono" : ""}`} value={f[k] || ""} onChange={(e) => set({ [k]: e.target.value })} /></Field>;
+  return (
+    <Modal wide title={f.id ? `Uredi ${f.broj}` : "Novi CMR"} onClose={onClose}
+      footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={() => onSpremi(f, false)}>Spremi</Btn><Btn variant="primary" icon={Eye} onClick={() => onSpremi(f, true)}>Spremi i pregledaj ispis</Btn></>}>
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
+        <Field label="Projekt">
+          <select className="select" disabled={!!f.id} value={f.projektId} onChange={(e) => odaberiProjekt(e.target.value)}>
+            <option value="">— odaberi projekt —</option>
+            {db.projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
+          </select>
+        </Field>
+        <Field label="Broj CMR-a"><input className="input f-mono" value={f.broj} disabled /></Field>
+        <Field label="Datum"><input className="input" type="date" value={f.datum} onChange={(e) => set({ datum: e.target.value, broj: f.id ? f.broj : sljedeciBrojCmr(db.cmr, e.target.value), mjestoPreuzimanja: [(db.postavkeTvrtke || {}).adresa, fmtDate(e.target.value)].filter(Boolean).join("\n") })} /></Field>
+      </div>
+
+      {projekt && (
+        <>
+          <div className="label" style={{ marginTop: 6 }}>Otpremnice koje ulaze u ovaj CMR (polje 5)</div>
+          {otpremniceProjekta.length === 0 ? <EmptyState text="Za ovaj projekt još nema otpremnica." /> : (
+            <div className="card" style={{ padding: 8, marginBottom: 10 }}>
+              {otpremniceProjekta.map((o) => {
+                const drugiCmr = db.cmr.find((c) => c.id !== f.id && (c.otpremniceIds || []).includes(o.id));
+                const t = tezinaOtpremnice(o, db);
+                return (
+                  <label key={o.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", cursor: "pointer", fontSize: 12.5 }}>
+                    <input type="checkbox" checked={f.otpremniceIds.includes(o.id)} onChange={(e) => promijeniOtpremnice(e.target.checked ? [...f.otpremniceIds, o.id] : f.otpremniceIds.filter((i) => i !== o.id))} />
+                    <span className="f-mono">{o.broj}</span> · {fmtDate(o.datum)} · {(o.stavke || []).length} stavki
+                    <span style={{ color: "var(--ink-faint)" }}>· {t.ukupno > 0 ? `${Math.round(t.ukupno * 10) / 10} kg${t.nedostaje ? ` (+ ${t.nedostaje} stavki bez težine)` : ""}` : "težina nije upisana"}</span>
+                    {drugiCmr && <span style={{ color: "var(--rust)" }}>· već u {drugiCmr.broj}</span>}
+                  </label>
+                );
+              })}
+            </div>
+          )}
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            {T("1 — Pošiljatelj", "posiljatelj", 3)}
+            {T("2 — Primatelj", "primatelj", 3)}
+            {T("3 — Mjesto isporuke (iz projekta)", "mjestoIsporuke", 3)}
+            {T("4 — Mjesto i datum preuzimanja", "mjestoPreuzimanja", 3)}
+            {T("5 — Priloženi dokumenti", "dokumenti", 2)}
+            {T("13 — Upute pošiljatelja (carina…)", "upute", 2)}
+          </div>
+
+          <div className="label" style={{ marginTop: 6 }}>Prijevoznik (polje 16)</div>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
+            <Field label="Prijevoznik">
+              <select className="select" value={f.prijevoznikId || ""} onChange={(e) => promijeniPrijevoz({ prijevoznikId: e.target.value })}>
+                <option value="">— odaberi —</option>
+                {prijevoznici.map((d) => <option key={d.id} value={d.id}>{d.naziv}</option>)}
+              </select>
+              {prijevoznici.length === 0 && <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 3 }}>Nema prijevoznika — u Partneri → Dobavljači označi dobavljača kao "Prijevoznik".</div>}
+            </Field>
+            <Field label="Registracija vozila"><input className="input f-mono" value={f.registracija || ""} onChange={(e) => promijeniPrijevoz({ registracija: e.target.value })} /></Field>
+            <Field label="Vozač"><input className="input" value={f.vozac || ""} onChange={(e) => promijeniPrijevoz({ vozac: e.target.value })} /></Field>
+          </div>
+          {T("16 — Tekst prijevoznika na CMR-u", "prijevoznikTekst", 3)}
+
+          <div className="label" style={{ marginTop: 6 }}>Roba (polja 6–12)</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
+            {I("6 — Oznake i brojevi", "oznake", true)}
+            {I("7 — Broj koleta", "brojKoleta", true)}
+            {I("8 — Vrsta pakiranja", "vrstaPakiranja")}
+            {I("9 — Opis robe (pamti se po projektu)", "opisRobe")}
+            {I("10 — Carinska tarifna oznaka", "statistickiBroj", true)}
+            <Field label="11 — Bruto težina (kg)">
+              <input className="input f-mono" value={f.brutoTezina || ""} onChange={(e) => set({ brutoTezina: e.target.value })} />
+              {f.otpremniceIds.length > 0 && <div style={{ fontSize: 10.5, color: bezTezine ? "var(--rust)" : "var(--ink-faint)", marginTop: 3 }}>{bezTezine ? `Za ${bezTezine} stavki nema težine (otpremnica/narudžba) — dopuni ručno.` : "Izračunato iz otpremnica/narudžbe."}</div>}
+            </Field>
+            {I("12 — Volumen (m³)", "volumen", true)}
+          </div>
+
+          <div className="label" style={{ marginTop: 6 }}>Plaćanje i ostalo</div>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
+            {I("14 — Uvjet isporuke (Incoterm: mjesto)", "uvjetIsporuke")}
+            <Field label="15 — Plaćanje vozarine">
+              <select className="select" value={f.placanjeVozarine || ""} onChange={(e) => set({ placanjeVozarine: e.target.value })}>
+                <option value="">—</option>
+                <option value="frei">Frei / Carriage paid</option>
+                <option value="unfrei">Unfrei / Carriage forward</option>
+              </select>
+            </Field>
+            {I("21 — Izdano u (mjesto)", "mjestoIzdavanja")}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            {T("18 — Napomene prijevoznika", "napomenePrijevoznika", 2)}
+            {T("20 — Posebni dogovori", "posebniDogovori", 2)}
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function CmrTab({ db, update, patchProjekt, showToast, mozeMijenjati }) {
+  const [forma, setForma] = useState(null); // { pocetni }
+  const [printCmr, setPrintCmr] = useState(null);
+  const [del, setDel] = useState(null);
+  const projSifra = (id) => db.projekti.find((p) => p.id === id)?.sifra || "—";
+  const novi = () => ({ id: null, broj: sljedeciBrojCmr(db.cmr, todayISO()), status: CMR_STATUSI[0], statusDatumi: {}, ...cmrPrijedlog(db, null, [], todayISO()) });
+  const spremi = (f, pregled) => {
+    if (!f.projektId) { showToast("Odaberi projekt."); return; }
+    if (!f.otpremniceIds.length) { showToast("Odaberi barem jednu otpremnicu."); return; }
+    const zapis = { ...f, id: f.id || uid("cmr") };
+    update("cmr", f.id ? db.cmr.map((c) => (c.id === f.id ? zapis : c)) : [...db.cmr, zapis]);
+    const projekt = db.projekti.find((p) => p.id === f.projektId);
+    if (projekt && f.opisRobe && projekt.cmrOpisRobe !== f.opisRobe) patchProjekt(projekt.id, { cmrOpisRobe: f.opisRobe });
+    setForma(null);
+    showToast("CMR spremljen.");
+    if (pregled) setPrintCmr(zapis);
+  };
+  const promijeniStatus = (c, status) => update("cmr", db.cmr.map((x) => (x.id === c.id ? { ...x, status, statusDatumi: { ...(x.statusDatumi || {}), [status]: todayISO() } } : x)));
+  const podaci = [...db.cmr].sort((a, b) => (b.datum || "").localeCompare(a.datum || "") || b.broj.localeCompare(a.broj));
+  const brojeviOtpremnica = (c) => (c.otpremniceIds || []).map((id) => String(db.otpremnice.find((o) => o.id === id)?.broj || "").replace(/^OTP-/, "")).filter(Boolean).join("; ");
+  return (
+    <>
+      <EntityPage
+        title="" data={podaci} onAdd={() => setForma({ pocetni: novi() })} onEdit={(row) => setForma({ pocetni: JSON.parse(JSON.stringify(row)) })} onDelete={(r) => setDel(r)}
+        addLabel="Novi CMR" searchKeys={["broj", "primatelj", "dokumenti"]} readOnly={!mozeMijenjati}
+        columns={[
+          { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
+          { key: "datum", label: "Datum", render: (r) => fmtDate(r.datum) },
+          { key: "projekt", label: "Projekt", render: (r) => projSifra(r.projektId) },
+          { key: "primatelj", label: "Primatelj", render: (r) => String(r.primatelj || "").split("\n")[0] || "—" },
+          { key: "otpremnice", label: "Otpremnice", render: (r) => <span style={{ fontSize: 11.5 }}>{brojeviOtpremnica(r) || "—"}</span> },
+          { key: "tezina", label: "Težina", render: (r) => <span className="f-mono">{r.brutoTezina ? `${r.brutoTezina} kg` : "—"}</span> },
+          { key: "prijevoznik", label: "Prijevoznik", render: (r) => db.dobavljaci.find((d) => d.id === r.prijevoznikId)?.naziv || "—" },
+          {
+            key: "status", label: "Status", render: (r) => (
+              <div>
+                {mozeMijenjati ? (
+                  <select className="select" style={{ fontSize: 12, padding: "4px 8px", width: 200 }} value={r.status || CMR_STATUSI[0]} onClick={(e) => e.stopPropagation()} onChange={(e) => promijeniStatus(r, e.target.value)}>
+                    {CMR_STATUSI.map((s) => <option key={s}>{s}</option>)}
+                  </select>
+                ) : <Badge status={r.status || CMR_STATUSI[0]} />}
+                {r.statusDatumi?.[r.status] && <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 2 }}>{fmtDate(r.statusDatumi[r.status])}</div>}
+              </div>
+            ),
+          },
+          { key: "pdf", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrintCmr(r)}>Ispis</Btn> },
+        ]}
+      />
+      {forma && <CmrFormModal db={db} pocetni={forma.pocetni} onSpremi={spremi} onClose={() => setForma(null)} />}
+      {printCmr && <CmrPrintModal cmr={printCmr} db={db} showToast={showToast} onClose={() => setPrintCmr(null)} />}
+      {del && <ConfirmDelete label={del.broj} onCancel={() => setDel(null)} onConfirm={() => { update("cmr", db.cmr.filter((c) => c.id !== del.id)); setDel(null); showToast("CMR obrisan."); }} />}
+    </>
+  );
+}
+
 function FakturiranjePage({ db, update, patchProjekt, showToast, mojaPozicija }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "fakturiranje");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "fakture");
@@ -7427,6 +7765,7 @@ function FakturiranjePage({ db, update, patchProjekt, showToast, mojaPozicija })
   const mozeFakture = dozvolaZaKarticu(mojaPozicija, "fakturiranje", "fakture").izmjene;
   const mozeOtpremnice = dozvolaZaKarticu(mojaPozicija, "fakturiranje", "otpremnice").izmjene;
   const mozePodloge = dozvolaZaKarticu(mojaPozicija, "fakturiranje", "podloge").izmjene;
+  const mozeCmr = dozvolaZaKarticu(mojaPozicija, "fakturiranje", "cmr").izmjene;
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
   const [printFaktura, setPrintFaktura] = useState(null);
@@ -7451,10 +7790,12 @@ function FakturiranjePage({ db, update, patchProjekt, showToast, mojaPozicija })
       <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
         {dozvKartice.some((k) => k.key === "fakture") && <div className={`nav-tab ${tab === "fakture" ? "active" : ""}`} onClick={() => setTab("fakture")}>Fakture</div>}
         {dozvKartice.some((k) => k.key === "otpremnice") && <div className={`nav-tab ${tab === "otpremnice" ? "active" : ""}`} onClick={() => setTab("otpremnice")}>Otpremnice</div>}
+        {dozvKartice.some((k) => k.key === "cmr") && <div className={`nav-tab ${tab === "cmr" ? "active" : ""}`} onClick={() => setTab("cmr")}>CMR</div>}
         {dozvKartice.some((k) => k.key === "podloge") && <div className={`nav-tab ${tab === "podloge" ? "active" : ""}`} onClick={() => setTab("podloge")}>Podloge za fakturu</div>}
       </div>
 
       {tab === "otpremnice" && <OtpremniceTab db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeOtpremnice} />}
+      {tab === "cmr" && <CmrTab db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeCmr} />}
       {tab === "podloge" && <PodlogeZaFakturuTab db={db} update={update} showToast={showToast} mozeMijenjati={mozePodloge} />}
 
       {tab === "fakture" && (
@@ -7516,7 +7857,7 @@ function PartneriPage({ db, update, showToast, mojaPozicija }) {
   const [del, setDel] = useState(null);
   const [filtarVrsta, setFiltarVrsta] = useState("");
   const emptyKupac = { naziv: "", oib: "", kontaktOsoba: "", telefon: "", email: "", adresa: "" };
-  const emptyDobav = { naziv: "", oib: "", kontaktOsoba: "", telefon: "", email: "", vrsta: "", dodatakIznos: 0, dodatakNapomena: "" };
+  const emptyDobav = { naziv: "", oib: "", kontaktOsoba: "", telefon: "", email: "", adresa: "", prijevoznik: false, vrsta: "", dodatakIznos: 0, dodatakNapomena: "" };
   const [form, setForm] = useState(emptyKupac);
 
   const key = tab === "kupci" ? "kupci" : "dobavljaci";
@@ -7609,7 +7950,13 @@ function PartneriPage({ db, update, showToast, mojaPozicija }) {
             <Field label="Telefon"><input className="input" value={form.telefon} onChange={(e) => setForm({ ...form, telefon: e.target.value })} /></Field>
             <Field label="E-mail"><input className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
           </div>
-          {tab === "kupci" && <Field label="Adresa"><input className="input" value={form.adresa} onChange={(e) => setForm({ ...form, adresa: e.target.value })} /></Field>}
+          <Field label="Adresa"><input className="input" value={form.adresa || ""} onChange={(e) => setForm({ ...form, adresa: e.target.value })} /></Field>
+          {tab === "dobavljaci" && (
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, marginBottom: 8 }}>
+              <input type="checkbox" checked={!!form.prijevoznik} onChange={(e) => setForm({ ...form, prijevoznik: e.target.checked })} />
+              Prijevoznik (nudi se za odabir na CMR-u)
+            </label>
+          )}
         </Modal>
       )}
       {del && <ConfirmDelete label={del.naziv} onCancel={() => setDel(null)} onConfirm={() => { update(key, db[key].filter((r) => r.id !== del.id)); setDel(null); showToast("Partner obrisan."); }} />}
