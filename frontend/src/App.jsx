@@ -3661,28 +3661,35 @@ const kapacitetZaDanMin = (kapaciteti, stroj, datum) => {
   return STANDARD_MIN_PO_DANU;
 };
 
-// Raspoređuje NEZAVRŠENE programe (redom) u dane dok se ne popuni kapacitet, pa prelazi u sljedeći dan
+// Raspoređuje NEZAVRŠENE programe (redom) u dane: dan se puni do kapaciteta, a program koji se
+// ne stane u ostatak dana nastavlja se sljedeći radni dan (svaki dan dobiva svoj dio programa).
 const rasporediProgramRezanja = (programi, kapaciteti, stroj) => {
   const listaZaStroj = programi.filter((p) => p.stroj === stroj && p.status !== "Završeno");
   if (listaZaStroj.length === 0) return [];
-  let datum = todayISO();
-  let kap = kapacitetZaDanMin(kapaciteti, stroj, datum);
-  let guard = 0;
-  while (kap <= 0 && guard < 90) { datum = addDays(datum, 1); kap = kapacitetZaDanMin(kapaciteti, stroj, datum); guard++; }
+  const sljedeciRadniDan = (od) => {
+    let datum = od, kap = kapacitetZaDanMin(kapaciteti, stroj, datum), guard = 0;
+    while (kap <= 0 && guard < 365) { datum = addDays(datum, 1); kap = kapacitetZaDanMin(kapaciteti, stroj, datum); guard++; }
+    return { datum, kapacitetMin: kap, stavke: [], iskoristenoMin: 0 };
+  };
   const dani = [];
-  let trenutni = { datum, kapacitetMin: kap, stavke: [], iskoristenoMin: 0 };
+  let trenutni = sljedeciRadniDan(todayISO());
   listaZaStroj.forEach((p) => {
-    const trajanje = Number(p.trajanjeMin) || 0;
-    if (trenutni.stavke.length > 0 && trenutni.iskoristenoMin + trajanje > trenutni.kapacitetMin) {
-      dani.push(trenutni);
-      let sljedeci = addDays(trenutni.datum, 1);
-      let k2 = kapacitetZaDanMin(kapaciteti, stroj, sljedeci);
-      let g2 = 0;
-      while (k2 <= 0 && g2 < 90) { sljedeci = addDays(sljedeci, 1); k2 = kapacitetZaDanMin(kapaciteti, stroj, sljedeci); g2++; }
-      trenutni = { datum: sljedeci, kapacitetMin: k2, stavke: [], iskoristenoMin: 0 };
+    let preostalo = Number(p.trajanjeMin) || 0;
+    const ukupno = preostalo;
+    let prviDio = true;
+    if (preostalo <= 0) { trenutni.stavke.push({ ...p, segmentMin: 0, nastavak: false, nastavlja: false }); return; }
+    while (preostalo > 0) {
+      if (trenutni.kapacitetMin - trenutni.iskoristenoMin <= 0) {
+        dani.push(trenutni);
+        trenutni = sljedeciRadniDan(addDays(trenutni.datum, 1));
+        continue;
+      }
+      const uzmi = Math.min(preostalo, trenutni.kapacitetMin - trenutni.iskoristenoMin);
+      preostalo -= uzmi;
+      trenutni.stavke.push({ ...p, segmentMin: uzmi, ukupnoMin: ukupno, nastavak: !prviDio, nastavlja: preostalo > 0 });
+      trenutni.iskoristenoMin += uzmi;
+      prviDio = false;
     }
-    trenutni.stavke.push(p);
-    trenutni.iskoristenoMin += trajanje;
   });
   dani.push(trenutni);
   return dani;
@@ -3984,9 +3991,10 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
                     {kapMin === 0 ? "✕" : `${(kapMin / 60).toFixed(kapMin % 60 === 0 ? 0 : 1)}h`}
                   </div>
                   <div style={{ minHeight: 90, padding: 4, display: "flex", flexDirection: "column", gap: 3 }}>
-                    {(dan?.stavke || []).map((p) => (
-                      <div key={p.id} title={`${p.brojPrograma} — ${fmtMin(p.trajanjeMin)} · ${p.status}`} style={{ fontSize: 9.5, padding: "3px 4px", borderRadius: 2, background: REZANJE_BOJA[p.status], color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} className="f-mono">
-                        {p.brojPrograma}
+                    {(dan?.stavke || []).map((p, i) => (
+                      <div key={`${p.id}-${i}`} title={`${p.brojPrograma} — ${p.nastavak || p.nastavlja ? `${fmtMin(p.segmentMin)} ovaj dan od ukupno ${fmtMin(p.ukupnoMin)}` : fmtMin(p.trajanjeMin)} · ${p.status}`} style={{ fontSize: 9.5, padding: "3px 4px", borderRadius: 2, background: REZANJE_BOJA[p.status], color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} className="f-mono">
+                        {p.nastavak ? "↳ " : ""}{p.brojPrograma}{p.nastavlja ? " →" : ""}
+                        {(p.nastavak || p.nastavlja) && <div style={{ fontSize: 9, opacity: 0.9 }}>{fmtMin(p.segmentMin)}</div>}
                       </div>
                     ))}
                   </div>
