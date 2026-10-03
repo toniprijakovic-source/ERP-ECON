@@ -1653,6 +1653,7 @@ function BackupModal({ db, update, showToast, onClose }) {
 export default function App() {
   const [db, setDb] = useState(null);
   const [page, setPage] = useState("dashboard");
+  const [otvoriProjektId, setOtvoriProjektId] = useState(null); // id projekta čije detalje treba otvoriti pri dolasku na Projekte
   const [toast, setToast] = useState(null);
   const [backupOpen, setBackupOpen] = useState(false);
   const [potrebnaPrijava, setPotrebnaPrijava] = useState(false);
@@ -1943,11 +1944,11 @@ export default function App() {
         </div>
 
         <div style={{ padding: 24, flex: 1, overflowY: "auto" }}>
-          {aktivnaStranica === "dashboard" && <Dashboard db={db} setPage={setPage} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} />}
+          {aktivnaStranica === "dashboard" && <Dashboard db={db} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} />}
           {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} />}
-          {aktivnaStranica === "projekti" && <ProjektiPage db={db} update={update} patchProjekt={patchProjekt} patchProjekti={patchProjekti} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} />}
+          {aktivnaStranica === "projekti" && <ProjektiPage db={db} update={update} patchProjekt={patchProjekt} patchProjekti={patchProjekti} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjektId={otvoriProjektId} ocistiOtvoriProjekt={() => setOtvoriProjektId(null)} />}
           {aktivnaStranica === "fakturiranje" && <FakturiranjePage db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "partneri" && <PartneriPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} patchEvidencija={patchEvidencija} mojaPozicija={mojaPozicija} />}
@@ -1967,7 +1968,7 @@ export default function App() {
 }
 
 /* ============================== DASHBOARD ============================== */
-function Dashboard({ db, setPage, mojId, mojaPozicija, patchZadatakIzvrseno }) {
+function Dashboard({ db, setPage, otvoriProjekt, mojId, mojaPozicija, patchZadatakIzvrseno }) {
   const [zadaciZa, setZadaciZa] = useState("moji"); // "moji" | "svi" | id zaposlenika
   const aktivniProjekti = db.projekti.filter((p) => ["U izradi", "Montaža"].includes(p.status));
   const otvorenePonude = db.ponude.filter((p) => p.status === "Poslana" || p.status === "U izradi");
@@ -2050,7 +2051,7 @@ function Dashboard({ db, setPage, mojId, mojaPozicija, patchZadatakIzvrseno }) {
                     {z.dodijeljenoId === mojId
                       ? <input type="checkbox" checked={false} onChange={() => patchZadatakIzvrseno(z.projektId, z.id, true)} style={{ width: 15, height: 15, flexShrink: 0, marginTop: 2 }} />
                       : <span style={{ width: 15, flexShrink: 0 }} />}
-                    <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={() => setPage("projekti")}>
+                    <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} title="Otvori projekt" onClick={() => otvoriProjekt(z.projektId)}>
                       <div style={{ fontSize: 13 }}>{z.naziv}</div>
                       <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{z.projektSifra} — {z.projektNaziv}{odabrano === "svi" && z.dodijeljenoId !== mojId && <> · <strong style={{ color: "var(--steel)" }}>{imeZaposlenika(z.dodijeljenoId)}</strong></>}</div>
                     </div>
@@ -6322,7 +6323,7 @@ function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
   );
 }
 
-function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, showToast, setPage, mojaPozicija, mojId }) {
+function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, showToast, setPage, mojaPozicija, mojId, otvoriProjektId, ocistiOtvoriProjekt }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "projekti");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "projekti");
   useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "projekti"); }, [dozvKartice, tab]);
@@ -6356,6 +6357,14 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
   const [cjenikOpen, setCjenikOpen] = useState(false);
   const [zadaciOpen, setZadaciOpen] = useState(false);
   const [detalj, setDetalj] = useState(null);
+  // Klik na zadatak na nadzornoj ploči otvara detalje baš tog projekta (a ne samo popis projekata).
+  useEffect(() => {
+    if (!otvoriProjektId) return;
+    const p = db.projekti.find((x) => x.id === otvoriProjektId);
+    if (p) setDetalj(p);
+    ocistiOtvoriProjekt();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [otvoriProjektId]);
   const [printPonuda, setPrintPonuda] = useState(null);
 
   const emptyLaser = () => ({ id: null, broj: sljedeciBroj(db.ponudeLasera, "broj", "LAS-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", cjenik: prazniCjenikLasera(), stavke: [], savijanje: { brojPregiba: 0, minPoKom: 0 }, ostaleStavke: [], projektId: null });
