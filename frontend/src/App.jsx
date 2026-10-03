@@ -596,7 +596,8 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
       }
     }
     neplaceniDaniUred = daniBolovanja + daniPrijeZaposlenja;
-    fiksnaPlacaPuna = osnova.osnovica;
+    // Pola radnog vremena: fiksna plaća se dijeli na pola (kao i putni, topli obrok i staž).
+    fiksnaPlacaPuna = osnova.osnovica * (zaposlenik.radnoVrijeme === "pola" ? 0.5 : 1);
     faktorFiksne = mjesecniFond > 0 ? Math.max(0, 1 - (neplaceniDaniUred * norma) / mjesecniFond) : 1;
     fiksnaPlaca = fiksnaPlacaPuna * faktorFiksne;
   }
@@ -648,7 +649,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     prekovremeni: prekovremeniPrikaz, iznosPrekovremeni: iznosPrekovremeniPrikaz,
     prikazPrekovremenihSati: doplatak.prikazPrekovremenihSati ?? "", visakPrekovremenihSati, visakPrekovremenihIznos,
     putni, topliObrok, daniObroka, prebacenoPutni, prebacenoObrok, prebacenoSubota,
-    jeUred, iznosRedovni, iznosNerad, fiksnaPlacaPuna, fiksnaPlaca, faktorFiksne, neplaceniDaniUred,
+    jeUred, polaRadnoVrijeme: zaposlenik.radnoVrijeme === "pola", iznosRedovni, iznosNerad, fiksnaPlacaPuna, fiksnaPlaca, faktorFiksne, neplaceniDaniUred,
     ukupno, brojDana: dani.length, dani, dnevnicaTeren, stimulacija, stimulacijaRucno, kredit, ustegPrehrane, dodaciUkupno, isplata,
   };
 };
@@ -8323,7 +8324,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
             {detaljZaposlenik.bodovi} bodova × {db.postavkePlaca?.vrijednostBoda} € = <strong className="f-mono">{fmtCurDec(detaljZaposlenik.osnovica)}</strong> ÷ {db.postavkePlaca?.fondSatiMjesec} h (godišnji fond) = <strong className="f-mono" style={{ color: "var(--steel)" }}>{detaljZaposlenik.satnica.toFixed(3)} €/h</strong>
             {detaljZaposlenik.jeUred && (
               <div style={{ marginTop: 6, color: "var(--ink-soft)" }}>
-                <strong>Ured — fiksna neto plaća:</strong> {detaljZaposlenik.bodovi} bodova × {db.postavkePlaca?.vrijednostBoda} € = <strong className="f-mono">{fmtCurDec(detaljZaposlenik.fiksnaPlacaPuna)}</strong> za cijeli mjesečni fond ({detaljZaposlenik.mjesecniFond} h)
+                <strong>Ured — fiksna neto plaća:</strong> {detaljZaposlenik.bodovi} bodova × {db.postavkePlaca?.vrijednostBoda} €{detaljZaposlenik.polaRadnoVrijeme && <> × 0,5 (pola radnog vremena)</>} = <strong className="f-mono">{fmtCurDec(detaljZaposlenik.fiksnaPlacaPuna)}</strong> za cijeli mjesečni fond ({detaljZaposlenik.mjesecniFond} h)
                 {detaljZaposlenik.neplaceniDaniUred > 0 && <> · umanjeno za <strong className="f-mono">{detaljZaposlenik.neplaceniDaniUred}</strong> neplaćenih radnih dana (bolovanje/očinski/roditeljski/prije zaposlenja) = <strong className="f-mono">{fmtCurDec(detaljZaposlenik.fiksnaPlaca)}</strong></>}
                 . Prekovremeni se računaju po satnici ({detaljZaposlenik.satnica.toFixed(3)} €/h × 1,5).
               </div>
