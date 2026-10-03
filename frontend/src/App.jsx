@@ -1295,6 +1295,8 @@ const KIOSK_TISINA_MS = 300;
 const KIOSK_MAX_DULJINA_KODA = 15;
 // Koliko dugo poruka o prijavi/odjavi ostaje na zaslonu kiosa (ms).
 const KIOSK_PRIKAZ_PORUKE_MS = 1000;
+// Svakih koliko kiosk provjerava je li izašla nova verzija aplikacije (pa se sam osvježi).
+const KIOSK_PROVJERA_VERZIJE_MS = 2 * 60 * 1000;
 
 function KioskView({ onPrijava }) {
   const [unos, setUnos] = useState("");
@@ -1327,6 +1329,27 @@ function KioskView({ onPrijava }) {
     const ping = () => fetch(`${API_URL}/api/kiosk/ping`).catch(() => {});
     ping();
     const t = setInterval(ping, 5 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Automatsko osvježavanje na novu verziju: tablet na kiosku se nikad ne zatvara, pa bi inače
+  // zauvijek ostao na staroj verziji. Aplikacija se gradi s imenom skripte koje se mijenja sa
+  // svakom novom verzijom — kiosk periodično dohvati početnu stranicu i usporedi ime skripte s
+  // onom koju trenutno izvodi. Ako se razlikuje, ponovno se učita, ali samo kad je mirno (nema
+  // skeniranja u tijeku, u redu ni upisanog koda), da nikad ne prekine nečiju prijavu.
+  useEffect(() => {
+    const trenutna = Array.from(document.scripts).map((sk) => sk.src).find((src) => /\/assets\/index-[^/]+\.js/.test(src));
+    if (!trenutna) return undefined; // razvojni način rada — nema hashiranih skripti
+    const provjeri = async () => {
+      try {
+        const res = await fetch(`${window.location.origin}/`, { cache: "no-store" });
+        const novaSkripta = (await res.text()).match(/\/assets\/index-[^"']+\.js/)?.[0];
+        if (!novaSkripta || trenutna.endsWith(novaSkripta)) return;
+        const mirno = !obradaURaduRef.current && redSkeniranjaRef.current.length === 0 && !tisinaTimeoutRef.current;
+        if (mirno) window.location.reload();
+      } catch { /* bez mreže — pokušat će se ponovno kod sljedeće provjere */ }
+    };
+    const t = setInterval(provjeri, KIOSK_PROVJERA_VERZIJE_MS);
     return () => clearInterval(t);
   }, []);
 
