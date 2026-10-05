@@ -821,12 +821,39 @@ const fmtCurDec = (n) => new Intl.NumberFormat("hr-HR", { style: "currency", cur
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString("hr-HR") : "—");
 
 // Otvara dijalog za ispis/spremanje PDF-a s nazivom dokumenta kao predloženim imenom datoteke
-// (preglednik za naslov datoteke uzima document.title u trenutku otvaranja dijaloga).
+// (preglednik za naslov datoteke uzima naslov dokumenta u trenutku otvaranja dijaloga).
+// Ispisuje SAMO dokument (.print-doc), u skrivenom iframeu sa stilovima aplikacije. Prije se
+// ispisivala cijela stranica, a dokument je bio "position: fixed" preko skrivene aplikacije —
+// preglednik je takav element ponavljao na svakoj stranici koliko je aplikacija iza modala duga,
+// pa je PDF imao više istih listova (kopije).
 const ispisPdf = (naziv) => {
+  const dokumenti = document.querySelectorAll(".print-doc");
+  const el = dokumenti[dokumenti.length - 1];
   const stariNaslov = document.title;
-  document.title = naziv;
-  window.print();
-  document.title = stariNaslov;
+  if (!el) { document.title = naziv; window.print(); document.title = stariNaslov; return; }
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
+  document.body.appendChild(iframe);
+  const klon = el.cloneNode(true);
+  klon.querySelectorAll("img").forEach((img) => img.setAttribute("src", img.src));
+  const stilovi = [...document.querySelectorAll('style, link[rel="stylesheet"]')].map((n) => n.outerHTML).join("\n");
+  const naslovHtml = String(naziv).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const d = iframe.contentDocument;
+  d.open();
+  d.write(`<!doctype html><html><head><meta charset="utf-8"><title>${naslovHtml}</title>${stilovi}<style>html,body{margin:0;background:#fff}body *{visibility:visible !important}.print-doc{position:static !important;inset:auto !important;padding:0 !important;z-index:auto !important}@page{margin:12mm}</style></head><body class="erp-root">${klon.outerHTML}</body></html>`);
+  d.close();
+  const prozor = iframe.contentWindow;
+  const ukloni = () => setTimeout(() => iframe.remove(), 500);
+  prozor.onafterprint = ukloni;
+  const slike = [...d.images].map((img) => (img.complete ? Promise.resolve() : new Promise((r) => { img.onload = r; img.onerror = r; })));
+  Promise.race([Promise.all([...slike, d.fonts ? d.fonts.ready : Promise.resolve()]), new Promise((r) => setTimeout(r, 2500))]).then(() => {
+    document.title = naziv;
+    prozor.focus();
+    prozor.print();
+    document.title = stariNaslov;
+    setTimeout(() => { if (iframe.isConnected) iframe.remove(); }, 60000);
+  });
 };
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const daysUntil = (d) => Math.ceil((new Date(d) - new Date(todayISO())) / 86400000);
