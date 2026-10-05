@@ -31,7 +31,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada",
   "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
   "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca",
-  "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje",
+  "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja",
 ];
 
 // Svaki modul (isti "moduli" popis kao u pozicijeZaposlenika) dijeli se na kartice — iste
@@ -64,17 +64,26 @@ const KARTICE_MODULA = {
     rezanje: { citanje: ["programiRezanja", "katalogProfila", "materijali", "radniNalozi", "zaposlenici", "evidencijaRada"], pisanje: ["programiRezanja", "kapacitetiDana", "materijali"] },
     isporuke: { citanje: ["projekti"], pisanje: ["projekti"] },
   },
+  // Projekti i Ponude su od 2026-10 zasebni moduli (prije jedan "Projekti i ponude"), kao i
+  // Otpremnice i CMR naspram Financija (prije jedan "Otpremnice i fakturiranje").
   projekti: {
-    projekti: { citanje: ["cjenikRada", "katalogProfila", "kupci", "materijali", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "zaposlenici", "upitiNabave", "kvaliteteMaterijala", "narudzbenice"], pisanje: ["projekti", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "materijali", "radniNalozi", "upitiNabave"] },
+    projekti: { citanje: ["cjenikRada", "katalogProfila", "kupci", "materijali", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "zaposlenici", "upitiNabave", "kvaliteteMaterijala", "narudzbenice", "dobavljaci"], pisanje: ["projekti", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "materijali", "radniNalozi", "upitiNabave"] },
+    zavrseni: { citanje: ["projekti", "radniNalozi", "kupci", "narudzbe"], pisanje: [] },
+  },
+  ponude: {
     ponude: { citanje: ["cjenikRada", "katalogProfila", "materijali", "ponude", "kupci", "kvaliteteMaterijala", "narudzbenice"], pisanje: ["ponude", "cjenikRada", "materijali", "projekti", "radniNalozi"] },
     laser: { citanje: ["ponudeLasera", "kupci", "kvaliteteMaterijala", "postavkeTvrtke"], pisanje: ["ponudeLasera"] },
-    zavrseni: { citanje: ["projekti", "radniNalozi", "ponude", "izdatnice", "materijali", "kupci"], pisanje: [] },
   },
+  otpremnice: {
+    otpremnice: { citanje: ["otpremnice", "projekti", "kupci", "narudzbe"], pisanje: ["otpremnice"] },
+    cmr: { citanje: ["cmr", "otpremnice", "projekti", "kupci", "dobavljaci", "narudzbe", "postavkeTvrtke"], pisanje: ["cmr"] },
+  },
+  // Financije (ključ ostaje "fakturiranje" zbog postojećih pozicija).
   fakturiranje: {
     fakture: { citanje: ["fakture", "kupci", "projekti"], pisanje: ["fakture"] },
-    otpremnice: { citanje: ["otpremnice", "projekti", "kupci", "narudzbe"], pisanje: ["otpremnice"] },
     podloge: { citanje: ["podlogeZaFakturu", "projekti", "materijali"], pisanje: ["podlogeZaFakturu"] },
-    cmr: { citanje: ["cmr", "otpremnice", "projekti", "kupci", "dobavljaci", "narudzbe", "postavkeTvrtke"], pisanje: ["cmr"] },
+    nedovrsena: { citanje: ["nedovrsenaProizvodnja", "projekti", "radniNalozi", "satiPoNalogu", "izdatnice", "materijali", "otpremnice", "narudzbe", "kupci", "dobavljaci"], pisanje: ["nedovrsenaProizvodnja"] },
+    analiza: { citanje: ["projekti", "radniNalozi", "ponude", "izdatnice", "materijali", "kupci", "cjenikRada", "katalogProfila", "kvaliteteMaterijala"], pisanje: [] },
   },
   partneri: {
     kupci: { citanje: ["kupci"], pisanje: ["kupci"] },
@@ -102,7 +111,7 @@ const filtrirajSlobodneZadatke = (zadaci, pozicija, zaposlenikId) => (Array.isAr
 const UVIJEK_CITLJIVO = ["zaposlenici", "pozicijeZaposlenika", "postavkeTvrtke"];
 
 // Ključevi čija je vrijednost objekt (ne niz) — koristi se za ispravan "prazan" placeholder.
-const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi", "postavkePlaca", "planProizvodnje"]);
+const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi", "postavkePlaca", "planProizvodnje", "nedovrsenaProizvodnja"]);
 
 async function ucitajPozicijuZaposlenika(zaposlenikId) {
   const [zaposlenici, pozicije] = await Promise.all([ucitajKljuc("zaposlenici"), ucitajKljuc("pozicijeZaposlenika")]);
