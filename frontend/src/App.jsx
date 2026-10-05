@@ -2225,15 +2225,22 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
     .filter((z) => (odabrano === "svi" ? true : z.dodijeljenoId === (odabrano === "moji" ? mojId : odabrano)))
     .sort((a, b) => (a.planiraniDatum || "9999-99-99").localeCompare(b.planiraniDatum || "9999-99-99"));
   const gledamTudje = odabrano !== "moji";
-  // Završeni: zadaci koje sam ja zadao drugima, a oni su ih izvršili — dok ih ne potvrdim "U redu",
-  // a potvrđeni još 30 dana. Samo zadaci sa zapisanim zadavateljem (zadaoId).
+  // Završeni: zadaci koje sam ja zadao — drugima (kad ih oni izvrše: istaknuti dok ih ne potvrdim
+  // "U redu", potvrđeni još 30 dana) i sebi (bez potvrde, 30 dana od završetka). Samo zadaci sa
+  // zapisanim zadavateljem (zadaoId; kod zadataka bez projekta i onaj tko ga je dodao).
   const granicaZavrsenih = addDays(todayISO(), -30);
   const zavrseniZadaci = [
     ...db.projekti.flatMap((p) => (p.zadaci || []).map((z) => ({ ...z, projektId: p.id, projektNaziv: p.naziv, projektSifra: p.sifra, izvor: "projekt" }))),
     ...slobodniZadaci.map((z) => ({ ...z, projektId: null, projektNaziv: "", projektSifra: "", slobodan: true, izvor: "slobodni" })),
-  ].filter((z) => z.zadaoId === mojId && z.izvrseno && z.izvrsioId && z.izvrsioId !== mojId && (!z.zavrsetakVidjenZadao || (z.zavrsetakVidjenDatum || "") >= granicaZavrsenih))
-    .sort((a, b) => (a.zavrsetakVidjenZadao === b.zavrsetakVidjenZadao ? 0 : a.zavrsetakVidjenZadao ? 1 : -1) || String(b.datumIzvrsenja || "").localeCompare(String(a.datumIzvrsenja || "")));
-  const novihZavrsenih = zavrseniZadaci.filter((z) => !z.zavrsetakVidjenZadao).length;
+  ].map((z) => {
+    const zadao = z.zadaoId || (z.slobodan ? z.kreiraoId : null);
+    const sebi = z.dodijeljenoId === mojId || z.izvrsioId === mojId;
+    return { ...z, zadao, sebi, novo: !sebi && !z.zavrsetakVidjenZadao };
+  }).filter((z) => z.izvrseno && z.zadao === mojId && (z.sebi
+    ? (z.datumIzvrsenja || "") >= granicaZavrsenih
+    : z.izvrsioId && (!z.zavrsetakVidjenZadao || (z.zavrsetakVidjenDatum || "") >= granicaZavrsenih)))
+    .sort((a, b) => (b.novo - a.novo) || String(b.datumIzvrsenja || "").localeCompare(String(a.datumIzvrsenja || "")));
+  const novihZavrsenih = zavrseniZadaci.filter((z) => z.novo).length;
 
   return (
     <div>
@@ -2268,7 +2275,7 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
         <div className="card" style={{ padding: 16 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
             <CheckCircle2 size={15} color="var(--steel)" />
-            <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600 }}>{skupinaZadataka === "zavrseni" ? "Završeni zadaci zadani drugima" : odabrano === "moji" ? "Moji zadaci" : odabrano === "svi" ? "Zadaci svih zaposlenika" : `Zadaci: ${imeZaposlenika(odabrano)}`}</h3>
+            <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600 }}>{skupinaZadataka === "zavrseni" ? "Završeni zadaci" : odabrano === "moji" ? "Moji zadaci" : odabrano === "svi" ? "Zadaci svih zaposlenika" : `Zadaci: ${imeZaposlenika(odabrano)}`}</h3>
             <Btn variant="ghost" size="sm" icon={Plus} onClick={() => setDodajZadatakOtvoreno((o) => !o)} style={{ marginLeft: "auto" }}>Novi zadatak</Btn>
             {mozeVidjetiTudje && skupinaZadataka === "aktualni" && (
               <select className="select" style={{ width: 210, fontSize: 12, padding: "4px 8px" }} value={zadaciZa} onChange={(e) => setZadaciZa(e.target.value)}>
@@ -2295,17 +2302,17 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
               <Btn variant="primary" size="sm" icon={Plus} onClick={dodajSlobodniZadatak}>Dodaj</Btn>
             </div>
           )}
-          {skupinaZadataka === "zavrseni" && (zavrseniZadaci.length === 0 ? <EmptyState text="Nema završenih zadataka zadanih drugima (prikazuju se zadaci zadani od 05.10.2026.)." /> : (
+          {skupinaZadataka === "zavrseni" && (zavrseniZadaci.length === 0 ? <EmptyState text="Nema završenih zadataka (prikazuju se zadaci zadani od 05.10.2026.)." /> : (
             <div>
               {zavrseniZadaci.map((z) => (
-                <div key={`${z.izvor}-${z.projektId || ""}-${z.id}`} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "7px 0", borderBottom: "1px solid var(--line)", background: z.zavrsetakVidjenZadao ? "transparent" : "rgba(37,107,69,0.06)" }}>
+                <div key={`${z.izvor}-${z.projektId || ""}-${z.id}`} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "7px 0", borderBottom: "1px solid var(--line)", background: z.novo ? "rgba(37,107,69,0.06)" : "transparent" }}>
                   <CheckCircle2 size={15} color="var(--green)" style={{ flexShrink: 0, marginTop: 2 }} />
                   <div style={{ flex: 1, minWidth: 0, cursor: z.slobodan ? "default" : "pointer" }} title={z.slobodan ? undefined : "Otvori projekt"} onClick={() => { if (!z.slobodan) otvoriProjekt(z.projektId); }}>
-                    <div style={{ fontSize: 13 }}>{z.naziv}{!z.zavrsetakVidjenZadao && <span className="badge badge-success" style={{ marginLeft: 6 }}>novo</span>}</div>
-                    <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{z.slobodan ? "Bez projekta" : `${z.projektSifra} — ${z.projektNaziv}`} · završeno — <strong style={{ color: "var(--ink-soft)" }}>{imeZaposlenika(z.izvrsioId)}</strong>{z.datumIzvrsenja ? ` · ${fmtDate(z.datumIzvrsenja)}` : ""}</div>
+                    <div style={{ fontSize: 13 }}>{z.naziv}{z.novo && <span className="badge badge-success" style={{ marginLeft: 6 }}>novo</span>}</div>
+                    <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{z.slobodan ? "Bez projekta" : `${z.projektSifra} — ${z.projektNaziv}`}{z.sebi ? " · moj zadatak" : <> · završeno — <strong style={{ color: "var(--ink-soft)" }}>{imeZaposlenika(z.izvrsioId)}</strong></>}{z.datumIzvrsenja ? ` · ${fmtDate(z.datumIzvrsenja)}` : ""}</div>
                     {z.napomena && <div style={{ marginTop: 4, padding: "4px 8px", background: "var(--surface-alt)", borderRadius: 3, fontSize: 12, whiteSpace: "pre-wrap" }}>{z.napomena}</div>}
                   </div>
-                  {!z.zavrsetakVidjenZadao && <Btn size="sm" onClick={() => potvrdiObavijesti([{ vrsta: "zavrsetak", izvor: z.izvor, projektId: z.projektId, zadId: z.id }])}>U redu</Btn>}
+                  {z.novo && <Btn size="sm" onClick={() => potvrdiObavijesti([{ vrsta: "zavrsetak", izvor: z.izvor, projektId: z.projektId, zadId: z.id }])}>U redu</Btn>}
                 </div>
               ))}
             </div>
