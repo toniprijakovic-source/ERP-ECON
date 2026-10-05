@@ -2138,10 +2138,10 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
 }
 
 /* ============================== SKLADIŠTE ============================== */
-const TIPOVI_MATERIJALA = ["HEA", "HEB", "HEM", "IPE", "IPN", "UPN", "SHS", "RHS", "CHS", "Okrugla šipka", "Kvadratna šipka", "Plosnat", "Kutni jednakokraki", "Lim", "Vijčana roba", "Boja i premazi", "Ostalo"];
+const TIPOVI_MATERIJALA = ["HEA", "HEB", "HEM", "IPE", "IPN", "UPN", "SHS", "RHS", "CHS", "Okrugla šipka", "Kvadratna šipka", "Plosnat", "Kutni jednakokraki", "Kutni raznokraki", "Lim", "Vijčana roba", "Boja i premazi", "Ostalo"];
 const JEDINICE = ["kg", "kom", "m", "m2", "l"];
 
-const TIPOVI_KATALOGA = ["HEA", "HEB", "HEM", "IPE", "IPN", "UPN", "SHS", "RHS", "CHS", "Okrugla šipka", "Kvadratna šipka", "Plosnat", "Kutni jednakokraki", "Lim", "Ostalo"];
+const TIPOVI_KATALOGA = ["HEA", "HEB", "HEM", "IPE", "IPN", "UPN", "SHS", "RHS", "CHS", "Okrugla šipka", "Kvadratna šipka", "Plosnat", "Kutni jednakokraki", "Kutni raznokraki", "Lim", "Ostalo"];
 const katalogPoTipu = (katalog) => TIPOVI_KATALOGA.map((tip) => ({ tip, stavke: katalog.filter((k) => k.tip === tip) })).filter((g) => g.stavke.length);
 // Puni naziv kataloške stavke za prikaz — oznaka obično već sadrži tip (npr. "HEA 100", "Lim 1
 // mm"), pa se tip ne dodaje ispred ako bi se time udvostručio (npr. "HEA HEA 100").
