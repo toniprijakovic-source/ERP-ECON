@@ -4,7 +4,7 @@ import {
   Plus, Pencil, Trash2, X, Search, AlertTriangle, CheckCircle2, ArrowRight,
   Clock, ChevronRight, Save, PackageCheck, PackageMinus, Settings, Layers,
   ChevronDown, ChevronUp, FolderInput, Eye, UserCog, CalendarRange,
-  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors, Printer, Bell
+  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors, Printer, Bell, Menu
 } from "lucide-react";
 import logoEcon from "./assets/logo-econ.jpg";
 
@@ -802,6 +802,57 @@ const GlobalStyle = () => (
     ::-webkit-scrollbar-thumb{ background:#C6CBCF; border-radius:5px; }
     ::-webkit-scrollbar-track{ background:transparent; }
 
+    /* ---------- Mobitel ----------
+       Na računalu se ništa ne mijenja: sve ispod vrijedi samo za zaslon uži od 760 px ("screen", da
+       ispis na A4 — koji je također uži od 760 px — ostane kakav je bio). */
+    .samo-mobitel{ display:none !important; }
+    .mob-izbornik-pozadina{ position:fixed; inset:0; background:rgba(20,24,28,0.55); z-index:70; }
+    .mob-izbornik{ position:absolute; top:0; left:0; bottom:0; width:min(290px, 85vw); background:var(--sidebar); display:flex; flex-direction:column; overflow-y:auto; }
+    .mob-izbornik .sidebar-item{ padding:13px 16px; font-size:14px; }
+    .mob-kartice{ display:flex; flex-direction:column; gap:10px; }
+    .mob-kartica{ background:var(--surface); border:1px solid var(--line); border-radius:3px; padding:12px 14px; }
+    .mob-kartica.row-warn{ background:#FDF6E9; }
+    .mob-kartica-naslov{ font-weight:600; font-size:14px; display:flex; flex-direction:column; gap:2px; margin-bottom:8px; }
+    .mob-kartica-polja{ display:grid; grid-template-columns:auto minmax(0,1fr); gap:6px 12px; margin:0; font-size:13px; align-items:center; }
+    .mob-kartica-polja dt{ font-size:11px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); font-weight:600; }
+    .mob-kartica-polja dd{ margin:0; min-width:0; overflow-wrap:anywhere; }
+    .mob-kartica-akcije{ display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; padding-top:10px; border-top:1px solid var(--line); align-items:center; }
+    .mob-kartica-akcije:empty{ display:none; }
+    @media screen and (max-width:760px){
+      .samo-mobitel{ display:inline-flex !important; }
+      .samo-racunalo{ display:none !important; }
+      .sidebar-wrap{ display:none !important; }
+      .erp-zaglavlje{ padding:8px 12px !important; }
+      .erp-sadrzaj{ padding:12px !important; }
+      /* iPhone zumira cijelu stranicu kad je slovo u polju manje od 16 px */
+      .erp-root input, .erp-root select, .erp-root textarea{ font-size:16px !important; }
+      .btn{ min-height:40px; }
+      .btn-sm{ min-height:36px; }
+      .btn-icon{ min-width:40px; min-height:40px; justify-content:center; }
+      /* Rasporedi u više stupaca (obrasci, podaci) idu jedan ispod drugog; kartice s brojkama po dvije */
+      .erp-root [style*="grid-template-columns"]{ grid-template-columns:minmax(0,1fr) !important; }
+      .erp-root [style*="minmax(190px"], .erp-root [style*="minmax(170px"]{ grid-template-columns:repeat(2, minmax(0,1fr)) !important; }
+      .kpi-card{ padding:12px 14px; }
+      .kpi-num{ font-size:22px; }
+      /* Tablice koje nisu kartice pomiču se vodoravno same za sebe (ne cijela stranica), a redovi
+         elemenata koji ne stanu u širinu prelamaju se u novi red — osim unutar područja koja se
+         ionako pomiču vodoravno (gantogram, trake po danima), gdje red mora ostati jedan */
+      .erp-sadrzaj table.erp-table{ display:block; overflow-x:auto; }
+      .erp-sadrzaj table.erp-table .f-mono{ white-space:nowrap; } /* datumi i brojevi u jednom redu */
+      .erp-sadrzaj [style*="display: flex"]:not([style*="overflow-x: auto"] *){ flex-wrap:wrap; }
+      .erp-sadrzaj [style*="display: flex"]:has(> svg:first-child):has(> :nth-child(2):last-child){ flex-wrap:nowrap; } /* samo ikona + tekst: tekst se lomi pokraj ikone */
+      /* Trake s podkarticama pomiču se prstom umjesto da izlaze iz zaslona */
+      .erp-root div:has(> .nav-tab){ overflow-x:auto; flex-wrap:nowrap !important; max-width:100%; scrollbar-width:none; }
+      .erp-root div:has(> div > .nav-tab){ flex-wrap:wrap; gap:8px; }
+      .nav-tab{ white-space:nowrap; flex-shrink:0; }
+      /* Prozori (obrasci) preko cijelog zaslona; naslov i gumbi uvijek vidljivi */
+      .modal-overlay{ padding:0; }
+      .modal-panel{ max-width:none !important; min-height:100%; border-radius:0; margin:0; }
+      .modal-header{ position:sticky; top:0; background:var(--surface); z-index:2; padding:10px 14px; }
+      .modal-body{ padding:14px; }
+      .modal-footer{ position:sticky; bottom:0; background:var(--surface); z-index:2; padding:10px 14px; flex-wrap:wrap; }
+    }
+
     @media print{
       body *{ visibility:hidden; }
       .print-doc, .print-doc *{ visibility:visible; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
@@ -1207,9 +1258,24 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
 // kao prije (jedna tablica). Kad JESU zadani (npr. popis Zaposlenika po Radiona/Praktikanti/
 // Tehnički ured/Kooperanti, isto kao Evidencija rada), popis se dijeli u zasebne tablice s
 // naslovom grupe iznad svake — pretraga i "Dodaj" ostaju zajednički za cijelu stranicu.
+// Uski zaslon (mobitel) — isti prag kao @media u GlobalStyle.
+const MOBILNI_ZASLON = "screen and (max-width: 760px)";
+function useJeMobitel() {
+  const [jest, setJest] = useState(() => window.matchMedia(MOBILNI_ZASLON).matches);
+  useEffect(() => {
+    // "resize" (a ne matchMedia "change") jer ga podržavaju i stariji iPhone preglednici; okretanje
+    // mobitela također javlja resize.
+    const provjeri = () => setJest(window.matchMedia(MOBILNI_ZASLON).matches);
+    window.addEventListener("resize", provjeri);
+    return () => window.removeEventListener("resize", provjeri);
+  }, []);
+  return jest;
+}
+
 function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete, columns, searchKeys, addLabel, rowClass, readOnly = false, onReorder, grupiraj, redoslijedGrupa, nazivGrupe }) {
   const [q, setQ] = useState("");
   const [dragOd, setDragOd] = useState(null);
+  const jeMobitel = useJeMobitel();
   const filtered = useMemo(() => {
     if (!q.trim()) return data;
     const s = q.toLowerCase();
@@ -1255,12 +1321,48 @@ function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete
     )
   );
 
+  // Na mobitelu umjesto tablice kartice: prva dva stupca su naslov (npr. šifra i naziv), stupci s
+  // nazivom idu kao "naziv: vrijednost", a stupci bez naziva (gumbi Detalji, Kopiraj…) zajedno s
+  // Uredi/Obriši u red gumba na dnu kartice. Ručno slaganje povlačenjem ostaje samo na računalu.
+  const vrijednost = (c, row) => (c.render ? c.render(row) : row[c.key]);
+  const Kartice = ({ lista }) => (
+    lista.length === 0 ? <EmptyState text="Nema podataka." /> : (
+      <div className="mob-kartice">
+        {lista.map((row) => {
+          const [prvi, drugi, ...ostali] = columns;
+          return (
+            <div key={row.id} className={`mob-kartica ${rowClass ? rowClass(row) : ""}`}>
+              <div className="mob-kartica-naslov">
+                {prvi && <div>{vrijednost(prvi, row)}</div>}
+                {drugi && <div style={{ fontWeight: 500, color: "var(--ink-soft)" }}>{vrijednost(drugi, row)}</div>}
+              </div>
+              {ostali.some((c) => c.label) && (
+                <dl className="mob-kartica-polja">
+                  {ostali.filter((c) => c.label).map((c) => (
+                    <React.Fragment key={c.key}><dt>{c.label}</dt><dd>{vrijednost(c, row)}</dd></React.Fragment>
+                  ))}
+                </dl>
+              )}
+              <div className="mob-kartica-akcije">
+                {ostali.filter((c) => !c.label).map((c) => <React.Fragment key={c.key}>{vrijednost(c, row)}</React.Fragment>)}
+                {!readOnly && <button className="btn btn-icon btn-ghost" aria-label="Uredi" onClick={() => onEdit(row)}><Pencil size={15} /></button>}
+                {!readOnly && <button className="btn btn-icon btn-ghost" aria-label="Obriši" onClick={() => onDelete(row)}><Trash2 size={15} color="var(--rust)" /></button>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    )
+  );
+  const Popis = jeMobitel ? Kartice : Tablica;
+  const omot = (sadrzaj) => (jeMobitel ? sadrzaj : <div className="card" style={{ overflowX: "auto" }}>{sadrzaj}</div>);
+
   return (
     <div>
       <PageHeader title={title} subtitle={subtitle} icon={Icon} action={readOnly ? null : <Btn variant="primary" icon={Plus} onClick={onAdd}>{addLabel}</Btn>} />
-      <div className="card" style={{ marginBottom: 14, padding: "8px 10px", display: "flex", alignItems: "center", gap: 8, maxWidth: 320 }}>
-        <Search size={15} color="var(--ink-faint)" />
-        <input className="input" style={{ border: "none", padding: "4px 0" }} placeholder="Pretraži…" value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="card" style={{ marginBottom: 14, padding: "8px 10px", display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 8, maxWidth: 320 }}>
+        <Search size={15} color="var(--ink-faint)" style={{ flexShrink: 0 }} />
+        <input className="input" style={{ border: "none", padding: "4px 0", minWidth: 0 }} placeholder="Pretraži…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
       {grupiraj ? (
         redoslijedGrupa.map((kljucGrupe) => {
@@ -1268,12 +1370,12 @@ function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete
           return (
             <div key={kljucGrupe} style={{ marginBottom: 20 }}>
               <div className="label" style={{ marginBottom: 6 }}>{(nazivGrupe ? nazivGrupe(kljucGrupe) : kljucGrupe)} ({lista.length})</div>
-              <div className="card" style={{ overflowX: "auto" }}><Tablica lista={lista} /></div>
+              {omot(<Popis lista={lista} />)}
             </div>
           );
         })
       ) : (
-        <div className="card" style={{ overflowX: "auto" }}><Tablica lista={filtered} /></div>
+        omot(<Popis lista={filtered} />)
       )}
     </div>
   );
@@ -1789,6 +1891,7 @@ export default function App() {
   // nova verzija — ako jest, pokaže se traka s gumbom "Osvježi", a aplikacija se sama ponovno učita
   // čim je sigurno: nije otvoren nijedan prozor (obrazac) i nitko ništa nije radio 10 minuta.
   const [novaVerzija, setNovaVerzija] = useState(false);
+  const [izbornikOtvoren, setIzbornikOtvoren] = useState(false); // izbornik modula na mobitelu (☰)
   useEffect(() => {
     if (!prijavljenId || potrebnaPrijava) return undefined;
     const trenutna = Array.from(document.scripts).map((sk) => sk.src).find((src) => /\/assets\/index-[^/]+\.js/.test(src));
@@ -2076,15 +2179,18 @@ export default function App() {
 
       {/* MAIN */}
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-        <div style={{ padding: "14px 24px", borderBottom: "1px solid var(--line)", background: "var(--surface)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <div className="f-mono" style={{ fontSize: 10.5, letterSpacing: "0.08em", color: "var(--ink-faint)", textTransform: "uppercase" }}>ERP · Proizvodnja čeličnih konstrukcija</div>
-            <div className="f-display" style={{ fontSize: 15, fontWeight: 600 }}>{db.postavkeTvrtke?.naziv || "ECON D.O.O."}</div>
+        <div className="erp-zaglavlje" style={{ padding: "14px 24px", borderBottom: "1px solid var(--line)", background: "var(--surface)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+            <button type="button" className="btn btn-ghost btn-icon samo-mobitel" aria-label="Izbornik" onClick={() => setIzbornikOtvoren(true)}><Menu size={18} /></button>
+            <div style={{ minWidth: 0 }}>
+              <div className="f-mono samo-racunalo" style={{ fontSize: 10.5, letterSpacing: "0.08em", color: "var(--ink-faint)", textTransform: "uppercase" }}>ERP · Proizvodnja čeličnih konstrukcija</div>
+              <div className="f-display" style={{ fontSize: 15, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{db.postavkeTvrtke?.naziv || "ECON D.O.O."}</div>
+            </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>{new Date().toLocaleDateString("hr-HR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
-            <div style={{ width: 1, height: 26, background: "var(--line)" }} />
-            <div style={{ textAlign: "right" }}>
+            <div className="samo-racunalo" style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>{new Date().toLocaleDateString("hr-HR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
+            <div className="samo-racunalo" style={{ width: 1, height: 26, background: "var(--line)" }} />
+            <div className="samo-racunalo" style={{ textAlign: "right" }}>
               <div style={{ fontSize: 12.5, fontWeight: 600 }}>{zaposlenik?.ime} {zaposlenik?.prezime}</div>
               <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{mojaPozicija?.naziv || "—"}</div>
             </div>
@@ -2103,10 +2209,40 @@ export default function App() {
                 />
               )}
             </div>
-            {mojaPozicija?.id === "poz-administrator" && <Btn variant="ghost" size="sm" icon={Database} onClick={() => setBackupOpen(true)}>Backup</Btn>}
-            <Btn variant="ghost" size="sm" onClick={odjava}>Odjava</Btn>
+            {mojaPozicija?.id === "poz-administrator" && <Btn variant="ghost" size="sm" icon={Database} className="samo-racunalo" onClick={() => setBackupOpen(true)}>Backup</Btn>}
+            <Btn variant="ghost" size="sm" className="samo-racunalo" onClick={odjava}>Odjava</Btn>
           </div>
         </div>
+        {/* Mobitel: moduli, korisnik, Backup i Odjava su u izborniku ☰ (bočna traka se ne prikazuje) */}
+        {izbornikOtvoren && (
+          <div className="mob-izbornik-pozadina" onClick={() => setIzbornikOtvoren(false)}>
+            <nav className="mob-izbornik" aria-label="Glavni izbornik" onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 26, height: 26, background: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 2 }}><Building2 size={15} color="var(--accent-ink)" /></div>
+                  <span className="f-display" style={{ color: "#fff", fontWeight: 600 }}>{db.postavkeTvrtke?.naziv || "ECON D.O.O."}</span>
+                </div>
+                <button type="button" className="btn btn-icon" aria-label="Zatvori izbornik" style={{ color: "var(--sidebar-ink)", background: "transparent", borderColor: "rgba(255,255,255,0.15)" }} onClick={() => setIzbornikOtvoren(false)}><X size={18} /></button>
+              </div>
+              <div style={{ paddingTop: 6, flex: 1 }}>
+                {NAV.map((item) => (
+                  <div key={item.key} className={`sidebar-item ${aktivnaStranica === item.key ? "active" : ""}`} onClick={() => { setPage(item.key); setIzbornikOtvoren(false); }}>
+                    <item.icon size={18} style={{ flexShrink: 0 }} />
+                    <span>{item.label}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{ padding: "12px 16px", borderTop: "1px solid rgba(255,255,255,0.08)", color: "var(--sidebar-ink)" }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{zaposlenik?.ime} {zaposlenik?.prezime}</div>
+                <div style={{ fontSize: 11.5, marginBottom: 10 }}>{mojaPozicija?.naziv || "—"}</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {mojaPozicija?.id === "poz-administrator" && <Btn variant="primary" size="sm" icon={Database} onClick={() => { setIzbornikOtvoren(false); setBackupOpen(true); }}>Backup</Btn>}
+                  <Btn variant="primary" size="sm" onClick={() => { setIzbornikOtvoren(false); odjava(); }}>Odjava</Btn>
+                </div>
+              </div>
+            </nav>
+          </div>
+        )}
         {novaVerzija && (
           <div role="status" style={{ padding: "8px 24px", background: "var(--ink)", color: "#fff", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
             <span>Objavljena je nova verzija aplikacije — osvježi da radiš s najnovijom verzijom i podacima.</span>
@@ -2114,7 +2250,7 @@ export default function App() {
           </div>
         )}
 
-        <div style={{ padding: 24, flex: 1, overflowY: "auto" }}>
+        <div className="erp-sadrzaj" style={{ padding: 24, flex: 1, overflowY: "auto", minWidth: 0 }}>
           {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} patchZadatakNapomena={patchZadatakNapomena} potvrdiObavijesti={potvrdiObavijesti} />}
           {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} mojaPozicija={mojaPozicija} />}
@@ -2130,7 +2266,7 @@ export default function App() {
       {backupOpen && <BackupModal db={db} update={update} showToast={showToast} onClose={() => setBackupOpen(false)} />}
 
       {toast && (
-        <div style={{ position: "fixed", bottom: 20, right: 20, background: "var(--ink)", color: "#fff", padding: "10px 16px", borderRadius: 3, fontSize: 13, display: "flex", alignItems: "center", gap: 8, zIndex: 100 }}>
+        <div style={{ position: "fixed", bottom: 20, right: 20, maxWidth: "calc(100vw - 40px)", background: "var(--ink)", color: "#fff", padding: "10px 16px", borderRadius: 3, fontSize: 13, display: "flex", alignItems: "center", gap: 8, zIndex: 100 }}>
           <CheckCircle2 size={15} color="var(--accent)" /> {toast}
         </div>
       )}
