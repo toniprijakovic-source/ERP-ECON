@@ -31,7 +31,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada",
   "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
   "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca",
-  "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci",
+  "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje",
 ];
 
 // Svaki modul (isti "moduli" popis kao u pozicijeZaposlenika) dijeli se na kartice — iste
@@ -56,7 +56,11 @@ const KARTICE_MODULA = {
   },
   proizvodnja: {
     tablica: { citanje: ["radniNalozi", "projekti", "materijali", "katalogProfila", "narudzbenice", "satiPoNalogu", "izdatnice", "zaposlenici"], pisanje: ["radniNalozi", "materijali", "izdatnice"] },
-    gantogram: { citanje: ["radniNalozi", "radniCentri", "kapacitetiDana", "projekti", "zaposlenici"], pisanje: ["radniNalozi", "radniCentri", "kapacitetiDana"] },
+    // Plan proizvodnje (nekad "Gantogram"): uz naloge čita i postavke plana, praznike i sate po nalozima;
+    // piše sate po nalozima (dnevni unos voditelja proizvodnje), projekte (hitno / na čekanju,
+    // završna obrada, faze, "spremno za otpremu" kupaonica) i postavke plana. Normativ i odsutnosti
+    // ne čita izravno nego preko /api/plan/podaci (bez cijena i bez vrste odsutnosti).
+    gantogram: { citanje: ["radniNalozi", "radniCentri", "kapacitetiDana", "projekti", "zaposlenici", "planProizvodnje", "praznici", "satiPoNalogu"], pisanje: ["radniNalozi", "radniCentri", "kapacitetiDana", "planProizvodnje", "satiPoNalogu", "projekti"] },
     rezanje: { citanje: ["programiRezanja", "katalogProfila", "materijali", "radniNalozi", "zaposlenici", "evidencijaRada"], pisanje: ["programiRezanja", "kapacitetiDana", "materijali"] },
     isporuke: { citanje: ["projekti"], pisanje: ["projekti"] },
   },
@@ -98,7 +102,7 @@ const filtrirajSlobodneZadatke = (zadaci, pozicija, zaposlenikId) => (Array.isAr
 const UVIJEK_CITLJIVO = ["zaposlenici", "pozicijeZaposlenika", "postavkeTvrtke"];
 
 // Ključevi čija je vrijednost objekt (ne niz) — koristi se za ispravan "prazan" placeholder.
-const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi", "postavkePlaca"]);
+const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi", "postavkePlaca", "planProizvodnje"]);
 
 async function ucitajPozicijuZaposlenika(zaposlenikId) {
   const [zaposlenici, pozicije] = await Promise.all([ucitajKljuc("zaposlenici"), ucitajKljuc("pozicijeZaposlenika")]);
@@ -467,6 +471,33 @@ app.put("/api/projekti/:projektId/zadatak/:zadId/izvrseno", autentikacija, async
   } finally {
     client.release();
   }
+});
+
+// ---------- Podaci za Plan proizvodnje ----------
+// Plan treba (1) normativ kupaonica — samo učinak (kg/h) i raspodjelu sati po fazama, BEZ ugovorenih
+// cijena — i (2) tko je kojih dana odsutan (godišnji, bolovanje…) — samo zaposlenik i datum, BEZ
+// vrste odsutnosti. Zato ih ne čita izravno iz "normativi"/"evidencijaRada" (to bi svakome tko vidi
+// plan otkrilo cijene i bolovanja), nego preko ove rute. Pravo: tko smije čitati planProizvodnje.
+app.get("/api/plan/podaci", autentikacija, async (req, res) => {
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  const { citljivo } = izracunajDozvoljeneKljuceve(pozicija);
+  if (!citljivo.has("planProizvodnje")) return res.status(403).json({ error: "Vaša pozicija nema pristup planu proizvodnje." });
+  const [normativi, evidencija] = await Promise.all([ucitajKljuc("normativi"), ucitajKljuc("evidencijaRada")]);
+  const odDatuma = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const odsutnosti = [];
+  const vidjeno = new Set();
+  (evidencija || []).forEach((e) => {
+    const datum = (e.vrijemeDolaska || "").slice(0, 10);
+    if ((e.vrsta || "rad") === "rad" || !datum || datum < odDatuma) return;
+    const kljuc = `${e.zaposlenikId}|${datum}`;
+    if (vidjeno.has(kljuc)) return;
+    vidjeno.add(kljuc);
+    odsutnosti.push({ zaposlenikId: e.zaposlenikId, datum });
+  });
+  res.json({
+    normativ: { naziv: normativi?.naziv || "", grupe: (normativi?.grupe || []).map((g) => ({ kljuc: g.kljuc, naziv: g.naziv, ucinakKgH: Number(g.ucinakKgH) || 0, raspodjela: g.raspodjela || {} })) },
+    odsutnosti,
+  });
 });
 
 // ---------- Zadaci na nadzornoj ploči koji nisu vezani uz projekt ("slobodniZadaci") ----------
