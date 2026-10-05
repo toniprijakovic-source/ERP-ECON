@@ -6701,6 +6701,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
           )}
           {projekt.mjestoIsporuke && <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>Mjesto isporuke: <strong style={{ color: "var(--ink)" }}>{projekt.mjestoIsporuke}</strong></div>}
           {projekt.izvorPonudaId && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2 }}>Kreirano iz ponude {db.ponude.find((p) => p.id === projekt.izvorPonudaId)?.broj || projekt.izvorPonudaId}</div>}
+          {projekt.kopiranoIzProjektaId && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2 }}>Kopirano iz projekta {db.projekti.find((p) => p.id === projekt.kopiranoIzProjektaId)?.sifra || "(obrisan projekt)"}</div>}
         </div>
         <div style={{ textAlign: "right" }}>
           <Badge status={projekt.status} />
@@ -7557,6 +7558,9 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
   const mozeLaser = dozvolaZaKarticu(mojaPozicija, "projekti", "laser").izmjene;
   const [detaljZavrsen, setDetaljZavrsen] = useState(null); // završeni projekt otvoren za analizu plan/stvarno
   const [pretvorba, setPretvorba] = useState(null); // { ponuda, tip: "standard"|"laser", broj, naziv } — prije kreiranja projekta iz ponude pita se za broj naloga (šifru) jer taj broj slijedi vlastitu, ručno vođenu numeraciju tvrtke (serije po vrsti posla), a ne može se pouzdano pogoditi automatski
+  // Kopiranje projekta smije samo glavni administrator.
+  const mozeKopiratiProjekt = mojaPozicija?.id === "poz-administrator";
+  const [kopija, setKopija] = useState(null); // { izvor, sifra, naziv, kupacId, rokZavrsetka, nalozi, zadaci }
 
   const kupacNaziv = (id) => db.kupci.find((k) => k.id === id)?.naziv || "—";
   const projSifra = (id) => db.projekti.find((p) => p.id === id)?.sifra || "";
@@ -7756,6 +7760,55 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
     setPretvorba(null);
   };
 
+  // Kopija projekta pod novim brojem naloga: isti sadržaj (pozicije, materijal, stavke, faze,
+  // voditelj, kontakt), ali ništa od same narudžbe i izvršenja — narudžba, potvrda narudžbe,
+  // isporuke/otpremnice, CMR, izdatnice i utrošeni sati ostaju na izvornom projektu. Zadaci i
+  // radni nalozi (po izboru) kreću ispočetka: neizvršeni, nedodijeljeni, "Planiran", 0 h.
+  const otvoriKopiju = (projekt) => {
+    const trajanjeDana = projekt.rokPocetka && projekt.rokZavrsetka ? Math.round((new Date(projekt.rokZavrsetka) - new Date(projekt.rokPocetka)) / 86400000) : 0;
+    setKopija({ izvor: projekt, sifra: "", naziv: projekt.naziv, kupacId: projekt.kupacId || db.kupci[0]?.id || "", rokZavrsetka: addDays(todayISO(), trajanjeDana > 0 ? trajanjeDana : 30), nalozi: true, zadaci: true });
+  };
+  const potvrdiKopiju = () => {
+    const izvor = kopija.izvor;
+    const sifra = kopija.sifra.trim();
+    const naziv = kopija.naziv.trim();
+    if (!sifra) { showToast("Upiši broj naloga."); return; }
+    if (!naziv) { showToast("Upiši naziv projekta."); return; }
+    if (db.projekti.some((p) => p.sifra.trim().toLowerCase() === sifra.toLowerCase())) { showToast(`Broj naloga ${sifra} je već iskorišten na drugom projektu.`); return; }
+    const { izvorPonudaId, izvorPonudaLaseraId, poredak, planStatus, autoZavrsenoNalozi, statusPrijeZavrsetka, ...sadrzaj } = JSON.parse(JSON.stringify(izvor));
+    const bezVezeNaNarudzbu = (stavke) => (stavke || []).map(({ izNarudzbeId, ...s }) => s);
+    const noviProjekt = {
+      ...sadrzaj,
+      id: uid("proj"), sifra, naziv, kupacId: kopija.kupacId, status: "Odobren",
+      rokPocetka: todayISO(), rokZavrsetka: kopija.rokZavrsetka || addDays(todayISO(), 30),
+      kopiranoIzProjektaId: izvor.id,
+      isporuke: [], stavkePod: bezVezeNaNarudzbu(sadrzaj.stavkePod), stavkeKomplet: bezVezeNaNarudzbu(sadrzaj.stavkeKomplet),
+      zadaci: kopija.zadaci
+        ? (izvor.zadaci || []).map((z) => ({ id: uid("zad"), naziv: z.naziv, izvrseno: false, izvrsioId: null, datumIzvrsenja: null, planiraniDatum: null, dodijeljenoId: null }))
+        : noviZadaciIzStandarda(),
+    };
+    let noviNalozi = [];
+    if (kopija.nalozi) {
+      const izvorniNalozi = db.radniNalozi.filter((r) => r.projektId === izvor.id).sort((a, b) => usporediPrirodno(a.broj, b.broj));
+      const noviIdNaloga = new Map(izvorniNalozi.map((r) => [r.id, uid("rn")]));
+      let brojac = parseInt(sljedeciBrojRadnogNaloga(db.radniNalozi, sifra).split("/").pop(), 10);
+      noviNalozi = izvorniNalozi.map((r) => ({
+        id: noviIdNaloga.get(r.id), broj: `${sifra}/${brojac++}`, projektId: noviProjekt.id,
+        naziv, faza: r.faza, zaduzenTim: r.zaduzenTim || "", status: "Planiran",
+        planiranoSati: Number(r.planiranoSati) || 0, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: noviProjekt.rokZavrsetka,
+        stavke: JSON.parse(JSON.stringify(r.stavke || [])), materijalIzdan: false,
+        ovisiONalogId: noviIdNaloga.get(r.ovisiONalogId) || null, ovisnostTip: r.ovisnostTip || "zavrsetak", ovisnostSati: r.ovisnostSati ?? 8,
+      }));
+    }
+    patchProjekti([noviProjekt], []);
+    if (noviNalozi.length > 0) update("radniNalozi", [...db.radniNalozi, ...noviNalozi]);
+    setKopija(null);
+    setTab("projekti");
+    const n = noviNalozi.length;
+    const rijecNaloga = n % 10 === 1 && n % 100 !== 11 ? "radnim nalogom" : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? "radna naloga" : "radnih naloga";
+    showToast(`Projekt ${sifra} kreiran kao kopija projekta ${izvor.sifra}${n ? ` s ${n} ${rijecNaloga}` : ""}.`);
+  };
+
   return (
     <div>
       <PageHeader title="Projekti i ponude" subtitle="Praćenje projekata od ponude do realizacije" icon={Building2} />
@@ -7811,6 +7864,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
               ) : <Badge status={r.status} />
             },
             { key: "detalji", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setDetalj(r)}>Detalji</Btn> },
+            ...(mozeKopiratiProjekt ? [{ key: "kopiraj", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Copy} onClick={() => otvoriKopiju(r)}>Kopiraj</Btn> }] : []),
           ]}
           />
         </>
@@ -7887,6 +7941,7 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
             { key: "rokZavrsetka", label: "Rok završetka", render: (r) => fmtDate(r.rokZavrsetka) },
             { key: "analiza", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setDetaljZavrsen(r)}>Analiza</Btn> },
             { key: "vrati", label: "", render: (r) => mozeProjekti && <Btn size="sm" variant="ghost" onClick={() => vratiUAktivne(r)}>Vrati u aktivne</Btn> },
+            ...(mozeKopiratiProjekt ? [{ key: "kopiraj", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Copy} onClick={() => otvoriKopiju(r)}>Kopiraj</Btn> }] : []),
           ]}
         />
       )}
@@ -8024,6 +8079,37 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
           <p style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Broj naloga je šifra pod kojom će se voditi projekt i svi njegovi radni nalozi (npr. RN 170-322/1, /2, …) — upiši ga po vašoj uobičajenoj numeraciji.</p>
         </Modal>
       )}
+      {kopija && (() => {
+        const brojNaloga = db.radniNalozi.filter((r) => r.projektId === kopija.izvor.id).length;
+        const brojZadataka = (kopija.izvor.zadaci || []).length;
+        return (
+          <Modal title={`Kopiraj projekt ${kopija.izvor.sifra}`} onClose={() => setKopija(null)}
+            footer={<>
+              <Btn onClick={() => setKopija(null)}>Odustani</Btn>
+              <Btn variant="primary" icon={Copy} onClick={potvrdiKopiju}>Kreiraj kopiju</Btn>
+            </>}>
+            <Field label="Broj naloga (šifra novog projekta)">
+              <input className="input f-mono" autoFocus placeholder="npr. RN 170-322" value={kopija.sifra} onChange={(e) => setKopija({ ...kopija, sifra: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") potvrdiKopiju(); }} />
+            </Field>
+            <Field label="Naziv projekta">
+              <input className="input" value={kopija.naziv} onChange={(e) => setKopija({ ...kopija, naziv: e.target.value })} />
+            </Field>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <Field label="Kupac"><select className="select" value={kopija.kupacId} onChange={(e) => setKopija({ ...kopija, kupacId: e.target.value })}>{db.kupci.map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}</select></Field>
+              <Field label="Rok završetka (isporuka kupcu)"><input className="input" type="date" value={kopija.rokZavrsetka} onChange={(e) => setKopija({ ...kopija, rokZavrsetka: e.target.value })} /></Field>
+            </div>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", fontSize: 13, marginBottom: 8 }}>
+              <input type="checkbox" checked={kopija.nalozi} disabled={brojNaloga === 0} onChange={(e) => setKopija({ ...kopija, nalozi: e.target.checked })} style={{ marginTop: 2 }} />
+              <span>Kopiraj radne naloge ({brojNaloga}) — kao „Planiran”, bez utrošenih sati i izdanog materijala</span>
+            </label>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", fontSize: 13, marginBottom: 8 }}>
+              <input type="checkbox" checked={kopija.zadaci} onChange={(e) => setKopija({ ...kopija, zadaci: e.target.checked })} style={{ marginTop: 2 }} />
+              <span>Kopiraj zadatke ({brojZadataka}) — neizvršene i bez dodijeljene osobe (inače se dodaju standardni zadaci)</span>
+            </label>
+            <p style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Kopiraju se pozicije, materijal, ostale stavke, faze (planirani sati), voditelj, kontakt, mjesto isporuke i vrijednost. Ne kopiraju se narudžba, potvrda narudžbe, isporuke, otpremnice, CMR, izdatnice ni utrošeni sati — oni ostaju samo na izvornom projektu.</p>
+          </Modal>
+        );
+      })()}
       {printPonuda && <PonudaPrintModal ponuda={printPonuda} kupac={db.kupci.find((k) => k.id === printPonuda.kupacId)} db={db} onClose={() => setPrintPonuda(null)} />}
       {modal === "laser" && <PonudaLaseraModal form={laserForm} setForm={setLaserForm} db={db} onSave={saveLaser} onClose={() => setModal(null)} />}
       {printLaser && <PonudaLaseraPrintModal ponuda={printLaser} kupac={db.kupci.find((k) => k.id === printLaser.kupacId)} db={db} onClose={() => setPrintLaser(null)} />}
