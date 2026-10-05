@@ -570,6 +570,52 @@ app.put("/api/slobodniZadaci/patch", autentikacija, async (req, res) => {
   }
 });
 
+// ---------- Napomena uz zadatak projekta (self-service) ----------
+// Ista pravila kao kod označavanja izvršenim: napomenu smije upisati osoba kojoj je zadatak
+// dodijeljen (i bez pristupa modulu Projekti, npr. s nadzorne ploče) ili tko smije mijenjati projekte.
+app.put("/api/projekti/:projektId/zadatak/:zadId/napomena", autentikacija, async (req, res) => {
+  const napomena = String(req.body.napomena ?? "").trim().slice(0, 2000) || null;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query("SELECT value FROM app_data WHERE key = 'projekti' FOR UPDATE");
+    const trenutno = r.rows[0]?.value || [];
+    const projekt = trenutno.find((p) => p.id === req.params.projektId);
+    const zadatak = (projekt?.zadaci || []).find((z) => z.id === req.params.zadId);
+    if (!projekt || !zadatak) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Zadatak nije pronađen." });
+    }
+    if (zadatak.dodijeljenoId !== req.zaposlenikId) {
+      const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+      if (!izracunajDozvoljeneKljuceve(pozicija).pisivo.has("projekti")) {
+        await client.query("ROLLBACK");
+        return res.status(403).json({ error: "Ovaj zadatak nije dodijeljen tebi." });
+      }
+    }
+    const danas = new Date().toISOString().slice(0, 10);
+    const rezultat = trenutno.map((p) => (p.id !== req.params.projektId ? p : {
+      ...p,
+      zadaci: (p.zadaci || []).map((z) => (z.id !== req.params.zadId ? z : {
+        ...z, napomena, napomenaAutorId: napomena ? req.zaposlenikId : null, napomenaDatum: napomena ? danas : null,
+      })),
+    }));
+    await client.query(
+      `INSERT INTO app_data (key, value, updated_at) VALUES ('projekti', $1, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [JSON.stringify(rezultat)]
+    );
+    await client.query("COMMIT");
+    res.json({ ok: true, projekti: rezultat });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Greška kod napomene zadatka:", e);
+    res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+  } finally {
+    client.release();
+  }
+});
+
 // ---------- Ciljana izmjena upitiNabave (Upiti materijala u Nabavi) ----------
 // Isti oblik kao /api/evidencija/patch (upsert po id-u + remove) — ponuda dobavljača u jednom
 // upitu uređuje se često i u sitnim koracima (cijena, jedinica, dodatak, napomena po svakoj

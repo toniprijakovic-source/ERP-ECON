@@ -1804,6 +1804,28 @@ export default function App() {
     }).catch(() => showToast("Greška pri spremanju — provjeri internetsku vezu."));
   };
 
+  // Napomena uz zadatak projekta — kao patchZadatakIzvrseno: cilja samo taj zadatak, a dopuštena je i
+  // osobi kojoj je zadatak dodijeljen bez pristupa modulu Projekti (provjerava backend).
+  const patchZadatakNapomena = (projektId, zadId, napomena) => {
+    const tekst = (napomena || "").trim() || null;
+    setDb((prev) => ({
+      ...prev,
+      projekti: prev.projekti.map((p) => (p.id !== projektId ? p : {
+        ...p,
+        zadaci: (p.zadaci || []).map((z) => (z.id !== zadId ? z : { ...z, napomena: tekst, napomenaAutorId: tekst ? prijavljenId : null, napomenaDatum: tekst ? todayISO() : null })),
+      })),
+    }));
+    fetch(`${API_URL}/api/projekti/${projektId}/zadatak/${zadId}/napomena`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` },
+      body: JSON.stringify({ napomena: tekst }),
+    }).then(async (res) => {
+      if (!res.ok) { showToast("Greška pri spremanju napomene."); return; }
+      const data = await res.json();
+      setDb((prev) => ({ ...prev, projekti: data.projekti }));
+    }).catch(() => showToast("Greška pri spremanju — provjeri internetsku vezu."));
+  };
+
   // Ciljana izmjena upitiNabave — isti razlog i isti oblik (upsert/remove po id-u) kao
   // patchEvidencija, uz OPTIMISTIČNO lokalno ažuriranje kao patchProjekt (ponuda dobavljača se
   // uređuje polje po polje, pa se ne smije čekati mreža za svaki unos). upsert prima CIJELI
@@ -1963,7 +1985,7 @@ export default function App() {
         </div>
 
         <div style={{ padding: 24, flex: 1, overflowY: "auto" }}>
-          {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} />}
+          {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} patchZadatakNapomena={patchZadatakNapomena} />}
           {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} otvoriProjekt={dopusteniKljucevi.includes("projekti") ? (id) => { setOtvoriProjektId(id); setPage("projekti"); } : undefined} />}
@@ -1986,8 +2008,40 @@ export default function App() {
   );
 }
 
+/* ============================== NAPOMENA UZ ZADATAK ============================== */
+// Napomena uz zadatak (projektni ili slobodni): prikaz teksta s autorom i datumom te uređivanje u
+// retku. Prazna napomena briše postojeću. Klikovi ne idu dalje (redak na nadzornoj ploči otvara projekt).
+const STIL_LINK_GUMBA = { background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit", fontSize: 11.5, fontWeight: 600, color: "var(--steel)" };
+function NapomenaZadatka({ zadatak, imeZaposlenika, mozeUredjivati, onSpremi, uvlaka = 0 }) {
+  const [uredjujem, setUredjujem] = useState(false);
+  const [tekst, setTekst] = useState("");
+  const otvori = () => { setTekst(zadatak.napomena || ""); setUredjujem(true); };
+  const spremi = () => { onSpremi(tekst.trim()); setUredjujem(false); };
+  const stani = (e) => e.stopPropagation();
+  if (uredjujem) return (
+    <div onClick={stani} style={{ marginLeft: uvlaka, marginTop: 6, display: "flex", flexDirection: "column", gap: 6 }}>
+      <textarea className="textarea" rows={2} autoFocus aria-label={`Napomena uz zadatak ${zadatak.naziv}`} placeholder="Napomena uz zadatak…" value={tekst} onChange={(e) => setTekst(e.target.value)} style={{ fontSize: 12.5 }} />
+      <div style={{ display: "flex", gap: 6 }}>
+        <Btn size="sm" variant="primary" onClick={spremi}>Spremi napomenu</Btn>
+        <Btn size="sm" onClick={() => setUredjujem(false)}>Odustani</Btn>
+      </div>
+    </div>
+  );
+  if (zadatak.napomena) return (
+    <div onClick={stani} style={{ marginLeft: uvlaka, marginTop: 6, padding: "6px 10px", background: "var(--surface-alt)", borderRadius: 3, fontSize: 12.5 }}>
+      <div style={{ whiteSpace: "pre-wrap", color: "var(--ink)" }}>{zadatak.napomena}</div>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 3, fontSize: 11, color: "var(--ink-soft)", flexWrap: "wrap" }}>
+        {zadatak.napomenaAutorId && <span>{imeZaposlenika(zadatak.napomenaAutorId)}</span>}
+        {zadatak.napomenaDatum && <span>{fmtDate(zadatak.napomenaDatum)}</span>}
+        {mozeUredjivati && <button type="button" onClick={otvori} style={STIL_LINK_GUMBA}>Uredi napomenu</button>}
+      </div>
+    </div>
+  );
+  return mozeUredjivati ? <div onClick={stani} style={{ marginLeft: uvlaka, marginTop: 4 }}><button type="button" onClick={otvori} style={STIL_LINK_GUMBA}>+ Napomena</button></div> : null;
+}
+
 /* ============================== DASHBOARD ============================== */
-function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, patchZadatakIzvrseno }) {
+function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, patchZadatakIzvrseno, patchZadatakNapomena }) {
   const [zadaciZa, setZadaciZa] = useState("moji"); // "moji" | "svi" | id zaposlenika
   const [dodajZadatakOtvoreno, setDodajZadatakOtvoreno] = useState(false);
   const [noviSlobodni, setNoviSlobodni] = useState({ naziv: "", datum: "", kome: "" });
@@ -2027,6 +2081,8 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
     update("slobodniZadaci", [...slobodniZadaci, { id: uid("sz"), naziv, dodijeljenoId: kome, planiraniDatum: noviSlobodni.datum || null, izvrseno: false, izvrsioId: null, datumIzvrsenja: null, kreiraoId: mojId }]);
     setNoviSlobodni({ naziv: "", datum: "", kome: "" });
   };
+  const mozeMijenjatiProjekte = (mojaPozicija?.moduli || []).includes("projekti") && dozvolaZaKarticu(mojaPozicija, "projekti", "projekti").izmjene;
+  const spremiNapomenuSlobodnog = (id, tekst) => update("slobodniZadaci", slobodniZadaci.map((z) => (z.id === id ? { ...z, napomena: tekst || null, napomenaAutorId: tekst ? mojId : null, napomenaDatum: tekst ? todayISO() : null } : z)));
   const oznaciSlobodniIzvrsenim = (id) => update("slobodniZadaci", slobodniZadaci.map((z) => (z.id === id ? { ...z, izvrseno: true, izvrsioId: mojId, datumIzvrsenja: todayISO() } : z)));
   const obrisiSlobodni = (id) => { if (window.confirm("Obrisati ovaj zadatak?")) update("slobodniZadaci", slobodniZadaci.filter((z) => z.id !== id)); };
   const brojPoOsobi = new Map();
@@ -2106,6 +2162,12 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
                     <div style={{ flex: 1, minWidth: 0, cursor: z.slobodan ? "default" : "pointer" }} title={z.slobodan ? undefined : "Otvori projekt"} onClick={() => { if (!z.slobodan) otvoriProjekt(z.projektId); }}>
                       <div style={{ fontSize: 13 }}>{z.naziv}</div>
                       <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{z.slobodan ? "Bez projekta" : `${z.projektSifra} — ${z.projektNaziv}`}{z.slobodan && z.kreiraoId && z.kreiraoId !== z.dodijeljenoId && <> · zadano od: {imeZaposlenika(z.kreiraoId)}</>}{odabrano === "svi" && z.dodijeljenoId !== mojId && <> · <strong style={{ color: "var(--steel)" }}>{imeZaposlenika(z.dodijeljenoId)}</strong></>}</div>
+                      <NapomenaZadatka
+                        zadatak={z}
+                        imeZaposlenika={imeZaposlenika}
+                        mozeUredjivati={z.slobodan ? (z.dodijeljenoId === mojId || z.kreiraoId === mojId || mozeZadavatiDrugima) : (z.dodijeljenoId === mojId || mozeMijenjatiProjekte)}
+                        onSpremi={(tekst) => (z.slobodan ? spremiNapomenuSlobodnog(z.id, tekst) : patchZadatakNapomena(z.projektId, z.id, tekst))}
+                      />
                     </div>
                     {z.planiraniDatum && <span className="f-mono" style={{ fontSize: 11.5, color: kasni ? "var(--rust)" : "var(--ink-soft)", flexShrink: 0, whiteSpace: "nowrap" }}>{fmtDate(z.planiraniDatum)}</span>}
                     {z.slobodan && (mozeZadavatiDrugima || z.kreiraoId === mojId) && <button type="button" onClick={() => obrisiSlobodni(z.id)} title="Obriši zadatak" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-faint)", padding: 0, flexShrink: 0 }}><Trash2 size={13} /></button>}
@@ -6280,6 +6342,8 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
   const postaviPlaniraniDatum = (zadId, datum) => azurirajZadatke(zadaci.map((z) => (z.id === zadId ? { ...z, planiraniDatum: datum } : z)));
   const postaviDodjelu = (zadId, dodijeljenoId) => azurirajZadatke(zadaci.map((z) => (z.id === zadId ? { ...z, dodijeljenoId: dodijeljenoId || null } : z)));
   const obrisiZadatak = (zadId) => azurirajZadatke(zadaci.filter((z) => z.id !== zadId));
+  const postaviNapomenu = (zadId, tekst) => azurirajZadatke(zadaci.map((z) => (z.id === zadId ? { ...z, napomena: tekst || null, napomenaAutorId: tekst ? mojId : null, napomenaDatum: tekst ? todayISO() : null } : z)));
+  const imeZaposlenikaZadatka = (id) => { const zz = db.zaposlenici.find((x) => x.id === id); return zz ? `${zz.prezime} ${zz.ime}` : "—"; };
   const dodajZadatak = () => {
     if (!noviZadatak.trim()) return;
     azurirajZadatke([...zadaci, { id: uid("zad"), naziv: noviZadatak.trim(), izvrseno: false, izvrsioId: null, datumIzvrsenja: null, planiraniDatum: noviZadatakDatum || null, dodijeljenoId: noviZadatakKome || null }]);
@@ -6468,6 +6532,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
                   </select>
                   {z.izvrseno && z.datumIzvrsenja && <span style={{ fontSize: 11.5, color: "var(--green)" }}>✓ Izvršeno {fmtDate(z.datumIzvrsenja)}</span>}
                 </div>
+                <NapomenaZadatka zadatak={z} imeZaposlenika={imeZaposlenikaZadatka} mozeUredjivati onSpremi={(tekst) => postaviNapomenu(z.id, tekst)} uvlaka={25} />
               </div>
             );
           })}
