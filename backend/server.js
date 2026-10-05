@@ -149,6 +149,52 @@ async function spremiKljuc(key, value) {
   );
 }
 
+// Radni nalozi se iz preglednika spremaju kao CIJELI popis, a preglednik ih učita samo jednom (pri
+// otvaranju aplikacije) — sesija otvorena prije nego što je nalogu promijenjena oznaka ili naziv bi
+// pri sljedećem spremanju bilo čega vratila staru vrijednost. Zato poslužitelj kod svake promjene
+// oznake/naziva zapamti prethodnu vrijednost (prethodniBroj / prethodniNaziv), a ako zatim stigne
+// točno ta prethodna vrijednost od preglednika koji ne zna za promjenu, zadrži novu. Ostala polja
+// (status, sati…) spremaju se kako su poslana. Namjernu promjenu natrag (npr. šifra projekta vraćena
+// na staru) preglednik označi slanjem prethodne vrijednosti jednake trenutnoj, pa prolazi.
+function zadrziNoveOznakeNaloga(dolazni, trenutni) {
+  const trenutniPoId = new Map(trenutni.map((n) => [n.id, n]));
+  return dolazni.map((n) => {
+    const t = n && trenutniPoId.get(n.id);
+    if (!t) return n;
+    const rezultat = { ...n };
+    for (const [polje, prethodno] of [["broj", "prethodniBroj"], ["naziv", "prethodniNaziv"]]) {
+      if (n[polje] === t[polje]) {
+        if (t[prethodno] !== undefined) rezultat[prethodno] = t[prethodno];
+      } else if (t[prethodno] !== undefined && n[polje] === t[prethodno] && n[prethodno] !== t[polje]) {
+        rezultat[polje] = t[polje];
+        rezultat[prethodno] = t[prethodno];
+      } else {
+        rezultat[prethodno] = t[polje];
+      }
+    }
+    return rezultat;
+  });
+}
+async function spremiRadneNaloge(dolazni) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query("SELECT value FROM app_data WHERE key = 'radniNalozi' FOR UPDATE");
+    const rezultat = zadrziNoveOznakeNaloga(dolazni, r.rows[0]?.value || []);
+    await client.query(
+      `INSERT INTO app_data (key, value, updated_at) VALUES ('radniNalozi', $1, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [JSON.stringify(rezultat)]
+    );
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 // ---------- auth middleware ----------
 function autentikacija(req, res, next) {
   const header = req.headers.authorization || "";
@@ -337,7 +383,8 @@ app.post("/api/kiosk/scan", async (req, res) => {
 app.get("/api/kiosk/ping", (req, res) => res.json({ ok: true }));
 // Vrijeme poslužitelja — preglednik iz njega računa koliko sat uređaja odstupa (npr. računalo na
 // laseru s krivom vremenskom zonom), pa se početak/kraj rezanja bilježi prema poslužitelju.
-app.get("/api/vrijeme", (req, res) => res.json({ sada: new Date().toISOString() }));
+// verzija = commit koji trenutno radi na Renderu (za provjeru je li nova verzija objavljena).
+app.get("/api/vrijeme", (req, res) => res.json({ sada: new Date().toISOString(), verzija: process.env.RENDER_GIT_COMMIT?.slice(0, 7) || null }));
 
 // ---------- Ciljana izmjena evidencijaRada (Evidencija rada u glavnoj aplikaciji) ----------
 // Obična PUT /api/data/evidencijaRada šalje CIJELI popis kakav ga je preglednik zadnji put
@@ -739,13 +786,14 @@ app.put("/api/upiti/patch", autentikacija, async (req, res) => {
 // Isti oblik kao /api/upiti/patch. Cijeli popis poslan iz zastarjele kopije preglednika znao je tiho
 // obrisati dokument koji je netko drugi upravo izdao — a pritom bi novi dobio ISTI broj (broj se
 // računao iz zastarjelog popisa). Zato server primjenjuje izmjenu na trenutni zaključani popis, a
-// novi dokument čiji je broj već zauzet dobiva sljedeći slobodan broj.
-const patchPoIdHandler = (kljuc, brojRegex, naziv) => async (req, res) => {
+// novi dokument čiji je broj već zauzet dobiva sljedeći slobodan broj. prilagodiUpsert (neobavezno)
+// dobiva poslane zapise i trenutni popis prije spajanja (radni nalozi: zadrziNoveOznakeNaloga).
+const patchPoIdHandler = (kljuc, brojRegex, naziv, prilagodiUpsert = (upsert) => upsert) => async (req, res) => {
   const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
   const { pisivo } = izracunajDozvoljeneKljuceve(pozicija);
   if (!pisivo.has(kljuc)) return res.status(403).json({ error: `Vaša pozicija nema ovlaštenje za mijenjanje: ${naziv}.` });
 
-  const upsert = Array.isArray(req.body.upsert) ? req.body.upsert : [];
+  const poslano = Array.isArray(req.body.upsert) ? req.body.upsert : [];
   const remove = Array.isArray(req.body.remove) ? req.body.remove : [];
 
   const client = await pool.connect();
@@ -753,6 +801,7 @@ const patchPoIdHandler = (kljuc, brojRegex, naziv) => async (req, res) => {
     await client.query("BEGIN");
     const r = await client.query("SELECT value FROM app_data WHERE key = $1 FOR UPDATE", [kljuc]);
     const trenutno = r.rows[0]?.value || [];
+    const upsert = prilagodiUpsert(poslano, trenutno);
     const removeSet = new Set(remove);
     const upsertMap = new Map(upsert.map((u) => [u.id, u]));
     const postojeciIds = new Set(trenutno.map((u) => u.id));
@@ -790,6 +839,9 @@ const patchPoIdHandler = (kljuc, brojRegex, naziv) => async (req, res) => {
 };
 app.put("/api/otpremnice/patch", autentikacija, patchPoIdHandler("otpremnice", /^(OTP-\d{2}-\d{2}-)(\d+)(\/\d{2})$/, "otpremnica"));
 app.put("/api/cmr/patch", autentikacija, patchPoIdHandler("cmr", /^(CMR-\d{2}-\d{2}-)(\d+)(\/\d{2})$/, "CMR-a"));
+// Radni nalozi: oznaka "<šifra projekta>/<broj>" — novi nalog čija je oznaka već zauzeta dobiva
+// sljedeći slobodan broj tog projekta.
+app.put("/api/radniNalozi/patch", autentikacija, patchPoIdHandler("radniNalozi", /^(.*\/)(\d+)()$/, "radnih naloga", zadrziNoveOznakeNaloga));
 
 // ---------- Ciljana izmjena projekata (upsert po id-u + remove) ----------
 // Isti oblik kao /api/evidencija/patch i /api/upiti/patch — dodavanje/uređivanje/brisanje CIJELOG
@@ -870,6 +922,16 @@ app.put("/api/data/:key", autentikacija, async (req, res, next) => {
   if (!DOZVOLJENI_KLJUCEVI.includes(req.params.key)) return res.status(400).json({ error: "Nepoznat ključ." });
   next();
 }, autorizacijaPisanja, async (req, res) => {
+  if (req.params.key === "radniNalozi") {
+    if (!Array.isArray(req.body)) return res.status(400).json({ error: "Neispravan popis radnih naloga." });
+    try {
+      await spremiRadneNaloge(req.body);
+    } catch (e) {
+      console.error("Greška kod spremanja radnih naloga:", e);
+      return res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+    }
+    return res.json({ ok: true });
+  }
   await spremiKljuc(req.params.key, req.body);
   res.json({ ok: true });
 });
