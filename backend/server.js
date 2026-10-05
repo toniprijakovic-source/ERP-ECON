@@ -458,6 +458,7 @@ app.put("/api/projekti/:projektId/zadatak/:zadId/izvrseno", autentikacija, async
         ...z, izvrseno,
         datumIzvrsenja: izvrseno ? (z.datumIzvrsenja || new Date().toISOString().slice(0, 10)) : null,
         izvrsioId: izvrseno ? (z.izvrsioId || req.zaposlenikId) : null,
+        ...(izvrseno ? {} : { zavrsetakVidjenZadao: null, zavrsetakVidjenDatum: null }),
       })),
     }));
     await client.query(
@@ -501,6 +502,76 @@ app.get("/api/plan/podaci", autentikacija, async (req, res) => {
     normativ: { naziv: normativi?.naziv || "", grupe: (normativi?.grupe || []).map((g) => ({ kljuc: g.kljuc, naziv: g.naziv, ucinakKgH: Number(g.ucinakKgH) || 0, raspodjela: g.raspodjela || {} })) },
     odsutnosti,
   });
+});
+
+// ---------- Obavijesti o zadacima (zvonce u aplikaciji) ----------
+// Dvije vrste: "dodjela" — netko mi je zadao zadatak (dok ga ne potvrdim ili izvršim) i
+// "zavrsetak" — netko je izvršio zadatak koji sam ja zadao (dok ne potvrdim "U redu"). Vrijedi samo
+// za zadatke koji imaju zapisano tko ih je zadao (zadaoId — od uvođenja ove funkcije).
+const obavijestiZadataka = (ja, projekti, slobodni) => {
+  const out = [];
+  const obradi = (z, izvor, p) => {
+    if (!z.zadaoId) return;
+    const baza = { izvor, projektId: p?.id || null, projektSifra: p?.sifra || "", projektNaziv: p?.naziv || "", zadId: z.id, naziv: z.naziv, planiraniDatum: z.planiraniDatum || null, napomena: z.napomena || null };
+    if (z.dodijeljenoId === ja && z.zadaoId !== ja && !z.izvrseno && !z.dodjelaVidjena) out.push({ ...baza, vrsta: "dodjela", od: z.zadaoId, datum: z.zadanoDatum || null });
+    if (z.zadaoId === ja && z.izvrseno && z.izvrsioId && z.izvrsioId !== ja && !z.zavrsetakVidjenZadao) out.push({ ...baza, vrsta: "zavrsetak", od: z.izvrsioId, datum: z.datumIzvrsenja || null });
+  };
+  (projekti || []).forEach((p) => (p.zadaci || []).forEach((z) => obradi(z, "projekt", p)));
+  (slobodni || []).forEach((z) => obradi(z, "slobodni", null));
+  return out.sort((a, b) => String(b.datum || "").localeCompare(String(a.datum || "")));
+};
+app.get("/api/obavijesti", autentikacija, async (req, res) => {
+  const [projekti, slobodni] = await Promise.all([ucitajKljuc("projekti"), ucitajKljuc("slobodniZadaci")]);
+  res.json({ obavijesti: obavijestiZadataka(req.zaposlenikId, projekti, slobodni) });
+});
+app.put("/api/obavijesti/potvrdi", autentikacija, async (req, res) => {
+  const stavke = Array.isArray(req.body.stavke) ? req.body.stavke.slice(0, 500) : [];
+  const ja = req.zaposlenikId;
+  const danas = new Date().toISOString().slice(0, 10);
+  const primijeni = (z, s) => {
+    if (s.vrsta === "dodjela" && z.dodijeljenoId === ja) return { ...z, dodjelaVidjena: true };
+    if (s.vrsta === "zavrsetak" && z.zadaoId === ja) return { ...z, zavrsetakVidjenZadao: true, zavrsetakVidjenDatum: danas };
+    return z;
+  };
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const projekti = (await client.query("SELECT value FROM app_data WHERE key = 'projekti' FOR UPDATE")).rows[0]?.value || [];
+    const slobodni = (await client.query("SELECT value FROM app_data WHERE key = 'slobodniZadaci' FOR UPDATE")).rows[0]?.value || [];
+    let promjenaP = false, promjenaS = false;
+    const projektiNovi = projekti.map((p) => {
+      const moje = stavke.filter((s) => s.izvor === "projekt" && s.projektId === p.id);
+      if (!moje.length) return p;
+      promjenaP = true;
+      return { ...p, zadaci: (p.zadaci || []).map((z) => moje.filter((s) => s.zadId === z.id).reduce(primijeni, z)) };
+    });
+    const slobodniNovi = slobodni.map((z) => {
+      const moje = stavke.filter((s) => s.izvor === "slobodni" && s.zadId === z.id);
+      if (!moje.length) return z;
+      promjenaS = true;
+      return moje.reduce(primijeni, z);
+    });
+    const spremi = (kljuc, v) => client.query(
+      `INSERT INTO app_data (key, value, updated_at) VALUES ($1, $2, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, [kljuc, JSON.stringify(v)]);
+    if (promjenaP) await spremi("projekti", projektiNovi);
+    if (promjenaS) await spremi("slobodniZadaci", slobodniNovi);
+    await client.query("COMMIT");
+    const pozicija = await ucitajPozicijuZaposlenika(ja);
+    const { citljivo } = izracunajDozvoljeneKljuceve(pozicija);
+    res.json({
+      ok: true,
+      ...(citljivo.has("projekti") ? { projekti: projektiNovi } : {}),
+      ...(citljivo.has("slobodniZadaci") ? { slobodniZadaci: filtrirajSlobodneZadatke(slobodniNovi, pozicija, ja) } : {}),
+      obavijesti: obavijestiZadataka(ja, projektiNovi, slobodniNovi),
+    });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Greška kod potvrde obavijesti:", e);
+    res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+  } finally {
+    client.release();
+  }
 });
 
 // ---------- Zadaci na nadzornoj ploči koji nisu vezani uz projekt ("slobodniZadaci") ----------
@@ -547,8 +618,14 @@ app.put("/api/slobodniZadaci/patch", autentikacija, async (req, res) => {
     const upsertMap = new Map(upsert.map((u) => [u.id, u]));
     const obradi = (u, staro) => {
       const z = { ...u, kreiraoId: staro?.kreiraoId || u.kreiraoId || req.zaposlenikId };
-      if (z.izvrseno) { z.datumIzvrsenja = staro?.datumIzvrsenja || z.datumIzvrsenja || danas; z.izvrsioId = staro?.izvrsioId || req.zaposlenikId; }
-      else { z.datumIzvrsenja = null; z.izvrsioId = null; }
+      // tko je zadao zadatak: kod novog zadatka uvijek onaj tko ga sprema (ako je zadao), kasnije se ne mijenja
+      z.zadaoId = staro ? (staro.zadaoId || null) : (u.zadaoId ? req.zaposlenikId : null);
+      z.dodjelaVidjena = !!(staro?.dodjelaVidjena || u.dodjelaVidjena);
+      if (z.izvrseno) {
+        z.datumIzvrsenja = staro?.datumIzvrsenja || z.datumIzvrsenja || danas; z.izvrsioId = staro?.izvrsioId || req.zaposlenikId;
+        z.zavrsetakVidjenZadao = !!(staro?.zavrsetakVidjenZadao || u.zavrsetakVidjenZadao);
+        z.zavrsetakVidjenDatum = staro?.zavrsetakVidjenDatum || u.zavrsetakVidjenDatum || null;
+      } else { z.datumIzvrsenja = null; z.izvrsioId = null; z.zavrsetakVidjenZadao = null; z.zavrsetakVidjenDatum = null; }
       return z;
     };
     const rezultat = trenutno.filter((z) => !removeSet.has(z.id)).map((z) => (upsertMap.has(z.id) ? obradi(upsertMap.get(z.id), z) : z));
