@@ -1784,9 +1784,36 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prijavljenId, potrebnaPrijava]);
 
+  // Automatsko osvježavanje na novu verziju (kao na kiosku): podaci i kod učitaju se samo pri
+  // otvaranju, a aplikacija zna ostati otvorena danima. Svakih 5 minuta provjeri se je li objavljena
+  // nova verzija — ako jest, pokaže se traka s gumbom "Osvježi", a aplikacija se sama ponovno učita
+  // čim je sigurno: nije otvoren nijedan prozor (obrazac) i nitko ništa nije radio 10 minuta.
+  const [novaVerzija, setNovaVerzija] = useState(false);
+  useEffect(() => {
+    if (!prijavljenId || potrebnaPrijava) return undefined;
+    const trenutna = Array.from(document.scripts).map((sk) => sk.src).find((src) => /\/assets\/index-[^/]+\.js/.test(src));
+    if (!trenutna) return undefined; // razvojni način rada — nema hashiranih skripti
+    let zadnjaAktivnost = Date.now();
+    const aktivnost = () => { zadnjaAktivnost = Date.now(); };
+    const dogadaji = ["pointerdown", "keydown", "wheel", "touchstart"];
+    dogadaji.forEach((d) => window.addEventListener(d, aktivnost, { passive: true }));
+    const provjeri = async () => {
+      try {
+        const res = await fetch(`${window.location.origin}/`, { cache: "no-store" });
+        const novaSkripta = (await res.text()).match(/\/assets\/index-[^"']+\.js/)?.[0];
+        if (!novaSkripta || trenutna.endsWith(novaSkripta)) return;
+        setNovaVerzija(true);
+        if (Date.now() - zadnjaAktivnost > 10 * 60 * 1000 && !document.querySelector(".modal-overlay")) window.location.reload();
+      } catch { /* bez mreže — pokušat će se ponovno kod sljedeće provjere */ }
+    };
+    const t = setInterval(provjeri, 5 * 60 * 1000);
+    return () => { clearInterval(t); dogadaji.forEach((d) => window.removeEventListener(d, aktivnost)); };
+  }, [prijavljenId, potrebnaPrijava]);
+
   // Otpremnice se NE šalju kao cijeli popis (zastarjela kopija je znala obrisati otpremnicu koju je
   // netko drugi upravo izdao, a nova bi dobila isti broj) — šalje se samo razlika po id-u, a
-  // server zaključava popis i dodjeljuje sljedeći slobodan broj ako je broj već zauzet.
+  // server zaključava popis i dodjeljuje sljedeći slobodan broj ako je broj već zauzet. Isto vrijedi
+  // za CMR, slobodne zadatke i radne naloge.
   const patchOtpremnice = (newArr, kljuc = "otpremnice") => {
     const stare = new Map((db[kljuc] || []).map((o) => [o.id, JSON.stringify(o)]));
     const noveIds = new Set(newArr.map((o) => o.id));
@@ -1799,7 +1826,7 @@ export default function App() {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` },
       body: JSON.stringify({ upsert, remove }),
     }).then(async (res) => {
-      if (!res.ok) { showToast(kljuc === "cmr" ? "Greška pri spremanju CMR-a." : kljuc === "slobodniZadaci" ? "Greška pri spremanju zadatka." : "Greška pri spremanju otpremnice."); return; }
+      if (!res.ok) { showToast({ cmr: "Greška pri spremanju CMR-a.", slobodniZadaci: "Greška pri spremanju zadatka.", radniNalozi: "Greška pri spremanju radnog naloga." }[kljuc] || "Greška pri spremanju otpremnice."); return; }
       const data = await res.json();
       setDb((prev) => ({ ...prev, [kljuc]: data[kljuc] }));
       (data.promijenjeniBrojevi || []).forEach((p) => showToast(`Broj ${p.staro} je već bio zauzet — spremljeno kao ${p.novo}.`));
@@ -1807,7 +1834,7 @@ export default function App() {
   };
 
   const update = (key, newArr) => {
-    if (key === "otpremnice" || key === "cmr" || key === "slobodniZadaci") { patchOtpremnice(newArr, key); return; }
+    if (key === "otpremnice" || key === "cmr" || key === "slobodniZadaci" || key === "radniNalozi") { patchOtpremnice(newArr, key); return; }
     setDb((prev) => ({ ...prev, [key]: newArr }));
     fetch(`${API_URL}/api/data/${key}`, {
       method: "PUT",
@@ -2080,6 +2107,12 @@ export default function App() {
             <Btn variant="ghost" size="sm" onClick={odjava}>Odjava</Btn>
           </div>
         </div>
+        {novaVerzija && (
+          <div role="status" style={{ padding: "8px 24px", background: "var(--ink)", color: "#fff", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <span>Objavljena je nova verzija aplikacije — osvježi da radiš s najnovijom verzijom i podacima.</span>
+            <Btn variant="primary" size="sm" onClick={() => window.location.reload()}>Osvježi</Btn>
+          </div>
+        )}
 
         <div style={{ padding: 24, flex: 1, overflowY: "auto" }}>
           {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} patchZadatakNapomena={patchZadatakNapomena} potvrdiObavijesti={potvrdiObavijesti} />}
@@ -7567,6 +7600,9 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
 
   const saveProj = () => {
     if (!projForm.sifra.trim() || !projForm.naziv.trim()) return;
+    // Šifra je i prefiks oznaka radnih naloga ("<šifra>/1", "/2"…) — dva projekta s istom šifrom
+    // dijelila bi i oznake naloga.
+    if (db.projekti.some((p) => p.id !== projForm.id && p.sifra.trim().toLowerCase() === projForm.sifra.trim().toLowerCase())) { showToast(`Šifra ${projForm.sifra.trim()} je već iskorištena na drugom projektu.`); return; }
     const payload = { ...projForm, vrijednost: Number(projForm.vrijednost) };
     const stariProjekt = projForm.id ? db.projekti.find((p) => p.id === projForm.id) : null;
     const voditeljPromijenjen = payload.voditeljId && payload.voditeljId !== stariProjekt?.voditeljId;
@@ -7584,14 +7620,22 @@ function ProjektiPage({ db, update, patchProjekt, patchProjekti, patchUpiti, sho
     }
     if (projForm.id) patchProjekti([payload], []);
     else patchProjekti([{ ...payload, id: uid("proj") }], []);
-    // Naziv radnog naloga uvijek prati naziv projekta — kad se projekt preimenuje, isto ime
-    // se prepiše na sve njegove radne naloge da ne ostanu razdvojeni.
-    if (projForm.id && stariProjekt && stariProjekt.naziv !== payload.naziv) {
-      update("radniNalozi", db.radniNalozi.map((r) => (r.projektId === projForm.id ? { ...r, naziv: payload.naziv } : r)));
-    }
-    if (prelaziUZavrseno) {
-      const dotaknutiIds = new Set(payload.autoZavrsenoNalozi.map((n) => n.id));
-      update("radniNalozi", db.radniNalozi.map((r) => (dotaknutiIds.has(r.id) ? { ...r, status: "Završen" } : r)));
+    // Naziv i oznaka radnog naloga uvijek prate projekt — kad se projekt preimenuje ili mu se
+    // promijeni šifra, to se prepiše na sve njegove radne naloge (oznaka "stara šifra/3" postaje
+    // "nova šifra/3"). prethodniNaziv/prethodniBroj javljaju poslužitelju da je promjena namjerna
+    // (vidi zadrziNoveOznakeNaloga u server.js). Sve izmjene naloga idu u jednom spremanju.
+    const promijenjenNaziv = projForm.id && stariProjekt && stariProjekt.naziv !== payload.naziv;
+    const promijenjenaSifra = projForm.id && stariProjekt && stariProjekt.sifra !== payload.sifra;
+    const zavrseniIds = new Set(prelaziUZavrseno ? payload.autoZavrsenoNalozi.map((n) => n.id) : []);
+    if (promijenjenNaziv || promijenjenaSifra || zavrseniIds.size > 0) {
+      const stariPrefiks = `${stariProjekt.sifra}/`;
+      update("radniNalozi", db.radniNalozi.map((r) => {
+        let n = r;
+        if (r.projektId === projForm.id && promijenjenNaziv) n = { ...n, naziv: payload.naziv, prethodniNaziv: r.naziv };
+        if (r.projektId === projForm.id && promijenjenaSifra && (r.broj || "").startsWith(stariPrefiks)) n = { ...n, broj: `${payload.sifra}/${r.broj.slice(stariPrefiks.length)}`, prethodniBroj: r.broj };
+        if (zavrseniIds.has(r.id)) n = { ...n, status: "Završen" };
+        return n;
+      }));
     }
     setModal(null);
     if (voditeljPromijenjen) {
