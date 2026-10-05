@@ -2017,7 +2017,7 @@ export default function App() {
           {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} otvoriProjekt={dopusteniKljucevi.includes("projekti") ? (id) => { setOtvoriProjektId(id); setPage("projekti"); } : undefined} />}
           {aktivnaStranica === "projekti" && <ProjektiPage db={db} update={update} patchProjekt={patchProjekt} patchProjekti={patchProjekti} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjektId={otvoriProjektId} ocistiOtvoriProjekt={() => setOtvoriProjektId(null)} />}
-          {aktivnaStranica === "fakturiranje" && <FakturiranjePage db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} />}
+          {aktivnaStranica === "fakturiranje" && <FakturiranjePage db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} />}
           {aktivnaStranica === "partneri" && <PartneriPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} patchEvidencija={patchEvidencija} mojaPozicija={mojaPozicija} />}
         </div>
@@ -8595,7 +8595,7 @@ const cmrStranicaHtml = (c, db, naslovPrimjerka) => {
     + kutija("15", "Frachtzahlungsanweisungen", "Instruction as to payment carriage", 32, 652, 295, 36, "", { extra: `<div class="cmr-mali" style="position:absolute;left:14pt;top:17pt">Frei / Carriage paid: <b>${kvacica(c.placanjeVozarine === "frei")}</b> &nbsp;&nbsp;&nbsp; Unfrei / Carriage forward: <b>${kvacica(c.placanjeVozarine === "unfrei")}</b></div>` })
     + kutija("21", "Ausgefertigt in", "Established in", 32, 688, 295, 26, "", { extra: `<div style="position:absolute;left:62pt;top:7pt;font-size:10pt">${escHtml(c.mjestoIzdavanja || "")}</div><div class="cmr-mali" style="position:absolute;left:170pt;top:5pt">am / on</div><div style="position:absolute;left:200pt;top:7pt;font-size:10pt">${escHtml(fmtDate(c.datum))}</div>` })
     + kutija("20", "Besondere Vereinbarungen", "Special agreements", 327, 652, 240, 62, c.posebniDogovori)
-    + kutija("22", "Signatur und Stempel des Absenders", "Signature and stamp of the sender", 32, 714, 215, 84, "", { extra: `<div class="cmr-mali" style="position:absolute;left:14pt;bottom:2pt">Signatur und Stempel des Absenders<br>Signature and stamp of the sender</div>` })
+    + kutija("22", "Signatur und Stempel des Absenders", "Signature and stamp of the sender", 32, 714, 215, 84, (() => { const z = (db.zaposlenici || []).find((x) => x.id === c.izradioId); return z ? `${z.ime} ${z.prezime}` : ""; })(), { vTop: 24, vStil: "font-size:10pt;", extra: `<div class="cmr-mali" style="position:absolute;left:14pt;bottom:2pt">Signatur und Stempel des Absenders<br>Signature and stamp of the sender</div>` })
     + kutija("23", "Unterschrift und Stempel des Frachtführers", "Signature and stamp of the carrier", 247, 714, 190, 84, "", { teska: true })
     + kutija("24", "Gut empfangen", "Goods received", 437, 714, 130, 84, "", { extra: `<div class="cmr-mali" style="position:absolute;left:5pt;top:20pt">Ort / Place</div><div class="cmr-mali" style="position:absolute;left:5pt;top:34pt">am / on</div><div class="cmr-mali" style="position:absolute;left:5pt;bottom:2pt">Unterschrift und Stempel des Empfängers<br>Signature and stamp of the consignee</div>` })
     + `<div class="cmr-podnozje">Das CMR/IRU/Polen-Modell von 1976 für den internationalen Straßenverkehr entspricht den Regelungen der Internationalen Straßenverkehrsunion /IRU/.<br>The 1976 CMR/IRU/Poland model for international road transport complies with the rules of the International Road Transport Union /IRU/.</div></div>`;
@@ -8636,7 +8636,7 @@ function CmrFormModal({ db, pocetni, onSpremi, onClose }) {
   const odaberiProjekt = (id) => {
     const p = db.projekti.find((x) => x.id === id);
     setF((prev) => ({ ...prev, ...cmrPrijedlog(db, p, [], prev.datum), id: prev.id, broj: prev.broj, status: prev.status, statusDatumi: prev.statusDatumi,
-      prijevoznikId: prev.prijevoznikId, registracija: prev.registracija, vozac: prev.vozac, prijevoznikTekst: prev.prijevoznikTekst }));
+      prijevoznikId: prev.prijevoznikId, registracija: prev.registracija, vozac: prev.vozac, prijevoznikTekst: prev.prijevoznikTekst, izradioId: prev.izradioId }));
   };
   const promijeniOtpremnice = (ids) => {
     const odabrane = db.otpremnice.filter((o) => ids.includes(o.id));
@@ -8739,6 +8739,14 @@ function CmrFormModal({ db, pocetni, onSpremi, onClose }) {
             </Field>
             {I("21 — Izdano u (mjesto)", "mjestoIzdavanja")}
           </div>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
+            <Field label="22 — Izradio (ime i prezime u polju pošiljatelja)">
+              <select className="select" value={f.izradioId || ""} onChange={(e) => set({ izradioId: e.target.value })}>
+                <option value="">—</option>
+                {[...db.zaposlenici].filter((z) => z.status === "Aktivan" || z.id === f.izradioId).sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+              </select>
+            </Field>
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             {T("18 — Napomene prijevoznika", "napomenePrijevoznika", 2)}
             {T("20 — Posebni dogovori", "posebniDogovori", 2)}
@@ -8749,12 +8757,12 @@ function CmrFormModal({ db, pocetni, onSpremi, onClose }) {
   );
 }
 
-function CmrTab({ db, update, patchProjekt, showToast, mozeMijenjati }) {
+function CmrTab({ db, update, patchProjekt, showToast, mozeMijenjati, mojId }) {
   const [forma, setForma] = useState(null); // { pocetni }
   const [printCmr, setPrintCmr] = useState(null);
   const [del, setDel] = useState(null);
   const projSifra = (id) => db.projekti.find((p) => p.id === id)?.sifra || "—";
-  const novi = () => ({ id: null, broj: sljedeciBrojCmr(db.cmr, todayISO()), status: CMR_STATUSI[0], statusDatumi: {}, ...cmrPrijedlog(db, null, [], todayISO()) });
+  const novi = () => ({ id: null, broj: sljedeciBrojCmr(db.cmr, todayISO()), status: CMR_STATUSI[0], statusDatumi: {}, ...cmrPrijedlog(db, null, [], todayISO()), izradioId: mojId || "" });
   const spremi = (f, pregled) => {
     if (!f.projektId) { showToast("Odaberi projekt."); return; }
     if (!f.otpremniceIds.length) { showToast("Odaberi barem jednu otpremnicu."); return; }
@@ -8804,7 +8812,7 @@ function CmrTab({ db, update, patchProjekt, showToast, mozeMijenjati }) {
   );
 }
 
-function FakturiranjePage({ db, update, patchProjekt, showToast, mojaPozicija }) {
+function FakturiranjePage({ db, update, patchProjekt, showToast, mojaPozicija, mojId }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "fakturiranje");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "fakture");
   useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "fakture"); }, [dozvKartice, tab]);
@@ -8841,7 +8849,7 @@ function FakturiranjePage({ db, update, patchProjekt, showToast, mojaPozicija })
       </div>
 
       {tab === "otpremnice" && <OtpremniceTab db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeOtpremnice} />}
-      {tab === "cmr" && <CmrTab db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeCmr} />}
+      {tab === "cmr" && <CmrTab db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeCmr} mojId={mojId} />}
       {tab === "podloge" && <PodlogeZaFakturuTab db={db} update={update} showToast={showToast} mozeMijenjati={mozePodloge} />}
 
       {tab === "fakture" && (
