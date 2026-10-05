@@ -2832,6 +2832,7 @@ function PostavkeTvrtkeModal({ postavke, onSave, onClose }) {
     ["naziv", "Naziv tvrtke"], ["djelatnost", "Djelatnost"], ["adresa", "Adresa"], ["telefon", "Telefon"], ["faks", "Faks"], ["email", "E-mail"], ["web", "Web"],
     ["oib", "OIB"], ["mb", "MB"], ["vatId", "VAT-ID"], ["ziroRacun", "Žiro račun"], ["iban", "IBAN"], ["swift", "SWIFT"], ["sud", "Trgovački sud"], ["mbs", "MBS"], ["temeljniKapital", "Temeljni kapital"], ["uprava", "Uprava"], ["pdvStopa", "Stopa PDV-a (%)"],
     ["cmrStatistickiBroj", "CMR: zadana carinska tarifna oznaka (npr. 73089098)"], ["cmrUvjetIsporuke", "CMR: zadani uvjet isporuke (npr. DAP)"],
+    ["abZadnjiBroj", "Potvrda narudžbe: zadnji broj izdan izvan aplikacije (npr. 026-04-AB)"],
   ];
   return (
     <Modal wide title="Postavke tvrtke (podaci za dokumente)" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={() => onSave(form)}>Spremi</Btn></>}>
@@ -2840,6 +2841,7 @@ function PostavkeTvrtkeModal({ postavke, onSave, onClose }) {
           <Field key={key} label={label}><input className="input" value={form[key] || ""} onChange={(e) => setForm({ ...form, [key]: e.target.value })} /></Field>
         ))}
       </div>
+      <Field label="Podružnica (ispisuje se na potvrdi narudžbe, više redaka)"><textarea className="textarea" rows={6} value={form.podruznica || ""} onChange={(e) => setForm({ ...form, podruznica: e.target.value })} /></Field>
     </Modal>
   );
 }
@@ -5311,6 +5313,162 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, patchProjekt, show
   );
 }
 
+/* ============================== POTVRDA NARUDŽBE (AUFTRAGSBESTÄTIGUNG) ============================== */
+// Potvrda se izrađuje iz narudžbe kupca (stavke, količine, cijene) i projekta (mjesto isporuke,
+// kontakt) i sprema na samu narudžbu (narudzba.potvrda) — jedna potvrda po narudžbi, može se
+// ponovno otvoriti, urediti i ispisati. Broj: 0GG-NN-AB (npr. 026-05-AB), redom unutar godine;
+// nastavlja se i na zadnji broj izdan izvan aplikacije (postavke tvrtke → abZadnjiBroj).
+const AB_NAPOMENE_ZADANO = `- Herstellung nach eingereichten Zeichnungen
+- Material: Gemäß den mitgelieferten Zeichnungen und Stückliste
+- Toleranzen lt. Zeichnungen
+- inkl. Feuerverzinkung
+- inkl. Transport. Der Auftraggeber muss die Mittel zum Entladen bereitstellen.
+- Liefertermin: 4 Wochen nach Freigabe der Werkstattzeichnungen
+- Zahlung: 14 Tage nach Lieferung`;
+const AB_BROJ_RE = /^0(\d{2})-(\d+)-AB$/;
+const sljedeciBrojPotvrde = (narudzbe, postavkeTvrtke, datum) => {
+  const gg = (datum || todayISO()).slice(2, 4);
+  const brojevi = [...(narudzbe || []).map((n) => n.potvrda?.broj), postavkeTvrtke?.abZadnjiBroj]
+    .map((b) => AB_BROJ_RE.exec(String(b || "").trim()))
+    .filter((m) => m && m[1] === gg)
+    .map((m) => parseInt(m[2], 10));
+  return `0${gg}-${String((brojevi.length ? Math.max(...brojevi) : 0) + 1).padStart(2, "0")}-AB`;
+};
+
+function PotvrdaNarudzbeModal({ narudzba, projekt, db, update, showToast, mojId, onClose }) {
+  const t = db.postavkeTvrtke || {};
+  const kupac = db.kupci.find((k) => k.id === (narudzba.kupacId || projekt.kupacId));
+  const [form, setForm] = useState(() => ({
+    broj: sljedeciBrojPotvrde(db.narudzbe, t, todayISO()),
+    datum: todayISO(),
+    kontakt: projekt.kontaktOsoba || kupac?.kontaktOsoba || "",
+    titula: "herr",
+    kontakt2: "",
+    bv: String(projekt.mjestoIsporuke || "").split(/\n+/).map((x) => x.trim()).filter(Boolean).join(", "),
+    projektNr: narudzba.broj || "",
+    napomene: AB_NAPOMENE_ZADANO,
+    izradioId: mojId || "",
+    ...(narudzba.potvrda || {}),
+  }));
+  const postavi = (polje, v) => setForm((f) => ({ ...f, [polje]: v }));
+  const izradio = db.zaposlenici.find((z) => z.id === form.izradioId);
+  const stavke = (narudzba.stavke || []).map((st, i) => {
+    const kolicina = Number(String(st.kolicina ?? "").replace(",", ".")) || 0;
+    const cijena = Number(st.cijena) || 0;
+    return { ...st, rb: i + 1, kolicina, cijena, iznos: kolicina * cijena };
+  });
+  const ukupno = stavke.reduce((a, st) => a + st.iznos, 0);
+  const prezime = String(form.kontakt || "").trim().split(/\s+/).pop();
+  const pozdrav = !form.kontakt?.trim() ? "Sehr geehrte Damen und Herren," : form.titula === "frau" ? `Sehr geehrte Frau ${prezime},` : `Sehr geehrter Herr ${prezime},`;
+  const adresaKupca = String(kupac?.adresa || "").split(/\s*\|\s*|\n+/).filter(Boolean);
+  const zaposleni = [...db.zaposlenici].filter((z) => z.status === "Aktivan").sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr"));
+
+  const spremi = () => {
+    const broj = String(form.broj || "").trim();
+    if (!broj) { showToast("Upiši broj potvrde."); return false; }
+    if (db.narudzbe.some((n) => n.id !== narudzba.id && n.potvrda?.broj === broj)) { showToast(`Broj ${broj} je već iskorišten na drugoj potvrdi.`); return false; }
+    update("narudzbe", db.narudzbe.map((n) => (n.id === narudzba.id ? { ...n, potvrda: { ...form, broj } } : n)));
+    showToast(`Potvrda narudžbe ${broj} spremljena.`);
+    return true;
+  };
+  const ispisi = () => { if (spremi()) setTimeout(() => ispisPdf(`Auftragsbestätigung_ ${String(form.broj).trim()}`), 50); };
+
+  return (
+    <Modal wide title={narudzba.potvrda ? `Potvrda narudžbe ${narudzba.potvrda.broj}` : "Nova potvrda narudžbe (Auftragsbestätigung)"} onClose={onClose}
+      footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn icon={Save} onClick={spremi}>Spremi</Btn><Btn variant="primary" icon={Printer} onClick={ispisi}>Spremi i ispiši / PDF</Btn></>}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+        <Field label="Broj potvrde"><input className="input f-mono" value={form.broj} onChange={(e) => postavi("broj", e.target.value)} /></Field>
+        <Field label="Datum"><input className="input" type="date" value={form.datum} onChange={(e) => postavi("datum", e.target.value)} /></Field>
+        <Field label="Potpisuje"><select className="select" value={form.izradioId} onChange={(e) => postavi("izradioId", e.target.value)}><option value="">—</option>{zaposleni.map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}</select></Field>
+        <Field label="Kontakt kupca (z.Hd.)"><input className="input" value={form.kontakt} onChange={(e) => postavi("kontakt", e.target.value)} /></Field>
+        <Field label="Oslovljavanje"><select className="select" value={form.titula} onChange={(e) => postavi("titula", e.target.value)}><option value="herr">Herr</option><option value="frau">Frau</option></select></Field>
+        <Field label="Dodatno „Zu Hd.“ (nije obavezno)"><input className="input" placeholder="npr. Hr. Christian Ludwig" value={form.kontakt2} onChange={(e) => postavi("kontakt2", e.target.value)} /></Field>
+        <Field label="BV (gradilište / mjesto isporuke)"><input className="input" value={form.bv} onChange={(e) => postavi("bv", e.target.value)} /></Field>
+        <Field label="Projekt Nr. kupca"><input className="input f-mono" value={form.projektNr} onChange={(e) => postavi("projektNr", e.target.value)} /></Field>
+        <div />
+      </div>
+      <Field label="Anmerkungen (napomene na potvrdi)"><textarea className="textarea" rows={7} value={form.napomene} onChange={(e) => postavi("napomene", e.target.value)} /></Field>
+      <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 12 }}>Stavke, količine i cijene dolaze iz narudžbe {narudzba.broj} — ako ih treba promijeniti, uredi narudžbu.</div>
+
+      <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif", fontSize: 11 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 24, marginBottom: 18 }}>
+          <div style={{ flex: 1 }}>
+            <img src={logoEcon} alt="Econ" style={{ width: 190, display: "block", marginBottom: 28 }} />
+            <div style={{ fontWeight: 700, fontSize: 15 }}>{kupac?.naziv || "—"}</div>
+            {adresaKupca.map((r, i) => <div key={i} style={{ fontSize: 14 }}>{r}</div>)}
+            {form.kontakt?.trim() && <div style={{ marginTop: 10, fontSize: 11 }}>z.Hd. {form.titula === "frau" ? "Frau" : "Herr"} {form.kontakt}</div>}
+          </div>
+          <div style={{ width: 210, fontSize: 9.5, lineHeight: 1.45 }}>
+            <div style={{ fontSize: 9, color: "#555", marginBottom: 6 }}>{t.djelatnost}</div>
+            <div style={{ fontWeight: 700 }}>{t.naziv}</div>
+            <div>{t.adresa}</div>
+            {t.telefon && <div>Tel. {t.telefon}</div>}
+            {t.faks && <div>Fax {t.faks}</div>}
+            {t.email && <div>{t.email}</div>}
+            {t.podruznica && <div style={{ marginTop: 10, whiteSpace: "pre-line" }}>{t.podruznica}</div>}
+            {t.web && <div style={{ marginTop: 6 }}>{t.web}</div>}
+          </div>
+        </div>
+
+        <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 10 }}>AUFTRAGSBESTÄTIGUNG: <span className="f-mono">{form.broj}</span></div>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 20, marginBottom: 16 }}>
+          <div style={{ lineHeight: 1.6 }}>
+            {form.kontakt2?.trim() && <div style={{ fontWeight: 600 }}>Zu Hd. {form.kontakt2}</div>}
+            {form.bv?.trim() && <div>BV: {form.bv}</div>}
+            {form.projektNr?.trim() && <div>Projekt Nr.: {form.projektNr}</div>}
+          </div>
+          <div style={{ whiteSpace: "nowrap" }}>Datum: {form.datum ? `${form.datum.slice(8, 10)}.${form.datum.slice(5, 7)}.${form.datum.slice(0, 4)}` : "—"}</div>
+        </div>
+
+        <div style={{ marginBottom: 6 }}>{pozdrav}</div>
+        <div style={{ marginBottom: 14 }}>vielen Dank für Ihre Bestellung. Gemäß unserem Angebot erbringen wir folgende Leistungen:</div>
+
+        <table className="doc-table" style={{ marginBottom: 6 }}>
+          <thead><tr><th style={{ width: 38 }}>Pos</th><th>Bezeichnung / Werkstoff / Norm</th><th style={{ width: 80, textAlign: "right" }}>Menge</th><th style={{ width: 100, textAlign: "right" }}>EP</th><th style={{ width: 100, textAlign: "right" }}>GP</th></tr></thead>
+          <tbody>
+            {stavke.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "#777" }}>Narudžba nema stavki.</td></tr>}
+            {stavke.map((st) => (
+              <tr key={st.id || st.rb}>
+                <td>{st.rb}.</td>
+                <td>{st.naziv}</td>
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{st.kolicina.toLocaleString("de-DE")} {st.jm}</td>
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{fmtCurDec(st.cijena)}{st.jm ? `/${st.jm}` : ""}</td>
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{fmtCurDec(st.iznos)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 24, fontWeight: 700, fontSize: 12, marginBottom: 2 }}><span>Gesamtsumme:</span><span style={{ minWidth: 100, textAlign: "right" }}>{fmtCurDec(ukupno)}</span></div>
+        <div style={{ textAlign: "right", fontSize: 9.5, color: "#555", marginBottom: 18 }}>Preisstellung exkl. MwSt.</div>
+
+        {form.napomene?.trim() && (
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>ANMERKUNGEN:</div>
+            <div style={{ whiteSpace: "pre-line", lineHeight: 1.6, paddingLeft: 24 }}>{form.napomene}</div>
+          </div>
+        )}
+
+        <div style={{ marginBottom: 24, lineHeight: 1.5 }}>
+          <div>Mit freundlichen Grüßen</div>
+          <div style={{ marginTop: 10, fontWeight: 700 }}>{t.naziv}</div>
+          {izradio && (
+            <>
+              <div>{izradio.ime} {izradio.prezime}</div>
+              {izradio.telefon && <div style={{ fontSize: 10 }}>Mobil: {izradio.telefon}</div>}
+              {izradio.email && <div style={{ fontSize: 10 }}>e-Mail: {izradio.email}</div>}
+            </>
+          )}
+        </div>
+
+        <div style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
+          <strong>OIB</strong>: {t.oib} | <strong>MB</strong>: {t.mb} | <strong>VAT-ID:</strong> {t.vatId} | <strong>Žiro račun:</strong> {t.ziroRacun}<br />
+          <strong>IBAN:</strong> {t.iban} | <strong>SWIFT:</strong> {t.swift} | Poduzeće je upisano na {t.sud}, <strong>MBS:</strong> {t.mbs} | <strong>Temeljni kapital:</strong> {t.temeljniKapital} | <strong>Uprava:</strong> {t.uprava}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function OtpremnicaPrintModal({ otpremnica, db, onClose }) {
   const t = db.postavkeTvrtke || {};
   const projekt = db.projekti.find((p) => p.id === otpremnica.projektId);
@@ -6289,6 +6447,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
   const [noviZadatakDatum, setNoviZadatakDatum] = useState("");
   const [noviZadatakKome, setNoviZadatakKome] = useState("");
   const [narudzbaModal, setNarudzbaModal] = useState(false);
+  const [potvrdaModal, setPotvrdaModal] = useState(false);
   const [otpremniceModal, setOtpremniceModal] = useState(false);
   const narudzba = db.narudzbe.find((n) => n.projektId === projekt.id);
   const brojOtpremnica = db.otpremnice.filter((o) => o.projektId === projekt.id).length;
@@ -6498,6 +6657,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <Btn variant="ghost" icon={narudzba ? Pencil : Plus} onClick={() => setNarudzbaModal(true)}>{narudzba ? `Narudžba ${narudzba.broj}` : "Narudžba"}</Btn>
+        {narudzba && <Btn variant="ghost" icon={FileText} onClick={() => setPotvrdaModal(true)}>{narudzba.potvrda ? `Potvrda ${narudzba.potvrda.broj}` : "Potvrda narudžbe"}</Btn>}
         <Btn variant="ghost" icon={Truck} onClick={() => setOtpremniceModal(true)}>Otpremnice{brojOtpremnica > 0 ? ` (${brojOtpremnica})` : ""}</Btn>
       </div>
 
@@ -6616,6 +6776,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
     </Modal>
 
     {narudzbaModal && <NarudzbaModal narudzba={narudzba} projekt={projekt} db={db} update={update} showToast={showToast} onClose={() => setNarudzbaModal(false)} />}
+    {potvrdaModal && narudzba && <PotvrdaNarudzbeModal narudzba={narudzba} projekt={projekt} db={db} update={update} showToast={showToast} mojId={mojId} onClose={() => setPotvrdaModal(false)} />}
     {otpremniceModal && <OtpremniceListModal projekt={projekt} narudzba={narudzba} db={db} update={update} patchProjekt={patchProjektAsync} showToast={showToast} onClose={() => setOtpremniceModal(false)} />}
     {normativOtvoren && <NormativiModal db={db} update={update} showToast={showToast} onClose={() => setNormativOtvoren(false)} />}
     {uvozOtvoren && narudzba && <NarudzbaUvozModal narudzba={narudzba} stavkePod={stavkePod} stavkeKomplet={stavkeKomplet} onUvezi={uveziIzNarudzbe} onClose={() => setUvozOtvoren(false)} />}
