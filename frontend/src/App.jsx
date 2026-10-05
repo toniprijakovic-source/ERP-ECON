@@ -831,6 +831,24 @@ const ispisPdf = (naziv) => {
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const daysUntil = (d) => Math.ceil((new Date(d) - new Date(todayISO())) / 86400000);
 const addDays = (d, n) => { const dt = new Date(d); dt.setDate(dt.getDate() + n); return dt.toISOString().slice(0, 10); };
+// Sat poslužitelja: uređaji (npr. računalo na laseru) znaju imati krivo podešen sat ili vremensku
+// zonu, a stvarno vrijeme rezanja računa se iz vremena zapisanih na različitim uređajima (jedan
+// pokrene program, drugi ga gleda ili završi). Zato se mjeri pomak sata ovog uređaja prema
+// poslužitelju i takva se vremena bilježe i računaju prema poslužitelju (sadaMs / sadaISO).
+let pomakSataMs = 0;
+const sadaMs = () => Date.now() + pomakSataMs;
+const sadaISO = () => new Date(sadaMs()).toISOString();
+const uskladiSatSPosluziteljem = async () => {
+  try {
+    const t0 = Date.now();
+    const res = await fetch(`${API_URL}/api/vrijeme`);
+    const t1 = Date.now();
+    if (!res.ok) return;
+    const { sada } = await res.json();
+    const posluzitelj = new Date(sada).getTime();
+    if (!isNaN(posluzitelj)) pomakSataMs = posluzitelj + (t1 - t0) / 2 - t1;
+  } catch { /* bez veze s poslužiteljem — ostaje sat uređaja */ }
+};
 
 const STATUS_TONE = {
   "Nacrt": "muted", "Ponuda": "muted", "Planiran": "muted",
@@ -1682,6 +1700,7 @@ export default function App() {
   };
 
   useEffect(() => { ucitajPodatke(); }, []);
+  useEffect(() => { uskladiSatSPosluziteljem(); const t = setInterval(uskladiSatSPosluziteljem, 10 * 60 * 1000); return () => clearInterval(t); }, []);
 
   // Otpremnice se NE šalju kao cijeli popis (zastarjela kopija je znala obrisati otpremnicu koju je
   // netko drugi upravo izdao, a nova bi dobila isti broj) — šalje se samo razlika po id-u, a
@@ -4349,7 +4368,7 @@ function PlanPostavke({ plan, db, update, showToast, mozeMijenjati }) {
 const REZANJE_STATUSI = ["Na čekanju", "Početak", "Pauzirano", "Završeno"];
 const REZANJE_BOJA = { "Na čekanju": "#F0883E", "Početak": "#3B6EE0", "Pauzirano": "#9AA1A8", "Završeno": "#22A05E" };
 const DAN_KRATICA = ["ned", "pon", "uto", "sri", "čet", "pet", "sub"];
-const STANDARD_MIN_PO_DANU = 8 * 60; // standard 8h radnog vremena
+const STANDARD_MIN_PO_DANU = 7.5 * 60; // standard: jedna smjena = 7,5 h
 
 const fmtMin = (min) => {
   const m = Math.max(0, Math.round(Number(min) || 0));
@@ -4357,7 +4376,7 @@ const fmtMin = (min) => {
 };
 const datumKratica = (iso) => { const d = new Date(iso); return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`; };
 
-// Kapacitet dana u MINUTAMA: standard 8h (480min) radnim danom, 0 vikendom, ili ručna iznimka (uneseno u satima)
+// Kapacitet dana u MINUTAMA: standard jedna smjena 7,5 h (450 min) radnim danom, 0 vikendom, ili ručna iznimka (uneseno u satima, npr. 15 h za dvije smjene)
 const kapacitetZaDanMin = (kapaciteti, stroj, datum) => {
   const override = kapaciteti.find((k) => k.stroj === stroj && k.datum === datum);
   if (override) return Math.round(Number(override.sati) * 60);
@@ -4368,7 +4387,7 @@ const kapacitetZaDanMin = (kapaciteti, stroj, datum) => {
 
 // Preostalo vrijeme programa = planirano − već odrađeno (uključujući segment koji upravo traje).
 // Tako se gantogram sam korigira: program koji je već u tijeku zauzima samo ono što mu još ostaje.
-const preostaloMinPrograma = (p, sada = Date.now()) => {
+const preostaloMinPrograma = (p, sada = sadaMs()) => {
   let odradjeno = Number(p.odradjenoMin) || 0;
   if (p.status === "Početak" && p.segmentPocetak) odradjeno += Math.max(0, Math.round((sada - new Date(p.segmentPocetak).getTime()) / 60000));
   return Math.max(0, (Number(p.trajanjeMin) || 0) - odradjeno);
@@ -4434,7 +4453,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
   const [form, setForm] = useState(emptyForm());
   const prazanRedMaterijala = () => ({ materijalId: "", nacinUnosa: "kolicina", duzinaM: 6, sirinaM: 1.25, komada: 1, kolicina: "" });
   const [noveStavkeMaterijala, setNoveStavkeMaterijala] = useState([]);
-  const [kapForm, setKapForm] = useState({ datum: addDays(todayISO(), 1), sati: 12 });
+  const [kapForm, setKapForm] = useState({ datum: addDays(todayISO(), 1), sati: 15 });
   const [materijalModalId, setMaterijalModalId] = useState(null);
   const [podijeliModalId, setPodijeliModalId] = useState(null);
   // Gantogram računa preostalo vrijeme programa koji je u tijeku, pa se osvježava svake minute.
@@ -4554,7 +4573,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
   // pri prelasku u "Početak" otvara se novo razdoblje. Operater se bilježi iz trenutno
   // odabranog p.operaterId u tom retku (pokrenuoId kad krene, zavrsioId kad završi).
   const postaviStatus = (id, noviStatus) => {
-    const sada = new Date().toISOString();
+    const sada = sadaISO();
     update("programiRezanja", db.programiRezanja.map((p) => {
       if (p.id !== id) return p;
       let odradjenoMin = p.odradjenoMin || 0;
@@ -4577,7 +4596,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
   const podijeliProgram = (programId, unosiPoStavci) => {
     const program = db.programiRezanja.find((p) => p.id === programId);
     if (!program) return;
-    const sada = new Date().toISOString();
+    const sada = sadaISO();
     let konacnoOdradjenoMin = program.odradjenoMin || 0;
     if (program.status === "Početak" && program.segmentPocetak) {
       konacnoOdradjenoMin += Math.max(0, Math.round((new Date(sada) - new Date(program.segmentPocetak)) / 60000));
@@ -4652,8 +4671,15 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
     </div>
   );
 
+  const odstupanjeSataMin = Math.round(pomakSataMs / 60000);
   return (
     <div>
+      {Math.abs(odstupanjeSataMin) >= 5 && (
+        <div className="card" style={{ padding: "10px 14px", marginBottom: 12, borderColor: "#F0C2B5", background: "#FBEAE6", fontSize: 12.5, display: "flex", gap: 8, alignItems: "flex-start" }}>
+          <AlertTriangle size={15} color="var(--rust)" style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>Sat na ovom računalu {odstupanjeSataMin > 0 ? "kasni" : "žuri"} {fmtMin(Math.abs(odstupanjeSataMin))} u odnosu na stvarno vrijeme. Aplikacija zato početak i kraj rezanja bilježi prema vremenu poslužitelja, ali u postavkama računala ispravi datum, vrijeme i vremensku zonu (Zagreb, automatsko vrijeme).</span>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
         <Btn variant={stroj === "laserProfili" ? "primary" : "ghost"} onClick={() => setStroj("laserProfili")}>Laser za profile</Btn>
         <Btn variant={stroj === "laserLimovi" ? "primary" : "ghost"} onClick={() => setStroj("laserLimovi")}>Laser za limove</Btn>
@@ -4663,7 +4689,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12, marginBottom: 16 }}>
         <KpiCard label="Ukupno nezavršenih" value={nezavrseni.length} sub="naloga" />
         <KpiCard label="Ukupno vrijeme" value={fmtMin(ukupnoVrijemeMin)} sub="za rezanje" />
-        <KpiCard label="Potrebno dana" value={potrebnoDana} sub={`(${STANDARD_MIN_PO_DANU / 60}h/dan standard)`} />
+        <KpiCard label="Potrebno dana" value={potrebnoDana} sub={`(${(STANDARD_MIN_PO_DANU / 60).toLocaleString("hr-HR")} h/dan, jedna smjena)`} />
         <KpiCard label="Završeno ukupno" value={zavrseni.length} sub={fmtMin(zavrsenoVrijemeMin)} />
       </div>
       )}
@@ -4704,7 +4730,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
                   <div style={{ textAlign: "center", padding: "6px 2px 1px", fontSize: 11, fontWeight: 600, color: jeVikend ? "var(--rust)" : "var(--ink-soft)" }}>{DAN_KRATICA[dow]}</div>
                   <div style={{ textAlign: "center", fontSize: 10.5, color: "var(--ink-faint)", marginBottom: 4 }}>{datumKratica(datum)}</div>
                   <div className="f-mono" style={{ textAlign: "center", fontSize: 11, fontWeight: 600, padding: "4px 0", borderTop: "1px solid var(--line)", borderBottom: "1px solid var(--line)", color: kapMin === 0 ? "var(--rust)" : "var(--ink)" }}>
-                    {kapMin === 0 ? "✕" : `${(kapMin / 60).toFixed(kapMin % 60 === 0 ? 0 : 1)}h`}
+                    {kapMin === 0 ? "✕" : `${(kapMin / 60).toLocaleString("hr-HR", { maximumFractionDigits: 1 })}h`}
                   </div>
                   <div style={{ minHeight: 90, padding: 4, display: "flex", flexDirection: "column", gap: 3 }}>
                     {(dan?.stavke || []).map((p, i) => (
@@ -4756,13 +4782,13 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
 
           <div className="card" style={{ padding: 14 }}>
             <div className="label" style={{ marginBottom: 8 }}>Radno vrijeme po danu</div>
-            <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 10 }}>Standard je 8h radnim danom, 0h vikendom. Ovdje postavi iznimku (produženo radno vrijeme, druga smjena…) za pojedini datum.</p>
+            <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 10 }}>Standard je jedna smjena od 7,5 h radnim danom, 0 h vikendom. Ovdje postavi iznimku za pojedini datum — npr. 15 h za dvije smjene ili produženo radno vrijeme.</p>
             <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
               <input className="input" type="date" value={kapForm.datum} onChange={(e) => setKapForm({ ...kapForm, datum: e.target.value })} />
               <input className="input f-mono" type="number" min="0" style={{ width: 70 }} value={kapForm.sati} onChange={(e) => setKapForm({ ...kapForm, sati: e.target.value })} />
               <Btn variant="ghost" size="sm" onClick={dodajKapacitet}>Postavi</Btn>
             </div>
-            {kapacitetiZaStroj.length === 0 ? <div style={{ fontSize: 12, color: "var(--ink-faint)" }}>Nema iznimki — koristi se standard (8h / 0h vikendom).</div> : (
+            {kapacitetiZaStroj.length === 0 ? <div style={{ fontSize: 12, color: "var(--ink-faint)" }}>Nema iznimki — koristi se standard (7,5 h / 0 h vikendom).</div> : (
               kapacitetiZaStroj.map((k) => (
                 <div key={k.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "5px 0", borderBottom: "1px solid var(--line)" }}>
                   <span>{fmtDate(k.datum)} — <strong className="f-mono">{k.sati}h</strong></span>
@@ -4784,7 +4810,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
                   {programiZaStroj.map((p) => {
                     const stavke = p.stavkeMaterijala || [];
                     const uTijeku = p.status === "Početak" && p.segmentPocetak;
-                    const odradjenoPrikaz = (p.odradjenoMin || 0) + (uTijeku ? Math.max(0, Math.round((Date.now() - new Date(p.segmentPocetak).getTime()) / 60000)) : 0);
+                    const odradjenoPrikaz = (p.odradjenoMin || 0) + (uTijeku ? Math.max(0, Math.round((sadaMs() - new Date(p.segmentPocetak).getTime()) / 60000)) : 0);
                     return (
                       <tr key={p.id}>
                         <td className="f-mono">{p.brojPrograma}</td>
@@ -4827,7 +4853,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
               </table>
             </div>
           )}
-          <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 8 }}>Stvarno vrijeme se mjeri od trenutka kad je program označen "Početak" do "Završeno" (vrijeme u statusu "Pauzirano" se ne broji). Operater odabran u retku bilježi se kao tko je pokrenuo/završio.</p>
+          <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 8 }}>Stvarno vrijeme se mjeri od trenutka kad je program označen "Početak" do "Završeno" (vrijeme u statusu "Pauzirano" se ne broji), prema satu poslužitelja — ne prema satu računala na kojem se klikne. Operater odabran u retku bilježi se kao tko je pokrenuo/završio.</p>
         </div>
       </div>
 
@@ -4987,7 +5013,7 @@ function PodijeliProgramModal({ program, materijali, programi, onPodijeli, onClo
   const matJm = (id) => materijali.find((x) => x.id === id)?.jm || "";
 
   const uTijeku = program?.status === "Početak" && program?.segmentPocetak;
-  const odradjenoDoSad = (program?.odradjenoMin || 0) + (uTijeku ? Math.max(0, Math.round((Date.now() - new Date(program.segmentPocetak).getTime()) / 60000)) : 0);
+  const odradjenoDoSad = (program?.odradjenoMin || 0) + (uTijeku ? Math.max(0, Math.round((sadaMs() - new Date(program.segmentPocetak).getTime()) / 60000)) : 0);
   const preostaloMin = Math.max(0, (Number(program?.trajanjeMin) || 0) - odradjenoDoSad);
 
   return (

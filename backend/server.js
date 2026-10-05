@@ -335,6 +335,9 @@ app.post("/api/kiosk/scan", async (req, res) => {
 // pravi zahtjev nakon toga čeka 30-50 s, što u gužvi na početku smjene izgleda kao da se
 // prijava "ne registrira").
 app.get("/api/kiosk/ping", (req, res) => res.json({ ok: true }));
+// Vrijeme poslužitelja — preglednik iz njega računa koliko sat uređaja odstupa (npr. računalo na
+// laseru s krivom vremenskom zonom), pa se početak/kraj rezanja bilježi prema poslužitelju.
+app.get("/api/vrijeme", (req, res) => res.json({ sada: new Date().toISOString() }));
 
 // ---------- Ciljana izmjena evidencijaRada (Evidencija rada u glavnoj aplikaciji) ----------
 // Obična PUT /api/data/evidencijaRada šalje CIJELI popis kakav ga je preglednik zadnji put
