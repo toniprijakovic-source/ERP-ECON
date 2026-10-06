@@ -1044,7 +1044,7 @@ const zadnjaCijenaIzNarudzbenice = (materijalId, narudzbenice) => {
   return sve[0]?.cijenaPoJed ?? null;
 };
 
-function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = [], narudzbenice = [], dozvoliKatalog = false }) {
+function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = [], narudzbenice = [], dozvoliKatalog = false, projekti = null }) {
   const addRow = () => setRows([...rows, mode === "materijal" ? { materijalId: "", nacinUnosa: "kolicina", kolicina: 1, duzinaM: 6, sirinaM: 1.25, komada: 1, cijenaPoJed: 0, kvaliteta: "" } : { opis: "", kolicina: 1, jm: "kom", cijenaJed: 0 }]);
   const removeRow = (i) => setRows(rows.filter((_, idx) => idx !== i));
   const update = (i, patch) => setRows(rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
@@ -1157,6 +1157,15 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
                     )}
                   </select>
                 </div>
+                {projekti && (
+                  <div style={{ width: 250 }}>
+                    <label className="label">Za projekt</label>
+                    <select className="select" value={r.projektId || ""} onChange={(e) => update(i, { projektId: e.target.value || null })}>
+                      <option value="">— bez projekta (zaliha) —</option>
+                      {projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
+                    </select>
+                  </div>
+                )}
                 <button className="btn btn-icon btn-ghost" onClick={() => removeRow(i)}><X size={14} /></button>
               </div>
 
@@ -2280,7 +2289,7 @@ export default function App() {
         <div className="erp-sadrzaj" style={{ padding: 24, flex: 1, overflowY: "auto", minWidth: 0 }}>
           {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} patchZadatakNapomena={patchZadatakNapomena} potvrdiObavijesti={potvrdiObavijesti} />}
           {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
-          {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} mojaPozicija={mojaPozicija} />}
+          {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} />}
           {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjekt={dopusteniKljucevi.includes("projekti") ? (id) => { setOtvoriProjektId(id); setPage("projekti"); } : undefined} />}
           {(aktivnaStranica === "projekti" || aktivnaStranica === "ponude") && <ProjektiPage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} patchProjekt={patchProjekt} patchProjekti={patchProjekti} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjektId={otvoriProjektId} ocistiOtvoriProjekt={() => setOtvoriProjektId(null)} />}
           {(aktivnaStranica === "otpremnice" || aktivnaStranica === "fakturiranje") && <FakturiranjePage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} />}
@@ -3494,7 +3503,7 @@ function UpitDetaljModal({ upit, db, update, patchUpiti, showToast, onClose, onO
   );
 }
 
-function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija }) {
+function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "nabava");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "narudzbenice");
   useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "narudzbenice"); }, [dozvKartice, tab]);
@@ -3518,7 +3527,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija }) {
     })
     .sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")), [db.zaposlenici, db.pozicijeZaposlenika]);
 
-  const emptyForm = () => ({ id: null, broj: sljedeciBroj(db.narudzbenice, "broj", "NAR-2026-"), dobavljacId: db.dobavljaci[0]?.id || "", datum: todayISO(), rokIsporuke: todayISO(), status: "Nacrt", napomena: "", stavke: [] });
+  const emptyForm = () => ({ id: null, broj: sljedeciBroj(db.narudzbenice, "broj", "NAR-2026-"), dobavljacId: db.dobavljaci[0]?.id || "", datum: todayISO(), rokIsporuke: todayISO(), status: "Nacrt", napomena: "", izradioId: mojId || "", stavke: [] });
   const [form, setForm] = useState(emptyForm());
 
   const emptyUpit = () => ({ id: null, broj: generirajBrojUpita(db.upitiNabave), datum: todayISO(), izradioId: zaposleniciNabava[0]?.id || "", status: "Priprema", napomena: "", stavke: [] });
@@ -3593,7 +3602,19 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija }) {
   const otvoriPrintNarudzba = (row) => {
     const stavke = row.stavkeUpita && row.stavkeUpita.length
       ? row.stavkeUpita
-      : row.stavke.map((s) => { const m = db.materijali.find((x) => x.id === s.materijalId); return { kolicina: s.kolicina, dimenzijaMM: "", vrstaMaterijala: m?.naziv || "—", kvaliteta: "", normaIsporuke: "", dodatniZahtjevi: "" }; });
+      : row.stavke.map((s) => {
+        // Ručno unesena narudžbenica: materijal je iz skladišta (materijalId) ili još samo iz kataloga
+        // (katalogId, nastaje na skladištu tek kod zaprimanja); "Kom" i dimenzije ovise o načinu unosa.
+        const m = db.materijali.find((x) => x.id === s.materijalId);
+        const kat = (db.katalogProfila || []).find((k) => k.id === s.katalogId);
+        const projekt = db.projekti.find((pr) => pr.id === s.projektId);
+        const mm = (v) => Math.round((Number(v) || 0) * 1000);
+        const zaokruzi = (v) => Math.round((Number(v) || 0) * 100) / 100;
+        const nacin = s.nacinUnosa || "kolicina";
+        const kom = nacin === "kolicina" ? `${zaokruzi(s.kolicina)} ${m?.jm || "kg"}` : zaokruzi(s.komada);
+        const dim = nacin === "duzina" ? String(mm(s.duzinaM)) : nacin === "lim" ? `${mm(s.duzinaM)}×${mm(s.sirinaM)}` : "";
+        return { kolicina: kom, dimenzijaMM: dim, vrstaStavke: "", vrstaMaterijala: m ? m.naziv : kat ? katalogOznakaPuna(kat) : "—", kvaliteta: s.kvaliteta || m?.kvaliteta || "", normaIsporuke: "", dodatniZahtjevi: projekt ? `Za projekt ${projekt.sifra}` : "" };
+      });
     setPrintDoc({ tip: "Narudžba", brojDokumenta: row.broj, datum: row.datum, izradioIme: zaposlenikIme(row.izradioId), dobavljacIme: db.dobavljaci.find((d) => d.id === row.dobavljacId)?.naziv || "", stavke });
   };
 
@@ -3650,9 +3671,17 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija }) {
             <Field label="Datum narudžbe"><input className="input" type="date" value={form.datum} onChange={(e) => setForm({ ...form, datum: e.target.value })} /></Field>
             <Field label="Rok isporuke"><input className="input" type="date" value={form.rokIsporuke} onChange={(e) => setForm({ ...form, rokIsporuke: e.target.value })} /></Field>
           </div>
-          <Field label="Status"><select className="select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{["Nacrt", "Poslano", "Djelomično primljeno", "Primljeno"].map((s) => <option key={s}>{s}</option>)}</select></Field>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Field label="Status"><select className="select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{["Nacrt", "Poslano", "Djelomično primljeno", "Primljeno"].map((s) => <option key={s}>{s}</option>)}</select></Field>
+            <Field label="Izradio (ispisuje se na narudžbi)">
+              <select className="select" value={form.izradioId || ""} onChange={(e) => setForm({ ...form, izradioId: e.target.value })}>
+                <option value="">—</option>
+                {zaposleniciNabava.map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+              </select>
+            </Field>
+          </div>
           <Field label="Stavke narudžbe">
-            <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} dozvoliKatalog />
+            <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} dozvoliKatalog projekti={db.projekti.filter((p) => !["Završen", "Otkazan"].includes(p.status) || form.stavke.some((st) => st.projektId === p.id))} />
           </Field>
           <Field label="Napomena"><textarea className="textarea" rows={2} value={form.napomena} onChange={(e) => setForm({ ...form, napomena: e.target.value })} /></Field>
         </Modal>
