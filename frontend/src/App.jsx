@@ -1,66 +1,3 @@
-  const primi = (row, opcije = {}) => {
-    let materijali = [...db.materijali];
-    let rezervacije = [...(db.rezervacije || [])];
-    const zaNaljepnice = []; // { materijalId, sarza, kopija }
-    const noveStavke = row.stavke.map((s, idx) => {
-      const sarza = String(opcije.sarze?.[idx] ?? s.sarza ?? "").trim();
-      const komadnaStavka = ["duzina", "lim", "komadi"].includes(s.nacinUnosa);
-      const evidentiraj = (materijalId, kolicina) => {
-        if (s.projektId && kolicina > 0) rezervacije.push({ id: uid("rez"), materijalId, projektId: s.projektId, kolicina: zaokruziKolicinu(kolicina), datum: todayISO(), izvor: "narudzbenica", narudzbenicaId: row.id, napomena: `Narudžbenica ${row.broj}` });
-        const kopija = Math.max(0, Math.min(200, Math.round(Number(opcije.naljepnice?.[idx] ?? 0) || 0)));
-        if (kopija > 0) zaNaljepnice.push({ materijalId, sarza, kopija });
-      };
-      if (s.materijalId) {
-        const mat = materijali.find((m) => m.id === s.materijalId);
-        let kolicina = efektivnaKolicinaMaterijala(s, mat);
-        if (mat?.jm === "kom" && komadnaStavka) kolicina = Number(s.komada) || 0; // stanje materijala je u komadima
-        materijali = materijali.map((m) => (m.id === s.materijalId ? { ...m, kolicina: m.kolicina + kolicina } : m));
-        evidentiraj(s.materijalId, kolicina);
-        return { ...s, sarza };
-      }
-      if (!s.katalogId) return { ...s, sarza };
-      const entry = db.katalogProfila.find((k) => k.id === s.katalogId);
-      if (!entry) return { ...s, sarza };
-      const virtualniMat = { kgPoM: entry.jedinica === "kg/m" ? Number(entry.vrijednost) : 0, kgPoM2: entry.jedinica === "kg/m2" ? Number(entry.vrijednost) : 0, kgPoKom: entry.jedinica === "kg/kom" ? Number(entry.vrijednost) : 0 };
-      const kolicinaPrimljeno = efektivnaKolicinaMaterijala(s, virtualniMat);
-      // Šifra = vrsta + broj kataloškog artikla + kvaliteta, pa isti materijal uvijek završi na istoj stavki.
-      const sifra = sifraMaterijala(entry, db.kvaliteteMaterijala, s.kvaliteta);
-      const postojeci = materijali.find((m) => m.sifra === sifra);
-      if (postojeci) {
-        const dodaj = postojeci.jm === "kom" && komadnaStavka ? (Number(s.komada) || 0) : kolicinaPrimljeno;
-        materijali = materijali.map((m) => (m.id === postojeci.id ? { ...m, kolicina: m.kolicina + dodaj, katalogId: m.katalogId || entry.id } : m));
-        evidentiraj(postojeci.id, dodaj);
-        return { ...s, materijalId: postojeci.id, katalogId: "", sarza };
-      }
-      const noviId = uid("mat");
-      materijali = [...materijali, {
-        id: noviId, sifra, katalogId: entry.id, naziv: katalogOznakaPuna(entry), tip: entry.tip,
-        dimenzije: `${entry.vrijednost} ${entry.jedinica}`, jm: "kg",
-        cijena: s.cijenaPoJed != null ? Number(s.cijenaPoJed) : (entry.jedinica === "kg/m2" ? 1.25 : 1.15),
-        kolicina: kolicinaPrimljeno, minZaliha: 0, lokacija: "", kvaliteta: s.kvaliteta || "",
-        kgPoM: entry.jedinica === "kg/m" ? Number(entry.vrijednost) : 0,
-        kgPoM2: entry.jedinica === "kg/m2" ? Number(entry.vrijednost) : 0,
-        kgPoKom: entry.jedinica === "kg/kom" ? Number(entry.vrijednost) : 0,
-      }];
-      evidentiraj(noviId, kolicinaPrimljeno);
-      return { ...s, materijalId: noviId, katalogId: "", sarza };
-    });
-    update("materijali", materijali);
-    if (rezervacije.length !== (db.rezervacije || []).length) update("rezervacije", rezervacije);
-    update("narudzbenice", db.narudzbenice.map((n) => (n.id === row.id ? { ...n, stavke: noveStavke, status: "Primljeno", zaprimljeno: todayISO() } : n)));
-    showToast("Roba zaprimljena, stanje skladišta ažurirano.");
-    if (opcije.ispis && zaNaljepnice.length > 0) {
-      const dobavljac = db.dobavljaci.find((d) => d.id === row.dobavljacId)?.naziv || "";
-      const popis = zaNaljepnice.flatMap((z) => {
-        const mat = materijali.find((m) => m.id === z.materijalId);
-        if (!mat) return [];
-        const podaci = podaciNaljepnice(mat, { ...db, rezervacije }, { sarza: z.sarza, datum: todayISO(), dobavljac, narudzbenica: row.broj });
-        return Array.from({ length: z.kopija }, () => podaci);
-      });
-      ispisiNaljepniceMaterijala(popis, db.postavkeTvrtke?.naziv).catch(() => showToast("Greška pri pripremi naljepnica."));
-    }
-  };
-  const [zaprimanjeZa, setZaprimanjeZa] = useState(null); // narudžbenica čije se zaprimanje potvrđuje
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   LayoutDashboard, Package, Truck, Factory, Building2, Receipt, Users,
@@ -3903,32 +3840,43 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId }) 
   // nastaje na skladištu, i to odmah sa stvarno primljenom količinom (ne s 0). Prije stvaranja
   // provjerava se postoji li već isti materijal (ista šifra izvedena iz kataloške oznake + ista
   // kvaliteta) — ako da, samo mu se poveća količina umjesto da se otvori nova šifra.
-  const primi = (row) => {
+  const primi = (row, opcije = {}) => {
     let materijali = [...db.materijali];
-    let stavkePromijenjene = false;
-    const noveStavke = row.stavke.map((s) => {
+    let rezervacije = [...(db.rezervacije || [])];
+    const zaNaljepnice = []; // { materijalId, sarza, kopija }
+    const noveStavke = row.stavke.map((s, idx) => {
+      const sarza = String(opcije.sarze?.[idx] ?? s.sarza ?? "").trim();
+      const komadnaStavka = ["duzina", "lim", "komadi"].includes(s.nacinUnosa);
+      const evidentiraj = (materijalId, kolicina) => {
+        if (s.projektId && kolicina > 0) rezervacije.push({ id: uid("rez"), materijalId, projektId: s.projektId, kolicina: zaokruziKolicinu(kolicina), datum: todayISO(), izvor: "narudzbenica", narudzbenicaId: row.id, napomena: `Narudžbenica ${row.broj}` });
+        const kopija = Math.max(0, Math.min(200, Math.round(Number(opcije.naljepnice?.[idx] ?? 0) || 0)));
+        if (kopija > 0) zaNaljepnice.push({ materijalId, sarza, kopija });
+      };
       if (s.materijalId) {
         const mat = materijali.find((m) => m.id === s.materijalId);
-        const kolicina = efektivnaKolicinaMaterijala(s, mat);
+        let kolicina = efektivnaKolicinaMaterijala(s, mat);
+        if (mat?.jm === "kom" && komadnaStavka) kolicina = Number(s.komada) || 0; // stanje materijala je u komadima
         materijali = materijali.map((m) => (m.id === s.materijalId ? { ...m, kolicina: m.kolicina + kolicina } : m));
-        return s;
+        evidentiraj(s.materijalId, kolicina);
+        return { ...s, sarza };
       }
-      if (!s.katalogId) return s;
+      if (!s.katalogId) return { ...s, sarza };
       const entry = db.katalogProfila.find((k) => k.id === s.katalogId);
-      if (!entry) return s;
+      if (!entry) return { ...s, sarza };
       const virtualniMat = { kgPoM: entry.jedinica === "kg/m" ? Number(entry.vrijednost) : 0, kgPoM2: entry.jedinica === "kg/m2" ? Number(entry.vrijednost) : 0, kgPoKom: entry.jedinica === "kg/kom" ? Number(entry.vrijednost) : 0 };
       const kolicinaPrimljeno = efektivnaKolicinaMaterijala(s, virtualniMat);
-      const sifra = sifraIzKataloga(entry);
-      const trazenaKvaliteta = (s.kvaliteta || "").trim().toLowerCase();
-      const postojeci = materijali.find((m) => m.sifra === sifra && (m.kvaliteta || "").trim().toLowerCase() === trazenaKvaliteta);
-      stavkePromijenjene = true;
+      // Šifra = vrsta + broj kataloškog artikla + kvaliteta, pa isti materijal uvijek završi na istoj stavki.
+      const sifra = sifraMaterijala(entry, db.kvaliteteMaterijala, s.kvaliteta);
+      const postojeci = materijali.find((m) => m.sifra === sifra);
       if (postojeci) {
-        materijali = materijali.map((m) => (m.id === postojeci.id ? { ...m, kolicina: m.kolicina + kolicinaPrimljeno } : m));
-        return { ...s, materijalId: postojeci.id, katalogId: "" };
+        const dodaj = postojeci.jm === "kom" && komadnaStavka ? (Number(s.komada) || 0) : kolicinaPrimljeno;
+        materijali = materijali.map((m) => (m.id === postojeci.id ? { ...m, kolicina: m.kolicina + dodaj, katalogId: m.katalogId || entry.id } : m));
+        evidentiraj(postojeci.id, dodaj);
+        return { ...s, materijalId: postojeci.id, katalogId: "", sarza };
       }
       const noviId = uid("mat");
       materijali = [...materijali, {
-        id: noviId, sifra, naziv: katalogOznakaPuna(entry), tip: entry.tip,
+        id: noviId, sifra, katalogId: entry.id, naziv: katalogOznakaPuna(entry), tip: entry.tip,
         dimenzije: `${entry.vrijednost} ${entry.jedinica}`, jm: "kg",
         cijena: s.cijenaPoJed != null ? Number(s.cijenaPoJed) : (entry.jedinica === "kg/m2" ? 1.25 : 1.15),
         kolicina: kolicinaPrimljeno, minZaliha: 0, lokacija: "", kvaliteta: s.kvaliteta || "",
@@ -3936,12 +3884,25 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId }) 
         kgPoM2: entry.jedinica === "kg/m2" ? Number(entry.vrijednost) : 0,
         kgPoKom: entry.jedinica === "kg/kom" ? Number(entry.vrijednost) : 0,
       }];
-      return { ...s, materijalId: noviId, katalogId: "" };
+      evidentiraj(noviId, kolicinaPrimljeno);
+      return { ...s, materijalId: noviId, katalogId: "", sarza };
     });
     update("materijali", materijali);
-    update("narudzbenice", db.narudzbenice.map((n) => (n.id === row.id ? { ...n, stavke: stavkePromijenjene ? noveStavke : n.stavke, status: "Primljeno" } : n)));
+    if (rezervacije.length !== (db.rezervacije || []).length) update("rezervacije", rezervacije);
+    update("narudzbenice", db.narudzbenice.map((n) => (n.id === row.id ? { ...n, stavke: noveStavke, status: "Primljeno", zaprimljeno: todayISO() } : n)));
     showToast("Roba zaprimljena, stanje skladišta ažurirano.");
+    if (opcije.ispis && zaNaljepnice.length > 0) {
+      const dobavljac = db.dobavljaci.find((d) => d.id === row.dobavljacId)?.naziv || "";
+      const popis = zaNaljepnice.flatMap((z) => {
+        const mat = materijali.find((m) => m.id === z.materijalId);
+        if (!mat) return [];
+        const podaci = podaciNaljepnice(mat, { ...db, rezervacije }, { sarza: z.sarza, datum: todayISO(), dobavljac, narudzbenica: row.broj });
+        return Array.from({ length: z.kopija }, () => podaci);
+      });
+      ispisiNaljepniceMaterijala(popis, db.postavkeTvrtke?.naziv).catch(() => showToast("Greška pri pripremi naljepnica."));
+    }
   };
+  const [zaprimanjeZa, setZaprimanjeZa] = useState(null); // narudžbenica čije se zaprimanje potvrđuje
   const dobNaziv = (id) => db.dobavljaci.find((d) => d.id === id)?.naziv || "—";
   const zaposlenikIme = (id) => { const z = db.zaposlenici.find((zz) => zz.id === id); return z ? `${z.ime} ${z.prezime}` : "—"; };
   const iznos = (row) => row.stavke.reduce((s, st) => { const m = db.materijali.find((x) => x.id === st.materijalId); const cijena = st.cijenaPoJed != null ? Number(st.cijenaPoJed) : (m ? m.cijena : 0); return s + cijena * efektivnaKolicinaMaterijala(st, m); }, 0);
