@@ -1062,6 +1062,14 @@ const Field = ({ label, children }) => (
   </div>
 );
 
+// Brisanje stavke jednim klikom na ikonu traži potvrdu u prozoru. Pozivi: potvrdiBrisanje(() => obrisi(id)).
+// Prozor prikazuje App (potvrdaBrisanjaHost); ako ga nema (nikad u radu), koristi se obični confirm.
+let potvrdaBrisanjaHost = null;
+const potvrdiBrisanje = (akcija, naziv = "ovu stavku") => {
+  if (potvrdaBrisanjaHost) potvrdaBrisanjaHost({ akcija, naziv });
+  else if (window.confirm(`Obrisati ${naziv}?`)) akcija();
+};
+
 const ConfirmDelete = ({ label, onConfirm, onCancel }) => (
   <Modal title="Potvrda brisanja" onClose={onCancel} footer={
     <>
@@ -1213,7 +1221,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
                     </select>
                   </div>
                 )}
-                <button className="btn btn-icon btn-ghost" onClick={() => removeRow(i)}><X size={14} /></button>
+                <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => removeRow(i))}><X size={14} /></button>
               </div>
 
               <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginTop: 8, flexWrap: "wrap" }}>
@@ -1313,7 +1321,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
               <td><input className="input" value={r.jm} onChange={(e) => update(i, { jm: e.target.value })} /></td>
               <td><input className="input f-mono" type="number" min="0" step="0.01" value={r.cijenaJed} onChange={(e) => update(i, { cijenaJed: e.target.value })} /></td>
               <td className="f-mono">{fmtCurDec(lineTotal(r))}</td>
-              <td><button className="btn btn-icon btn-ghost" onClick={() => removeRow(i)}><X size={14} /></button></td>
+              <td><button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => removeRow(i))}><X size={14} /></button></td>
             </tr>
           ))}
         </tbody>
@@ -1975,6 +1983,8 @@ export default function App() {
   // čim je sigurno: nije otvoren nijedan prozor (obrazac) i nitko ništa nije radio 10 minuta.
   const [novaVerzija, setNovaVerzija] = useState(false);
   const [izbornikOtvoren, setIzbornikOtvoren] = useState(false); // izbornik modula na mobitelu (☰)
+  const [cekaBrisanje, setCekaBrisanje] = useState(null); // { akcija, naziv } — brisanje koje čeka potvrdu
+  useEffect(() => { potvrdaBrisanjaHost = setCekaBrisanje; return () => { potvrdaBrisanjaHost = null; }; }, []);
   useEffect(() => {
     if (!prijavljenId || potrebnaPrijava) return undefined;
     const trenutna = Array.from(document.scripts).map((sk) => sk.src).find((src) => /\/assets\/index-[^/]+\.js/.test(src));
@@ -2346,6 +2356,7 @@ export default function App() {
 
       </div>
 
+      {cekaBrisanje && <ConfirmDelete label={cekaBrisanje.naziv} onCancel={() => setCekaBrisanje(null)} onConfirm={() => { const akcija = cekaBrisanje.akcija; setCekaBrisanje(null); akcija(); }} />}
       {backupOpen && <BackupModal db={db} update={update} showToast={showToast} onClose={() => setBackupOpen(false)} />}
 
       {toast && (
@@ -3062,7 +3073,7 @@ function IzdatnicaModal({ db, update, showToast, initialMaterijalId, onClose, on
                   <input className="input f-mono" type="number" min="0" max={mat?.kolicina ?? undefined} step="0.01" value={s.kolicina} onChange={(e) => azurirajStavku(i, { kolicina: e.target.value })} />
                   {mat && <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 2 }}>Na stanju: {mat.kolicina} {mat.jm}</div>}
                 </td>
-                <td>{stavke.length > 1 && <button className="btn btn-icon btn-ghost" onClick={() => obrisiStavku(i)}><X size={14} /></button>}</td>
+                <td>{stavke.length > 1 && <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => obrisiStavku(i))}><X size={14} /></button>}</td>
               </tr>
             );
           })}
@@ -3337,7 +3348,7 @@ function UpitStavkeEditor({ stavke, setStavke, katalogProfila, upitiNabave, kval
               <td><KvalitetaOznakaSelect kvalitete={kvalitete} value={s.kvaliteta} onChange={(v) => update(i, { kvaliteta: v })} /></td>
               <td><input className="input" value={s.normaIsporuke} onChange={(e) => update(i, { normaIsporuke: e.target.value })} /></td>
               <td><input className="input" value={s.dodatniZahtjevi} onChange={(e) => update(i, { dodatniZahtjevi: e.target.value })} /></td>
-              <td><button className="btn btn-icon btn-ghost" onClick={() => removeRow(i)}><X size={14} /></button></td>
+              <td><button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => removeRow(i))}><X size={14} /></button></td>
             </tr>
             );
           })}
@@ -3535,7 +3546,7 @@ function UpitDetaljModal({ upit, db, update, patchUpiti, showToast, onClose, onO
                     <td><input className="input f-mono" type="number" min="0" step="0.01" title="Dodatak za ovu stavku (npr. transport, pakiranje)" disabled={!!s.narudzbenicaId} value={p.dodatak ?? 0} onChange={(e) => azurirajPonudu(s.id, p.id, { dodatak: e.target.value })} /></td>
                     <td className="f-mono" style={{ fontWeight: najjeftinija ? 700 : 400, color: najjeftinija ? "var(--green)" : undefined }}>{ukupno != null ? fmtCurDec(ukupno) : "—"}</td>
                     <td><input className="input" disabled={!!s.narudzbenicaId} value={p.napomena} onChange={(e) => azurirajPonudu(s.id, p.id, { napomena: e.target.value })} /></td>
-                    <td>{!s.narudzbenicaId && <button className="btn btn-icon btn-ghost" onClick={() => obrisiPonudu(s.id, p.id)}><X size={13} /></button>}</td>
+                    <td>{!s.narudzbenicaId && <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => obrisiPonudu(s.id, p.id))}><X size={13} /></button>}</td>
                   </tr>
                   );
                 })}
@@ -5321,7 +5332,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
               kapacitetiZaStroj.map((k) => (
                 <div key={k.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "5px 0", borderBottom: "1px solid var(--line)" }}>
                   <span>{fmtDate(k.datum)} — <strong className="f-mono">{k.sati}h</strong></span>
-                  <button className="btn btn-icon btn-ghost" onClick={() => obrisiKapacitet(k.id)}><X size={13} /></button>
+                  <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => obrisiKapacitet(k.id))}><X size={13} /></button>
                 </div>
               ))
             )}
@@ -5371,7 +5382,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
                           <div style={{ display: "flex", gap: 2 }}>
                             <button className="btn btn-icon btn-ghost" onClick={() => pomakni(p.id, -1)}><ChevronUp size={13} /></button>
                             <button className="btn btn-icon btn-ghost" onClick={() => pomakni(p.id, 1)}><ChevronDown size={13} /></button>
-                            <button className="btn btn-icon btn-ghost" onClick={() => obrisiProgram(p.id)}><Trash2 size={13} color="var(--rust)" /></button>
+                            <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => obrisiProgram(p.id))}><Trash2 size={13} color="var(--rust)" /></button>
                           </div>
                         </td>
                         )}
@@ -5436,7 +5447,7 @@ function PlanMaterijalRedak({ row, materijali, onChange, onRemove }) {
             {materijali.map((m) => <option key={m.id} value={m.id}>{m.sifra} — {m.naziv} ({m.kolicina} {m.jm})</option>)}
           </select>
         </div>
-        {onRemove && <button className="btn btn-icon btn-ghost" onClick={onRemove}><X size={14} /></button>}
+        {onRemove && <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(onRemove)}><X size={14} /></button>}
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginTop: 8, flexWrap: "wrap" }}>
         <div style={{ width: 155 }}>
@@ -5510,7 +5521,7 @@ function MaterijalProgramaModal({ program, materijali, materijaliZaOdabir, radni
                 )}
               </td>
               <td className="f-mono">{s.finalizirano ? fmtCurDec((Number(s.stvarnoKolicina) || 0) * matCijena(s.materijalId)) : "—"}</td>
-              <td>{!s.finalizirano && <button className="btn btn-icon btn-ghost" onClick={() => onObrisi(s.id)}><X size={14} /></button>}</td>
+              <td>{!s.finalizirano && <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => onObrisi(s.id))}><X size={14} /></button>}</td>
             </tr>
           ))}
           {stavke.some((s) => s.finalizirano) && (
@@ -5655,7 +5666,7 @@ function NarudzbaModal({ narudzba, projekt, db, update, showToast, onClose }) {
                   </div>
                   {izMase && <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 2 }}>= {fmtCurDec(s.cijena)} / kom</div>}
                 </td>
-                <td><button className="btn btn-icon btn-ghost" onClick={() => obrisiStavku(i)}><Trash2 size={14} color="var(--rust)" /></button></td>
+                <td><button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => obrisiStavku(i))}><Trash2 size={14} color="var(--rust)" /></button></td>
               </tr>
             );
           })}
@@ -6384,7 +6395,7 @@ function StavkaPozicijeRedak({ stavka: s, katalog, grupe, kvalitete, onAzuriraj,
         <label className="label">Trošak</label>
         <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{fmtCurDec(masaJedEfektivna * (Number(s.komada) || 1) * (Number(s.cijenaKg) || 0))}</div>
       </div>
-      <button className="btn btn-icon btn-ghost" onClick={onObrisi}><Trash2 size={14} color="var(--rust)" /></button>
+      <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(onObrisi)}><Trash2 size={14} color="var(--rust)" /></button>
     </div>
   );
 }
@@ -6478,7 +6489,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
               <div style={{ flex: "2 1 220px" }}><label className="label">Naziv stavke</label><input className="input" placeholder="npr. Glavni nosači rešetke" value={p.naziv} onChange={(e) => updatePoz(p.id, { naziv: e.target.value })} /></div>
               <div style={{ width: 90 }}><label className="label">Količina</label><input className="input f-mono" type="number" min="0" value={p.kolicina} onChange={(e) => updatePoz(p.id, { kolicina: e.target.value })} /></div>
               <button className="btn btn-icon btn-ghost" onClick={() => toggle(p.id)} title="Prikaži/sakrij sate po operaciji">{otvorene[p.id] ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button>
-              <button className="btn btn-icon btn-ghost" onClick={() => removePoz(p.id)}><Trash2 size={14} color="var(--rust)" /></button>
+              <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => removePoz(p.id))}><Trash2 size={14} color="var(--rust)" /></button>
             </div>
 
             <div style={{ marginTop: 10, paddingTop: 6, borderTop: "1px dashed var(--line-strong)" }}>
@@ -6533,7 +6544,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
                       <label className="label">Iznos</label>
                       <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{fmtCurDec(iznos)}</div>
                     </div>
-                    <button className="btn btn-icon btn-ghost" onClick={() => removeAkz(p.id, a.id)}><Trash2 size={14} color="var(--rust)" /></button>
+                    <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => removeAkz(p.id, a.id))}><Trash2 size={14} color="var(--rust)" /></button>
                   </div>
                 );
               })}
@@ -6733,7 +6744,7 @@ function StandardniZadaciModal({ standardniZadaci, update, showToast, onClose })
         {standardniZadaci.map((t) => (
           <div key={t.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid var(--line)" }}>
             <span style={{ fontSize: 13.5 }}>{t.naziv}</span>
-            <button className="btn btn-icon btn-ghost" onClick={() => obrisi(t.id)}><Trash2 size={14} color="var(--rust)" /></button>
+            <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => obrisi(t.id))}><Trash2 size={14} color="var(--rust)" /></button>
           </div>
         ))}
       </div>
@@ -6827,7 +6838,7 @@ function StavkeNormativaTablica({ naslov, rezultat, rasporedjeno, onDodaj, onAzu
                 <td className="f-mono">{fmtCur(r.vrijednost)}</td>
                 <td className="f-mono">{r.sati.toFixed(1)} h</td>
                 <td className="f-mono" style={{ color: rasp === kom ? "var(--green)" : "var(--rust)" }}>{rasp}/{kom}</td>
-                <td><button className="btn btn-icon btn-ghost" onClick={() => onObrisi(r.stavka.id)}><Trash2 size={14} /></button></td>
+                <td><button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => onObrisi(r.stavka.id))}><Trash2 size={14} /></button></td>
               </tr>
             );
           })}
@@ -6920,7 +6931,7 @@ function VanjskiTroskoviModal({ projekt, dobavljaci, patchProjekt, onClose }) {
     patchProjekt({ vanjskiTroskovi: [...troskovi, { id: uid("vt"), datum: novi.datum, dobavljacId: novi.dobavljacId || null, opis: novi.opis.trim(), iznos }] });
     setNovi(prazno());
   };
-  const obrisi = (id) => { if (window.confirm("Obrisati ovaj trošak?")) patchProjekt({ vanjskiTroskovi: troskovi.filter((t) => t.id !== id) }); };
+  const obrisi = (id) => patchProjekt({ vanjskiTroskovi: troskovi.filter((t) => t.id !== id) });
   const ukupno = troskovi.reduce((s, t) => s + (Number(t.iznos) || 0), 0);
   return (
     <Modal wide title={`Vanjski troškovi — ${projekt.sifra}`} onClose={onClose} footer={<Btn onClick={onClose}>Zatvori</Btn>}>
@@ -6935,7 +6946,7 @@ function VanjskiTroskoviModal({ projekt, dobavljaci, patchProjekt, onClose }) {
                 <td>{nazivDobavljaca(t.dobavljacId) || <span style={{ color: "var(--ink-faint)" }}>—</span>}</td>
                 <td>{t.opis}</td>
                 <td className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(t.iznos)}</td>
-                <td><button className="btn btn-icon btn-ghost" aria-label="Obriši trošak" onClick={() => obrisi(t.id)}><Trash2 size={14} color="var(--rust)" /></button></td>
+                <td><button className="btn btn-icon btn-ghost" aria-label="Obriši trošak" onClick={() => potvrdiBrisanje(() => obrisi(t.id))}><Trash2 size={14} color="var(--rust)" /></button></td>
               </tr>
             ))}
             <tr><td colSpan={3} style={{ fontWeight: 700 }}>Ukupno</td><td className="f-mono" style={{ textAlign: "right", fontWeight: 700 }}>{fmtCurDec(ukupno)}</td><td /></tr>
@@ -7197,7 +7208,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
                       <td><input className="input" type="date" disabled={!!i.uOtpremniciId} value={i.datum || ""} onChange={(e) => azurirajIsporuku(i.id, { datum: e.target.value })} /></td>
                       <td><input type="checkbox" checked={!!i.isporuceno} disabled={!!i.uOtpremniciId} title={i.uOtpremniciId ? `Uključeno u otpremnicu ${db.otpremnice.find((o) => o.id === i.uOtpremniciId)?.broj || ""}` : ""} onChange={(e) => azurirajIsporuku(i.id, { isporuceno: e.target.checked })} /></td>
                       <td style={{ fontSize: 11 }}>{i.uOtpremniciId ? <span style={{ color: "var(--ink-soft)" }}>U otpremnici {db.otpremnice.find((o) => o.id === i.uOtpremniciId)?.broj || ""}</span> : kasni ? <span style={{ color: "var(--rust)", fontWeight: 600 }}>Kasni</span> : null}</td>
-                      <td><button className="btn btn-icon btn-ghost" disabled={!!i.uOtpremniciId} onClick={() => obrisiIsporuku(i.id)}><Trash2 size={14} color={i.uOtpremniciId ? "var(--ink-faint)" : "var(--rust)"} /></button></td>
+                      <td><button className="btn btn-icon btn-ghost" disabled={!!i.uOtpremniciId} onClick={() => potvrdiBrisanje(() => obrisiIsporuku(i.id))}><Trash2 size={14} color={i.uOtpremniciId ? "var(--ink-faint)" : "var(--rust)"} /></button></td>
                     </tr>
                   );
                 })}
@@ -7235,7 +7246,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
                   <input type="checkbox" checked={z.izvrseno} onChange={(e) => toggleZadatak(z.id, e.target.checked)} style={{ width: 15, height: 15, flexShrink: 0 }} />
                   <span style={{ flex: 1, fontSize: 13.5, textDecoration: z.izvrseno ? "line-through" : "none", color: z.izvrseno ? "var(--ink-faint)" : "var(--ink)" }}>{z.naziv}</span>
                   {zakasnio && <Badge status="Kasni" />}
-                  <button className="btn btn-icon btn-ghost" onClick={() => obrisiZadatak(z.id)}><X size={14} /></button>
+                  <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => obrisiZadatak(z.id))}><X size={14} /></button>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, marginLeft: 25, flexWrap: "wrap" }}>
                   <label style={{ fontSize: 11, color: "var(--ink-faint)" }}>Dodijeljeno:</label>
@@ -7566,7 +7577,7 @@ function FormatLaseraRedak({ format: f, tipLasera, kvalitete, onAzuriraj, onObri
         <label className="label">Masa</label>
         <div className="f-mono" style={{ fontWeight: 600, fontSize: 13 }}>{(f.masaKg || 0).toFixed(1)} kg</div>
       </div>
-      {!jedini && <button className="btn btn-icon btn-ghost" onClick={onObrisi}><X size={14} /></button>}
+      {!jedini && <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(onObrisi)}><X size={14} /></button>}
     </div>
   );
 }
@@ -7595,7 +7606,7 @@ function LaserStavkaRedak({ stavka: s, kvalitete, onAzuriraj, onObrisi }) {
             <option value="cijevni">Cijevni (profili)</option>
           </select>
         </div>
-        <button className="btn btn-icon btn-ghost" onClick={onObrisi}><X size={14} /></button>
+        <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(onObrisi)}><X size={14} /></button>
       </div>
 
       <div style={{ marginTop: 8 }}>
@@ -9178,7 +9189,7 @@ function OtpremnicaKooperantuModal({ db, update, showToast, onClose }) {
               <td><input className="input" value={s.naziv} onChange={(e) => azurirajStavku(i, { naziv: e.target.value })} placeholder="npr. Profili za plastifikaciju" /></td>
               <td><input className="input" value={s.jm} onChange={(e) => azurirajStavku(i, { jm: e.target.value })} /></td>
               <td><input className="input f-mono" type="number" min="0" value={s.kolicina} onChange={(e) => azurirajStavku(i, { kolicina: e.target.value })} /></td>
-              <td><button className="btn btn-icon btn-ghost" onClick={() => setStavke(stavke.filter((_, idx) => idx !== i))}><X size={14} /></button></td>
+              <td><button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => setStavke(stavke.filter((_, idx) => idx !== i)))}><X size={14} /></button></td>
             </tr>
           ))}
         </tbody>
@@ -10215,7 +10226,7 @@ function PostavkePlacaModal({ db, update, showToast, onClose }) {
               <input className="input f-mono" type="number" step="1" min="0" value={s.dodatakPostotak} onChange={(e) => setForm({ ...form, smjene: form.smjene.map((x, j) => (j === i ? { ...x, dodatakPostotak: Number(e.target.value) || 0 } : x)) })} />
               <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>% dodatka</span>
             </div>
-            <button className="btn btn-icon btn-ghost" onClick={() => setForm({ ...form, smjene: form.smjene.filter((_, j) => j !== i) })}><Trash2 size={13} /></button>
+            <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => setForm({ ...form, smjene: form.smjene.filter((_, j) => j !== i) }))}><Trash2 size={13} /></button>
           </div>
         ))}
         <Btn variant="ghost" size="sm" icon={Plus} onClick={() => setForm({ ...form, smjene: [...(form.smjene || []), { kljuc: uid("smj"), naziv: "Nova smjena", pocetak: "22:00", dodatakPostotak: 0 }] })}>Dodaj smjenu</Btn>
@@ -10227,7 +10238,7 @@ function PostavkePlacaModal({ db, update, showToast, onClose }) {
           <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, fontSize: 12.5 }}>
             <span className="f-mono" style={{ width: 90 }}>{fmtDate(p.datum)}</span>
             <span style={{ flex: 1 }}>{p.naziv}</span>
-            <button className="btn btn-icon btn-ghost" onClick={() => setPraznici(praznici.filter((x) => x.id !== p.id))}><Trash2 size={13} /></button>
+            <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => setPraznici(praznici.filter((x) => x.id !== p.id)))}><Trash2 size={13} /></button>
           </div>
         ))}
       </div>
@@ -11535,7 +11546,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
                     </select>
                   </td>
                   <td><input className="input f-mono" type="number" min="0" step="0.5" value={r.sati} onChange={(e) => azurirajRedak(i, { sati: e.target.value })} /></td>
-                  <td><button className="btn btn-icon btn-ghost" onClick={() => obrisiRedak(i)}><Trash2 size={14} /></button></td>
+                  <td><button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => obrisiRedak(i))}><Trash2 size={14} /></button></td>
                 </tr>
               ))}
             </tbody>
