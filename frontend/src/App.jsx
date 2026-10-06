@@ -53,6 +53,7 @@ const izracunFakture = (faktura, pdvStopa) => {
 const efektivnaKolicinaMaterijala = (st, mat) => {
   if (st?.nacinUnosa === "duzina" && mat?.kgPoM > 0) return (Number(st.duzinaM) || 0) * (Number(st.komada) || 0) * Number(mat.kgPoM);
   if (st?.nacinUnosa === "lim" && mat?.kgPoM2 > 0) return (Number(st.duzinaM) || 0) * (Number(st.sirinaM) || 0) * (Number(st.komada) || 0) * Number(mat.kgPoM2);
+  if (st?.nacinUnosa === "komadi" && mat?.kgPoKom > 0) return (Number(st.komada) || 0) * Number(mat.kgPoKom);
   return Number(st?.kolicina) || 0;
 };
 
@@ -165,6 +166,8 @@ const izracunPotrebnogMaterijala = (pozicije, katalog, otpadLimPoTipu = {}) => {
         const povrsinaJed = ((Number(s.sirinaMM) || 0) * (Number(s.duzinaMM) || 0)) / 1e6;
         if (!limoviPoTipu.has(entry.id)) limoviPoTipu.set(entry.id, { oznaka: entry.oznaka, povrsinaM2: 0, kgPoM2: Number(entry.vrijednost) || 0 });
         limoviPoTipu.get(entry.id).povrsinaM2 += povrsinaJed * ukupnoKomada;
+      } else if (entry.jedinica === "kg/kom") {
+        return; // komadni artikl se kupuje u komadima — ne ulazi u optimizaciju šipki
       } else {
         const duljinaM = Number(s.dimenzija) || 0;
         if (duljinaM <= 0) return;
@@ -1059,6 +1062,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
         cijena: k.jedinica === "kg/m2" ? 1.25 : 1.15,
         kgPoM: k.jedinica === "kg/m" ? Number(k.vrijednost) : 0,
         kgPoM2: k.jedinica === "kg/m2" ? Number(k.vrijednost) : 0,
+        kgPoKom: k.jedinica === "kg/kom" ? Number(k.vrijednost) : 0,
       };
     }
     return null;
@@ -1086,6 +1090,10 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
         const mat = resolvMat(merged);
         const kgPoM = mat?.kgPoM > 0 ? Number(mat.kgPoM) : 0;
         if (kgPoM > 0) merged.kolicina = (Number(merged.duzinaM) || 0) * (Number(merged.komada) || 0) * kgPoM;
+      } else if (merged.nacinUnosa === "komadi") {
+        const mat = resolvMat(merged);
+        const kgPoKom = mat?.kgPoKom > 0 ? Number(mat.kgPoKom) : 0;
+        if (kgPoKom > 0) merged.kolicina = (Number(merged.komada) || 0) * kgPoKom;
       } else if (merged.nacinUnosa === "lim") {
         const mat = resolvMat(merged);
         const kgPoM2 = mat?.kgPoM2 > 0 ? Number(mat.kgPoM2) : 0;
@@ -1110,14 +1118,15 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
       if (entry) {
         const jeDuzina = entry.jedinica === "kg/m";
         const jeLim = entry.jedinica === "kg/m2";
-        const nacin = jeDuzina ? "duzina" : jeLim ? "lim" : "kolicina";
+        const jeKomadni = entry.jedinica === "kg/kom";
+        const nacin = jeDuzina ? "duzina" : jeLim ? "lim" : jeKomadni ? "komadi" : "kolicina";
         azurirajRedak(i, { materijalId: "", katalogId: katId, nacinUnosa: nacin, duzinaM: duzinaDef, sirinaM: sirinaDef, komada: komadaDef, cijenaPoJed: jeLim ? 1.25 : 1.15 });
       }
     } else {
       const mat = materijali.find((m) => m.id === val);
       const jeDuzina = mat?.kgPoM > 0;
       const jeLim = mat?.kgPoM2 > 0;
-      const nacin = jeDuzina ? "duzina" : jeLim ? "lim" : "kolicina";
+      const nacin = jeDuzina ? "duzina" : jeLim ? "lim" : mat?.kgPoKom > 0 ? "komadi" : "kolicina";
       const cijenaPoJed = zadnjaCijenaIzNarudzbenice(val, narudzbenice) ?? (mat ? mat.cijena : 0);
       azurirajRedak(i, { materijalId: val, katalogId: "", nacinUnosa: nacin, duzinaM: duzinaDef, sirinaM: sirinaDef, komada: komadaDef, cijenaPoJed });
     }
@@ -1157,6 +1166,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
                   <select className="select" value={nacin} onChange={(e) => azurirajRedak(i, { nacinUnosa: e.target.value })}>
                     <option value="duzina">Dužina profila × komada</option>
                     <option value="lim">Dimenzije lima (dužina × širina) × komada</option>
+                    <option value="komadi">Komadi (masa po komadu)</option>
                     <option value="kolicina">Ručni unos količine</option>
                   </select>
                 </div>
@@ -1179,6 +1189,14 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
                       <div className="input f-mono" style={{ background: "var(--surface)", color: mat?.kgPoM2 > 0 ? "var(--ink-soft)" : "var(--rust)" }}>{mat?.kgPoM2 > 0 ? `${kol.toFixed(1)} kg` : "nema kg/m²"}</div>
                     </div>
                   </>
+                ) : nacin === "komadi" ? (
+                  <>
+                    <div style={{ width: 90 }}><label className="label">Komada</label><input className="input f-mono" type="number" min="0" value={r.komada ?? 1} onChange={(e) => azurirajRedak(i, { komada: e.target.value })} /></div>
+                    <div style={{ width: 120 }}>
+                      <label className="label">Masa (izračunato)</label>
+                      <div className="input f-mono" style={{ background: "var(--surface)", color: mat?.kgPoKom > 0 ? "var(--ink-soft)" : "var(--rust)" }}>{mat?.kgPoKom > 0 ? `${kol.toFixed(1)} kg` : "nema kg/kom"}</div>
+                    </div>
+                  </>
                 ) : (
                   <div style={{ width: 120 }}><label className="label">Količina ({mat?.jm || "kg"})</label><input className="input f-mono" type="number" min="0" value={r.kolicina} onChange={(e) => update(i, { kolicina: e.target.value })} /></div>
                 )}
@@ -1197,6 +1215,9 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
               </div>
               {nacin === "duzina" && !(mat?.kgPoM > 0) && mat && (
                 <div style={{ fontSize: 11, color: "var(--rust)", marginTop: 6 }}>Ovaj materijal nema definiranu masu po m' — unesi je u Skladištu ili prebaci na ručni unos količine.</div>
+              )}
+              {nacin === "komadi" && !(mat?.kgPoKom > 0) && mat && (
+                <div style={{ fontSize: 11, color: "var(--rust)", marginTop: 6 }}>Ovaj materijal nema definiranu masu po komadu — unesi je u Skladištu ili prebaci na ručni unos količine.</div>
               )}
               {nacin === "lim" && !(mat?.kgPoM2 > 0) && mat && (
                 <div style={{ fontSize: 11, color: "var(--rust)", marginTop: 6 }}>Ovaj materijal nema definiranu masu po m² — unesi je u Skladištu ili prebaci na ručni unos količine.</div>
@@ -2574,6 +2595,8 @@ const masaStavkePozicije = (s, katalog, kvalitete) => {
       const povrsinaM2 = ((Number(s.sirinaMM) || 0) * (Number(s.duzinaMM) || 0)) / 1e6;
       return (Number(entry.vrijednost) || 0) * povrsinaM2 * faktor;
     }
+    // Komadni artikl: masa po komadu je zadana izravno (nema dužine ni gustoće).
+    if (entry?.jedinica === "kg/kom") return Number(entry.vrijednost) || 0;
     return masaIzKataloga(entry, s.dimenzija) * faktor;
   }
   return Number(s.masaJed) || 0;
@@ -2632,8 +2655,11 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
   const [katalogUnos, setKatalogUnos] = useState(emptyKatalogUnos);
   const katalogEntry = db.katalogProfila.find((k) => k.id === katalogUnos.katalogId);
   const jeLimUnos = katalogEntry?.jedinica === "kg/m2";
+  const jeKomadUnos = katalogEntry?.jedinica === "kg/kom";
   const faktorKvaliteteUnos = faktorGustoce(db.kvaliteteMaterijala, katalogUnos.kvaliteta);
-  const izracunataMasaUnos = !katalogEntry ? 0 : jeLimUnos
+  const izracunataMasaUnos = !katalogEntry ? 0 : jeKomadUnos
+    ? Number(katalogEntry.vrijednost) * (Number(katalogUnos.komada) || 0)
+    : jeLimUnos
     ? ((Number(katalogUnos.duzinaMM) || 0) / 1000) * ((Number(katalogUnos.sirinaMM) || 0) / 1000) * Number(katalogEntry.vrijednost) * faktorKvaliteteUnos * (Number(katalogUnos.komada) || 1)
     : ((Number(katalogUnos.duzinaMM) || 0) / 1000) * Number(katalogEntry.vrijednost) * faktorKvaliteteUnos * (Number(katalogUnos.komada) || 1);
 
@@ -2654,12 +2680,13 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
     if (!form.sifra.trim() || !form.naziv.trim()) { showToast("Šifra i naziv su obavezni."); return; }
     const duplikat = db.materijali.some((m) => m.sifra.trim().toLowerCase() === form.sifra.trim().toLowerCase() && m.id !== form.id);
     if (duplikat) { showToast(`Šifra "${form.sifra}" već postoji na drugom materijalu — koristi drugu šifru.`); return; }
-    const dimenzijeIzKataloga = !katalogEntry ? form.dimenzije : jeLimUnos ? `${katalogUnos.duzinaMM || 0}×${katalogUnos.sirinaMM || 0} mm` : `${katalogUnos.duzinaMM || 0} mm`;
+    const dimenzijeIzKataloga = !katalogEntry ? form.dimenzije : jeKomadUnos ? `${katalogUnos.komada || 0} kom × ${katalogEntry.vrijednost} kg` : jeLimUnos ? `${katalogUnos.duzinaMM || 0}×${katalogUnos.sirinaMM || 0} mm` : `${katalogUnos.duzinaMM || 0} mm`;
     const payload = {
       ...form, cijena: Number(form.cijena), minZaliha: Number(form.minZaliha),
       dimenzije: dimenzijeIzKataloga,
       kolicina: katalogEntry ? Number(izracunataMasaUnos.toFixed(2)) : Number(form.kolicina),
-      kgPoM: katalogEntry ? (jeLimUnos ? 0 : Number(katalogEntry.vrijednost)) : Number(form.kgPoM) || 0,
+      kgPoM: katalogEntry ? (jeLimUnos || jeKomadUnos ? 0 : Number(katalogEntry.vrijednost)) : Number(form.kgPoM) || 0,
+      kgPoKom: katalogEntry ? (jeKomadUnos ? Number(katalogEntry.vrijednost) : 0) : Number(form.kgPoKom) || 0,
       kgPoM2: katalogEntry ? (jeLimUnos ? Number(katalogEntry.vrijednost) : 0) : Number(form.kgPoM2) || 0,
     };
     if (modal.mode === "add") update("materijali", [...db.materijali, { ...payload, id: uid("mat") }]);
@@ -2818,10 +2845,10 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
           {katalogEntry && (
             <div className="card" style={{ padding: 10, marginBottom: 14, background: "var(--surface-alt)" }}>
               <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
-                <div style={{ width: 130 }}>
+                {!jeKomadUnos && <div style={{ width: 130 }}>
                   <label className="label">Dužina (mm)</label>
                   <input className="input f-mono" type="number" min="0" value={katalogUnos.duzinaMM} onChange={(e) => setKatalogUnos({ ...katalogUnos, duzinaMM: e.target.value })} />
-                </div>
+                </div>}
                 {jeLimUnos && (
                   <div style={{ width: 130 }}>
                     <label className="label">Širina (mm)</label>
@@ -2851,10 +2878,10 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
             <Field label="Naziv"><input className="input" value={form.naziv} onChange={(e) => setForm({ ...form, naziv: e.target.value })} /></Field>
             <Field label="Tip"><select className="select" value={form.tip} onChange={(e) => setForm({ ...form, tip: e.target.value })}>{TIPOVI_MATERIJALA.map((t) => <option key={t}>{t}</option>)}</select></Field>
             <Field label="Kvaliteta (npr. S235JR) — za prepoznavanje istog materijala kod zaprimanja"><input className="input" value={form.kvaliteta || ""} onChange={(e) => setForm({ ...form, kvaliteta: e.target.value })} /></Field>
-            <Field label="Dimenzije">{katalogEntry ? <div className="input" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{jeLimUnos ? `${katalogUnos.duzinaMM || 0}×${katalogUnos.sirinaMM || 0} mm` : `${katalogUnos.duzinaMM || 0} mm`}</div> : <input className="input" value={form.dimenzije} onChange={(e) => setForm({ ...form, dimenzije: e.target.value })} />}</Field>
+            <Field label="Dimenzije">{katalogEntry ? <div className="input" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{jeKomadUnos ? `${katalogUnos.komada || 0} kom × ${katalogEntry.vrijednost} kg` : jeLimUnos ? `${katalogUnos.duzinaMM || 0}×${katalogUnos.sirinaMM || 0} mm` : `${katalogUnos.duzinaMM || 0} mm`}</div> : <input className="input" value={form.dimenzije} onChange={(e) => setForm({ ...form, dimenzije: e.target.value })} />}</Field>
             <Field label="Jedinica mjere">{katalogEntry ? <div className="input" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>kg</div> : <select className="select" value={form.jm} onChange={(e) => setForm({ ...form, jm: e.target.value })}>{JEDINICE.map((j) => <option key={j}>{j}</option>)}</select>}</Field>
             <Field label={katalogEntry ? "Cijena (€/kg)" : "Cijena po jedinici (€)"}><input className="input f-mono" type="number" step="0.01" value={form.cijena} onChange={(e) => setForm({ ...form, cijena: e.target.value })} /></Field>
-            <Field label="Masa po m' (kg/m) — za auto-izračun po dužini">{katalogEntry && !jeLimUnos ? <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{katalogEntry.vrijednost}</div> : <input className="input f-mono" type="number" step="0.01" value={form.kgPoM || 0} onChange={(e) => setForm({ ...form, kgPoM: e.target.value })} />}</Field>
+            <Field label="Masa po m' (kg/m) — za auto-izračun po dužini">{katalogEntry && !jeLimUnos && !jeKomadUnos ? <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{katalogEntry.vrijednost}</div> : <input className="input f-mono" type="number" step="0.01" value={form.kgPoM || 0} onChange={(e) => setForm({ ...form, kgPoM: e.target.value })} />}</Field>
             <Field label="Masa po m² (kg/m²) — za auto-izračun lima">{katalogEntry && jeLimUnos ? <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{katalogEntry.vrijednost}</div> : <input className="input f-mono" type="number" step="0.01" value={form.kgPoM2 || 0} onChange={(e) => setForm({ ...form, kgPoM2: e.target.value })} />}</Field>
             <Field label="Trenutno stanje">{katalogEntry ? <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{izracunataMasaUnos.toFixed(2)}</div> : <input className="input f-mono" type="number" value={form.kolicina} onChange={(e) => setForm({ ...form, kolicina: e.target.value })} />}</Field>
             <Field label="Minimalna zaliha"><input className="input f-mono" type="number" value={form.minZaliha} onChange={(e) => setForm({ ...form, minZaliha: e.target.value })} /></Field>
@@ -2877,8 +2904,8 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
           <Field label="Tip profila"><select className="select" value={katForm.tip} onChange={(e) => setKatForm({ ...katForm, tip: e.target.value })}>{TIPOVI_KATALOGA.map((t) => <option key={t}>{t}</option>)}</select></Field>
           <Field label="Oznaka (npr. HEB 200, Lim 10 mm, 60×60×4)"><input className="input" value={katForm.oznaka} onChange={(e) => setKatForm({ ...katForm, oznaka: e.target.value })} /></Field>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label="Jedinica"><select className="select" value={katForm.jedinica} onChange={(e) => setKatForm({ ...katForm, jedinica: e.target.value })}><option value="kg/m">kg/m (linearni profil)</option><option value="kg/m2">kg/m² (lim)</option></select></Field>
-            <Field label={katForm.jedinica === "kg/m2" ? "Masa (kg po m²)" : "Masa (kg po m dužni)"}><input className="input f-mono" type="number" step="0.001" value={katForm.vrijednost} onChange={(e) => setKatForm({ ...katForm, vrijednost: e.target.value })} /></Field>
+            <Field label="Jedinica"><select className="select" value={katForm.jedinica} onChange={(e) => setKatForm({ ...katForm, jedinica: e.target.value })}><option value="kg/m">kg/m (linearni profil)</option><option value="kg/m2">kg/m² (lim)</option><option value="kg/kom">kg/kom (komadni artikl)</option></select></Field>
+            <Field label={katForm.jedinica === "kg/m2" ? "Masa (kg po m²)" : katForm.jedinica === "kg/kom" ? "Masa (kg po komadu)" : "Masa (kg po m dužni)"}><input className="input f-mono" type="number" step="0.001" value={katForm.vrijednost} onChange={(e) => setKatForm({ ...katForm, vrijednost: e.target.value })} /></Field>
           </div>
         </Modal>
       )}
@@ -3274,6 +3301,7 @@ const duzinaUkupnaMStavke = (s) => ((Number(s.dimenzijaMM) || 0) / 1000) * (Numb
 const tezinaStavkeUpita = (s, katalogProfila) => {
   const kat = (katalogProfila || []).find((k) => katalogOznakaPuna(k) === s.vrstaMaterijala);
   if (!kat) return null;
+  if (kat.jedinica === "kg/kom") return (Number(kat.vrijednost) || 0) * (Number(s.kolicina) || 0);
   const jeLim = kat.jedinica === "kg/m2";
   const duzinaM = (Number(s.dimenzijaMM) || 0) / 1000;
   const masaJed = jeLim ? duzinaM * ((Number(s.sirinaMM) || 0) / 1000) * Number(kat.vrijednost) : duzinaM * Number(kat.vrijednost);
@@ -3522,7 +3550,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija }) {
       if (!s.katalogId) return s;
       const entry = db.katalogProfila.find((k) => k.id === s.katalogId);
       if (!entry) return s;
-      const virtualniMat = { kgPoM: entry.jedinica === "kg/m" ? Number(entry.vrijednost) : 0, kgPoM2: entry.jedinica === "kg/m2" ? Number(entry.vrijednost) : 0 };
+      const virtualniMat = { kgPoM: entry.jedinica === "kg/m" ? Number(entry.vrijednost) : 0, kgPoM2: entry.jedinica === "kg/m2" ? Number(entry.vrijednost) : 0, kgPoKom: entry.jedinica === "kg/kom" ? Number(entry.vrijednost) : 0 };
       const kolicinaPrimljeno = efektivnaKolicinaMaterijala(s, virtualniMat);
       const sifra = sifraIzKataloga(entry);
       const trazenaKvaliteta = (s.kvaliteta || "").trim().toLowerCase();
@@ -3540,6 +3568,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija }) {
         kolicina: kolicinaPrimljeno, minZaliha: 0, lokacija: "", kvaliteta: s.kvaliteta || "",
         kgPoM: entry.jedinica === "kg/m" ? Number(entry.vrijednost) : 0,
         kgPoM2: entry.jedinica === "kg/m2" ? Number(entry.vrijednost) : 0,
+        kgPoKom: entry.jedinica === "kg/kom" ? Number(entry.vrijednost) : 0,
       }];
       return { ...s, materijalId: noviId, katalogId: "" };
     });
@@ -6187,6 +6216,7 @@ function StavkaPozicijeRedak({ stavka: s, katalog, grupe, kvalitete, onAzuriraj,
   const nacinMase = s.nacinMase || "rucno";
   const katEntry = katalog.find((k) => k.id === s.katalogId);
   const jeLim = katEntry?.jedinica === "kg/m2";
+  const jeKomadni = katEntry?.jedinica === "kg/kom";
   const masaJedEfektivna = masaStavkePozicije(s, katalog, kvalitete);
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap", padding: "8px 0", borderBottom: "1px dashed var(--line)" }}>
@@ -6221,7 +6251,7 @@ function StavkaPozicijeRedak({ stavka: s, katalog, grupe, kvalitete, onAzuriraj,
                 <input className="input f-mono" type="number" min="0" step="1" value={s.duzinaMM || 0} onChange={(e) => onAzuriraj({ duzinaMM: e.target.value })} />
               </div>
             </>
-          ) : (
+          ) : jeKomadni ? null : (
             <div style={{ width: 120 }}>
               <label className="label">Dužina/kom (mm)</label>
               <input className="input f-mono" type="number" min="0" step="1" value={Math.round((Number(s.dimenzija) || 0) * 1000)} onChange={(e) => onAzuriraj({ dimenzija: (Number(e.target.value) || 0) / 1000 })} />
