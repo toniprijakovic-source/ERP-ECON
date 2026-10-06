@@ -1440,7 +1440,7 @@ const KARTICE_MODULA = {
   skladiste: { kartice: [{ key: "zalihe", naziv: "Zalihe" }, { key: "katalog", naziv: "Katalog profila i limova" }, { key: "kvaliteta", naziv: "Kvaliteta materijala" }, { key: "izdatnice", naziv: "Izdatnice" }] },
   nabava: { kartice: [{ key: "narudzbenice", naziv: "Narudžbenice" }, { key: "upiti", naziv: "Upiti materijala" }, { key: "postavke", naziv: "Postavke tvrtke" }] },
   proizvodnja: { kartice: [{ key: "tablica", naziv: "Tablica" }, { key: "gantogram", naziv: "Plan proizvodnje" }, { key: "rezanje", naziv: "Plan rezanja" }, { key: "isporuke", naziv: "Isporuke kupaonica" }] },
-  projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "zavrseni", naziv: "Završeni projekti" }] },
+  projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "potvrde", naziv: "Potvrde narudžbe" }, { key: "zavrseni", naziv: "Završeni projekti" }] },
   ponude: { kartice: [{ key: "ponude", naziv: "Ponude" }, { key: "laser", naziv: "Ponude - Laser" }] },
   otpremnice: { kartice: [{ key: "otpremnice", naziv: "Otpremnice" }, { key: "cmr", naziv: "CMR" }] },
   fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "podloge", naziv: "Podloge za fakturu" }, { key: "nedovrsena", naziv: "Nedovršena proizvodnja" }, { key: "analiza", naziv: "Analiza projekata" }] },
@@ -7790,6 +7790,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
   useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || modul); }, [dozvKartice, tab, modul]);
   const mozeProjekti = dozvolaZaKarticu(mojaPozicija, "projekti", "projekti").izmjene;
   const mozePonude = dozvolaZaKarticu(mojaPozicija, "ponude", "ponude").izmjene;
+  const mozePotvrde = dozvolaZaKarticu(mojaPozicija, "projekti", "potvrde").izmjene;
   const imaModulProjekti = (mojaPozicija?.moduli || []).includes("projekti");
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
@@ -8122,6 +8123,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
           {dozvKartice.some((k) => k.key === "projekti") && <div className={`nav-tab ${tab === "projekti" ? "active" : ""}`} onClick={() => setTab("projekti")}>Projekti</div>}
           {dozvKartice.some((k) => k.key === "ponude") && <div className={`nav-tab ${tab === "ponude" ? "active" : ""}`} onClick={() => setTab("ponude")}>Ponude</div>}
           {dozvKartice.some((k) => k.key === "laser") && <div className={`nav-tab ${tab === "laser" ? "active" : ""}`} onClick={() => setTab("laser")}>Ponude - Laser</div>}
+          {dozvKartice.some((k) => k.key === "potvrde") && <div className={`nav-tab ${tab === "potvrde" ? "active" : ""}`} onClick={() => setTab("potvrde")}>Potvrde narudžbe</div>}
           {dozvKartice.some((k) => k.key === "zavrseni") && <div className={`nav-tab ${tab === "zavrseni" ? "active" : ""}`} onClick={() => setTab("zavrseni")}>Završeni projekti</div>}
         </div>
         {tab === "ponude" && (
@@ -8139,6 +8141,8 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
         {tab === "zavrseni" && <Btn variant="ghost" size="sm" icon={Printer} onClick={() => ispisiProjekte(projektiZavrseni, "Završeni projekti")}>Ispis / PDF</Btn>}
         {tab === "laser" && <Btn variant="ghost" size="sm" icon={Printer} onClick={() => ispisiPonude(db.ponudeLasera, "Popis ponuda — laser", true)}>Ispis / PDF</Btn>}
       </div>
+
+      {tab === "potvrde" && <PotvrdeNarudzbeTab db={db} update={update} showToast={showToast} mozeMijenjati={mozePotvrde} mojId={mojId} />}
 
       {tab === "projekti" && (
         <>
@@ -8808,6 +8812,80 @@ function PodlogeZaFakturuTab({ db, update, showToast, mozeMijenjati = true }) {
         />
       )}
       {del && <ConfirmDelete label={del.broj} onCancel={() => setDel(null)} onConfirm={() => { update("podlogeZaFakturu", db.podlogeZaFakturu.filter((p) => p.id !== del.id)); setDel(null); showToast("Podloga obrisana."); }} />}
+    </div>
+  );
+}
+
+// Popis svih potvrda narudžbe (Auftragsbestätigung). Potvrda je zapisana na narudžbi kupca
+// (narudzba.potvrda) pa se popis izvodi iz narudžbi; otvaranje daje isti obrazac kao iz detalja projekta.
+function PotvrdeNarudzbeTab({ db, update, showToast, mozeMijenjati, mojId }) {
+  const [otvorena, setOtvorena] = useState(null); // { narudzba, projekt }
+  const [nova, setNova] = useState(false);
+  const [odabranaNarudzba, setOdabranaNarudzba] = useState("");
+  const [del, setDel] = useState(null);
+  const iznosNarudzbe = (n) => (n.stavke || []).reduce((a, st) => a + (Number(String(st.kolicina ?? "").replace(",", ".")) || 0) * (Number(st.cijena) || 0), 0);
+  const potvrde = db.narudzbe.filter((n) => n.potvrda).sort((a, b) => (b.potvrda.datum || "").localeCompare(a.potvrda.datum || "") || usporediPrirodno(b.potvrda.broj, a.potvrda.broj));
+  const bezPotvrde = db.narudzbe.filter((n) => !n.potvrda && db.projekti.some((p) => p.id === n.projektId));
+  const otvori = (n) => {
+    const projekt = db.projekti.find((p) => p.id === n.projektId);
+    if (!projekt) { showToast("Projekt ove narudžbe više ne postoji."); return; }
+    setOtvorena({ narudzba: n, projekt });
+  };
+  return (
+    <div>
+      {mozeMijenjati && (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
+          <Btn variant="primary" icon={Plus} onClick={() => { setOdabranaNarudzba(""); setNova(true); }}>Nova potvrda narudžbe</Btn>
+        </div>
+      )}
+      {potvrde.length === 0 ? <EmptyState text="Nema izdanih potvrda narudžbe." /> : (
+        <div className="card" style={{ overflowX: "auto" }}>
+          <table className="erp-table">
+            <thead><tr><th>Broj</th><th>Projekt</th><th>Kupac</th><th>Narudžba</th><th>Datum</th><th style={{ textAlign: "right" }}>Iznos</th><th>Potpisuje</th><th></th></tr></thead>
+            <tbody>
+              {potvrde.map((n) => {
+                const projekt = db.projekti.find((p) => p.id === n.projektId);
+                const kupac = db.kupci.find((k) => k.id === (n.kupacId || projekt?.kupacId));
+                const potpisuje = db.zaposlenici.find((z) => z.id === n.potvrda.izradioId);
+                return (
+                  <tr key={n.id}>
+                    <td className="f-mono">{n.potvrda.broj}</td>
+                    <td>{projekt ? `${projekt.sifra} — ${projekt.naziv}` : "—"}</td>
+                    <td>{kupac?.naziv || "—"}</td>
+                    <td className="f-mono">{n.broj || "—"}</td>
+                    <td>{fmtDate(n.potvrda.datum)}</td>
+                    <td className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(iznosNarudzbe(n))}</td>
+                    <td>{potpisuje ? `${potpisuje.ime} ${potpisuje.prezime}` : "—"}</td>
+                    <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                      <Btn size="sm" icon={Eye} onClick={() => otvori(n)}>PDF</Btn>
+                      {mozeMijenjati && <button className="btn btn-icon btn-ghost" aria-label="Obriši potvrdu" onClick={() => setDel(n)}><Trash2 size={14} color="var(--rust)" /></button>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {nova && (
+        <Modal title="Nova potvrda narudžbe — odaberi narudžbu" onClose={() => setNova(false)} footer={<><Btn onClick={() => setNova(false)}>Odustani</Btn><Btn variant="primary" disabled={!odabranaNarudzba} onClick={() => { const n = db.narudzbe.find((x) => x.id === odabranaNarudzba); setNova(false); if (n) otvori(n); }}>Nastavi</Btn></>}>
+          <Field label="Narudžba kupca">
+            <select className="select" value={odabranaNarudzba} onChange={(e) => setOdabranaNarudzba(e.target.value)}>
+              <option value="">— odaberi narudžbu —</option>
+              {bezPotvrde.map((n) => { const p = db.projekti.find((x) => x.id === n.projektId); return <option key={n.id} value={n.id}>{n.broj || "(bez broja)"} — {p?.sifra} {p?.naziv}</option>; })}
+            </select>
+          </Field>
+          {bezPotvrde.length === 0 && <p style={{ fontSize: 12.5, color: "var(--ink-faint)" }}>Sve narudžbe već imaju potvrdu (ili nema unesenih narudžbi kupaca).</p>}
+        </Modal>
+      )}
+      {otvorena && <PotvrdaNarudzbeModal narudzba={db.narudzbe.find((n) => n.id === otvorena.narudzba.id) || otvorena.narudzba} projekt={otvorena.projekt} db={db} update={update} showToast={showToast} mojId={mojId} onClose={() => setOtvorena(null)} />}
+      {del && (
+        <ConfirmDelete label={del.potvrda.broj} onCancel={() => setDel(null)} onConfirm={() => {
+          update("narudzbe", db.narudzbe.map((n) => { if (n.id !== del.id) return n; const { potvrda, ...ostalo } = n; return ostalo; }));
+          setDel(null);
+          showToast("Potvrda narudžbe obrisana.");
+        }} />
+      )}
     </div>
   );
 }

@@ -69,6 +69,8 @@ const KARTICE_MODULA = {
   projekti: {
     projekti: { citanje: ["cjenikRada", "katalogProfila", "kupci", "materijali", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "zaposlenici", "upitiNabave", "kvaliteteMaterijala", "narudzbenice", "dobavljaci"], pisanje: ["projekti", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "materijali", "radniNalozi", "upitiNabave"] },
     zavrseni: { citanje: ["projekti", "radniNalozi", "kupci", "narudzbe"], pisanje: [] },
+    // Popis potvrda narudžbe (Auftragsbestätigung) — potvrda se sprema na narudžbu kupca.
+    potvrde: { citanje: ["narudzbe", "projekti", "kupci", "zaposlenici", "postavkeTvrtke"], pisanje: ["narudzbe"] },
   },
   ponude: {
     ponude: { citanje: ["cjenikRada", "katalogProfila", "materijali", "ponude", "kupci", "kvaliteteMaterijala", "narudzbenice"], pisanje: ["ponude", "cjenikRada", "materijali", "projekti", "radniNalozi"] },
