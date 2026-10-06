@@ -950,16 +950,63 @@ const Badge = ({ status }) => <span className={`badge badge-${STATUS_TONE[status
 // računa se iz gustoća pri korištenju — vidi faktorGustoce(). Ovo je samo zadana/početna lista za
 // prvi seed i za slučaj da db.kvaliteteMaterijala još nije učitan.
 const GUSTOCA_CELIKA = 7.85;
+// Svaka kvaliteta ima grupu, naziv, kratku oznaku (upisuje se u tekstualna polja "Kvaliteta" na upitu,
+// narudžbenici i skladištu) i gustoću. U pozicijama ponude i laser stavkama sprema se id (iz njega se
+// računa masa). Isti popis ugrađen je u backend/migracija-kvalitete-2026-10.js.
+const GRUPE_KVALITETE = ["Konstrukcijski čelik", "Pocinčani limovi", "Nehrđajući čelik", "Aluminij"];
 const ZADANE_KVALITETE_MATERIJALA = [
-  { id: "celik", naziv: "Konstrukcijski čelik (S235 / S275 / S355)", gustoca: 7.85 },
-  { id: "inox304", naziv: "Nehrđajući čelik – Inox 304", gustoca: 7.9 },
-  { id: "inox316", naziv: "Nehrđajući čelik – Inox 316", gustoca: 8.0 },
-  { id: "alu", naziv: "Aluminij (EN AW-6082)", gustoca: 2.7 },
+  { id: "celik", grupa: "Konstrukcijski čelik", naziv: "Konstrukcijski čelik – općenito (S235 / S275 / S355)", oznaka: "", gustoca: 7.85 },
+  ...["S235JR", "S235J0", "S235J2", "S275JR", "S275J0", "S275J2", "S355JR", "S355J0", "S355J2", "S355K2"].map((o) => ({ id: `kv-${o.toLowerCase()}`, grupa: "Konstrukcijski čelik", naziv: o, oznaka: o, gustoca: 7.85 })),
+  { id: "kvl-muv723sl-52qo", grupa: "Pocinčani limovi", naziv: "DX51D+Z275", oznaka: "DX51D+Z275", gustoca: 7.85 },
+  ...["DX51D+Z100", "DX51D+Z140", "DX51D+Z200", "DX51D+Z350", "S250GD+Z275", "S280GD+Z275", "S320GD+Z275", "S350GD+Z275"].map((o) => ({ id: `kv-${o.toLowerCase().replace(/\+/g, "-")}`, grupa: "Pocinčani limovi", naziv: o, oznaka: o, gustoca: 7.85 })),
+  { id: "inox304", grupa: "Nehrđajući čelik", naziv: "1.4301 (X5CrNi18-10, Inox 304)", oznaka: "1.4301", gustoca: 7.9 },
+  { id: "kv-14307", grupa: "Nehrđajući čelik", naziv: "1.4307 (X2CrNi18-9, Inox 304L)", oznaka: "1.4307", gustoca: 7.9 },
+  { id: "kv-14541", grupa: "Nehrđajući čelik", naziv: "1.4541 (X6CrNiTi18-10, Inox 321)", oznaka: "1.4541", gustoca: 7.9 },
+  { id: "inox316", grupa: "Nehrđajući čelik", naziv: "1.4401 (X5CrNiMo17-12-2, Inox 316)", oznaka: "1.4401", gustoca: 8.0 },
+  { id: "kvl-muw9szzp-qysw", grupa: "Nehrđajući čelik", naziv: "1.4404 (X2CrNiMo17-12-2, Inox 316L)", oznaka: "1.4404", gustoca: 8.0 },
+  { id: "kv-14435", grupa: "Nehrđajući čelik", naziv: "1.4435 (X2CrNiMo18-14-3, Inox 316L)", oznaka: "1.4435", gustoca: 8.0 },
+  { id: "kv-14571", grupa: "Nehrđajući čelik", naziv: "1.4571 (X6CrNiMoTi17-12-2, Inox 316Ti)", oznaka: "1.4571", gustoca: 8.0 },
+  { id: "kv-14462", grupa: "Nehrđajući čelik", naziv: "1.4462 (X2CrNiMoN22-5-3, duplex)", oznaka: "1.4462", gustoca: 7.8 },
+  { id: "alu", grupa: "Aluminij", naziv: "EN AW-6082", oznaka: "EN AW-6082", gustoca: 2.7 },
+  { id: "kv-aw6060", grupa: "Aluminij", naziv: "EN AW-6060", oznaka: "EN AW-6060", gustoca: 2.7 },
+  { id: "kv-aw6061", grupa: "Aluminij", naziv: "EN AW-6061", oznaka: "EN AW-6061", gustoca: 2.7 },
+  { id: "kv-aw5754", grupa: "Aluminij", naziv: "EN AW-5754", oznaka: "EN AW-5754", gustoca: 2.66 },
+  { id: "kv-aw5083", grupa: "Aluminij", naziv: "EN AW-5083", oznaka: "EN AW-5083", gustoca: 2.66 },
 ];
 const faktorGustoce = (kvaliteta, kljuc) => {
   const entry = (kvaliteta && kvaliteta.length ? kvaliteta : ZADANE_KVALITETE_MATERIJALA).find((k) => k.id === (kljuc || "celik"));
   return entry ? Number(entry.gustoca) / GUSTOCA_CELIKA : 1;
 };
+const grupaKvalitete = (k) => k.grupa || "Ostalo";
+const kvalitetePoGrupama = (kvalitete) => {
+  const lista = kvalitete && kvalitete.length ? kvalitete : ZADANE_KVALITETE_MATERIJALA;
+  return [...GRUPE_KVALITETE, "Ostalo"].map((grupa) => ({ grupa, stavke: lista.filter((k) => grupaKvalitete(k) === grupa) })).filter((g) => g.stavke.length);
+};
+// Opcije padajućeg izbornika (vrijednost = id kvalitete) — pozicije ponude, laser, unos iz kataloga.
+function KvalitetaIdOptions({ kvalitete }) {
+  return kvalitetePoGrupama(kvalitete).map((g) => (
+    <optgroup key={g.grupa} label={g.grupa}>
+      {g.stavke.map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}
+    </optgroup>
+  ));
+}
+// Padajući izbornik za tekstualna polja "Kvaliteta" (upit, narudžbenica, skladište): vrijednost je
+// kratka oznaka (npr. S235JR, 1.4404). Ranije upisana vrijednost koje nema u popisu ostaje ponuđena.
+function KvalitetaOznakaSelect({ kvalitete, value, onChange, style }) {
+  const grupe = kvalitetePoGrupama(kvalitete).map((g) => ({ ...g, stavke: g.stavke.filter((k) => k.oznaka) })).filter((g) => g.stavke.length);
+  const poznata = grupe.some((g) => g.stavke.some((k) => k.oznaka === value));
+  return (
+    <select className="select" style={style} value={value || ""} onChange={(e) => onChange(e.target.value)}>
+      <option value="">— kvaliteta —</option>
+      {value && !poznata && <option value={value}>{value} (nije u popisu)</option>}
+      {grupe.map((g) => (
+        <optgroup key={g.grupa} label={g.grupa}>
+          {g.stavke.map((k) => <option key={k.id} value={k.oznaka}>{k.oznaka}</option>)}
+        </optgroup>
+      ))}
+    </select>
+  );
+}
 
 // Antikorozivna zaštita (AKZ) — po poziciji se može dodati više stavki (npr. sačmarenje pa
 // vruće cinčanje), svaka sa svojom cijenom €/kg koja se množi s UKUPNOM masom te pozicije.
@@ -1044,7 +1091,7 @@ const zadnjaCijenaIzNarudzbenice = (materijalId, narudzbenice) => {
   return sve[0]?.cijenaPoJed ?? null;
 };
 
-function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = [], narudzbenice = [], dozvoliKatalog = false, projekti = null }) {
+function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = [], narudzbenice = [], dozvoliKatalog = false, projekti = null, kvalitete = [] }) {
   const addRow = () => setRows([...rows, mode === "materijal" ? { materijalId: "", nacinUnosa: "kolicina", kolicina: 1, duzinaM: 6, sirinaM: 1.25, komada: 1, cijenaPoJed: 0, kvaliteta: "" } : { opis: "", kolicina: 1, jm: "kom", cijenaJed: 0 }]);
   const removeRow = (i) => setRows(rows.filter((_, idx) => idx !== i));
   const update = (i, patch) => setRows(rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
@@ -1211,7 +1258,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
                 )}
                 <div style={{ width: 130 }}>
                   <label className="label">Kvaliteta</label>
-                  <input className="input" placeholder="S235JR…" value={r.kvaliteta || ""} onChange={(e) => update(i, { kvaliteta: e.target.value })} />
+                  <KvalitetaOznakaSelect kvalitete={kvalitete} value={r.kvaliteta} onChange={(v) => update(i, { kvaliteta: v })} />
                 </div>
                 <div style={{ width: 120 }}>
                   <label className="label">Cijena/{mat?.jm || "kg"} (€)</label>
@@ -2725,13 +2772,13 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
   const kvaliteteMaterijala = db.kvaliteteMaterijala && db.kvaliteteMaterijala.length ? db.kvaliteteMaterijala : ZADANE_KVALITETE_MATERIJALA;
   const [kvalModal, setKvalModal] = useState(null);
   const [kvalDel, setKvalDel] = useState(null);
-  const emptyKval = { naziv: "", gustoca: GUSTOCA_CELIKA };
+  const emptyKval = { grupa: GRUPE_KVALITETE[0], naziv: "", oznaka: "", gustoca: GUSTOCA_CELIKA };
   const [kvalForm, setKvalForm] = useState(emptyKval);
   const openKvalAdd = () => { setKvalForm(emptyKval); setKvalModal("add"); };
   const openKvalEdit = (item) => { setKvalForm(item); setKvalModal("edit"); };
   const saveKval = () => {
     if (!kvalForm.naziv.trim()) return;
-    const payload = { ...kvalForm, gustoca: Number(kvalForm.gustoca) || 0 };
+    const payload = { ...kvalForm, naziv: kvalForm.naziv.trim(), oznaka: (kvalForm.oznaka || "").trim(), gustoca: Number(kvalForm.gustoca) || 0 };
     if (kvalModal === "add") update("kvaliteteMaterijala", [...kvaliteteMaterijala, { ...payload, id: uid("kvl") }]);
     else update("kvaliteteMaterijala", kvaliteteMaterijala.map((k) => (k.id === kvalForm.id ? payload : k)));
     setKvalModal(null);
@@ -2794,9 +2841,11 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
           </div>
           <EntityPage
             title="" data={kvaliteteMaterijala} onAdd={openKvalAdd} onEdit={openKvalEdit} onDelete={(row) => setKvalDel(row)}
-            addLabel="Nova kvaliteta materijala" searchKeys={["naziv"]} readOnly={!mozeKvaliteta}
+            grupiraj={grupaKvalitete} redoslijedGrupa={[...GRUPE_KVALITETE, "Ostalo"].filter((g) => kvaliteteMaterijala.some((k) => grupaKvalitete(k) === g))}
+            addLabel="Nova kvaliteta materijala" searchKeys={["naziv", "oznaka", "grupa"]} readOnly={!mozeKvaliteta}
             columns={[
               { key: "naziv", label: "Naziv" },
+              { key: "oznaka", label: "Oznaka u poljima", render: (r) => <span className="f-mono">{r.oznaka || "—"}</span> },
               { key: "gustoca", label: "Gustoća (kg/dm³)", render: (r) => <span className="f-mono">{r.gustoca}</span> },
               { key: "faktor", label: "Faktor prema čeliku", render: (r) => <span className="f-mono">{(Number(r.gustoca) / GUSTOCA_CELIKA).toFixed(3)}</span> },
             ]}
@@ -2871,7 +2920,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
                 <div style={{ width: 170 }}>
                   <label className="label">Kvaliteta materijala</label>
                   <select className="select" value={katalogUnos.kvaliteta} onChange={(e) => setKatalogUnos({ ...katalogUnos, kvaliteta: e.target.value })}>
-                    {(db.kvaliteteMaterijala && db.kvaliteteMaterijala.length ? db.kvaliteteMaterijala : ZADANE_KVALITETE_MATERIJALA).map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}
+                    <KvalitetaIdOptions kvalitete={db.kvaliteteMaterijala} />
                   </select>
                 </div>
                 <div style={{ width: 130 }}>
@@ -2886,7 +2935,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
             <Field label="Šifra"><input className="input" value={form.sifra} onChange={(e) => setForm({ ...form, sifra: e.target.value })} /></Field>
             <Field label="Naziv"><input className="input" value={form.naziv} onChange={(e) => setForm({ ...form, naziv: e.target.value })} /></Field>
             <Field label="Tip"><select className="select" value={form.tip} onChange={(e) => setForm({ ...form, tip: e.target.value })}>{TIPOVI_MATERIJALA.map((t) => <option key={t}>{t}</option>)}</select></Field>
-            <Field label="Kvaliteta (npr. S235JR) — za prepoznavanje istog materijala kod zaprimanja"><input className="input" value={form.kvaliteta || ""} onChange={(e) => setForm({ ...form, kvaliteta: e.target.value })} /></Field>
+            <Field label="Kvaliteta — za prepoznavanje istog materijala kod zaprimanja"><KvalitetaOznakaSelect kvalitete={db.kvaliteteMaterijala} value={form.kvaliteta} onChange={(v) => setForm({ ...form, kvaliteta: v })} /></Field>
             <Field label="Dimenzije">{katalogEntry ? <div className="input" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{jeKomadUnos ? `${katalogUnos.komada || 0} kom × ${katalogEntry.vrijednost} kg` : jeLimUnos ? `${katalogUnos.duzinaMM || 0}×${katalogUnos.sirinaMM || 0} mm` : `${katalogUnos.duzinaMM || 0} mm`}</div> : <input className="input" value={form.dimenzije} onChange={(e) => setForm({ ...form, dimenzije: e.target.value })} />}</Field>
             <Field label="Jedinica mjere">{katalogEntry ? <div className="input" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>kg</div> : <select className="select" value={form.jm} onChange={(e) => setForm({ ...form, jm: e.target.value })}>{JEDINICE.map((j) => <option key={j}>{j}</option>)}</select>}</Field>
             <Field label={katalogEntry ? "Cijena (€/kg)" : "Cijena po jedinici (€)"}><input className="input f-mono" type="number" step="0.01" value={form.cijena} onChange={(e) => setForm({ ...form, cijena: e.target.value })} /></Field>
@@ -2922,7 +2971,9 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
 
       {kvalModal && (
         <Modal title={kvalModal === "add" ? "Nova kvaliteta materijala" : "Uredi kvalitetu materijala"} onClose={() => setKvalModal(null)} footer={<><Btn onClick={() => setKvalModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={saveKval}>Spremi</Btn></>}>
-          <Field label="Naziv (npr. Nehrđajući čelik – Inox 304)"><input className="input" value={kvalForm.naziv} onChange={(e) => setKvalForm({ ...kvalForm, naziv: e.target.value })} /></Field>
+          <Field label="Grupa"><select className="select" value={kvalForm.grupa || "Ostalo"} onChange={(e) => setKvalForm({ ...kvalForm, grupa: e.target.value })}>{[...GRUPE_KVALITETE, "Ostalo"].map((g) => <option key={g}>{g}</option>)}</select></Field>
+          <Field label="Naziv (npr. 1.4301 (X5CrNi18-10, Inox 304))"><input className="input" value={kvalForm.naziv} onChange={(e) => setKvalForm({ ...kvalForm, naziv: e.target.value })} /></Field>
+          <Field label="Oznaka (kratko, npr. S235JR ili 1.4301 — nudi se u poljima Kvaliteta na upitu, narudžbenici i skladištu)"><input className="input f-mono" value={kvalForm.oznaka || ""} onChange={(e) => setKvalForm({ ...kvalForm, oznaka: e.target.value })} /></Field>
           <Field label="Gustoća (kg/dm³)"><input className="input f-mono" type="number" step="0.01" min="0" value={kvalForm.gustoca} onChange={(e) => setKvalForm({ ...kvalForm, gustoca: e.target.value })} /></Field>
           <p style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Konstrukcijski čelik ima gustoću {GUSTOCA_CELIKA} kg/dm³ (faktor 1,00) — sve ostale gustoće se prema njemu razmjerno preračunavaju.</p>
         </Modal>
@@ -3238,7 +3289,7 @@ function PostavkeTvrtkeModal({ postavke, onSave, onClose }) {
   );
 }
 
-function UpitStavkeEditor({ stavke, setStavke, katalogProfila, upitiNabave }) {
+function UpitStavkeEditor({ stavke, setStavke, katalogProfila, upitiNabave, kvalitete = [] }) {
   const addRow = () => setStavke([...stavke, { id: uid("us"), kolicina: 1, vrstaStavke: "profil", dimenzijaMM: 6000, sirinaMM: "", vrstaMaterijala: "", kvaliteta: "", normaIsporuke: "", dodatniZahtjevi: "", ponude: [], odabranaPonudaId: null, narudzbenicaId: null }]);
   const update = (i, patch) => setStavke(stavke.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
   const removeRow = (i) => setStavke(stavke.filter((_, idx) => idx !== i));
@@ -3283,7 +3334,7 @@ function UpitStavkeEditor({ stavke, setStavke, katalogProfila, upitiNabave }) {
                 </div>
                 <datalist id={`vrste-materijala-${s.id}`}>{prijedloziVrsteMaterijala.map((v) => <option key={v} value={v} />)}</datalist>
               </td>
-              <td><input className="input" placeholder="S235JR…" value={s.kvaliteta} onChange={(e) => update(i, { kvaliteta: e.target.value })} /></td>
+              <td><KvalitetaOznakaSelect kvalitete={kvalitete} value={s.kvaliteta} onChange={(v) => update(i, { kvaliteta: v })} /></td>
               <td><input className="input" value={s.normaIsporuke} onChange={(e) => update(i, { normaIsporuke: e.target.value })} /></td>
               <td><input className="input" value={s.dodatniZahtjevi} onChange={(e) => update(i, { dodatniZahtjevi: e.target.value })} /></td>
               <td><button className="btn btn-icon btn-ghost" onClick={() => removeRow(i)}><X size={14} /></button></td>
@@ -3681,7 +3732,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId }) 
             </Field>
           </div>
           <Field label="Stavke narudžbe">
-            <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} dozvoliKatalog projekti={db.projekti.filter((p) => !["Završen", "Otkazan"].includes(p.status) || form.stavke.some((st) => st.projektId === p.id))} />
+            <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} dozvoliKatalog kvalitete={db.kvaliteteMaterijala} projekti={db.projekti.filter((p) => !["Završen", "Otkazan"].includes(p.status) || form.stavke.some((st) => st.projektId === p.id))} />
           </Field>
           <Field label="Napomena"><textarea className="textarea" rows={2} value={form.napomena} onChange={(e) => setForm({ ...form, napomena: e.target.value })} /></Field>
         </Modal>
@@ -3695,7 +3746,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId }) 
             <Field label="Izradio"><select className="select" value={upitForm.izradioId} onChange={(e) => setUpitForm({ ...upitForm, izradioId: e.target.value })}>{zaposleniciNabava.map((z) => <option key={z.id} value={z.id}>{z.ime} {z.prezime}</option>)}</select></Field>
           </div>
           <Field label="Status"><select className="select" style={{ maxWidth: 220 }} value={upitForm.status} onChange={(e) => setUpitForm({ ...upitForm, status: e.target.value })}>{["Priprema", "Poslan", "Zaprimanje ponuda", "Zatvoreno"].map((s) => <option key={s}>{s}</option>)}</select></Field>
-          <Field label="Potreban materijal"><UpitStavkeEditor stavke={upitForm.stavke} setStavke={(rows) => setUpitForm({ ...upitForm, stavke: rows })} katalogProfila={db.katalogProfila} upitiNabave={db.upitiNabave} /></Field>
+          <Field label="Potreban materijal"><UpitStavkeEditor stavke={upitForm.stavke} setStavke={(rows) => setUpitForm({ ...upitForm, stavke: rows })} katalogProfila={db.katalogProfila} upitiNabave={db.upitiNabave} kvalitete={db.kvaliteteMaterijala} /></Field>
           <Field label="Napomena"><textarea className="textarea" rows={2} value={upitForm.napomena} onChange={(e) => setUpitForm({ ...upitForm, napomena: e.target.value })} /></Field>
         </Modal>
       )}
@@ -6245,7 +6296,7 @@ function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija, mo
             <Field label="Datum završetka"><input className="input" type="date" value={form.datumZavrsetka} onChange={(e) => setForm({ ...form, datumZavrsetka: e.target.value })} /></Field>
           </div>
           <Field label="Potreban materijal (skladište)">
-            <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} />
+            <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} kvalitete={db.kvaliteteMaterijala} />
           </Field>
         </Modal>
         );
@@ -6307,7 +6358,7 @@ function StavkaPozicijeRedak({ stavka: s, katalog, grupe, kvalitete, onAzuriraj,
           <div style={{ width: 160 }}>
             <label className="label">Kvaliteta materijala</label>
             <select className="select" value={s.kvaliteta || "celik"} onChange={(e) => onAzuriraj({ kvaliteta: e.target.value })}>
-              {(kvalitete && kvalitete.length ? kvalitete : ZADANE_KVALITETE_MATERIJALA).map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}
+              <KvalitetaIdOptions kvalitete={kvalitete} />
             </select>
           </div>
         </>
@@ -6444,7 +6495,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
 
             <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line-strong)" }}>
               <div className="label" style={{ marginBottom: 2 }}>Materijal (iz skladišta) — za ovu stavku</div>
-              <LineItemsEditor mode="materijal" rows={p.materijalStavke || []} setRows={(rows) => updatePoz(p.id, { materijalStavke: rows })} materijali={materijaliSkladiste} katalog={katalog} narudzbenice={narudzbenice} />
+              <LineItemsEditor mode="materijal" rows={p.materijalStavke || []} setRows={(rows) => updatePoz(p.id, { materijalStavke: rows })} materijali={materijaliSkladiste} katalog={katalog} narudzbenice={narudzbenice} kvalitete={kvalitete} />
             </div>
 
             {otvorene[p.id] && (
@@ -7247,7 +7298,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
           <div className="label" style={{ marginBottom: 0 }}>Potreban materijal za izradu</div>
           <Btn variant="ghost" size="sm" icon={FolderInput} onClick={pokreniKreiranjeUpita}>Kreiraj upit iz materijala</Btn>
         </div>
-        <LineItemsEditor mode="materijal" rows={materijalStavke} setRows={azurirajMaterijal} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} dozvoliKatalog />
+        <LineItemsEditor mode="materijal" rows={materijalStavke} setRows={azurirajMaterijal} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} dozvoliKatalog kvalitete={db.kvaliteteMaterijala} />
       </div>
 
       {ostaleStavke.length > 0 && (
@@ -7505,7 +7556,7 @@ function FormatLaseraRedak({ format: f, tipLasera, kvalitete, onAzuriraj, onObri
           <div style={{ width: 165 }}>
             <label className="label">Kvaliteta materijala</label>
             <select className="select" value={f.kvaliteta} onChange={(e) => onAzuriraj({ kvaliteta: e.target.value })}>
-              {(kvalitete && kvalitete.length ? kvalitete : ZADANE_KVALITETE_MATERIJALA).map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}
+              <KvalitetaIdOptions kvalitete={kvalitete} />
             </select>
           </div>
         </>
