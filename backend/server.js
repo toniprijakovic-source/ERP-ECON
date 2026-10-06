@@ -31,7 +31,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada",
   "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
   "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca",
-  "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja",
+  "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije",
 ];
 
 // Svaki modul (isti "moduli" popis kao u pozicijeZaposlenika) dijeli se na kartice — iste
@@ -44,18 +44,18 @@ const KARTICE_MODULA = {
     pregled: { citanje: ["cjenikRada", "fakture", "materijali", "ponude", "projekti", "radniNalozi", "slobodniZadaci"], pisanje: [] },
   },
   skladiste: {
-    zalihe: { citanje: ["materijali", "katalogProfila", "kvaliteteMaterijala", "projekti", "izdatnice", "zaposlenici"], pisanje: ["materijali", "izdatnice"] },
+    zalihe: { citanje: ["materijali", "katalogProfila", "kvaliteteMaterijala", "projekti", "izdatnice", "zaposlenici", "rezervacije", "narudzbenice", "dobavljaci", "postavkeTvrtke"], pisanje: ["materijali", "izdatnice", "rezervacije"] },
     katalog: { citanje: ["katalogProfila"], pisanje: ["katalogProfila"] },
     kvaliteta: { citanje: ["kvaliteteMaterijala"], pisanje: ["kvaliteteMaterijala"] },
-    izdatnice: { citanje: ["izdatnice", "materijali", "projekti", "zaposlenici"], pisanje: ["izdatnice", "materijali"] },
+    izdatnice: { citanje: ["izdatnice", "materijali", "projekti", "zaposlenici", "rezervacije"], pisanje: ["izdatnice", "materijali", "rezervacije"] },
   },
   nabava: {
-    narudzbenice: { citanje: ["narudzbenice", "dobavljaci", "katalogProfila", "materijali"], pisanje: ["narudzbenice", "materijali"] },
-    upiti: { citanje: ["upitiNabave", "dobavljaci", "materijali"], pisanje: ["upitiNabave", "narudzbenice", "materijali"] },
+    narudzbenice: { citanje: ["narudzbenice", "dobavljaci", "katalogProfila", "materijali", "projekti", "kvaliteteMaterijala", "rezervacije", "postavkeTvrtke"], pisanje: ["narudzbenice", "materijali", "rezervacije"] },
+    upiti: { citanje: ["upitiNabave", "dobavljaci", "materijali", "kvaliteteMaterijala", "katalogProfila"], pisanje: ["upitiNabave", "narudzbenice", "materijali"] },
     postavke: { citanje: ["postavkeTvrtke"], pisanje: ["postavkeTvrtke"] },
   },
   proizvodnja: {
-    tablica: { citanje: ["radniNalozi", "projekti", "materijali", "katalogProfila", "narudzbenice", "satiPoNalogu", "izdatnice", "zaposlenici"], pisanje: ["radniNalozi", "materijali", "izdatnice"] },
+    tablica: { citanje: ["radniNalozi", "projekti", "materijali", "katalogProfila", "narudzbenice", "satiPoNalogu", "izdatnice", "zaposlenici", "rezervacije"], pisanje: ["radniNalozi", "materijali", "izdatnice", "rezervacije"] },
     // Plan proizvodnje (nekad "Gantogram"): uz naloge čita i postavke plana, praznike i sate po nalozima;
     // piše sate po nalozima (dnevni unos voditelja proizvodnje), projekte (hitno / na čekanju,
     // završna obrada, faze, "spremno za otpremu" kupaonica) i postavke plana. Normativ i odsutnosti
@@ -852,6 +852,9 @@ app.put("/api/otpremnice/patch", autentikacija, patchPoIdHandler("otpremnice", /
 app.put("/api/cmr/patch", autentikacija, patchPoIdHandler("cmr", /^(CMR-\d{2}-\d{2}-)(\d+)(\/\d{2})$/, "CMR-a"));
 // Radni nalozi: oznaka "<šifra projekta>/<broj>" — novi nalog čija je oznaka već zauzeta dobiva
 // sljedeći slobodan broj tog projekta.
+// Materijali i rezervacije: isto ciljano spremanje po id-u (nema broja dokumenta, pa se regex nikad ne podudara).
+app.put("/api/materijali/patch", autentikacija, patchPoIdHandler("materijali", /^(?!)$/, "materijala"));
+app.put("/api/rezervacije/patch", autentikacija, patchPoIdHandler("rezervacije", /^(?!)$/, "rezervacija"));
 app.put("/api/radniNalozi/patch", autentikacija, patchPoIdHandler("radniNalozi", /^(.*\/)(\d+)()$/, "radnih naloga", zadrziNoveOznakeNaloga));
 
 // ---------- Ciljana izmjena projekata (upsert po id-u + remove) ----------

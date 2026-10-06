@@ -19,7 +19,7 @@ const KLJUCEVI = [
   "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada",
   "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
   "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca",
-  "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja",
+  "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije",
 ];
 
 const pool = new Pool({
