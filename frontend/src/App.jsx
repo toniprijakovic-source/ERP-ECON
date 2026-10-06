@@ -7218,16 +7218,20 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16, alignItems: "flex-start" }}>
         {narudzbeProjekta.map((n) => (
-          <React.Fragment key={n.id}>
+          <div key={n.id} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <Btn variant="ghost" icon={Pencil} onClick={() => setNarudzbaModal({ narudzba: n })}>Narudžba {n.broj || "(bez broja)"}</Btn>
             <Btn variant="ghost" icon={FileText} onClick={() => setPotvrdaModal(n)}>{n.potvrda ? `Potvrda ${n.potvrda.broj}` : narudzbeProjekta.length > 1 ? `Potvrda za ${n.broj || "narudžbu"}` : "Potvrda narudžbe"}</Btn>
-          </React.Fragment>
+          </div>
         ))}
-        <Btn variant="ghost" icon={Plus} onClick={() => setNarudzbaModal({ narudzba: null })}>{narudzbeProjekta.length > 0 ? "Nova narudžba" : "Narudžba"}</Btn>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Btn variant="ghost" icon={Plus} onClick={() => setNarudzbaModal({ narudzba: null })}>{narudzbeProjekta.length > 0 ? "Nova narudžba" : "Narudžba"}</Btn>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Btn variant="ghost" icon={Truck} onClick={() => setOtpremniceModal(true)}>Otpremnice{brojOtpremnica > 0 ? ` (${brojOtpremnica})` : ""}</Btn>
         <Btn variant="ghost" icon={Receipt} onClick={() => setVanjskiModal(true)}>Vanjski troškovi{(projekt.vanjskiTroskovi || []).length > 0 ? ` (${fmtCur((projekt.vanjskiTroskovi || []).reduce((s, v) => s + (Number(v.iznos) || 0), 0))})` : ""}</Btn>
+        </div>
       </div>
       {vanjskiModal && <VanjskiTroskoviModal projekt={projekt} dobavljaci={db.dobavljaci || []} patchProjekt={patchProjekt} onClose={() => setVanjskiModal(false)} />}
 
