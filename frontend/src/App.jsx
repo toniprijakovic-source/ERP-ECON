@@ -5523,6 +5523,21 @@ function PodijeliProgramModal({ program, materijali, programi, onPodijeli, onClo
 }
 
 /* ============================== NARUDŽBA KUPCA / OTPREMNICE ============================== */
+// Projekt može imati VIŠE narudžbi kupca. Gdje radnja vrijedi za jednu narudžbu (nova otpremnica,
+// uvoz u normativ) a projekt ih ima više, pita se za koju.
+function OdaberiNarudzbuModal({ narudzbe, naslov, onOdaberi, onClose }) {
+  const [id, setId] = useState(narudzbe[0]?.id || "");
+  return (
+    <Modal title={naslov} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" disabled={!id} onClick={() => onOdaberi(narudzbe.find((n) => n.id === id))}>Nastavi</Btn></>}>
+      <Field label="Narudžba kupca">
+        <select className="select" value={id} onChange={(e) => setId(e.target.value)}>
+          {narudzbe.map((n) => <option key={n.id} value={n.id}>{n.broj || "(bez broja)"} — {fmtDate(n.datum)} · {(n.stavke || []).length} stavki</option>)}
+        </select>
+      </Field>
+    </Modal>
+  );
+}
+
 // "Narudžba" ovdje = narudžba KOJU ŠALJE KUPAC Econu (s dogovorenim cijenama po stavci), za
 // razliku od postojećih "Narudžbenica" koje su Econova narudžba DOBAVLJAČU.
 function NarudzbaModal({ narudzba, projekt, db, update, showToast, onClose }) {
@@ -5968,20 +5983,22 @@ function OtpremnicaPrintModal({ otpremnica, db, onClose }) {
   );
 }
 
-function OtpremniceListModal({ projekt, narudzba, db, update, patchProjekt, showToast, onClose }) {
+function OtpremniceListModal({ projekt, narudzbe = [], db, update, patchProjekt, showToast, onClose }) {
   const kupac = db.kupci.find((k) => k.id === projekt?.kupacId);
   const otpremnice = db.otpremnice.filter((o) => o.projektId === projekt.id).sort((a, b) => b.datum.localeCompare(a.datum));
-  const [otpModal, setOtpModal] = useState(false);
+  const [otpModal, setOtpModal] = useState(false); // false | { narudzba } — narudžba po kojoj se izdaje (null kod tipskih projekata)
+  const [odabirNarudzbe, setOdabirNarudzbe] = useState(false);
   const [printOtp, setPrintOtp] = useState(null);
   const [delOtp, setDelOtp] = useState(null);
   const koristiNormativ = !!projekt.koristiNormativ;
+  const novaOtpremnica = () => (!koristiNormativ && narudzbe.length > 1 ? setOdabirNarudzbe(true) : setOtpModal({ narudzba: narudzbe[0] || null }));
   const spremneZaOtpremu = koristiNormativ ? (projekt.isporuke || []).filter((i) => i.isporuceno && !i.uOtpremniciId).length : 0;
-  const nemaStavki = koristiNormativ ? spremneZaOtpremu === 0 : !narudzba;
+  const nemaStavki = koristiNormativ ? spremneZaOtpremu === 0 : narudzbe.length === 0;
 
   return (
     <>
-      <Modal wide title={`Otpremnice — ${projekt.sifra}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Plus} onClick={() => setOtpModal(true)} disabled={nemaStavki}>Nova otpremnica</Btn></>}>
-        {!koristiNormativ && !narudzba && <div style={{ fontSize: 12.5, color: "var(--rust)", marginBottom: 12 }}>Ovaj projekt nema unesenu narudžbu kupca — prvo je unesi (gumb "Narudžba" u detaljima projekta).</div>}
+      <Modal wide title={`Otpremnice — ${projekt.sifra}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Plus} onClick={novaOtpremnica} disabled={nemaStavki}>Nova otpremnica</Btn></>}>
+        {!koristiNormativ && narudzbe.length === 0 && <div style={{ fontSize: 12.5, color: "var(--rust)", marginBottom: 12 }}>Ovaj projekt nema unesenu narudžbu kupca — prvo je unesi (gumb "Narudžba" u detaljima projekta).</div>}
         {koristiNormativ && spremneZaOtpremu === 0 && <div style={{ fontSize: 12.5, color: "var(--rust)", marginBottom: 12 }}>Nema kupaonica označenih kao spremne za otpremu u rasporedu isporuka.</div>}
         {otpremnice.length === 0 ? <EmptyState text="Nema izdanih otpremnica." /> : (
           <table className="erp-table">
@@ -6003,7 +6020,8 @@ function OtpremniceListModal({ projekt, narudzba, db, update, patchProjekt, show
         )}
       </Modal>
 
-      {otpModal && <OtpremnicaFormModal narudzba={narudzba} projekt={projekt} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} onClose={() => setOtpModal(false)} />}
+      {odabirNarudzbe && <OdaberiNarudzbuModal narudzbe={narudzbe} naslov="Nova otpremnica — odaberi narudžbu" onOdaberi={(n) => { setOdabirNarudzbe(false); setOtpModal({ narudzba: n }); }} onClose={() => setOdabirNarudzbe(false)} />}
+      {otpModal && <OtpremnicaFormModal narudzba={otpModal.narudzba} projekt={projekt} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} onClose={() => setOtpModal(false)} />}
       {printOtp && <OtpremnicaPrintModal otpremnica={printOtp} db={db} onClose={() => setPrintOtp(null)} />}
       {delOtp && <ConfirmDelete label={delOtp.broj} onCancel={() => setDelOtp(null)} onConfirm={() => {
         update("otpremnice", db.otpremnice.filter((o) => o.id !== delOtp.id));
@@ -6924,11 +6942,12 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
   const [noviZadatak, setNoviZadatak] = useState("");
   const [noviZadatakDatum, setNoviZadatakDatum] = useState("");
   const [noviZadatakKome, setNoviZadatakKome] = useState("");
-  const [narudzbaModal, setNarudzbaModal] = useState(false);
-  const [potvrdaModal, setPotvrdaModal] = useState(false);
+  const [narudzbaModal, setNarudzbaModal] = useState(null); // null | { narudzba: objekt | null (nova) }
+  const [potvrdaModal, setPotvrdaModal] = useState(null); // null | narudžba za koju se otvara potvrda
+  const [uvozOdabir, setUvozOdabir] = useState(false);
   const [otpremniceModal, setOtpremniceModal] = useState(false);
   const [vanjskiModal, setVanjskiModal] = useState(false);
-  const narudzba = db.narudzbe.find((n) => n.projektId === projekt.id);
+  const narudzbeProjekta = db.narudzbe.filter((n) => n.projektId === projekt.id);
   const brojOtpremnica = db.otpremnice.filter((o) => o.projektId === projekt.id).length;
 
   const [normativOtvoren, setNormativOtvoren] = useState(false);
@@ -6948,7 +6967,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
   ];
   const nadjiStavku = (grupa, stavkaId) => (grupa === "stavkePod" ? stavkePod : stavkeKomplet).find((s) => s.id === stavkaId);
   const rasporedjenoZaStavku = (grupa, stavkaId) => isporuke.filter((i) => i.grupa === grupa && i.stavkaId === stavkaId).reduce((s, i) => s + (Number(i.komada) || 0), 0);
-  const [uvozOtvoren, setUvozOtvoren] = useState(false);
+  const [uvozOtvoren, setUvozOtvoren] = useState(false); // false | narudžba iz koje se uvozi
   const uveziIzNarudzbe = (odabrane) => {
     const noviPod = [...stavkePod];
     const noviKomplet = [...stavkeKomplet];
@@ -7040,7 +7059,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
           </label>
           {koristiNormativ && (
             <div style={{ display: "flex", gap: 8 }}>
-              <Btn variant="ghost" size="sm" icon={Download} onClick={() => setUvozOtvoren(true)} disabled={!narudzba}>Uvezi iz narudžbe</Btn>
+              <Btn variant="ghost" size="sm" icon={Download} onClick={() => (narudzbeProjekta.length > 1 ? setUvozOdabir(true) : setUvozOtvoren(narudzbeProjekta[0] || false))} disabled={narudzbeProjekta.length === 0}>Uvezi iz narudžbe</Btn>
               <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setNormativOtvoren(true)}>Uredi normativ</Btn>
             </div>
           )}
@@ -7052,7 +7071,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
           <>
             <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 10 }}>
               Normativ: <strong>{db.normativi?.naziv}</strong> · {(db.normativi?.grupe || []).map((g) => `${g.naziv.split(" (")[0]}: ${g.cijenaKg} €/kg, ${g.ucinakKgH} kg/h`).join(" · ")}
-              {!narudzba && <span> · Za uvoz stavki iz narudžbe prvo kreiraj narudžbu kupca za ovaj projekt.</span>}
+              {narudzbeProjekta.length === 0 && <span> · Za uvoz stavki iz narudžbe prvo kreiraj narudžbu kupca za ovaj projekt.</span>}
             </div>
 
             <StavkeNormativaTablica naslov="Pod (podna konstrukcija)" rezultat={izracunNorm.pod} rasporedjeno={(id) => rasporedjenoZaStavku("stavkePod", id)} onDodaj={() => dodajStavku("stavkePod")} onAzuriraj={(id, patch) => azurirajStavku("stavkePod", id, patch)} onObrisi={(id) => obrisiStavku("stavkePod", id)} />
@@ -7138,8 +7157,13 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
       )}
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <Btn variant="ghost" icon={narudzba ? Pencil : Plus} onClick={() => setNarudzbaModal(true)}>{narudzba ? `Narudžba ${narudzba.broj}` : "Narudžba"}</Btn>
-        {narudzba && <Btn variant="ghost" icon={FileText} onClick={() => setPotvrdaModal(true)}>{narudzba.potvrda ? `Potvrda ${narudzba.potvrda.broj}` : "Potvrda narudžbe"}</Btn>}
+        {narudzbeProjekta.map((n) => (
+          <React.Fragment key={n.id}>
+            <Btn variant="ghost" icon={Pencil} onClick={() => setNarudzbaModal({ narudzba: n })}>Narudžba {n.broj || "(bez broja)"}</Btn>
+            <Btn variant="ghost" icon={FileText} onClick={() => setPotvrdaModal(n)}>{n.potvrda ? `Potvrda ${n.potvrda.broj}` : narudzbeProjekta.length > 1 ? `Potvrda za ${n.broj || "narudžbu"}` : "Potvrda narudžbe"}</Btn>
+          </React.Fragment>
+        ))}
+        <Btn variant="ghost" icon={Plus} onClick={() => setNarudzbaModal({ narudzba: null })}>{narudzbeProjekta.length > 0 ? "Nova narudžba" : "Narudžba"}</Btn>
         <Btn variant="ghost" icon={Truck} onClick={() => setOtpremniceModal(true)}>Otpremnice{brojOtpremnica > 0 ? ` (${brojOtpremnica})` : ""}</Btn>
         <Btn variant="ghost" icon={Receipt} onClick={() => setVanjskiModal(true)}>Vanjski troškovi{(projekt.vanjskiTroskovi || []).length > 0 ? ` (${fmtCur((projekt.vanjskiTroskovi || []).reduce((s, v) => s + (Number(v.iznos) || 0), 0))})` : ""}</Btn>
       </div>
@@ -7260,11 +7284,12 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
       </div>
     </Modal>
 
-    {narudzbaModal && <NarudzbaModal narudzba={narudzba} projekt={projekt} db={db} update={update} showToast={showToast} onClose={() => setNarudzbaModal(false)} />}
-    {potvrdaModal && narudzba && <PotvrdaNarudzbeModal narudzba={narudzba} projekt={projekt} db={db} update={update} showToast={showToast} mojId={mojId} onClose={() => setPotvrdaModal(false)} />}
-    {otpremniceModal && <OtpremniceListModal projekt={projekt} narudzba={narudzba} db={db} update={update} patchProjekt={patchProjektAsync} showToast={showToast} onClose={() => setOtpremniceModal(false)} />}
+    {narudzbaModal && <NarudzbaModal narudzba={narudzbaModal.narudzba} projekt={projekt} db={db} update={update} showToast={showToast} onClose={() => setNarudzbaModal(null)} />}
+    {potvrdaModal && <PotvrdaNarudzbeModal narudzba={db.narudzbe.find((n) => n.id === potvrdaModal.id) || potvrdaModal} projekt={projekt} db={db} update={update} showToast={showToast} mojId={mojId} onClose={() => setPotvrdaModal(null)} />}
+    {uvozOdabir && <OdaberiNarudzbuModal narudzbe={narudzbeProjekta} naslov="Uvoz u normativ — odaberi narudžbu" onOdaberi={(n) => { setUvozOdabir(false); setUvozOtvoren(n); }} onClose={() => setUvozOdabir(false)} />}
+    {otpremniceModal && <OtpremniceListModal projekt={projekt} narudzbe={narudzbeProjekta} db={db} update={update} patchProjekt={patchProjektAsync} showToast={showToast} onClose={() => setOtpremniceModal(false)} />}
     {normativOtvoren && <NormativiModal db={db} update={update} showToast={showToast} onClose={() => setNormativOtvoren(false)} />}
-    {uvozOtvoren && narudzba && <NarudzbaUvozModal narudzba={narudzba} stavkePod={stavkePod} stavkeKomplet={stavkeKomplet} onUvezi={uveziIzNarudzbe} onClose={() => setUvozOtvoren(false)} />}
+    {uvozOtvoren && <NarudzbaUvozModal narudzba={uvozOtvoren} stavkePod={stavkePod} stavkeKomplet={stavkeKomplet} onUvezi={uveziIzNarudzbe} onClose={() => setUvozOtvoren(false)} />}
     </>
   );
 }
@@ -8656,7 +8681,9 @@ function PodlogaZaFakturuFormModal({ db, update, showToast, onClose }) {
 
   const otpremniceZaProjekt = db.otpremnice.filter((o) => o.projektId === projektId);
   const projekt = db.projekti.find((p) => p.id === projektId);
-  const narudzba = db.narudzbe.find((n) => n.projektId === projektId);
+  const narudzbeProjekta = db.narudzbe.filter((n) => n.projektId === projektId);
+  // cijene se traže po stavci kroz sve narudžbe projekta (otpremnica upućuje na stavku narudžbe po id-u)
+  const narudzba = narudzbeProjekta.length ? { id: narudzbeProjekta[0].id, stavke: narudzbeProjekta.flatMap((n) => n.stavke || []) } : undefined;
   const odabraneOtp = otpremniceZaProjekt.filter((o) => odabraneOtpId.includes(o.id));
   const stavke = izracunajStavkePodloge(odabraneOtp, narudzba);
   const zbroj = stavke.reduce((s, x) => s + x.ukupno, 0);
@@ -8669,7 +8696,7 @@ function PodlogaZaFakturuFormModal({ db, update, showToast, onClose }) {
     if (odabraneOtp.length === 0) { showToast("Odaberi barem jednu otpremnicu."); return; }
     const nova = {
       id: uid("pdf"), broj: sljedeciBrojPodloge(db.podlogeZaFakturu, projekt.sifra),
-      projektId, otpremniceIds: odabraneOtpId, narudzbaId: narudzba?.id || null,
+      projektId, otpremniceIds: odabraneOtpId, narudzbaId: odabraneOtp[0]?.narudzbaId || narudzba?.id || null,
       datum, vorkasa: Number(vorkasa) || 0, stavke, zbroj, zaPlatiti,
     };
     update("podlogeZaFakturu", [...db.podlogeZaFakturu, nova]);
@@ -8984,6 +9011,7 @@ function OtpremniceTab({ db, update, patchProjekt, showToast, mozeMijenjati = tr
 function NovaOtpremnicaModal({ db, update, patchProjekt, showToast, onClose }) {
   const [vrsta, setVrsta] = useState(null); // null | "kupac" | "kooperant"
   const [projektId, setProjektId] = useState("");
+  const [narudzbaId, setNarudzbaId] = useState("");
 
   if (vrsta === "kooperant") {
     return <OtpremnicaKooperantuModal db={db} update={update} showToast={showToast} onClose={onClose} />;
@@ -8998,14 +9026,18 @@ function NovaOtpremnicaModal({ db, update, patchProjekt, showToast, onClose }) {
     const projekt = db.projekti.find((p) => p.id === projektId);
 
     if (projekt) {
-      const narudzba = db.narudzbe.find((n) => n.projektId === projekt.id);
+      const narudzbeProjekta = db.narudzbe.filter((n) => n.projektId === projekt.id);
+      if (!projekt.koristiNormativ && narudzbeProjekta.length > 1 && !narudzbaId) {
+        return <OdaberiNarudzbuModal narudzbe={narudzbeProjekta} naslov="Nova otpremnica — odaberi narudžbu" onOdaberi={(n) => setNarudzbaId(n.id)} onClose={onClose} />;
+      }
+      const narudzba = narudzbeProjekta.find((n) => n.id === narudzbaId) || narudzbeProjekta[0];
       return <OtpremnicaFormModal narudzba={narudzba} projekt={projekt} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} onClose={onClose} />;
     }
 
     return (
       <Modal title="Nova otpremnica — odaberi projekt" onClose={onClose} footer={<><Btn onClick={() => setVrsta(null)}>Natrag</Btn><Btn onClick={onClose}>Odustani</Btn></>}>
         <Field label="Projekt">
-          <select className="select" value={projektId} onChange={(e) => setProjektId(e.target.value)}>
+          <select className="select" value={projektId} onChange={(e) => { setProjektId(e.target.value); setNarudzbaId(""); }}>
             <option value="">— odaberi projekt —</option>
             {projektiZaOtpremu.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
           </select>
