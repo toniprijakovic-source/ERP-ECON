@@ -5059,6 +5059,8 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
     }
     return lista;
   };
+  // Na izborniku radnih naloga prikazuju se samo nalozi faze ovog lasera (otvoreni).
+  const nazivFazeLasera = stroj === "laserLimovi" ? "Laser za limove" : "Laser za profile";
   const materijaliZaStroj = db.materijali.filter((m) => (stroj === "laserLimovi" ? m.kgPoM2 > 0 : m.kgPoM > 0));
 
   const programiZaStroj = db.programiRezanja.filter((p) => p.stroj === stroj);
@@ -5301,8 +5303,9 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
             <Field label="Radni nalog">
               <select className="select" value={form.radniNalogId} onChange={(e) => setForm({ ...form, radniNalogId: e.target.value })}>
                 <option value="">Odaberi radni nalog…</option>
-                {db.radniNalozi.map((rn) => { const proj = db.projekti.find((p) => p.id === rn.projektId); return <option key={rn.id} value={rn.id}>{rn.broj} — {proj?.sifra} {rn.faza}</option>; })}
+                {db.radniNalozi.filter((rn) => rn.id === form.radniNalogId || (rn.faza === nazivFazeLasera && rn.status !== "Završen")).map((rn) => { const proj = db.projekti.find((p) => p.id === rn.projektId); return <option key={rn.id} value={rn.id}>{rn.broj} — {proj?.sifra} {proj?.naziv}</option>; })}
               </select>
+              {!db.radniNalozi.some((rn) => rn.faza === nazivFazeLasera && rn.status !== "Završen") && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 4 }}>Nema otvorenih radnih naloga za fazu „{nazivFazeLasera}“.</div>}
             </Field>
             <Field label="Status"><select className="select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{REZANJE_STATUSI.map((s) => <option key={s}>{s}</option>)}</select></Field>
             <Field label="Napomena"><input className="input" value={form.napomena} onChange={(e) => setForm({ ...form, napomena: e.target.value })} /></Field>
