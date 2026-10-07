@@ -2535,6 +2535,10 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
     : z.izvrsioId && (!z.zavrsetakVidjenZadao || (z.zavrsetakVidjenDatum || "") >= granicaZavrsenih)))
     .sort((a, b) => (b.novo - a.novo) || String(b.datumIzvrsenja || "").localeCompare(String(a.datumIzvrsenja || "")));
   const novihZavrsenih = zavrseniZadaci.filter((z) => z.novo).length;
+  // Dodijeljeni: otvoreni zadaci koje sam zadao drugim osobama (kod zadataka bez projekta i onaj tko ga je dodao).
+  const dodijeljeniZadaci = sviOtvoreniZadaci
+    .filter((z) => (z.zadaoId || (z.slobodan ? z.kreiraoId : null)) === mojId && z.dodijeljenoId !== mojId)
+    .sort((a, b) => (a.planiraniDatum || "9999-99-99").localeCompare(b.planiraniDatum || "9999-99-99"));
 
   return (
     <div>
@@ -2577,7 +2581,7 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
         <div className="card" style={{ padding: 16 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
             <CheckCircle2 size={15} color="var(--steel)" />
-            <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600 }}>{skupinaZadataka === "zavrseni" ? "Završeni zadaci" : odabrano === "moji" ? "Moji zadaci" : odabrano === "svi" ? "Zadaci svih zaposlenika" : `Zadaci: ${imeZaposlenika(odabrano)}`}</h3>
+            <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600 }}>{skupinaZadataka === "zavrseni" ? "Završeni zadaci" : skupinaZadataka === "dodijeljeni" ? "Dodijeljeni zadaci" : odabrano === "moji" ? "Moji zadaci" : odabrano === "svi" ? "Zadaci svih zaposlenika" : `Zadaci: ${imeZaposlenika(odabrano)}`}</h3>
             <Btn variant="ghost" size="sm" icon={Plus} onClick={() => setDodajZadatakOtvoreno((o) => !o)} style={{ marginLeft: "auto" }}>Novi zadatak</Btn>
             {mozeVidjetiTudje && skupinaZadataka === "aktualni" && (
               <select className="select" style={{ width: 210, fontSize: 12, padding: "4px 8px" }} value={zadaciZa} onChange={(e) => setZadaciZa(e.target.value)}>
@@ -2589,6 +2593,7 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
           </div>
           <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 10 }}>
             <div className={`nav-tab ${skupinaZadataka === "aktualni" ? "active" : ""}`} onClick={() => setSkupinaZadataka("aktualni")}>Aktualni ({mojiZadaci.length})</div>
+            <div className={`nav-tab ${skupinaZadataka === "dodijeljeni" ? "active" : ""}`} onClick={() => setSkupinaZadataka("dodijeljeni")}>Dodijeljeni ({dodijeljeniZadaci.length})</div>
             <div className={`nav-tab ${skupinaZadataka === "zavrseni" ? "active" : ""}`} onClick={() => setSkupinaZadataka("zavrseni")}>Završeni{novihZavrsenih ? <span style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 8, background: "var(--rust)", color: "#fff", fontSize: 10.5 }}>{novihZavrsenih}</span> : ` (${zavrseniZadaci.length})`}</div>
           </div>
           {dodajZadatakOtvoreno && (
@@ -2617,6 +2622,29 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
                   {z.novo && <Btn size="sm" onClick={() => potvrdiObavijesti([{ vrsta: "zavrsetak", izvor: z.izvor, projektId: z.projektId, zadId: z.id }])}>U redu</Btn>}
                 </div>
               ))}
+            </div>
+          ))}
+          {skupinaZadataka === "dodijeljeni" && (dodijeljeniZadaci.length === 0 ? <EmptyState text="Nemaš otvorenih zadataka koje si dodijelio/la drugima." /> : (
+            <div>
+              {dodijeljeniZadaci.map((z) => {
+                const kasni = z.planiraniDatum && daysUntil(z.planiraniDatum) < 0;
+                return (
+                  <div key={`${z.slobodan ? "s" : z.projektId}-${z.id}`} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "7px 0", borderBottom: "1px solid var(--line)" }}>
+                    <div style={{ flex: 1, minWidth: 0, cursor: z.slobodan ? "default" : "pointer" }} title={z.slobodan ? undefined : "Otvori projekt"} onClick={() => { if (!z.slobodan) otvoriProjekt(z.projektId); }}>
+                      <div style={{ fontSize: 13 }}>{z.naziv}</div>
+                      <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{z.slobodan ? "Bez projekta" : `${z.projektSifra} — ${z.projektNaziv}`} · dodijeljeno: <strong style={{ color: "var(--steel)" }}>{imeZaposlenika(z.dodijeljenoId)}</strong>{z.zadanoDatum ? ` · zadano ${fmtDate(z.zadanoDatum)}` : ""}</div>
+                      <NapomenaZadatka
+                        zadatak={z}
+                        imeZaposlenika={imeZaposlenika}
+                        mozeUredjivati={z.slobodan ? (z.kreiraoId === mojId || mozeZadavatiDrugima) : mozeMijenjatiProjekte}
+                        onSpremi={(tekst) => (z.slobodan ? spremiNapomenuSlobodnog(z.id, tekst) : patchZadatakNapomena(z.projektId, z.id, tekst))}
+                      />
+                    </div>
+                    {z.planiraniDatum && <span className="f-mono" style={{ fontSize: 11.5, color: kasni ? "var(--rust)" : "var(--ink-soft)", flexShrink: 0, whiteSpace: "nowrap" }}>{fmtDate(z.planiraniDatum)}</span>}
+                    {z.slobodan && (mozeZadavatiDrugima || z.kreiraoId === mojId) && <button type="button" onClick={() => obrisiSlobodni(z.id)} title="Obriši zadatak" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-faint)", padding: 0, flexShrink: 0 }}><Trash2 size={13} /></button>}
+                  </div>
+                );
+              })}
             </div>
           ))}
           {skupinaZadataka === "aktualni" && (mojiZadaci.length === 0 ? <EmptyState text={gledamTudje ? "Nema otvorenih zadataka." : "Nemaš dodijeljenih zadataka."} /> : (
