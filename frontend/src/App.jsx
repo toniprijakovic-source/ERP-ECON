@@ -10,6 +10,15 @@ import logoEcon from "./assets/logo-econ.jpg";
 import QRCode from "qrcode";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
+// Demo instalacija (VITE_DEMO=1, vidi DEMO-POSTAVLJANJE.md): naziv "Demo", bez logotipa i podataka
+// tvrtke, bez Backupa, promjene lozinki i kioska. Produkcijska verzija se ne mijenja.
+const DEMO = import.meta.env.VITE_DEMO === "1";
+const NAZIV_ZADANO = DEMO ? "Demo d.o.o." : "ECON D.O.O.";
+const MJESTO_ZADANO = DEMO ? "Zagreb" : "Prelog";
+// Logotip na dokumentima; u demu umjesto slike samo naziv tvrtke.
+const LogoTvrtke = ({ naziv, style }) => (DEMO
+  ? <div style={{ ...style, fontSize: 26, fontWeight: 700, letterSpacing: "0.02em", color: "#222" }}>{naziv || NAZIV_ZADANO}</div>
+  : <img src={logoEcon} alt="Econ" style={style} />);
 
 // Čita zaposlenikId iz JWT-a bez provjere potpisa (potpis provjerava backend na svakom pozivu) — koristi se samo da frontend zna tko je prijavljen.
 function decodeJwtPayload(token) {
@@ -1796,7 +1805,7 @@ function LoginScreen({ onLogin }) {
           </div>
           <div>
             <div className="f-mono" style={{ fontSize: 10, letterSpacing: "0.08em", color: "var(--ink-faint)", textTransform: "uppercase" }}>ERP prijava</div>
-            <div className="f-display" style={{ fontSize: 18, fontWeight: 600 }}>ECON D.O.O.</div>
+            <div className="f-display" style={{ fontSize: 18, fontWeight: 600 }}>{NAZIV_ZADANO}</div>
           </div>
         </div>
         {ucitavanje ? (
@@ -1815,6 +1824,7 @@ function LoginScreen({ onLogin }) {
                 onKeyDown={(e) => { if (e.key === "Enter") prijavi(); }}
               />
             </Field>
+            {DEMO && <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 10 }}>Demo verzija s izmišljenim podacima. Lozinku ste dobili e-mailom. Promjene su dopuštene — podaci se svake noći vraćaju na početno stanje.</div>}
             {greska && <div style={{ color: "var(--rust)", fontSize: 12.5, marginBottom: 10 }}>{greska}</div>}
             <Btn variant="primary" onClick={prijavi} disabled={saljem} className="f-display" style={{ width: "100%", justifyContent: "center", marginTop: 4 }}>{saljem ? "Prijava…" : "Prijava"}</Btn>
           </>
@@ -2236,12 +2246,12 @@ export default function App() {
 
   const urlParametri = new URLSearchParams(window.location.search);
   const jeKioskNacin = urlParametri.get("kiosk") === "1" || !!urlParametri.get("rfid");
-  if (jeKioskNacin) return <KioskView />;
+  if (jeKioskNacin && !DEMO) return <KioskView />;
 
   // Početna stranica (bez prijave) je kiosk zaslon za evidenciju radnog vremena — gumb "Prijava"
   // u kutu prebacuje na stvarni login (?prijava=1), da uređaj na ulazu ne mora biti posebno adresiran.
   const zeliPrijavu = urlParametri.get("prijava") === "1";
-  if ((potrebnaPrijava || !prijavljenId) && !zeliPrijavu) {
+  if ((potrebnaPrijava || !prijavljenId) && !zeliPrijavu && !DEMO) {
     return <KioskView onPrijava={() => { window.location.href = `${window.location.pathname}?prijava=1`; }} />;
   }
 
@@ -2315,7 +2325,7 @@ export default function App() {
             <button type="button" className="btn btn-ghost btn-icon samo-mobitel" aria-label="Izbornik" onClick={() => setIzbornikOtvoren(true)}><Menu size={18} /></button>
             <div style={{ minWidth: 0 }}>
               <div className="f-mono samo-racunalo" style={{ fontSize: 10.5, letterSpacing: "0.08em", color: "var(--ink-faint)", textTransform: "uppercase" }}>ERP · Proizvodnja čeličnih konstrukcija</div>
-              <div className="f-display" style={{ fontSize: 15, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{db.postavkeTvrtke?.naziv || "ECON D.O.O."}</div>
+              <div className="f-display" style={{ fontSize: 15, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{db.postavkeTvrtke?.naziv || NAZIV_ZADANO}{DEMO && <span className="badge badge-warning" title="Izmišljeni podaci — svake noći se vraćaju na početno stanje" style={{ marginLeft: 8, fontSize: 9.5, verticalAlign: "middle" }}>DEMO</span>}</div>
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
@@ -2340,7 +2350,7 @@ export default function App() {
                 />
               )}
             </div>
-            {mojaPozicija?.id === "poz-administrator" && <Btn variant="ghost" size="sm" icon={Database} className="samo-racunalo" onClick={() => setBackupOpen(true)}>Backup</Btn>}
+            {!DEMO && mojaPozicija?.id === "poz-administrator" && <Btn variant="ghost" size="sm" icon={Database} className="samo-racunalo" onClick={() => setBackupOpen(true)}>Backup</Btn>}
             <Btn variant="ghost" size="sm" className="samo-racunalo" onClick={odjava}>Odjava</Btn>
           </div>
         </div>
@@ -2351,7 +2361,7 @@ export default function App() {
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <div style={{ width: 26, height: 26, background: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 2 }}><Building2 size={15} color="var(--accent-ink)" /></div>
-                  <span className="f-display" style={{ color: "#fff", fontWeight: 600 }}>{db.postavkeTvrtke?.naziv || "ECON D.O.O."}</span>
+                  <span className="f-display" style={{ color: "#fff", fontWeight: 600 }}>{db.postavkeTvrtke?.naziv || NAZIV_ZADANO}</span>
                 </div>
                 <button type="button" className="btn btn-icon" aria-label="Zatvori izbornik" style={{ color: "var(--sidebar-ink)", background: "transparent", borderColor: "rgba(255,255,255,0.15)" }} onClick={() => setIzbornikOtvoren(false)}><X size={18} /></button>
               </div>
@@ -2367,7 +2377,7 @@ export default function App() {
                 <div style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{zaposlenik?.ime} {zaposlenik?.prezime}</div>
                 <div style={{ fontSize: 11.5, marginBottom: 10 }}>{mojaPozicija?.naziv || "—"}</div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {mojaPozicija?.id === "poz-administrator" && <Btn variant="primary" size="sm" icon={Database} onClick={() => { setIzbornikOtvoren(false); setBackupOpen(true); }}>Backup</Btn>}
+                  {!DEMO && mojaPozicija?.id === "poz-administrator" && <Btn variant="primary" size="sm" icon={Database} onClick={() => { setIzbornikOtvoren(false); setBackupOpen(true); }}>Backup</Btn>}
                   <Btn variant="primary" size="sm" onClick={() => { setIzbornikOtvoren(false); odjava(); }}>Odjava</Btn>
                 </div>
               </div>
@@ -2396,7 +2406,7 @@ export default function App() {
       </div>
 
       {cekaBrisanje && <ConfirmDelete label={cekaBrisanje.naziv} onCancel={() => setCekaBrisanje(null)} onConfirm={() => { const akcija = cekaBrisanje.akcija; setCekaBrisanje(null); akcija(); }} />}
-      {backupOpen && <BackupModal db={db} update={update} showToast={showToast} onClose={() => setBackupOpen(false)} />}
+      {!DEMO && backupOpen && <BackupModal db={db} update={update} showToast={showToast} onClose={() => setBackupOpen(false)} />}
 
       {toast && (
         <div style={{ position: "fixed", bottom: 20, right: 20, maxWidth: "calc(100vw - 40px)", background: "var(--ink)", color: "#fff", padding: "10px 16px", borderRadius: 3, fontSize: 13, display: "flex", alignItems: "center", gap: 8, zIndex: 100 }}>
@@ -2912,7 +2922,7 @@ async function ispisiNaljepniceMaterijala(popis, nazivTvrtke) {
   const qr = {};
   for (const n of popis) if (!qr[n.maticniBroj]) qr[n.maticniBroj] = await QRCode.toDataURL(n.maticniBroj || "-", { margin: 0, width: 220, errorCorrectionLevel: "M" });
   const css = "@page{size:90mm 38mm;margin:0}html,body{margin:0;padding:0}.n{width:90mm;height:38mm;box-sizing:border-box;padding:2.2mm 2.6mm;display:flex;gap:2.6mm;page-break-after:always;overflow:hidden;font-family:Arial,Helvetica,sans-serif;color:#000}.n:last-child{page-break-after:auto}.q{width:25mm;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:space-between}.q img{width:25mm;height:25mm;image-rendering:pixelated}.q .f{font-size:5.6pt;color:#333;text-align:center;line-height:1.1}.t{flex:1;min-width:0;display:flex;flex-direction:column;font-size:9pt;line-height:1.3}.t .naziv{font-weight:700;font-size:11pt;line-height:1.12;margin-bottom:1.2mm;max-height:2.3em;overflow:hidden}.t .r{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.t .r b{font-weight:700}.t .mb{margin-top:auto;font-size:13pt;font-weight:700;white-space:nowrap}";
-  const tijelo = popis.map((n) => `<div class="n"><div class="q"><img src="${qr[n.maticniBroj]}" alt=""><div class="f">${escHtml(nazivTvrtke || "Econ d.o.o.")}</div></div><div class="t"><div class="naziv">${escHtml(n.naziv)}</div>`
+  const tijelo = popis.map((n) => `<div class="n"><div class="q"><img src="${qr[n.maticniBroj]}" alt=""><div class="f">${escHtml(nazivTvrtke || NAZIV_ZADANO)}</div></div><div class="t"><div class="naziv">${escHtml(n.naziv)}</div>`
     + [["Kvaliteta", n.kvaliteta], ["Šarža", n.sarza]].filter(([, v]) => v).map(([k, v]) => `<div class="r"><b>${k}:</b> ${escHtml(v)}</div>`).join("")
     + `<div class="mb">Matični broj: ${escHtml(n.maticniBroj)}</div></div></div>`).join("");
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Naljepnice materijala</title><style>${css}</style></head><body>${tijelo}</body></html>`;
@@ -3651,8 +3661,8 @@ function IzdatnicaPrintModal({ izdatnica, projekt, izdao, postavkeTvrtke, onClos
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
           <div style={{ maxWidth: 250 }}>
-            <img src={logoEcon} alt="Econ" style={{ width: 190, display: "block", marginBottom: 4 }} />
-            <div style={{ fontSize: 9, color: "#555", lineHeight: 1.3 }}>Projektiranje, izrada i montaža metalnih<br />konstrukcija i ventiliranih fasada</div>
+            <LogoTvrtke naziv={t.naziv} style={{ width: 190, display: "block", marginBottom: 4 }} />
+            <div style={{ fontSize: 9, color: "#555", lineHeight: 1.3 }}>{DEMO ? t.djelatnost : <>Projektiranje, izrada i montaža metalnih<br />konstrukcija i ventiliranih fasada</>}</div>
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontWeight: 700, fontSize: 20 }}>IZDATNICA</div>
@@ -5476,7 +5486,7 @@ function PlanPostavke({ plan, db, update, showToast, mozeMijenjati }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))", gap: 16 }}>
         <div className="card" style={{ padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
           <h3 className="f-display" style={{ fontSize: 16, fontWeight: 600 }}>Rokovi i završna obrada</h3>
-          {[["rezervaProjektDana", "Projekt gotov prije isporuke kupcu (radnih dana)"], ["rezervaKupaoniceDana", "Kupaonica spremna prije dana otpreme (radnih dana)"], ["bojanjeDana", "Bojanje u ECON-u (radnih dana)"], ["cincanjeDana", "Cinčanje vani (radnih dana)"]].map(([k, n]) => (
+          {[["rezervaProjektDana", "Projekt gotov prije isporuke kupcu (radnih dana)"], ["rezervaKupaoniceDana", "Kupaonica spremna prije dana otpreme (radnih dana)"], ["bojanjeDana", DEMO ? "Bojanje u vlastitoj radionici (radnih dana)" : "Bojanje u ECON-u (radnih dana)"], ["cincanjeDana", "Cinčanje vani (radnih dana)"]].map(([k, n]) => (
             <label key={k} style={polje}>{n}<input className="input f-mono" inputMode="numeric" disabled={!mozeMijenjati} style={{ width: 64, textAlign: "right" }} value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })} /></label>
           ))}
         </div>
@@ -6321,7 +6331,7 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, patchProjekt, show
     return Array.from(poKljucu.values());
   };
   const emptyForm = () => ({
-    broj: sljedeciBrojOtpremnice(db.otpremnice, todayISO()), datum: todayISO(), mjesto: "Prelog",
+    broj: sljedeciBrojOtpremnice(db.otpremnice, todayISO()), datum: todayISO(), mjesto: MJESTO_ZADANO,
     projektId: projekt.id, kupacId: projekt?.kupacId || "", narudzbaId: narudzba?.id || null, izdaoId: "", napomena: "",
     stavke: koristiNormativ
       ? grupirajIsporuke().map((s) => ({ ...s, kolicina: String(s.dostupno) }))
@@ -6495,7 +6505,7 @@ function PotvrdaNarudzbeModal({ narudzba, projekt, db, update, showToast, mojId,
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif", fontSize: 11 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 24, marginBottom: 18 }}>
           <div style={{ flex: 1 }}>
-            <img src={logoEcon} alt="Econ" style={{ width: 190, display: "block", marginBottom: 28 }} />
+            <LogoTvrtke naziv={t.naziv} style={{ width: 190, display: "block", marginBottom: 28 }} />
             <div style={{ fontWeight: 700, fontSize: 15 }}>{kupac?.naziv || "—"}</div>
             {adresaKupca.map((r, i) => <div key={i} style={{ fontSize: 14 }}>{r}</div>)}
             {form.kontakt?.trim() && <div style={{ marginTop: 10, fontSize: 11 }}>z.Hd. {form.titula === "frau" ? "Frau" : "Herr"} {form.kontakt}</div>}
@@ -6587,8 +6597,8 @@ function OtpremnicaPrintModal({ otpremnica, db, onClose }) {
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
           <div style={{ maxWidth: 250 }}>
-            <img src={logoEcon} alt="Econ" style={{ width: 190, display: "block", marginBottom: 4 }} />
-            <div style={{ fontSize: 9, color: "#555", lineHeight: 1.3 }}>Projektiranje, izrada i montaža metalnih<br />konstrukcija i ventiliranih fasada</div>
+            <LogoTvrtke naziv={t.naziv} style={{ width: 190, display: "block", marginBottom: 4 }} />
+            <div style={{ fontSize: 9, color: "#555", lineHeight: 1.3 }}>{DEMO ? t.djelatnost : <>Projektiranje, izrada i montaža metalnih<br />konstrukcija i ventiliranih fasada</>}</div>
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontWeight: 700, fontSize: 20, whiteSpace: "nowrap" }}>OTPREMNICA / <span style={{ fontStyle: "italic" }}>LIEFERSCHEIN</span> :&nbsp;<span className="f-mono">{otpremnica.broj}</span></div>
@@ -7984,7 +7994,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
 const posaljiObavijestVoditelju = (projekt, zaposlenik) => {
   if (!zaposlenik?.email) return false;
   const subject = `Dodijeljen/a si kao voditelj projekta ${projekt.sifra} — ${projekt.naziv}`;
-  const body = `Pozdrav ${zaposlenik.ime},\n\nDodijeljen/a si kao voditelj/ica projekta:\n\nŠifra: ${projekt.sifra}\nNaziv: ${projekt.naziv}\nRok završetka: ${fmtDate(projekt.rokZavrsetka)}\nVrijednost: ${fmtCur(projekt.vrijednost)}\n\nPrijavi se u ERP za popis zadataka i detalje.\n\nLijep pozdrav,\nECON D.O.O. ERP`;
+  const body = `Pozdrav ${zaposlenik.ime},\n\nDodijeljen/a si kao voditelj/ica projekta:\n\nŠifra: ${projekt.sifra}\nNaziv: ${projekt.naziv}\nRok završetka: ${fmtDate(projekt.rokZavrsetka)}\nVrijednost: ${fmtCur(projekt.vrijednost)}\n\nPrijavi se u ERP za popis zadataka i detalje.\n\nLijep pozdrav,\n${NAZIV_ZADANO} ERP`;
   window.open(`mailto:${zaposlenik.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, "_blank");
   return true;
 };
@@ -8511,7 +8521,7 @@ function ispisiTablicuPdf({ naslov, zaglavlja, redovi, podnozje, podnaslov, nazi
   const css = "body{font-family:Arial,Helvetica,sans-serif;color:#111;font-size:10px;margin:0}h1{font-size:15px;margin:0 0 2px}.sub{color:#555;margin-bottom:8px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:3px 5px;text-align:left;vertical-align:top}th{background:#eee;font-size:9.5px}thead{display:table-header-group}tr{page-break-inside:avoid}.m{font-family:Consolas,monospace;white-space:nowrap}.d{font-family:Consolas,monospace;white-space:nowrap;text-align:right}tfoot td{font-weight:700;background:#f4f4f4}@page{size:A4 landscape;margin:10mm}";
   const klasa = zaglavlja.map((z) => (z.startsWith(">") ? " class=\"d\"" : z.startsWith("#") ? " class=\"m\"" : ""));
   const red = (r) => "<tr>" + r.map((c, i) => `<td${klasa[i]}>${escHtml(c)}</td>`).join("") + "</tr>";
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escHtml(naslov)}</title><style>${css}</style></head><body><h1>${escHtml(nazivTvrtke || "ECON d.o.o.")} — ${escHtml(naslov)}</h1><div class="sub">${podnaslov ? `${escHtml(podnaslov)} · ` : ""}Ispisano ${escHtml(fmtDate(todayISO()))} · ${redovi.length} zapisa</div><table><thead><tr>${zaglavlja.map((z, i) => `<th${klasa[i]}>${escHtml(z.replace(/^[#>]/, ""))}</th>`).join("")}</tr></thead><tbody>${redovi.map(red).join("")}</tbody>${podnozje ? `<tfoot>${red(podnozje)}</tfoot>` : ""}</table></body></html>`;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escHtml(naslov)}</title><style>${css}</style></head><body><h1>${escHtml(nazivTvrtke || NAZIV_ZADANO)} — ${escHtml(naslov)}</h1><div class="sub">${podnaslov ? `${escHtml(podnaslov)} · ` : ""}Ispisano ${escHtml(fmtDate(todayISO()))} · ${redovi.length} zapisa</div><table><thead><tr>${zaglavlja.map((z, i) => `<th${klasa[i]}>${escHtml(z.replace(/^[#>]/, ""))}</th>`).join("")}</tr></thead><tbody>${redovi.map(red).join("")}</tbody>${podnozje ? `<tfoot>${red(podnozje)}</tfoot>` : ""}</table></body></html>`;
   const w = window.open("", "_blank");
   if (!w) { showToast("Preglednik je blokirao novi prozor — dozvoli skočne prozore za ovu stranicu i pokušaj ponovno."); return; }
   w.document.write(html);
@@ -9751,7 +9761,7 @@ function OtpremnicaKooperantuModal({ db, update, showToast, onClose }) {
   const [projektId, setProjektId] = useState("");
   const [dobavljacId, setDobavljacId] = useState(db.dobavljaci[0]?.id || "");
   const [datum, setDatum] = useState(todayISO());
-  const [mjesto, setMjesto] = useState("Prelog");
+  const [mjesto, setMjesto] = useState(MJESTO_ZADANO);
   const [izdaoId, setIzdaoId] = useState("");
   const [napomena, setNapomena] = useState("");
   const prazanRedak = () => ({ id: uid("ost"), naziv: "", jm: "kom", kolicina: "" });
@@ -9878,7 +9888,7 @@ const cmrPrijedlog = (db, projekt, otpremniceIds, datum) => {
     brutoTezina: tezina > 0 ? String(Math.round(tezina * 10) / 10) : "", volumen: "",
     upute: [t.naziv ? `Exp: ${t.naziv}` : "", kupac?.naziv ? `Imp: ${kupac.naziv}` : ""].filter(Boolean).join("\n"),
     uvjetIsporuke: `${t.cmrUvjetIsporuke || "DAP"}${zadnjaLinija ? `: ${zadnjaLinija}` : ""}`,
-    placanjeVozarine: "", mjestoIzdavanja: "Prelog",
+    placanjeVozarine: "", mjestoIzdavanja: MJESTO_ZADANO,
   };
 };
 
@@ -10965,7 +10975,7 @@ const evidencijaPrintHtml = ({ mjesec, grupe, dani, zapisiMapa, sazetci, db }) =
         + `<td class="evp-zb"><b>${f1(s.ukupno)}</b></td><td class="evp-zb">${f1(s.redovni)}</td><td class="evp-zb">${f1(s.prekovremeni)}</td>`
         + `<td class="evp-zb">${s.praznikDana}</td><td class="evp-zb">${s.goDana}</td><td class="evp-zb">${s.boDana}</td></tr>`;
     });
-    html += `<div class="${prva ? "" : "evp-nova"}"><div class="evp-zag"><span>${escHtml(t.naziv || "ECON d.o.o.")}</span><span>EVIDENCIJA RADNOG VREMENA · ${escHtml(grupa.naziv)}</span><span>Mjesec: ${m}/${g}</span></div>`
+    html += `<div class="${prva ? "" : "evp-nova"}"><div class="evp-zag"><span>${escHtml(t.naziv || NAZIV_ZADANO)}</span><span>EVIDENCIJA RADNOG VREMENA · ${escHtml(grupa.naziv)}</span><span>Mjesec: ${m}/${g}</span></div>`
       + `<table class="evp-t"><thead><tr><th class="evp-ime">Zaposlenik</th>`
       + dani.map((d) => `<th class="${d.praznik ? "evp-pr" : d.vikend ? "evp-vk" : ""}"><b>${d.dan}</b><br>${nazivDana[d.dow]}</th>`).join("")
       + `<th>Ukupno<br>sati</th><th>Redovni<br>rad</th><th>Prekovre-<br>mene</th><th>Praznik<br>(dana)</th><th>GO<br>(dana)</th><th>BO<br>(dana)</th></tr></thead><tbody>${redovi}`
@@ -11165,12 +11175,12 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true })
 
   return (
     <div>
-      <div className="card" style={{ padding: 14, marginBottom: 16, background: "var(--surface-alt)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+      {!DEMO && <div className="card" style={{ padding: 14, marginBottom: 16, background: "var(--surface-alt)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
         <div style={{ fontSize: 12.5, color: "var(--ink-soft)", maxWidth: 460 }}>
           Kiosk zaslon za prijavu NFC karticom postavi na uređaj na ulazu.
         </div>
         <Btn variant="primary" icon={UserCog} onClick={() => window.open(kioskUrl, "_blank")}>Otvori kiosk zaslon</Btn>
-      </div>
+      </div>}
 
       {neprijavljeni.length > 0 && (
         <div className="card" style={{ padding: "10px 14px", marginBottom: 12, background: "#FDF6E3", borderColor: "#F0C36B" }}>
@@ -11755,7 +11765,7 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
       <style>{"@media print { @page { size: A3 landscape; } }"}</style>
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
         <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 12, marginBottom: 8 }}>
-          <span>{t.naziv || "ECON d.o.o."}</span>
+          <span>{t.naziv || NAZIV_ZADANO}</span>
           <span>OBRAČUN PLAĆE - HR · {naslovGrupe}</span>
           <span>Mjesec obračuna: {gmesec}/{gg}</span>
         </div>
@@ -11885,7 +11895,7 @@ function ObracunKooperantiPrintModal({ redovi, mjesec, db, onClose }) {
     <Modal title={`Pregled za ispis — Obračun kooperanata ${mjesec}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(`Placa_Kooperanti_${gg}${gmesec}`)}>Ispis / Spremi kao PDF</Btn></>}>
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
         <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 12, marginBottom: 8 }}>
-          <span>{t.naziv || "ECON d.o.o."}</span>
+          <span>{t.naziv || NAZIV_ZADANO}</span>
           <span>OBRAČUN KOOPERANATA</span>
           <span>Mjesec obračuna: {gmesec}/{gg}</span>
         </div>
@@ -11928,7 +11938,7 @@ function ObracunVanjskiPrintModal({ redovi, mjesec, db, onClose }) {
     <Modal title={`Pregled za ispis — Obračun vanjskih suradnika ${mjesec}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(`Placa_Vanjski-suradnici_${gg}${gmesec}`)}>Ispis / Spremi kao PDF</Btn></>}>
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
         <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 12, marginBottom: 8 }}>
-          <span>{t.naziv || "ECON d.o.o."}</span>
+          <span>{t.naziv || NAZIV_ZADANO}</span>
           <span>OBRAČUN VANJSKIH SURADNIKA</span>
           <span>Mjesec obračuna: {gmesec}/{gg}</span>
         </div>
@@ -12258,7 +12268,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
 
       {tab === "zaposlenici" && (
         <>
-          {db.zaposlenici.some((z) => !z.lozinkaHash) && (
+          {!DEMO && db.zaposlenici.some((z) => !z.lozinkaHash) && (
             <div className="card" style={{ padding: "10px 14px", marginBottom: 14, background: "#FDF6E3", borderColor: "#F0C36B", display: "flex", alignItems: "center", gap: 8 }}>
               <AlertTriangle size={15} color="#8A6100" />
               <span style={{ fontSize: 12.5, color: "#6b5511" }}><strong>{db.zaposlenici.filter((z) => !z.lozinkaHash).length}</strong> zaposlenika još nema postavljenu jaku lozinku (koriste stari PIN ili nemaju nikakvu) — postavi im lozinku gumbom "Lozinka" u tablici.</span>
@@ -12281,7 +12291,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
               { key: "lozinka", label: "Lozinka", render: (r) => (
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ fontSize: 11.5, color: r.lozinkaHash ? "var(--green)" : "var(--rust)" }}>{r.lozinkaHash ? "✓ Postavljena" : "Stari/nema PIN"}</span>
-                  <Btn variant="ghost" size="sm" onClick={() => setLozinkaZa(r)}>Lozinka</Btn>
+                  {!DEMO && <Btn variant="ghost" size="sm" onClick={() => setLozinkaZa(r)}>Lozinka</Btn>}
                 </div>
               ) },
               { key: "kompetencije", label: "Kompetencije", render: (r) => (

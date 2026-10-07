@@ -18,8 +18,26 @@ app.use(express.json({ limit: "5mb" }));
 
 // Veza prema bazi se drži otvorenom (idle 10 min + redovit SELECT 1): kiosk skenira rijetko, a nova
 // veza prema Supabase poolera košta ~0,3-0,8 s koje bi osoba čekala ispred čitača.
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_URL?.includes("supabase") ? { rejectUnauthorized: false } : undefined, idleTimeoutMillis: 10 * 60 * 1000, keepAlive: true });
+// DEMO_MODE=1: zasebna demo instalacija (vidi DEMO-POSTAVLJANJE.md). Spaja se ISKLJUČIVO na
+// DEMO_DATABASE_URL (nikad na DATABASE_URL), svake noći se vraća na izmišljene početne podatke i
+// dopušta prijavu samo zajedničkom demo računu.
+const DEMO = process.env.DEMO_MODE === "1";
+const demo = DEMO ? require("./demo/reset") : null;
+const demoPodaciModul = DEMO ? require("./demo/podaci") : null;
+let pool;
+if (DEMO) {
+  try { pool = require("./demo/baza").demoPool(); } catch (e) { console.error(e.message); process.exit(1); }
+} else {
+  pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_URL?.includes("supabase") ? { rejectUnauthorized: false } : undefined, idleTimeoutMillis: 10 * 60 * 1000, keepAlive: true });
+}
 setInterval(() => { pool.query("SELECT 1").catch(() => {}); }, 30 * 1000);
+if (DEMO) {
+  // Render (besplatni plan) uspava servis pa noćni interval može propustiti 03:00 — zato se reset
+  // provjerava i pri svakom zahtjevu (brzo: samo usporedba datuma dok se dan ne promijeni).
+  app.use("/api", (req, res, next) => {
+    demo.resetirajAkoTreba(pool).then(() => next(), (e) => { console.error("Demo reset nije uspio:", e.message); res.status(503).json({ error: "Demo se upravo priprema — pokušaj ponovno za minutu." }); });
+  });
+}
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) { console.error("JWT_SECRET nije postavljen u .env — vidi .env.example"); process.exit(1); }
@@ -240,7 +258,7 @@ async function autorizacijaPisanja(req, res, next) {
 app.get("/api/auth/zaposlenici", async (req, res) => {
   const zaposlenici = (await ucitajKljuc("zaposlenici")) || [];
   const lista = zaposlenici
-    .filter((z) => z.status === "Aktivan")
+    .filter((z) => z.status === "Aktivan" && (!DEMO || z.id === demoPodaciModul.DEMO_ZAPOSLENIK_ID))
     .map((z) => ({ id: z.id, ime: z.ime, prezime: z.prezime, pozicijaId: z.pozicijaId }))
     .sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr"));
   res.json(lista);
@@ -255,6 +273,9 @@ const pokusajiLogina = new Map(); // zaposlenikId -> [timestamps]
 app.post("/api/auth/login", async (req, res) => {
   const { zaposlenikId } = req.body;
   const lozinka = req.body.lozinka ?? req.body.pin;
+  // Bez ove provjere zaposlenik koji nema ni PIN ni lozinku prolazi kad lozinka izostane (undefined === undefined).
+  if (typeof lozinka !== "string" || !lozinka) return res.status(401).json({ error: "Unesite lozinku." });
+  if (DEMO && zaposlenikId !== demoPodaciModul.DEMO_ZAPOSLENIK_ID) return res.status(401).json({ error: "U demo verziji prijava je moguća samo demo računom." });
   const zaposlenici = (await ucitajKljuc("zaposlenici")) || [];
   const zaposlenik = zaposlenici.find((z) => z.id === zaposlenikId);
   if (!zaposlenik) return res.status(401).json({ error: "Nepoznat zaposlenik." });
@@ -286,6 +307,7 @@ function lozinkaJeValjana(lozinka) {
     && /[A-Za-z]/.test(lozinka) && /[0-9]/.test(lozinka) && /[^A-Za-z0-9]/.test(lozinka);
 }
 app.put("/api/zaposlenici/:id/lozinka", autentikacija, async (req, res) => {
+  if (DEMO) return res.status(403).json({ error: "U demo verziji lozinke se ne mogu mijenjati." });
   const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
   if (!dozvolaZaKarticu(pozicija, "zaposlenici", "zaposlenici").izmjene) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za promjenu lozinki." });
 
@@ -309,6 +331,7 @@ app.put("/api/zaposlenici/:id/lozinka", autentikacija, async (req, res) => {
 // ---------- KIOSK prijava dolaska/odlaska (bez potrebe za login/PIN) ----------
 const KIOSK_BLOKADA_MIN = 3;
 app.post("/api/kiosk/scan", async (req, res) => {
+  if (DEMO) return res.status(403).json({ error: "Kiosk nije dostupan u demo verziji." });
   const kod = (req.body.rfidKod || "").trim().toUpperCase();
   if (!kod) return res.status(404).json({ error: "Kartica nije prepoznata." });
   // Brzina je bitna (osoba čeka ispred čitača), a svaki upit prema bazi košta mrežno putovanje —
@@ -960,9 +983,22 @@ app.put("/api/data/:key", autentikacija, async (req, res, next) => {
     }
     return res.json({ ok: true });
   }
-  await spremiKljuc(req.params.key, req.body);
+  let vrijednost = req.body;
+  if (DEMO) vrijednost = zastitiDemoRacun(req.params.key, vrijednost);
+  await spremiKljuc(req.params.key, vrijednost);
   res.json({ ok: true });
 });
+
+// Demo: zajednički račun i njegova pozicija ne smiju se obrisati ni promijeniti (inače bi jedna
+// stranka do noćnog reseta zaključala sve ostale) — vraćaju se iz početnih podataka pri svakom spremanju.
+function zastitiDemoRacun(key, vrijednost) {
+  if (!Array.isArray(vrijednost) || !["zaposlenici", "pozicijeZaposlenika"].includes(key)) return vrijednost;
+  const { demoPodaci, DEMO_ZAPOSLENIK_ID, DEMO_POZICIJA_ID } = demoPodaciModul;
+  const id = key === "zaposlenici" ? DEMO_ZAPOSLENIK_ID : DEMO_POZICIJA_ID;
+  zastitiDemoRacun.izvorno ||= demoPodaci();
+  const izvorni = zastitiDemoRacun.izvorno[key].find((x) => x.id === id);
+  return [izvorni, ...vrijednost.filter((x) => x?.id !== id)];
+}
 
 // ---------- Automatska odjava zaostalih (nezavršenih) smjena ----------
 // Prije se ova provjera pokretala SAMO u pregledniku, kad bi netko otvorio tab "Evidencija rada"
@@ -1007,8 +1043,9 @@ async function provjeriAutoOdjavu() {
 }
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`ERP backend sluša na portu ${PORT}`);
+(DEMO ? demo.resetirajAkoTreba(pool) : Promise.resolve()).then(() => app.listen(PORT, () => {
+  console.log(`ERP backend${DEMO ? " (DEMO)" : ""} sluša na portu ${PORT}`);
   provjeriAutoOdjavu();
   setInterval(provjeriAutoOdjavu, 15 * 60 * 1000);
-});
+  if (DEMO) setInterval(() => demo.resetirajAkoTreba(pool).catch((e) => console.error("Demo reset nije uspio:", e.message)), 10 * 60 * 1000);
+})).catch((e) => { console.error("Demo baza nije spremna:", e.message); process.exit(1); });

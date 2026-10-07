@@ -72,6 +72,7 @@ function demoPodaci(sada = new Date()) {
     { id: "poz-voditelj", naziv: "Voditelj proizvodnje", opis: "Radni nalozi i plan proizvodnje", moduli: ["dashboard", "proizvodnja", "skladiste", "kontrola"], karticeDozvole: {} },
     { id: "poz-skladistar", naziv: "Skladištar", opis: "Zalihe, zaprimanje i izdavanje", moduli: ["dashboard", "skladiste", "nabava"], karticeDozvole: {} },
     { id: "poz-laser", naziv: "Operater na laseru", opis: "Plan rezanja", moduli: ["proizvodnja"], karticeDozvole: {} },
+    { id: "poz-racunovodstvo", naziv: "Računovodstvo", opis: "Fakture, financije i plaće", moduli: ["dashboard", "otpremnice", "fakturiranje", "partneri", "zaposlenici"], karticeDozvole: {} },
     { id: "poz-zaposlenik", naziv: "Zaposlenik", opis: "Radionica", moduli: ["dashboard"], karticeDozvole: {} },
     { id: "poz-kooperant", naziv: "Kooperant", opis: "Vanjski izvođači po satu", moduli: ["dashboard"], karticeDozvole: {} },
   ];
@@ -93,8 +94,11 @@ function demoPodaci(sada = new Date()) {
     zap("zap-d8", "Stjepan", "Vuković", "poz-zaposlenik", "SVUK01", { bodovi: 1100, kompetencije: ["Bravarski radovi"] }),
     zap("zap-d9", "Nikola", "Pavlović", "poz-zaposlenik", "NPAV01", { bodovi: 1000, kompetencije: ["Brušenje", "Bojanje"] }),
     zap("zap-d10", "Dario", "Božić", "poz-kooperant", "DBOZ01", { satnicaKooperant: 14 }),
+    zap("zap-d11", "Ivana", "Grgić", "poz-racunovodstvo", "IGRG01"),
+    zap("zap-d12", "Filip", "Barišić", "poz-zaposlenik", "FBAR01", { bodovi: 950, kompetencije: ["Bravarski radovi", "Montaža"] }),
+    zap("zap-d13", "Matej", "Šarić", "poz-zaposlenik", "MSAR01", { bodovi: 1050, kompetencije: ["Zavarivanje MAG", "Montaža"] }),
   ];
-  const radiona = ["zap-d4", "zap-d5", "zap-d6", "zap-d7", "zap-d8", "zap-d9", "zap-d10"];
+  const radiona = ["zap-d4", "zap-d5", "zap-d6", "zap-d7", "zap-d8", "zap-d9", "zap-d10", "zap-d12", "zap-d13"];
 
   // ---------- partneri ----------
   const kupci = [
@@ -148,7 +152,7 @@ function demoPodaci(sada = new Date()) {
     matIzKataloga("mat-d7", "kat-lim5", "S235JR", 8, { duzinaMM: 3000, sirinaMM: 1500, cijenaKg: 1.25, minZaliha: 4, lokacija: "Hala B / limovi" }),
     matIzKataloga("mat-d8", "kat-lim10", "S355J2", 2, { duzinaMM: 3000, sirinaMM: 1500, cijenaKg: 1.25, minZaliha: 3, lokacija: "Hala B / limovi" }),
     matIzKataloga("mat-d9", "kat-lim3", "DX51D+Z275", 15, { duzinaMM: 2000, sirinaMM: 1000, cijenaKg: 1.45, minZaliha: 5, lokacija: "Hala B / limovi" }),
-    matIzKataloga("mat-d10", "kat-pl50", "S235JR", 30, { minZaliha: 10, lokacija: "Hala A / regal 5" }),
+    matIzKataloga("mat-d10", "kat-pl50", "S235JR", 26, { minZaliha: 10, lokacija: "Hala A / regal 5" }),
     { id: "mat-d11", sifra: "40900100", naziv: "Vijak M16x60 8.8 pocinčani", tip: "Vijčana roba", dimenzije: "M16x60", jm: "kom", cijena: 0.42, kolicina: 850, minZaliha: 300, lokacija: "Skladište sitnog materijala", kgPoM: 0, kgPoM2: 0, kgPoKom: 0, projektId: null, kvaliteta: "", katalogId: null },
     { id: "mat-d12", sifra: "90900100", naziv: "Temeljna boja RAL 7035", tip: "Boja i premazi", dimenzije: "kanta 25 l", jm: "l", cijena: 6.8, kolicina: 120, minZaliha: 50, lokacija: "Bojaona", kgPoM: 0, kgPoM2: 0, kgPoKom: 0, projektId: null, kvaliteta: "", katalogId: null },
   ];
@@ -200,7 +204,7 @@ function demoPodaci(sada = new Date()) {
   };
 
   const ponude = [
-    ponuda("pon-d1", `PON-${godina}-001`, "Čelična hala skladišta 24 x 40 m", "kup-d3", d(-75), "Prihvaćena", [
+    ponuda("pon-d1", `PON-${godina}-001`, "Čelična nadstrešnica skladišta 12 x 18 m", "kup-d3", d(-75), "Prihvaćena", [
       poz("pp-d1-1", "P1", "Stup HEA 200, L = 7,2 m", 14, [stavkaProfil("st-d1-1", "kat-hea200", 7.2, 1, "kv-s355j2"), stavkaLim("st-d1-2", "kat-lim15", 300, 400, 1, "kv-s355j2")], { pila: 0.3, laserLimovi: 0.2, pripremaPozicija: 0.4, sklapanjeKonstrukcije: 1.5, zavarivanje: 2, brusenje: 0.5, akz: 0.6 }, { stavkeAKZ: [{ id: "akz-d1", tip: "vrucecincano", cijenaKg: 0.55 }] }),
       poz("pp-d1-2", "P2", "Krovni nosač IPE 200, L = 12 m", 7, [stavkaProfil("st-d1-3", "kat-ipe200", 12, 2), stavkaLim("st-d1-4", "kat-lim10", 200, 300, 4)], { pila: 0.5, laserLimovi: 0.3, pripremaPozicija: 0.6, sklapanjeKonstrukcije: 2.5, zavarivanje: 3.5, brusenje: 0.8, akz: 1 }, { stavkeAKZ: [{ id: "akz-d2", tip: "vrucecincano", cijenaKg: 0.55 }], brojMontera: 3, planiraniSatiMontaza: 4 }),
       poz("pp-d1-3", "P3", "Spreg L 50x5", 24, [stavkaProfil("st-d1-5", "kat-l50", 5.8, 1)], { pila: 0.1, pripremaPozicija: 0.1, zavarivanje: 0.2, akz: 0.1 }),
@@ -214,12 +218,15 @@ function demoPodaci(sada = new Date()) {
       poz("pp-d3-2", "P2", "Gazište, rebrasti lim 5 mm", 64, [stavkaLim("st-d3-2", "kat-lim5", 300, 1100, 1)], { laserLimovi: 0.1, kutnoSavijanje: 0.15, zavarivanje: 0.2, akz: 0.1 }),
       poz("pp-d3-3", "P3", "Ograda, okrugla cijev 60,3", 10, [stavkaProfil("st-d3-3", "kat-ok60", 3, 3), stavkaProfil("st-d3-4", "kat-pl50", 3, 2)], { pila: 0.3, laserProfili: 0.4, zavarivanje: 2, brusenje: 1, akz: 0.5 }),
     ], { napomenaNjemacki: "Lieferung frei Baustelle. Preise netto zzgl. MwSt." }),
-    ponuda("pon-d4", `PON-${godina}-004`, "Platforma za opremu, terminal", "kup-d5", d(-6), "Poslana", [
+    ponuda("pon-d4", `PON-${godina}-004`, "Platforma za opremu, terminal", "kup-d5", d(-12), "Prihvaćena", [
       poz("pp-d4-1", "P1", "Glavni nosač HEB 200", 6, [stavkaProfil("st-d4-1", "kat-heb200", 6, 1, "kv-s355j2")], { pila: 0.3, pripremaPozicija: 0.5, sklapanjeKonstrukcije: 2, zavarivanje: 2.5, akz: 0.8 }, { stavkeAKZ: [{ id: "akz-d5", tip: "vrucecincano", cijenaKg: 0.55 }] }),
       poz("pp-d4-2", "P2", "Podest, lim 5 mm", 12, [stavkaLim("st-d4-2", "kat-lim5", 1000, 2000, 1)], { laserLimovi: 0.3, kutnoSavijanje: 0.3, zavarivanje: 0.5, akz: 0.3 }),
     ]),
     ponuda("pon-d5", `PON-${godina}-005`, "Konzole za cjevovod, 40 kom", "kup-d4", d(-1), "U izradi", [
       poz("pp-d5-1", "P1", "Konzola L 50x5 s pločom", 40, [stavkaProfil("st-d5-1", "kat-l50", 0.6, 2), stavkaLim("st-d5-2", "kat-lim10", 150, 150, 1)], { pila: 0.05, laserLimovi: 0.05, zavarivanje: 0.25, akz: 0.05 }),
+    ]),
+    ponuda("pon-d7", `PON-${godina}-007`, "Nosiva konstrukcija reklamnog panoa", "kup-d3", d(-3), "Poslana", [
+      poz("pp-d7-1", "P1", "Stup HEA 160 s temeljnom pločom", 2, [stavkaProfil("st-d7-1", "kat-hea160", 6, 1), stavkaLim("st-d7-2", "kat-lim15", 350, 350, 1)], { pila: 0.3, laserLimovi: 0.2, sklapanjeKonstrukcije: 1.5, zavarivanje: 2, akz: 0.5 }, { stavkeAKZ: [{ id: "akz-d6", tip: "vrucecincano", cijenaKg: 0.55 }] }),
     ]),
     ponuda("pon-d6", `PON-${godina}-006`, "Ograda rampe, 25 m", "kup-d1", d(-30), "Odbijena", [
       poz("pp-d6-1", "P1", "Segment ograde 2,5 m", 10, [stavkaProfil("st-d6-1", "kat-ok60", 2.5, 3)], { pila: 0.2, zavarivanje: 1.2, brusenje: 0.4, akz: 0.3 }),
@@ -261,18 +268,30 @@ function demoPodaci(sada = new Date()) {
   };
   projektIzPonude("proj-d1", "pon-d1", `${yy}-101`, { status: "Završen", voditeljId: "zap-d4", pocetak: d(-70), trajanje: 55, napredak: 1, zadaciGotovo: 5 });
   projektIzPonude("proj-d2", "pon-d2", `${yy}-102`, { status: "U izradi", voditeljId: "zap-d4", pocetak: d(-30), trajanje: 45, napredak: 0.6, zadaciGotovo: 3 });
-  projektIzPonude("proj-d3", "pon-d3", `${yy}-103`, { status: "Odobren", voditeljId: "zap-d3", pocetak: d(-10), trajanje: 40, napredak: 0.2, zadaciGotovo: 1, mjestoIsporuke: "Baustelle Musterplatz 3, 80331 München" });
+  projektIzPonude("proj-d4", "pon-d4", `${yy}-104`, { status: "Odobren", voditeljId: "zap-d4", pocetak: d(7), trajanje: 30, napredak: 0, zadaciGotovo: 0 });
+  projektIzPonude("proj-d3", "pon-d3", `${yy}-103`, { status: "U izradi", voditeljId: "zap-d3", pocetak: d(-10), trajanje: 40, napredak: 0.2, zadaciGotovo: 1, mjestoIsporuke: "Baustelle Musterplatz 3, 80331 München" });
 
   // ---------- narudžbe kupaca, otpremnice, fakture ----------
+  // Stavke narudžbe kupca = pozicije ponude (količina, masa po komadu, cijena po komadu s maržom).
+  const stavkeNarudzbe = (nid, ponudaId) => {
+    const p = ponudaPoId[ponudaId];
+    const ukupnaCijena = izracun(p).cijena;
+    const mase = p.pozicije.map((pz) => pz.stavke.reduce((s, st) => s + masaStavke(st) * st.komada, 0));
+    const ukupnaMasa = p.pozicije.reduce((s, pz, i) => s + mase[i] * pz.kolicina, 0);
+    return p.pozicije.map((pz, i) => ({
+      id: `${nid}-st${i + 1}`, sifra: pz.oznaka, naziv: pz.naziv, jm: "kom", kolicina: pz.kolicina, masaJed: Math.round(mase[i] * 10) / 10,
+      nacinCijene: "rucno", cijenaKg: 0, cijena: Math.round((ukupnaCijena * (mase[i] * pz.kolicina) / ukupnaMasa / pz.kolicina) * 100) / 100,
+    }));
+  };
   const narudzbe = [
-    { id: "nar-k1", projektId: "proj-d1", kupacId: "kup-d3", broj: "HS-2026-0412", datum: d(-72), napomena: "", stavke: [] },
-    { id: "nar-k2", projektId: "proj-d2", kupacId: "kup-d1", broj: "GP-778/26", datum: d(-32), napomena: "", stavke: [] },
-    { id: "nar-k3", projektId: "proj-d3", kupacId: "kup-d2", broj: "4500012345", datum: d(-12), napomena: "Bestellung laut Angebot", stavke: [] },
+    { id: "nar-k1", projektId: "proj-d1", kupacId: "kup-d3", broj: `HS-${godina}-0412`, datum: d(-72), napomena: "", stavke: stavkeNarudzbe("nar-k1", "pon-d1") },
+    { id: "nar-k2", projektId: "proj-d2", kupacId: "kup-d1", broj: `GP-778/${yy}`, datum: d(-32), napomena: "", stavke: stavkeNarudzbe("nar-k2", "pon-d2") },
+    { id: "nar-k3", projektId: "proj-d3", kupacId: "kup-d2", broj: "4500012345", datum: d(-12), napomena: "Bestellung laut Angebot", stavke: stavkeNarudzbe("nar-k3", "pon-d3") },
   ];
   const vrijednostProjekta = (id) => projekti.find((p) => p.id === id).vrijednost;
   const fakture = [
-    { id: "fak-d1", broj: `FAK-${godina}-0001`, projektId: "proj-d1", kupacId: "kup-d3", datumIzdavanja: d(-35), rokPlacanja: d(-5), status: "Plaćeno", stavke: [{ opis: "Čelična hala — izrada i isporuka konstrukcije (1. situacija)", kolicina: 1, jm: "kom", cijenaJed: Math.round(vrijednostProjekta("proj-d1") * 0.6) }] },
-    { id: "fak-d2", broj: `FAK-${godina}-0002`, projektId: "proj-d1", kupacId: "kup-d3", datumIzdavanja: d(-12), rokPlacanja: d(18), status: "Poslano", stavke: [{ opis: "Čelična hala — montaža i okončana situacija", kolicina: 1, jm: "kom", cijenaJed: vrijednostProjekta("proj-d1") - Math.round(vrijednostProjekta("proj-d1") * 0.6) }] },
+    { id: "fak-d1", broj: `FAK-${godina}-0001`, projektId: "proj-d1", kupacId: "kup-d3", datumIzdavanja: d(-35), rokPlacanja: d(-5), status: "Plaćeno", stavke: [{ opis: "Nadstrešnica skladišta — izrada i isporuka konstrukcije (1. situacija)", kolicina: 1, jm: "kom", cijenaJed: Math.round(vrijednostProjekta("proj-d1") * 0.6) }] },
+    { id: "fak-d2", broj: `FAK-${godina}-0002`, projektId: "proj-d1", kupacId: "kup-d3", datumIzdavanja: d(-12), rokPlacanja: d(18), status: "Poslano", stavke: [{ opis: "Nadstrešnica skladišta — montaža i okončana situacija", kolicina: 1, jm: "kom", cijenaJed: vrijednostProjekta("proj-d1") - Math.round(vrijednostProjekta("proj-d1") * 0.6) }] },
     { id: "fak-d3", broj: `FAK-${godina}-0003`, projektId: "proj-d2", kupacId: "kup-d1", datumIzdavanja: d(-3), rokPlacanja: d(27), status: "Nacrt", stavke: [{ opis: "Nadstrešnica — avans 30 %", kolicina: 1, jm: "kom", cijenaJed: Math.round(vrijednostProjekta("proj-d2") * 0.3) }] },
   ];
 
@@ -283,6 +302,68 @@ function demoPodaci(sada = new Date()) {
     { id: "nab-d1", broj: `NAR-${godina}-001`, dobavljacId: "dob-d1", datum: d(-4), rokIsporuke: d(5), status: "Poslano", napomena: "Isporuka na adresu radionice.", izradioId: "zap-d2", stavke: [stavkaNar("mat-d3", 12, matCijena("mat-d3"), "S235JR", "proj-d3"), stavkaNar("mat-d8", 6, matCijena("mat-d8"), "S355J2", "proj-d3")] },
     { id: "nab-d2", broj: `NAR-${godina}-002`, dobavljacId: "dob-d4", datum: d(-1), rokIsporuke: d(3), status: "Nacrt", napomena: "", izradioId: "zap-d5", stavke: [stavkaNar("mat-d11", 500, matCijena("mat-d11"), "")] },
   ];
+
+  // Zaprimljena narudžbenica (materijal za hale i nadstrešnicu) -> matični brojevi u matičnoj knjizi.
+  narudzbenice.unshift({ id: "nab-d0", broj: `NAR-${godina}-000`, dobavljacId: "dob-d2", datum: d(-60), rokIsporuke: d(-52), status: "Primljeno", napomena: "", izradioId: "zap-d2",
+    stavke: [stavkaNar("mat-d1", 20, matCijena("mat-d1"), "S355J2", "proj-d1"), stavkaNar("mat-d4", 30, matCijena("mat-d4"), "S235JR"), stavkaNar("mat-d5", 24, matCijena("mat-d5"), "S355J2", "proj-d2"), stavkaNar("mat-d7", 10, matCijena("mat-d7"), "S235JR")] });
+  narudzbenice[0].broj = `NAR-${godina}-001`; narudzbenice[1].broj = `NAR-${godina}-002`; narudzbenice[2].broj = `NAR-${godina}-003`;
+  const matPoId = Object.fromEntries(materijali.map((m) => [m.id, m]));
+  let maticniBroj = 3700;
+  const maticnaKnjiga = [];
+  const mb = (id, materijalId, kolicina, sarza, atestBroj, datum, nab) => {
+    const m = matPoId[materijalId];
+    maticnaKnjiga.push({
+      id, broj: maticniBroj++, materijalId, sifra: m.sifra, naziv: m.naziv, kvaliteta: m.kvaliteta, sarza, atestBroj, atestVrsta: atestBroj ? "3.1" : "", datum,
+      dobavljacId: nab?.dobavljacId || "", narudzbenicaId: nab?.id || "", narudzbenicaBroj: nab?.broj || "", kolicinaPrimljeno: kolicina, jm: m.jm, napomena: "", izvor: nab ? "zaprimanje" : "rucno",
+    });
+  };
+  const nab0 = narudzbenice[0];
+  mb("mb-d1", "mat-d1", 20, "S24-81733", "AT-2026-1187", d(-53), nab0);
+  mb("mb-d2", "mat-d4", 30, "S24-80122", "AT-2026-1188", d(-53), nab0);
+  mb("mb-d3", "mat-d5", 24, "S24-80577", "AT-2026-1189", d(-53), nab0);
+  mb("mb-d4", "mat-d7", 10, "L24-11290", "", d(-53), nab0); // atest još nije stigao
+  mb("mb-d5", "mat-d2", 9, "S24-77010", "AT-2026-0950", d(-90), null);
+  mb("mb-d6", "mat-d10", 30, "P24-30155", "AT-2026-0951", d(-90), null);
+
+  // Izdatnice: materijal izdan na projekte (FIFO po matičnim brojevima, kao u aplikaciji).
+  const izdStavka = (iid, n, materijalId, kolicina, maticniId) => {
+    const m = matPoId[materijalId];
+    const z = maticnaKnjiga.find((x) => x.id === maticniId);
+    return { id: `${iid}-s${n}`, materijalId, sifra: m.sifra, naziv: m.naziv, jm: m.jm, kolicinaIzdano: kolicina, kolicinaVraceno: null, cijena: m.cijena, matBrojevi: [{ maticniId, broj: z.broj, kolicina }] };
+  };
+  const izdatnice = [
+    { id: "izd-d1", broj: `IZD-${godina}-001`, datum: d(-50), projektId: "proj-d1", izdaoId: "zap-d5", napomena: "", status: "Izdano", stavke: [izdStavka("izd-d1", 1, "mat-d1", 6, "mb-d1"), izdStavka("izd-d1", 2, "mat-d10", 4, "mb-d6")] },
+    { id: "izd-d2", broj: `IZD-${godina}-002`, datum: d(-25), projektId: "proj-d2", izdaoId: "zap-d5", napomena: "", status: "Izdano", stavke: [izdStavka("izd-d2", 1, "mat-d5", 8, "mb-d3"), izdStavka("izd-d2", 2, "mat-d4", 8, "mb-d2")] },
+    { id: "izd-d3", broj: `IZD-${godina}-003`, datum: d(-6), projektId: "proj-d3", izdaoId: "zap-d5", napomena: "Gazišta", status: "Izdano", stavke: [izdStavka("izd-d3", 1, "mat-d7", 2, "mb-d4")] },
+  ];
+  const rezervacije = [
+    { id: "rez-d1", materijalId: "mat-d3", projektId: "proj-d3", kolicina: 12, datum: d(-4), izvor: "narudzbenica", narudzbenicaId: "nab-d1", napomena: `Narudžbenica ${narudzbenice[1].broj}` },
+    { id: "rez-d2", materijalId: "mat-d5", projektId: "proj-d2", kolicina: 6, datum: d(-20), izvor: "rucno", napomena: "" },
+  ];
+
+  // ---------- otpremnice i CMR ----------
+  const brojDokumenta = (prefiks, datum, n = 1) => `${prefiks}-${datum.slice(8, 10)}-${datum.slice(5, 7)}-${n}/${datum.slice(2, 4)}`;
+  const otpremnica = (id, narudzba, datum, udio, izdaoId) => ({
+    id, broj: brojDokumenta("OTP", datum), datum, mjesto: "Zagreb", projektId: narudzba.projektId, kupacId: narudzba.kupacId, narudzbaId: narudzba.id, izdaoId, napomena: "",
+    stavke: narudzba.stavke.map((st) => ({ id: `${id}-${st.id}`, narudzbaStavkaId: st.id, naziv: st.naziv, jm: st.jm, narucena: st.kolicina, kolicina: Math.max(1, Math.round(st.kolicina * udio)) })),
+  });
+  const otpremnice = [
+    otpremnica("otp-d1", narudzbe[0], d(-30), 0.5, "zap-d4"),
+    { ...otpremnica("otp-d2", narudzbe[0], d(-18), 0.5, "zap-d4"), stavke: narudzbe[0].stavke.map((st) => ({ id: `otp-d2-${st.id}`, narudzbaStavkaId: st.id, naziv: st.naziv, jm: st.jm, narucena: st.kolicina, kolicina: st.kolicina - Math.max(1, Math.round(st.kolicina * 0.5)) })).filter((s) => s.kolicina > 0) },
+    otpremnica("otp-d3", narudzbe[1], d(-2), 0.5, "zap-d4"),
+  ];
+  const tezina = (o) => Math.round(o.stavke.reduce((s, st) => s + (narudzbe.find((n) => n.id === o.narudzbaId).stavke.find((x) => x.id === st.narudzbaStavkaId)?.masaJed || 0) * st.kolicina, 0) * 10) / 10;
+  const kupacP1 = kupci.find((k) => k.id === "kup-d3");
+  const prijevoznik = dobavljaci.find((x) => x.id === "dob-d3");
+  const cmr = [otpremnice[0], otpremnice[1]].map((o, i) => ({
+    id: `cmr-d${i + 1}`, broj: brojDokumenta("CMR", o.datum), status: i === 0 ? "Isporučeno (potpisao primatelj)" : "Potpisao prijevoznik", statusDatumi: {},
+    projektId: o.projektId, kupacId: o.kupacId, otpremniceIds: [o.id], datum: o.datum,
+    posiljatelj: [postavkeTvrtke.naziv, postavkeTvrtke.adresa, "CRO"].join("\n"), primatelj: `${kupacP1.naziv}\n${kupacP1.adresa}`, mjestoIsporuke: `${kupacP1.naziv}\n${kupacP1.adresa}`,
+    mjestoPreuzimanja: postavkeTvrtke.adresa, dokumenti: `Otpremnice: ${o.broj.replace(/^OTP-/, "")}`,
+    prijevoznikId: prijevoznik.id, registracija: "ZG-0000-DM", vozac: "Vozač Demo", prijevoznikTekst: `${prijevoznik.naziv}\n${prijevoznik.adresa}\nReg. oznaka / Kennzeichen: ZG-0000-DM\nVozač / Fahrer: Vozač Demo`,
+    napomenePrijevoznika: "", posebniDogovori: "", oznake: projekti[0].sifra, brojKoleta: "", vrstaPakiranja: "", opisRobe: "Stahlkonstruktion", statistickiBroj: "73089098",
+    brutoTezina: String(tezina(o)), volumen: "", upute: `Exp: ${postavkeTvrtke.naziv}\nImp: ${kupacP1.naziv}`, uvjetIsporuke: `DAP: ${kupacP1.adresa}`, placanjeVozarine: "", mjestoIzdavanja: "Zagreb", izradioId: "zap-d2",
+  }));
 
   // ---------- zadaci ----------
   const slobodni = (id, naziv, dodijeljenoId, zadaoId, planiraniDatum, izvrseno = false) => ({
@@ -331,7 +412,7 @@ function demoPodaci(sada = new Date()) {
   return {
     postavkeTvrtke, pozicijeZaposlenika, zaposlenici, kupci, dobavljaci, kvaliteteMaterijala, katalogProfila, materijali,
     cjenikRada, standardniZadaci, ponude, projekti, radniNalozi, narudzbe, fakture, narudzbenice, slobodniZadaci,
-    evidencijaRada, postavkePlaca, praznici,
+    evidencijaRada, postavkePlaca, praznici, maticnaKnjiga, izdatnice, rezervacije, otpremnice, cmr,
   };
 }
 
