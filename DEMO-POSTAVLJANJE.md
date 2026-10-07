@@ -61,7 +61,7 @@ Redoslijed je bitan: **1 → 2 → 3**. Render treba adresu baze, a Vercel treba
    ERP backend (DEMO) sluša na portu 10000
    ```
 6. Provjera: otvori `https://erp-demo-api.onrender.com/api/auth/zaposlenici`. Trebaš vidjeti samo jedan zapis, „Korisnik Demo”.
-7. Zapiši adresu servisa jer ti treba u koraku 3.
+7. Zapiši adresu servisa jer ti treba u koraku 3. **Prepiši je točno kako piše ispod naziva servisa**: Render često doda nastavak (npr. `https://erp-demo-api-zzfr.onrender.com`).
 
 ℹ️ Besplatni Render servis „zaspi” nakon 15 minuta bez prometa. Prvo otvaranje nakon toga traje oko minutu.
 
@@ -80,11 +80,13 @@ Redoslijed je bitan: **1 → 2 → 3**. Render treba adresu baze, a Vercel treba
    | Framework Preset | Vite |
    | Root Directory | `frontend` (klikni **Edit** i odaberi mapu) |
    | Build / Output | ostavi zadano |
-4. **Environment Variables**:
+4. **Environment Variables** (vrsta **Config**, ne *Secret*: Vercel ne dopušta spremiti `VITE_` varijable kao Secret, a postojeći Secret se ne može prebaciti u Config, nego se briše i dodaje ponovo):
    | Ključ | Vrijednost |
    |---|---|
    | `VITE_DEMO` | `1` |
    | `VITE_API_URL` | adresa Render servisa iz koraka 2.7, **bez** `/` na kraju |
+
+   Kad promijeniš varijablu, napravi **Redeploy**: vrijednosti se upisuju u stranicu tijekom izgradnje.
 5. **Deploy**. Kod uvoza Vercel ne nudi izbor grane, pa je prvi deploy s `main`. Dok `demo-verzija` nije spojena u `main`, ta stranica još prikazuje običnu prijavu.
 6. **Settings → Environments → Production → Branch Tracking:** upiši `demo-verzija` i spremi.
 7. Vercel gradi granu tek nakon prvog pusha na nju koji stigne *nakon* što je projekt otvoren. Ako u Deployments nema nijednog deploya za `demo-verzija`, napravi bilo kakav push na tu granu ili koristi **Settings → Git → Deploy Hooks** (grana `demo-verzija`, URL pozoveš kao POST, npr. `Invoke-RestMethod -Method Post "<url>"`).
@@ -92,9 +94,15 @@ Redoslijed je bitan: **1 → 2 → 3**. Render treba adresu baze, a Vercel treba
 
 ---
 
+## Trenutna instalacija
+
+- Frontend: https://erp-demo-swart.vercel.app
+- Backend: https://erp-demo-api-zzfr.onrender.com
+- Obje usluge prate granu `demo-verzija`.
+
 ## Pristup za stranke
 
-- Link: adresa iz koraka 3 (npr. `https://erp-demo.vercel.app`).
+- Link: https://erp-demo-swart.vercel.app
 - Korisnik: **Demo Korisnik** (jedini na popisu).
 - Lozinka: `Demo2026!`. Šalješ je strankama e-mailom; na stranici se ne prikazuje.
 
