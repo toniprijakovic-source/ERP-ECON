@@ -894,11 +894,23 @@ const ispisPdf = (naziv) => {
   document.body.appendChild(iframe);
   const klon = el.cloneNode(true);
   klon.querySelectorAll("img").forEach((img) => img.setAttribute("src", img.src));
+  // Podnožje s podacima tvrtke (.doc-footer) ponavlja se na dnu SVAKE stranice: izdvaja se iz dokumenta i
+  // postavlja kao "fixed" (preglednik ga ponavlja na svakoj stranici), a ponavljajući tfoot rezervira mjesto
+  // da ga sadržaj ne prekrije.
+  const podnozje = klon.querySelector(".doc-footer");
+  let podnozjeHtml = "";
+  if (podnozje) { podnozje.style.marginTop = "0"; podnozjeHtml = podnozje.outerHTML; podnozje.remove(); }
+  const tijelo = podnozje
+    ? `<table class="stranica"><tbody><tr><td>${klon.outerHTML}</td></tr></tbody><tfoot><tr><td><div style="height:27mm"></div></td></tr></tfoot></table><div class="podnozje-stranice">${podnozjeHtml}</div>`
+    : klon.outerHTML;
+  const stranicaCss = podnozje
+    ? "@page{margin:12mm 12mm 0}.stranica{width:100%;border-collapse:collapse}.stranica>tbody>tr>td,.stranica>tfoot>tr>td{padding:0;border:0}.stranica>tbody>tr{break-inside:auto;page-break-inside:auto}.podnozje-stranice{position:fixed;left:12mm;right:12mm;bottom:8mm;background:#fff}"
+    : "@page{margin:12mm}";
   const stilovi = [...document.querySelectorAll('style, link[rel="stylesheet"]')].map((n) => n.outerHTML).join("\n");
   const naslovHtml = String(naziv).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const d = iframe.contentDocument;
   d.open();
-  d.write(`<!doctype html><html><head><meta charset="utf-8"><title>${naslovHtml}</title>${stilovi}<style>html,body{margin:0;background:#fff}body *{visibility:visible !important}.print-doc{position:static !important;inset:auto !important;padding:0 !important;z-index:auto !important}@page{margin:12mm}</style></head><body class="erp-root">${klon.outerHTML}</body></html>`);
+  d.write(`<!doctype html><html><head><meta charset="utf-8"><title>${naslovHtml}</title>${stilovi}<style>html,body{margin:0;background:#fff}body *{visibility:visible !important}.print-doc{position:static !important;inset:auto !important;padding:0 !important;z-index:auto !important}${stranicaCss}</style></head><body class="erp-root">${tijelo}</body></html>`);
   d.close();
   const prozor = iframe.contentWindow;
   const ukloni = () => setTimeout(() => iframe.remove(), 500);
@@ -3686,7 +3698,7 @@ function IzdatnicaPrintModal({ izdatnica, projekt, izdao, postavkeTvrtke, onClos
           <div style={{ textAlign: "center", width: "45%" }}><div style={{ borderTop: "1px solid #333", paddingTop: 4 }}>Zaprimio (proizvodnja)</div></div>
         </div>
 
-        <div style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
+        <div className="doc-footer" style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
           <strong>OIB</strong>: {t.oib} | <strong>MB</strong>: {t.mb} | <strong>VAT-ID:</strong> {t.vatId} | <strong>IBAN:</strong> {t.iban} | <strong>SWIFT:</strong> {t.swift} | Poduzeće je upisano na {t.sud}, <strong>MBS:</strong> {t.mbs} | <strong>Uprava:</strong> {t.uprava}
         </div>
       </div>
@@ -3744,7 +3756,7 @@ function ZaprimiPovratModal({ izdatnica, db, update, showToast, onClose }) {
 function DokumentNabavePrintModal({ tip, brojDokumenta, datum, izradioIme, dobavljacIme, stavke, postavkeTvrtke, onClose }) {
   const t = postavkeTvrtke || {};
   return (
-    <Modal wide title={`Pregled za ispis — ${tip} ${brojDokumenta}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => window.print()}>Ispis / Spremi kao PDF</Btn></>}>
+    <Modal wide title={`Pregled za ispis — ${tip} ${brojDokumenta}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(`${tip} ${brojDokumenta}`)}>Ispis / Spremi kao PDF</Btn></>}>
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
           <div style={{ maxWidth: 260 }}>
@@ -3817,7 +3829,7 @@ function DokumentNabavePrintModal({ tip, brojDokumenta, datum, izradioIme, dobav
           <div>{izradioIme}</div>
         </div>
 
-        <div style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
+        <div className="doc-footer" style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
           <strong>OIB</strong>: {t.oib} | <strong>MB</strong>: {t.mb} | <strong>VAT-ID:</strong> {t.vatId} | <strong>Žiro račun:</strong> {t.ziroRacun}<br />
           <strong>IBAN:</strong> {t.iban} | <strong>SWIFT:</strong> {t.swift} | Poduzeće je upisano na {t.sud}, <strong>MBS:</strong> {t.mbs} | <strong>Temeljni kapital:</strong> {t.temeljniKapital} | <strong>Uprava:</strong> {t.uprava}
         </div>
@@ -6550,7 +6562,7 @@ function PotvrdaNarudzbeModal({ narudzba, projekt, db, update, showToast, mojId,
           )}
         </div>
 
-        <div style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
+        <div className="doc-footer" style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
           <strong>OIB</strong>: {t.oib} | <strong>MB</strong>: {t.mb} | <strong>VAT-ID:</strong> {t.vatId} | <strong>Žiro račun:</strong> {t.ziroRacun}<br />
           <strong>IBAN:</strong> {t.iban} | <strong>SWIFT:</strong> {t.swift} | Poduzeće je upisano na {t.sud}, <strong>MBS:</strong> {t.mbs} | <strong>Temeljni kapital:</strong> {t.temeljniKapital} | <strong>Uprava:</strong> {t.uprava}
         </div>
@@ -6635,7 +6647,7 @@ function OtpremnicaPrintModal({ otpremnica, db, onClose }) {
           <div style={{ textAlign: "center", width: "30%" }}><div style={{ borderTop: "1px solid #333", paddingTop: 4 }}>Zaprimio / Empfangen von</div></div>
         </div>
 
-        <div style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
+        <div className="doc-footer" style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
           <strong>OIB</strong>: {t.oib} | <strong>MB</strong>: {t.mb} | <strong>VAT-ID:</strong> {t.vatId} | <strong>Žiro račun:</strong> {t.ziroRacun}<br />
           <strong>IBAN:</strong> {t.iban} | <strong>SWIFT:</strong> {t.swift} | Poduzeće je upisano na {t.sud}, <strong>MBS:</strong> {t.mbs} | <strong>Temeljni kapital:</strong> {t.temeljniKapital} | <strong>Uprava:</strong> {t.uprava}
         </div>
@@ -8145,7 +8157,7 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
           </div>
         </div>
 
-        <div style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
+        <div className="doc-footer" style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
           <strong>{L.oib}</strong>: {t.oib} | <strong>MB</strong>: {t.mb} | <strong>VAT-ID:</strong> {t.vatId} | <strong>IBAN:</strong> {t.iban} | <strong>SWIFT:</strong> {t.swift} | {L.upisano} {t.sud}, <strong>{L.mbs}:</strong> {t.mbs} | <strong>{L.uprava}:</strong> {t.uprava}
         </div>
       </div>
@@ -8484,7 +8496,7 @@ function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
           <div style={{ fontWeight: 700, marginTop: 8 }}>{t.naziv}</div>
         </div>
 
-        <div style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
+        <div className="doc-footer" style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
           <strong>OIB</strong>: {t.oib} | <strong>MB</strong>: {t.mb} | <strong>VAT-ID:</strong> {t.vatId} | <strong>IBAN:</strong> {t.iban} | <strong>SWIFT:</strong> {t.swift} | Poduzeće je upisano na {t.sud}, <strong>MBS:</strong> {t.mbs} | <strong>Uprava:</strong> {t.uprava}
         </div>
       </div>
@@ -9260,7 +9272,7 @@ function FakturaPrintModal({ faktura, kupac, projekt, postavkeTvrtke, onClose })
   const t = postavkeTvrtke || {};
   const calc = izracunFakture(faktura, t.pdvStopa);
   return (
-    <Modal wide title={`Pregled za ispis — Faktura ${faktura.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => window.print()}>Ispis / Spremi kao PDF</Btn></>}>
+    <Modal wide title={`Pregled za ispis — Faktura ${faktura.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(`Faktura ${faktura.broj}`)}>Ispis / Spremi kao PDF</Btn></>}>
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
           <div>
@@ -9320,7 +9332,7 @@ function FakturaPrintModal({ faktura, kupac, projekt, postavkeTvrtke, onClose })
           <strong>Napomena:</strong> Ovo je interni/predračunski ispis iz ERP sustava. Od 1.1.2026. B2B računi u Hrvatskoj moraju biti izdani kao fiskalizirani eRačun (Fiskalizacija 2.0) — ovaj PDF ne zamjenjuje tu zakonsku obvezu. Za pravno valjano izdavanje računa prema drugim tvrtkama koristite ovlašteni sustav za eRačune (npr. besplatnu aplikaciju MikroeRačun ili informacijskog posrednika).
         </div>
 
-        <div style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
+        <div className="doc-footer" style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
           <strong>OIB</strong>: {t.oib} | <strong>MB</strong>: {t.mb} | <strong>VAT-ID:</strong> {t.vatId} | <strong>Žiro račun:</strong> {t.ziroRacun}<br />
           <strong>IBAN:</strong> {t.iban} | <strong>SWIFT:</strong> {t.swift} | Poduzeće je upisano na {t.sud}, <strong>MBS:</strong> {t.mbs} | <strong>Uprava:</strong> {t.uprava}
         </div>
@@ -9434,7 +9446,7 @@ function PodlogaZaFakturuFormModal({ db, update, showToast, onClose }) {
 function PodlogaZaFakturuPrintModal({ podloga, projekt, narudzba, kupac, otpremnice, postavkeTvrtke, onClose }) {
   const t = postavkeTvrtke || {};
   return (
-    <Modal wide title={`Pregled za ispis — Podloga za fakturu ${podloga.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => window.print()}>Ispis / Spremi kao PDF</Btn></>}>
+    <Modal wide title={`Pregled za ispis — Podloga za fakturu ${podloga.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(`Podloga ${podloga.broj}`)}>Ispis / Spremi kao PDF</Btn></>}>
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
         <div style={{ marginBottom: 16, fontSize: 10.5 }}>
           <strong>{t.naziv}</strong><div>{t.adresa}</div>
@@ -9486,7 +9498,7 @@ function PodlogaZaFakturuPrintModal({ podloga, projekt, narudzba, kupac, otpremn
 
         <div style={{ marginTop: 20, fontSize: 11 }}>DATUM: {fmtDate(podloga.datum)}</div>
 
-        <div style={{ borderTop: "1px solid #999", paddingTop: 8, marginTop: 24, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
+        <div className="doc-footer" style={{ borderTop: "1px solid #999", paddingTop: 8, marginTop: 24, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
           <strong>OIB</strong>: {t.oib} | <strong>MB</strong>: {t.mb} | <strong>VAT-ID:</strong> {t.vatId} | <strong>Žiro račun:</strong> {t.ziroRacun}<br />
           <strong>IBAN:</strong> {t.iban} | <strong>SWIFT:</strong> {t.swift} | Poduzeće je upisano na {t.sud}, <strong>MBS:</strong> {t.mbs} | <strong>Temeljni kapital:</strong> {t.temeljniKapital} | <strong>Uprava:</strong> {t.uprava}
         </div>
