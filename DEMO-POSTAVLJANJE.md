@@ -85,8 +85,10 @@ Redoslijed je bitan: **1 → 2 → 3**. Render treba adresu baze, a Vercel treba
    |---|---|
    | `VITE_DEMO` | `1` |
    | `VITE_API_URL` | adresa Render servisa iz koraka 2.7, **bez** `/` na kraju |
-5. **Deploy**.
-6. Otvori dobivenu adresu. Vidjet ćeš prijavu „Demo d.o.o.” s jednim korisnikom, „Demo Korisnik”.
+5. **Deploy**. Kod uvoza Vercel ne nudi izbor grane, pa je prvi deploy s `main`. Dok `demo-verzija` nije spojena u `main`, ta stranica još prikazuje običnu prijavu.
+6. **Settings → Environments → Production → Branch Tracking:** upiši `demo-verzija` i spremi.
+7. Vercel gradi granu tek nakon prvog pusha na nju koji stigne *nakon* što je projekt otvoren. Ako u Deployments nema nijednog deploya za `demo-verzija`, napravi bilo kakav push na tu granu ili koristi **Settings → Git → Deploy Hooks** (grana `demo-verzija`, URL pozoveš kao POST, npr. `Invoke-RestMethod -Method Post "<url>"`).
+8. Otvori dobivenu adresu. Vidjet ćeš prijavu „Demo d.o.o.” s jednim korisnikom, „Demo Korisnik”.
 
 ---
 
