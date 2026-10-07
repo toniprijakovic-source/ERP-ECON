@@ -1824,7 +1824,7 @@ function LoginScreen({ onLogin }) {
                 onKeyDown={(e) => { if (e.key === "Enter") prijavi(); }}
               />
             </Field>
-            {DEMO && <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 10 }}>Demo verzija s izmišljenim podacima. Lozinku ste dobili e-mailom. Promjene su dopuštene — podaci se svake noći vraćaju na početno stanje.</div>}
+            {DEMO && <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 10 }}>Demo verzija s izmišljenim podacima. Lozinku ste dobili e-mailom. Promjene su dopuštene — podaci se svake noći vraćaju na početno stanje.<br /><span style={{ fontSize: 11, color: "var(--ink-faint)" }}>Radi praćenja korištenja demo verzije bilježimo vrijeme prijave, približnu lokaciju prema IP adresi, vrstu uređaja i trajanje korištenja.</span></div>}
             {greska && <div style={{ color: "var(--rust)", fontSize: 12.5, marginBottom: 10 }}>{greska}</div>}
             <Btn variant="primary" onClick={prijavi} disabled={saljem} className="f-display" style={{ width: "100%", justifyContent: "center", marginTop: 4 }}>{saljem ? "Prijava…" : "Prijava"}</Btn>
           </>
@@ -1949,6 +1949,26 @@ export default function App() {
   };
 
   useEffect(() => { ucitajPodatke(); }, []);
+  // Demo: dok je aplikacija otvorena i vidljiva, svakih 30 s javlja serveru aktivnost i trenutni
+  // modul (izvještaj o posjetama, backend/demo/pracenje.js). Povratak na skrivenu karticu ne
+  // pribraja vrijeme dok je bila skrivena ("povratak").
+  useEffect(() => {
+    if (!DEMO || !prijavljenId || potrebnaPrijava) return undefined;
+    const javi = (povratak) => {
+      const token = localStorage.getItem("erp_token");
+      if (!token || document.visibilityState !== "visible") return;
+      fetch(`${API_URL}/api/demo/aktivnost`, {
+        method: "POST", keepalive: true,
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ modul: page, povratak: !!povratak }),
+      }).catch(() => {});
+    };
+    javi(false);
+    const t = setInterval(() => javi(false), 30 * 1000);
+    const vidljivost = () => javi(true);
+    document.addEventListener("visibilitychange", vidljivost);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", vidljivost); };
+  }, [page, prijavljenId, potrebnaPrijava]);
   useEffect(() => { uskladiSatSPosluziteljem(); const t = setInterval(uskladiSatSPosluziteljem, 10 * 60 * 1000); return () => clearInterval(t); }, []);
 
   // Obavijesti o zadacima (zvonce): dohvaćaju se pri prijavi i svake 2 minute dok je aplikacija

@@ -53,6 +53,7 @@ Redoslijed je bitan: **1 → 2 → 3**. Render treba adresu baze, a Vercel treba
    | `DEMO_MODE` | `1` |
    | `DEMO_DATABASE_URL` | URI iz koraka 1.4 (s lozinkom) |
    | `JWT_SECRET` | **novi** dugi nasumični niz, različit od produkcijskog (npr. gumb *Generate* u Renderu) |
+   | `DEMO_IZVJESTAJ_KLJUC` | tajni ključ za izvještaj o posjetama, najmanje 12 znakova (npr. *Generate*); vidi „Izvještaj o posjetama” |
 
    **Ne dodaji `DATABASE_URL`.** Demo ga ne treba.
 5. **Create Web Service**. Nakon builda u logu trebaš vidjeti:
@@ -112,8 +113,21 @@ Lozinka je zapisana u `backend/demo/podaci.js` (`DEMO_LOZINKA`). Kad je promijen
 
 - Naziv tvrtke „Demo d.o.o.”, bez Econ logotipa (ni slika logotipa nije uključena u demo build) i bez pravih podataka tvrtke u sučelju i PDF ispisima.
 - Nema gumba Backup, nema promjene lozinki, nema kiosk zaslona.
+- Posjete se bilježe za izvještaj (vidi „Izvještaj o posjetama”).
 - Prijava je moguća samo demo računom. Demo račun i pozicija Administrator ne mogu se obrisati ni promijeniti.
 - Izmišljeni podaci pokrivaju cijeli tijek: 7 ponuda, 4 projekta u različitim fazama s radnim nalozima, narudžbe kupaca, narudžbenice, skladište, matičnu knjigu s atestima, izdatnice, rezervacije, otpremnice, CMR, fakture, 14 zaposlenika s evidencijom rada za zadnja dva tjedna, zadatke i praznike.
+
+## Izvještaj o posjetama
+
+Demo bilježi svaku prijavu: vrijeme, približnu lokaciju (grad i država prema IP adresi), uređaj i preglednik, aktivno vrijeme (dok je aplikacija otvorena i vidljiva) i otvorene module. Posjete su u zasebnoj tablici `demo_posjete` koju noćni reset ne briše.
+
+- Lokacija se određuje **lokalno na serveru** (paket `geoip-lite`, podaci MaxMind GeoLite2), pa IP adrese ne idu nijednom vanjskom servisu. Lokacija je približna: na mobilnoj mreži često pokazuje grad operatera.
+- Na prijavi u demo piše da se ti podaci bilježe.
+- Izvještaj otvoriš u pregledniku (zamijeni ključ onim iz Rendera):
+  `https://erp-demo-api-zzfr.onrender.com/api/demo/izvjestaj?kljuc=TVOJ_KLJUČ`
+  Na vrhu su poveznice za 7 dana, 30 dana i godinu te **Preuzmi CSV** (za Excel).
+- Bez varijable `DEMO_IZVJESTAJ_KLJUC` ili s krivim ključem stranica vraća „Not found”. Ključ nikome ne šalji: tko ga ima, vidi IP adrese posjetitelja.
+- Ako se servis upravo budi, prvo otvaranje izvještaja traje do minute.
 
 ## Ručne naredbe (nisu potrebne za normalan rad)
 

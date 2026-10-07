@@ -24,6 +24,7 @@ app.use(express.json({ limit: "5mb" }));
 const DEMO = process.env.DEMO_MODE === "1";
 const demo = DEMO ? require("./demo/reset") : null;
 const demoPodaciModul = DEMO ? require("./demo/podaci") : null;
+const demoPracenje = DEMO ? require("./demo/pracenje") : null;
 let pool;
 if (DEMO) {
   try { pool = require("./demo/baza").demoPool(); } catch (e) { console.error(e.message); process.exit(1); }
@@ -37,6 +38,7 @@ if (DEMO) {
   app.use("/api", (req, res, next) => {
     demo.resetirajAkoTreba(pool).then(() => next(), (e) => { console.error("Demo reset nije uspio:", e.message); res.status(503).json({ error: "Demo se upravo priprema — pokušaj ponovno za minutu." }); });
   });
+  demoPracenje.ukljuciPracenje(app, pool, autentikacija);
 }
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -235,7 +237,9 @@ function autentikacija(req, res, next) {
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: "Nedostaje token." });
   try {
-    req.zaposlenikId = jwt.verify(token, JWT_SECRET).zaposlenikId;
+    const podaci = jwt.verify(token, JWT_SECRET);
+    req.zaposlenikId = podaci.zaposlenikId;
+    req.sesija = podaci.sesija || null; // samo demo: oznaka posjete za praćenje (demo/pracenje.js)
     next();
   } catch {
     return res.status(401).json({ error: "Token nije valjan ili je istekao." });
@@ -294,7 +298,9 @@ app.post("/api/auth/login", async (req, res) => {
     return res.status(401).json({ error: "Pogrešna lozinka." });
   }
   pokusajiLogina.delete(zaposlenikId);
-  const token = jwt.sign({ zaposlenikId }, JWT_SECRET, { expiresIn: "12h" });
+  const sesija = DEMO ? require("crypto").randomUUID() : undefined;
+  const token = jwt.sign(sesija ? { zaposlenikId, sesija } : { zaposlenikId }, JWT_SECRET, { expiresIn: "12h" });
+  if (DEMO) demoPracenje.zabiljeziPrijavu(pool, req, sesija);
   res.json({ token, zaposlenik: { id: zaposlenik.id, ime: zaposlenik.ime, prezime: zaposlenik.prezime, pozicijaId: zaposlenik.pozicijaId } });
 });
 
@@ -1043,7 +1049,7 @@ async function provjeriAutoOdjavu() {
 }
 
 const PORT = process.env.PORT || 3001;
-(DEMO ? demo.resetirajAkoTreba(pool) : Promise.resolve()).then(() => app.listen(PORT, () => {
+(DEMO ? demo.resetirajAkoTreba(pool).then(() => demoPracenje.pripremiTablicu(pool)) : Promise.resolve()).then(() => app.listen(PORT, () => {
   console.log(`ERP backend${DEMO ? " (DEMO)" : ""} sluša na portu ${PORT}`);
   provjeriAutoOdjavu();
   setInterval(provjeriAutoOdjavu, 15 * 60 * 1000);
