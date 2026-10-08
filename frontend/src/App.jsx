@@ -955,7 +955,7 @@ const STATUS_TONE = {
   "Otkazan": "danger", "Odbijena": "danger", "Kasni": "danger",
   "Aktivan": "success", "Neaktivan": "muted",
 };
-const Badge = ({ status }) => <span className={`badge badge-${STATUS_TONE[status] || "muted"}`}>{status}</span>;
+const Badge = ({ status, label }) => <span className={`badge badge-${STATUS_TONE[status] || "muted"}`}>{label || status}</span>;
 
 /* ============================== SEED DATA ============================== */
 
@@ -9524,13 +9524,23 @@ const izracunajStavkePodloge = (otpremniceOdabrane, narudzba) => {
   return Object.values(mapa).map((s) => ({ ...s, ukupno: s.kolicina * s.cijena }));
 };
 
-function PodlogaZaFakturuFormModal({ db, update, showToast, onClose }) {
-  const [projektId, setProjektId] = useState("");
-  const [odabraneOtpId, setOdabraneOtpId] = useState([]);
+// Otpremnica je "fakturirana" kad ulazi u neku podlogu za fakturu ili je ručno označena (faktura izdana izvan aplikacije).
+// Otpremnice kooperantima (dorada) se ne fakturiraju kupcu pa se ne prate.
+const podlogaZaOtpremnicu = (db, otpremnicaId) => (db.podlogeZaFakturu || []).find((p) => (p.otpremniceIds || []).includes(otpremnicaId));
+const otpremniceBezPodloge = (db) => {
+  const uPodlogama = new Set((db.podlogeZaFakturu || []).flatMap((p) => p.otpremniceIds || []));
+  return (db.otpremnice || []).filter((o) => o.vrsta !== "kooperant" && !o.fakturiranoRucno && !uPodlogama.has(o.id));
+};
+
+function PodlogaZaFakturuFormModal({ db, update, showToast, onClose, pocetniProjektId = "" }) {
+  const [projektId, setProjektId] = useState(pocetniProjektId);
+  // Unaprijed se označe sve otpremnice projekta za koje podloga još nije izrađena.
+  const [odabraneOtpId, setOdabraneOtpId] = useState(() => (pocetniProjektId ? otpremniceBezPodloge(db).filter((o) => o.projektId === pocetniProjektId).map((o) => o.id) : []));
   const [vorkasa, setVorkasa] = useState(0);
   const [datum, setDatum] = useState(todayISO());
 
-  const otpremniceZaProjekt = db.otpremnice.filter((o) => o.projektId === projektId);
+  const otpremniceZaProjekt = db.otpremnice.filter((o) => o.projektId === projektId && o.vrsta !== "kooperant");
+  const bezPodloge = new Set(otpremniceBezPodloge(db).map((o) => o.id));
   const projekt = db.projekti.find((p) => p.id === projektId);
   const narudzbeProjekta = db.narudzbe.filter((n) => n.projektId === projektId);
   // cijene se traže po stavci kroz sve narudžbe projekta (otpremnica upućuje na stavku narudžbe po id-u)
@@ -9559,10 +9569,11 @@ function PodlogaZaFakturuFormModal({ db, update, showToast, onClose }) {
     <Modal wide title="Nova podloga za fakturu" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi}>Kreiraj podlogu</Btn></>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <Field label="Projekt">
-          <select className="select" value={projektId} onChange={(e) => { setProjektId(e.target.value); setOdabraneOtpId([]); }}>
+          <select className="select" value={projektId} onChange={(e) => { setProjektId(e.target.value); setOdabraneOtpId(otpremniceBezPodloge(db).filter((o) => o.projektId === e.target.value).map((o) => o.id)); }}>
             <option value="">— Odaberi —</option>
-            {db.projekti.filter((p) => db.otpremnice.some((o) => o.projektId === p.id)).map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
+            {db.projekti.filter((p) => p.id === pocetniProjektId || otpremniceBezPodloge(db).some((o) => o.projektId === p.id)).map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
           </select>
+          <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 3 }}>Nude se samo projekti s otpremnicama za koje podloga još nije izrađena.</div>
         </Field>
         <Field label="Datum obračuna"><input className="input" type="date" value={datum} onChange={(e) => setDatum(e.target.value)} /></Field>
       </div>
@@ -9573,16 +9584,21 @@ function PodlogaZaFakturuFormModal({ db, update, showToast, onClose }) {
           <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Otpremnice za uključiti u obračun</div>
           {otpremniceZaProjekt.length === 0 ? <EmptyState text="Nema otpremnica za ovaj projekt." /> : (
             <table className="erp-table">
-              <thead><tr><th style={{ width: 30 }}></th><th>Broj</th><th>Datum</th><th>Stavki</th></tr></thead>
+              <thead><tr><th style={{ width: 30 }}></th><th>Broj</th><th>Datum</th><th>Stavki</th><th>Fakturiranje</th></tr></thead>
               <tbody>
-                {otpremniceZaProjekt.map((o) => (
-                  <tr key={o.id}>
-                    <td><input type="checkbox" checked={odabraneOtpId.includes(o.id)} onChange={() => toggleOtp(o.id)} /></td>
-                    <td className="f-mono">{o.broj}</td>
-                    <td>{fmtDate(o.datum)}</td>
-                    <td className="f-mono">{o.stavke.length}</td>
-                  </tr>
-                ))}
+                {otpremniceZaProjekt.map((o) => {
+                  const uPodlozi = podlogaZaOtpremnicu(db, o.id);
+                  const gotovo = !bezPodloge.has(o.id);
+                  return (
+                    <tr key={o.id} style={gotovo ? { opacity: 0.6 } : undefined}>
+                      <td><input type="checkbox" disabled={gotovo} checked={odabraneOtpId.includes(o.id)} onChange={() => toggleOtp(o.id)} /></td>
+                      <td className="f-mono">{o.broj}</td>
+                      <td>{fmtDate(o.datum)}</td>
+                      <td className="f-mono">{o.stavke.length}</td>
+                      <td style={{ fontSize: 12 }}>{gotovo ? (uPodlozi ? `već u podlozi ${uPodlozi.broj}` : "već fakturirano") : <span style={{ color: "var(--rust)" }}>nije fakturirano</span>}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -9674,17 +9690,64 @@ function PodlogaZaFakturuPrintModal({ podloga, projekt, narudzba, kupac, otpremn
   );
 }
 
+// Obavijest u Podlogama za fakturu: izdane otpremnice kupcima po kojima još nije izrađena podloga za fakturu.
+function OtpremniceBezPodlogeKartica({ db, update, onNapraviPodlogu, mozeMijenjati }) {
+  const popis = otpremniceBezPodloge(db).sort((a, b) => (a.datum || "").localeCompare(b.datum || ""));
+  const danas = todayISO();
+  const projekt = (id) => db.projekti.find((p) => p.id === id);
+  const kupac = (id) => db.kupci.find((k) => k.id === id)?.naziv || "—";
+  const oznaciFakturirano = (o) => update("otpremnice", db.otpremnice.map((x) => (x.id === o.id ? { ...x, fakturiranoRucno: true, fakturiranoRucnoDatum: danas } : x)));
+  if (popis.length === 0) {
+    return <div className="card" style={{ padding: "10px 14px", marginBottom: 14, background: "#EAF6EF", fontSize: 13 }}>✓ Za sve izdane otpremnice kupcima izrađena je podloga za fakturu.</div>;
+  }
+  const projektiBroj = new Set(popis.map((o) => o.projektId)).size;
+  return (
+    <div className="card" style={{ padding: 0, marginBottom: 14, borderColor: "#F0C2B5" }}>
+      <div style={{ padding: "10px 14px", background: "#FBEAE6", borderBottom: "1px solid #F0C2B5", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <AlertTriangle size={16} color="var(--rust)" />
+        <strong style={{ fontSize: 13.5 }}>Otpremnice bez podloge za fakturu: {popis.length}</strong>
+        <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>({projektiBroj} {projektiBroj === 1 ? "projekt" : "projekata"}) — otpremljeno, a još nije fakturirano</span>
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table className="erp-table" style={{ minWidth: 640 }}>
+          <thead><tr><th>Otpremnica</th><th>Datum</th><th>Projekt</th><th>Kupac</th><th style={{ width: 70 }}>Dana</th><th style={{ width: 260 }} /></tr></thead>
+          <tbody>
+            {popis.map((o) => {
+              const dana = Math.max(0, Math.round((new Date(danas) - new Date(o.datum)) / 86400000));
+              const p = projekt(o.projektId);
+              return (
+                <tr key={o.id}>
+                  <td className="f-mono">{o.broj}</td>
+                  <td>{fmtDate(o.datum)}</td>
+                  <td>{p ? `${p.sifra} — ${p.naziv}` : "—"}</td>
+                  <td>{kupac(o.kupacId)}</td>
+                  <td className="f-mono" style={{ color: dana > 14 ? "var(--rust)" : "inherit", fontWeight: dana > 14 ? 700 : 400 }}>{dana}</td>
+                  <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                    {mozeMijenjati && p && <Btn size="sm" variant="primary" onClick={() => onNapraviPodlogu(o.projektId)}>Napravi podlogu</Btn>}
+                    {mozeMijenjati && <Btn size="sm" variant="ghost" onClick={() => { if (window.confirm(`Označiti otpremnicu ${o.broj} kao već fakturiranu (faktura je izdana izvan aplikacije)?`)) oznaciFakturirano(o); }}>Već fakturirano</Btn>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function PodlogeZaFakturuTab({ db, update, showToast, mozeMijenjati = true }) {
-  const [formOpen, setFormOpen] = useState(false);
+  const [formOpen, setFormOpen] = useState(false); // false | { projektId }
   const [printPodloga, setPrintPodloga] = useState(null);
   const [del, setDel] = useState(null);
   const projektInfo = (id) => db.projekti.find((p) => p.id === id);
 
   return (
     <div>
+      <OtpremniceBezPodlogeKartica db={db} update={update} mozeMijenjati={mozeMijenjati} onNapraviPodlogu={(id) => setFormOpen({ projektId: id })} />
       {mozeMijenjati && (
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
-          <Btn variant="primary" icon={Plus} onClick={() => setFormOpen(true)}>Nova podloga za fakturu</Btn>
+          <Btn variant="primary" icon={Plus} onClick={() => setFormOpen({ projektId: "" })}>Nova podloga za fakturu</Btn>
         </div>
       )}
       {db.podlogeZaFakturu.length === 0 ? <EmptyState text="Nema izrađenih podloga za fakturu." /> : (
@@ -9706,7 +9769,7 @@ function PodlogeZaFakturuTab({ db, update, showToast, mozeMijenjati = true }) {
           </tbody>
         </table>
       )}
-      {formOpen && <PodlogaZaFakturuFormModal db={db} update={update} showToast={showToast} onClose={() => setFormOpen(false)} />}
+      {formOpen && <PodlogaZaFakturuFormModal db={db} update={update} showToast={showToast} pocetniProjektId={formOpen.projektId} onClose={() => setFormOpen(false)} />}
       {printPodloga && (
         <PodlogaZaFakturuPrintModal
           podloga={printPodloga}
@@ -9813,7 +9876,7 @@ function OtpremniceTab({ db, update, patchProjekt, showToast, mozeMijenjati = tr
       )}
       {db.otpremnice.length === 0 ? <EmptyState text="Nema izdanih otpremnica." /> : (
         <table className="erp-table">
-          <thead><tr><th>Broj</th><th>Projekt</th><th>Primatelj</th><th>Vrsta</th><th>Datum</th><th>Stavki</th><th></th></tr></thead>
+          <thead><tr><th>Broj</th><th>Projekt</th><th>Primatelj</th><th>Vrsta</th><th>Datum</th><th>Stavki</th><th>Fakturirano</th><th></th></tr></thead>
           <tbody>
             {[...db.otpremnice].sort((a, b) => b.datum.localeCompare(a.datum)).map((o) => {
               const projekt = projektInfo(o.projektId);
@@ -9827,6 +9890,13 @@ function OtpremniceTab({ db, update, patchProjekt, showToast, mozeMijenjati = tr
                   <td>{jeKooperant ? <span style={{ color: "var(--steel)" }}>Kooperant (dorada)</span> : "Kupac"}</td>
                   <td>{fmtDate(o.datum)}</td>
                   <td className="f-mono">{o.stavke.length}</td>
+                  <td style={{ fontSize: 12 }}>{(() => {
+                    if (jeKooperant) return <span style={{ color: "var(--ink-faint)" }}>—</span>;
+                    const pod = podlogaZaOtpremnicu(db, o.id);
+                    if (pod) return <div><Badge status="Plaćeno" label="Fakturirano" /><div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 2 }}>podloga {pod.broj}</div></div>;
+                    if (o.fakturiranoRucno) return <div><Badge status="Plaćeno" label="Fakturirano" /><div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 2 }}>izvan aplikacije{mozeMijenjati && <> · <a href="#" onClick={(e) => { e.preventDefault(); update("otpremnice", db.otpremnice.map((x) => (x.id === o.id ? { ...x, fakturiranoRucno: false } : x))); }}>poništi</a></>}</div></div>;
+                    return <span style={{ color: "var(--rust)" }}>nije fakturirano</span>;
+                  })()}</td>
                   <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                     <Btn size="sm" icon={Eye} onClick={() => setPrintOtp(o)}>PDF</Btn>
                     {mozeMijenjati && <button className="btn btn-icon btn-ghost" onClick={() => setDel(o)}><Trash2 size={14} color="var(--rust)" /></button>}

@@ -77,13 +77,13 @@ const KARTICE_MODULA = {
     laser: { citanje: ["ponudeLasera", "kupci", "kvaliteteMaterijala", "postavkeTvrtke"], pisanje: ["ponudeLasera"] },
   },
   otpremnice: {
-    otpremnice: { citanje: ["otpremnice", "projekti", "kupci", "narudzbe"], pisanje: ["otpremnice"] },
+    otpremnice: { citanje: ["otpremnice", "projekti", "kupci", "narudzbe", "podlogeZaFakturu"], pisanje: ["otpremnice"] },
     cmr: { citanje: ["cmr", "otpremnice", "projekti", "kupci", "dobavljaci", "narudzbe", "postavkeTvrtke"], pisanje: ["cmr"] },
   },
   // Financije (ključ ostaje "fakturiranje" zbog postojećih pozicija).
   fakturiranje: {
     fakture: { citanje: ["fakture", "kupci", "projekti"], pisanje: ["fakture"] },
-    podloge: { citanje: ["podlogeZaFakturu", "projekti", "materijali"], pisanje: ["podlogeZaFakturu"] },
+    podloge: { citanje: ["podlogeZaFakturu", "projekti", "materijali", "otpremnice", "narudzbe", "kupci"], pisanje: ["podlogeZaFakturu", "otpremnice"] },
     nedovrsena: { citanje: ["nedovrsenaProizvodnja", "projekti", "radniNalozi", "satiPoNalogu", "izdatnice", "materijali", "otpremnice", "narudzbe", "kupci", "dobavljaci", "narudzbeTransporta"], pisanje: ["nedovrsenaProizvodnja"] },
     analiza: { citanje: ["projekti", "radniNalozi", "ponude", "izdatnice", "materijali", "kupci", "cjenikRada", "katalogProfila", "kvaliteteMaterijala"], pisanje: [] },
   },
