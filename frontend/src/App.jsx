@@ -4468,6 +4468,23 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
 /* ============================== PROIZVODNJA ============================== */
 const FAZE = [...OPERACIJE.map((o) => o.label), "Montaža (teren)", "Kontrola kvalitete", "Ostalo"];
 const praznaFazaSati = () => Object.fromEntries(FAZE.map((f) => [f, 0]));
+// Slovne oznake faza prema "Popisu šifri" (slova G i Q ne postoje). Montaža (teren), Kontrola kvalitete i Ostalo dobile su W, X i Y.
+const FAZA_SLOVO = { "Pila": "B", "Laser za profile": "C", "Laser za limove": "D", "Kutno savijanje": "E", "Strojna obrada": "F", "Priprema pozicija za sklapanje": "H", "Sklapanje - konstrukcije": "I", "Sklapanje - kupaonice": "J", "Zavarivanje": "K", "Brušenje": "L", "Ravnanje": "M", "Bojanje": "N", "Montaža (teren)": "W", "Kontrola kvalitete": "X", "Ostalo": "Y" };
+const fazaOznaka = (f) => (FAZA_SLOVO[f] ? `${FAZA_SLOVO[f]} – ${f}` : f);
+// Stalni poslovi — nisu vezani uz projekt ni radni nalog, uvijek su na popisu za upis sati (redak u satiPoNalogu
+// s radniNalogId = id posla). Za posao s oznakom projekt može se neobavezno upisati projekt na koji se sati odnose.
+const STALNI_POSLOVI = [
+  { id: "stalni-A", slovo: "A", naziv: "Brigadirski poslovi" },
+  { id: "stalni-O", slovo: "O", naziv: "Pakiranje" },
+  { id: "stalni-P", slovo: "P", naziv: "Utovar - istovar", projekt: true },
+  { id: "stalni-R", slovo: "R", naziv: "Čekanje na dokumentaciju" },
+  { id: "stalni-S", slovo: "S", naziv: "Čišćenje" },
+  { id: "stalni-T", slovo: "T", naziv: "Održavanje" },
+  { id: "stalni-U", slovo: "U", naziv: "Prijevozi (interno, externo)", projekt: true },
+  { id: "stalni-V", slovo: "V", naziv: "Popravak (konstrukcije, zavara)", projekt: true },
+];
+const stalniPosao = (id) => STALNI_POSLOVI.find((p) => p.id === id);
+const nazivStalnogPosla = (p) => `${p.slovo} – ${p.naziv}`;
 
 // Koliko je sati od planiranih na projektu za danu fazu već raspoređeno po (ostalim) radnim nalozima —
 // vraća null ako faza uopće nije definirana na projektu (nema smisla nuditi "preostalo" za nju).
@@ -5375,7 +5392,7 @@ function PlanDanasUnos({ plan, db, update, patchProjekt, showToast, mozeMijenjat
                   <tr key={r.n.id}>
                     <td className="f-mono" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
                       <span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 2, background: PLAN_BOJA[r.n.faza] || "#6B737B", marginRight: 6 }} />{r.n.broj}
-                      <div style={{ fontFamily: "var(--font-body)", fontSize: 11, color: "var(--ink-soft)" }}>{r.n.faza}{r.n.status === "U tijeku" ? " · u tijeku" : ""}</div>
+                      <div style={{ fontFamily: "var(--font-body)", fontSize: 11, color: "var(--ink-soft)" }}>{fazaOznaka(r.n.faza)}{r.n.status === "U tijeku" ? " · u tijeku" : ""}</div>
                     </td>
                     <td><span className="f-mono" style={{ fontSize: 12, fontWeight: 600 }}>{r.projekt?.sifra}</span><div style={{ fontSize: 11.5, color: "var(--ink-soft)", maxWidth: 260, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.projekt?.naziv}</div></td>
                     <td className="f-mono" style={{ textAlign: "right" }}>{fmtSati(r.plan)} h</td>
@@ -5417,6 +5434,8 @@ function PlanDanasUnos({ plan, db, update, patchProjekt, showToast, mozeMijenjat
         </div>
       </div>
 
+      <StalniPosloviDanas key={datum} db={db} update={update} datum={datum} showToast={showToast} mozeMijenjati={mozeMijenjati} />
+
       {kupSekcije.length > 0 && (
         <div className="card" style={{ padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
           <div>
@@ -5426,6 +5445,73 @@ function PlanDanasUnos({ plan, db, update, patchProjekt, showToast, mozeMijenjat
           {kupSekcije}
         </div>
       )}
+    </div>
+  );
+}
+
+/* ---------- Stalni poslovi — sati za dan (unos voditelja, ukupno po poslu) ---------- */
+// Poslovi izvan projekata (brigadirski poslovi, pakiranje, utovar/istovar, čekanje na dokumentaciju, čišćenje, održavanje,
+// prijevozi, popravak). Redak u satiPoNalogu bez zaposlenika, izvor "plan", radniNalogId = id stalnog posla.
+function StalniPosloviDanas({ db, update, datum, showToast, mozeMijenjati }) {
+  const sati = db.satiPoNalogu || [];
+  const prazanRed = () => ({ sati: "", projektId: "" });
+  const [unos, setUnos] = useState(() => Object.fromEntries(STALNI_POSLOVI.map((p) => {
+    const redovi = sati.filter((s) => s.radniNalogId === p.id && s.datum === datum && !s.zaposlenikId && s.izvor === "plan").map((s) => ({ sati: String(s.sati), projektId: s.projektId || "" }));
+    return [p.id, redovi.length ? redovi : [prazanRed()]];
+  })));
+  const projekti = [...db.projekti].filter((p) => !["Završen", "Otkazan"].includes(p.status)).sort((a, b) => String(b.sifra).localeCompare(String(a.sifra), "hr", { numeric: true }));
+  const postavi = (id, i, patch) => setUnos((u) => ({ ...u, [id]: u[id].map((r, idx) => (idx === i ? { ...r, ...patch } : r)) }));
+  const dodaj = (id) => setUnos((u) => ({ ...u, [id]: [...u[id], prazanRed()] }));
+  const ukloni = (id, i) => setUnos((u) => ({ ...u, [id]: u[id].length > 1 ? u[id].filter((_, idx) => idx !== i) : [prazanRed()] }));
+  const poRadnicima = (id) => sati.filter((s) => s.radniNalogId === id && s.datum === datum && s.zaposlenikId).reduce((a, s) => a + (Number(s.sati) || 0), 0);
+  const ukupno = STALNI_POSLOVI.reduce((a, p) => a + unos[p.id].reduce((b, r) => b + (Number(String(r.sati).replace(",", ".")) || 0), 0), 0);
+  const spremi = () => {
+    const bezStarih = sati.filter((s) => !(stalniPosao(s.radniNalogId) && s.datum === datum && !s.zaposlenikId && s.izvor === "plan"));
+    const novi = STALNI_POSLOVI.flatMap((p) => unos[p.id]
+      .map((r) => ({ h: Number(String(r.sati).replace(",", ".")) || 0, projektId: p.projekt ? r.projektId : "" }))
+      .filter((r) => r.h > 0)
+      .map((r) => ({ id: uid("spn"), datum, zaposlenikId: null, radniNalogId: p.id, sati: r.h, izvor: "plan", napomena: "Stalni posao — unos u Planu proizvodnje", ...(r.projektId ? { projektId: r.projektId } : {}) })));
+    update("satiPoNalogu", [...bezStarih, ...novi]);
+    showToast("Sati stalnih poslova spremljeni.");
+  };
+  return (
+    <div className="card" style={{ padding: 0 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 12, padding: "12px 16px", borderBottom: "1px solid var(--line)" }}>
+        <div>
+          <h3 className="f-display" style={{ fontSize: 16, fontWeight: 600 }}>Stalni poslovi (izvan projekata)</h3>
+          <p style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 2 }}>Ukupni sati po poslu za odabrani dan ({fmtDate(datum)}). Isti poslovi mogu se upisati i po radniku (Zaposlenici → Sati po nalozima); pregled po mjesecu je tamo. Za utovar–istovar, prijevoze i popravak može se upisati projekt na koji se sati odnose.</p>
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <span className="f-mono" style={{ fontSize: 13 }}>Ukupno: <strong>{fmtSati(ukupno)} h</strong></span>
+          {mozeMijenjati && <Btn variant="primary" icon={Save} onClick={spremi}>Spremi stalne poslove</Btn>}
+        </div>
+      </div>
+      <div style={{ overflowX: "auto", padding: "0 16px 12px" }}>
+        <table className="erp-table" style={{ minWidth: 640 }}>
+          <thead><tr><th>Posao</th><th style={{ width: 110 }}>Sati</th><th>Projekt (neobavezno)</th><th style={{ width: 160 }}>Po radnicima</th></tr></thead>
+          <tbody>
+            {STALNI_POSLOVI.map((p) => unos[p.id].map((r, i) => (
+              <tr key={`${p.id}-${i}`}>
+                <td style={{ fontWeight: 600 }}>{i === 0 ? nazivStalnogPosla(p) : <span style={{ color: "var(--ink-faint)", fontWeight: 400 }}>{p.slovo} – dodatni redak</span>}</td>
+                <td><input className="input f-mono" inputMode="decimal" placeholder="0" aria-label={`Sati ${p.naziv}`} disabled={!mozeMijenjati} style={{ width: 90, textAlign: "right" }} value={r.sati} onChange={(e) => postavi(p.id, i, { sati: e.target.value })} /></td>
+                <td>
+                  {p.projekt ? (
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <select className="select" aria-label={`Projekt ${p.naziv}`} disabled={!mozeMijenjati} value={r.projektId} onChange={(e) => postavi(p.id, i, { projektId: e.target.value })}>
+                        <option value="">— bez projekta —</option>
+                        {projekti.map((pr) => <option key={pr.id} value={pr.id}>{pr.sifra} — {pr.naziv}</option>)}
+                      </select>
+                      {mozeMijenjati && i === unos[p.id].length - 1 && <button type="button" className="btn btn-icon btn-ghost" title="Dodaj još jedan projekt" aria-label={`Dodaj redak ${p.naziv}`} onClick={() => dodaj(p.id)}><Plus size={14} /></button>}
+                      {mozeMijenjati && unos[p.id].length > 1 && <button type="button" className="btn btn-icon btn-ghost" title="Ukloni redak" aria-label={`Ukloni redak ${p.naziv}`} onClick={() => ukloni(p.id, i)}><X size={13} /></button>}
+                    </div>
+                  ) : <span style={{ color: "var(--ink-faint)" }}>—</span>}
+                </td>
+                <td className="f-mono" style={{ fontSize: 12, color: "var(--ink-soft)" }}>{i === 0 && poRadnicima(p.id) > 0 ? `${fmtSati(poRadnicima(p.id))} h` : ""}</td>
+              </tr>
+            )))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -6912,7 +6998,7 @@ function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija, mo
         columns={[
           { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
           { key: "projekt", label: "Projekt", render: (r) => projNaziv(r.projektId) },
-          { key: "faza", label: "Faza" },
+          { key: "faza", label: "Faza", render: (r) => fazaOznaka(r.faza) },
           { key: "zaduzenTim", label: "Tim" },
           { key: "sati", label: "Sati (utr./plan.)", render: (r) => <span className="f-mono">{r.utrosenoSati} / {r.planiranoSati}</span> },
           {
@@ -6946,7 +7032,7 @@ function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija, mo
                 const novaFaza = e.target.value;
                 const preostalo = preostaloSatiFaze(trenutniProjekt, novaFaza, db.radniNalozi, form.id);
                 setForm({ ...form, faza: novaFaza, planiranoSati: preostalo != null ? preostalo : form.planiranoSati });
-              }}>{FAZE.map((f) => <option key={f}>{f}</option>)}</select>
+              }}>{FAZE.map((f) => <option key={f} value={f}>{fazaOznaka(f)}</option>)}</select>
             </Field>
             <Field label="Zadužen tim"><input className="input" value={form.zaduzenTim} onChange={(e) => setForm({ ...form, zaduzenTim: e.target.value })} /></Field>
             <Field label="Status"><select className="select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{["Planiran", "U tijeku", "Pauziran", "Završen"].map((s) => <option key={s}>{s}</option>)}</select></Field>
@@ -8037,7 +8123,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
               {nalozi.map((n) => (
                 <tr key={n.id}>
                   <td className="f-mono">{n.broj}</td>
-                  <td>{n.faza}</td>
+                  <td>{fazaOznaka(n.faza)}</td>
                   <td>{n.zaduzenTim || "—"}</td>
                   <td className="f-mono">{n.utrosenoSati} / {n.planiranoSati}</td>
                   <td><Badge status={n.status} /></td>
@@ -9110,7 +9196,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
           <div style={{ fontSize: 11, color: "var(--ink-faint)", marginBottom: 8 }}>Sati po fazi koriste se kao predložak kad se za ovaj projekt kasnije kreira radni nalog — nisu obavezni za faze koje se ne planiraju.</div>
           <div className="card" style={{ padding: 14, background: "var(--surface-alt)", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
             {FAZE.map((f) => (
-              <Field key={f} label={f}>
+              <Field key={f} label={fazaOznaka(f)}>
                 <input className="input f-mono" type="number" min="0" step="0.5" value={projForm.faze?.[f] ?? 0} onChange={(e) => setProjForm({ ...projForm, faze: { ...(projForm.faze || praznaFazaSati()), [f]: Number(e.target.value) || 0 } })} />
               </Field>
             ))}
@@ -9294,7 +9380,7 @@ function ZavrsenProjektAnalizaModal({ projekt, db, onClose }) {
               const razlika = r.stvarno - r.planirano;
               return (
                 <tr key={r.faza}>
-                  <td>{r.faza}</td>
+                  <td>{fazaOznaka(r.faza)}</td>
                   <td className="f-mono">{r.planirano.toFixed(1)} h</td>
                   <td className="f-mono">{r.stvarno.toFixed(1)} h</td>
                   <td className="f-mono" style={{ color: razlika > 0 ? "var(--rust)" : razlika < 0 ? "var(--green)" : "inherit" }}>{razlika > 0 ? "+" : ""}{razlika.toFixed(1)} h</td>
@@ -9336,7 +9422,7 @@ function ZavrsenProjektAnalizaModal({ projekt, db, onClose }) {
             {[...nalozi].sort((a, b) => usporediPrirodno(a.broj, b.broj)).map((n) => (
               <tr key={n.id}>
                 <td className="f-mono">{n.broj}</td>
-                <td>{n.faza}</td>
+                <td>{fazaOznaka(n.faza)}</td>
                 <td className="f-mono">{Number(n.planiranoSati || 0).toFixed(1)} h</td>
                 <td className="f-mono">{Number(n.utrosenoSati || 0).toFixed(1)} h</td>
               </tr>
@@ -10957,7 +11043,7 @@ function NedovrsenaDetaljModal({ red, db, mjesec, trosakSata, zakljucan, onClose
       {satiPoNalogu.length === 0 ? <p style={{ fontSize: 12.5, color: "var(--ink-faint)" }}>Nema upisanih sati na nalozima do kraja mjeseca.</p> : (
         <table className="erp-table" style={{ marginBottom: 14 }}>
           <thead><tr><th>Radni nalog</th><th>Faza</th><th style={{ textAlign: "right" }}>Sati</th></tr></thead>
-          <tbody>{satiPoNalogu.map(({ n, sati }) => <tr key={n.id}><td className="f-mono">{n.broj}</td><td>{n.faza}</td><td className="f-mono" style={{ textAlign: "right" }}>{fmtSati(sati)}</td></tr>)}</tbody>
+          <tbody>{satiPoNalogu.map(({ n, sati }) => <tr key={n.id}><td className="f-mono">{n.broj}</td><td>{fazaOznaka(n.faza)}</td><td className="f-mono" style={{ textAlign: "right" }}>{fmtSati(sati)}</td></tr>)}</tbody>
         </table>
       )}
       <div className="label">Vanjski troškovi ({fmtCurDec(red.vanjski)})</div>
@@ -12487,9 +12573,9 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
   const otvoriUnos = (r) => {
     if (!mozeMijenjati) return;
     setUredjivanje(r.zaposlenik.id);
-    setRedoviUnos(r.uneseno.length ? r.uneseno.map((u) => ({ radniNalogId: u.radniNalogId, sati: u.sati })) : [{ radniNalogId: "", sati: "" }]);
+    setRedoviUnos(r.uneseno.length ? r.uneseno.map((u) => ({ radniNalogId: u.radniNalogId, sati: u.sati, projektId: u.projektId || "" })) : [{ radniNalogId: "", sati: "", projektId: "" }]);
   };
-  const dodajRedak = () => setRedoviUnos([...redoviUnos, { radniNalogId: "", sati: "" }]);
+  const dodajRedak = () => setRedoviUnos([...redoviUnos, { radniNalogId: "", sati: "", projektId: "" }]);
   const azurirajRedak = (i, patch) => setRedoviUnos(redoviUnos.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
   const obrisiRedak = (i) => setRedoviUnos(redoviUnos.filter((_, idx) => idx !== i));
 
@@ -12515,7 +12601,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
 
     const dotaknutiStari = new Set(db.satiPoNalogu.filter((s) => s.zaposlenikId === uredjivanje && s.datum === datum).map((s) => s.radniNalogId));
     const bezStarih = db.satiPoNalogu.filter((s) => !(s.zaposlenikId === uredjivanje && s.datum === datum));
-    const noviRedovi = validni.map((r) => ({ id: uid("spn"), datum, zaposlenikId: uredjivanje, radniNalogId: r.radniNalogId, sati: Number(r.sati) }));
+    const noviRedovi = validni.map((r) => ({ id: uid("spn"), datum, zaposlenikId: uredjivanje, radniNalogId: r.radniNalogId, sati: Number(r.sati), ...(stalniPosao(r.radniNalogId)?.projekt && r.projektId ? { projektId: r.projektId } : {}) }));
     const noviSatiPoNalogu = [...bezStarih, ...noviRedovi];
 
     const sviDotaknuti = new Set([...dotaknutiStari, ...validni.map((r) => r.radniNalogId)]);
@@ -12587,7 +12673,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
         const ukupnoSve = nalozi.reduce((s, r) => s + r.sati, 0);
         return (
           <>
-            <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Presjek evidentiranih sati po radnom nalogu za odabrani mjesec, grupirano po operaciji (fazi) kojoj nalog pripada. Prikazani su samo nalozi koji su taj mjesec imali unesene sate.</p>
+            <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Presjek evidentiranih sati po radnom nalogu za odabrani mjesec, grupirano po operaciji (fazi) kojoj nalog pripada. Prikazani su samo nalozi koji su taj mjesec imali unesene sate. Ispod su stalni poslovi izvan projekata (ako se isti dan upišu i po radniku i ukupno od voditelja, sati se zbrajaju).</p>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
               <span className="label">Mjesec</span>
               <input className="input f-mono" type="month" style={{ width: 160 }} value={mjesecPregled} onChange={(e) => setMjesecPregled(e.target.value)} />
@@ -12605,7 +12691,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
                   <tbody>
                     {faze.map((faza) => (
                       <tr key={faza}>
-                        <td style={{ position: "sticky", left: 0, background: "var(--surface)", fontWeight: 600 }}>{faza}</td>
+                        <td style={{ position: "sticky", left: 0, background: "var(--surface)", fontWeight: 600 }}>{fazaOznaka(faza)}</td>
                         {nalozi.map((r) => (
                           <td key={r.nalog.id} className="f-mono" style={{ textAlign: "center", color: r.nalog.faza === faza ? "var(--ink)" : "var(--ink-faint)" }}>
                             {r.nalog.faza === faza ? r.sati.toFixed(1) : "—"}
@@ -12623,6 +12709,46 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
                 </table>
               </div>
             )}
+            {(() => {
+              const uMjesecu = db.satiPoNalogu.filter((s) => s.datum.slice(0, 7) === mjesecPregled);
+              const ukupnoMjesec = uMjesecu.reduce((a, s) => a + (Number(s.sati) || 0), 0);
+              const projektOznaka = (id) => db.projekti.find((p) => p.id === id)?.sifra || "(obrisan projekt)";
+              const redci = STALNI_POSLOVI.map((p) => {
+                const poOsobi = new Map();
+                const poProjektu = new Map();
+                let bezOsobe = 0;
+                uMjesecu.filter((s) => s.radniNalogId === p.id).forEach((s) => {
+                  const h = Number(s.sati) || 0;
+                  if (s.zaposlenikId) poOsobi.set(s.zaposlenikId, (poOsobi.get(s.zaposlenikId) || 0) + h); else bezOsobe += h;
+                  if (s.projektId) poProjektu.set(s.projektId, (poProjektu.get(s.projektId) || 0) + h);
+                });
+                const ukupno = [...poOsobi.values()].reduce((a, h) => a + h, 0) + bezOsobe;
+                return { p, ukupno, poOsobi: [...poOsobi.entries()].sort((a, b) => b[1] - a[1]), poProjektu: [...poProjektu.entries()].sort((a, b) => b[1] - a[1]), bezOsobe };
+              });
+              const ukupnoStalni = redci.reduce((a, r) => a + r.ukupno, 0);
+              return (
+                <div className="card" style={{ padding: 0, marginTop: 18, overflowX: "auto" }}>
+                  <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--line)" }}>
+                    <h3 className="f-display" style={{ fontSize: 15, fontWeight: 600 }}>Stalni poslovi (izvan projekata)</h3>
+                    <p style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 2 }}>Sati utrošeni na poslove koji nisu vezani uz radni nalog. Ukupno {ukupnoStalni.toFixed(1)} h{ukupnoMjesec > 0 ? ` (${Math.round((ukupnoStalni / ukupnoMjesec) * 100)} % svih evidentiranih sati u mjesecu)` : ""}.</p>
+                  </div>
+                  <table className="erp-table" style={{ minWidth: 720 }}>
+                    <thead><tr><th>Posao</th><th style={{ width: 90, textAlign: "right" }}>Sati</th><th style={{ width: 70, textAlign: "right" }}>Udio</th><th>Po osobama</th><th>Po projektima</th></tr></thead>
+                    <tbody>
+                      {redci.map((r) => (
+                        <tr key={r.p.id}>
+                          <td style={{ fontWeight: 600 }}>{nazivStalnogPosla(r.p)}</td>
+                          <td className="f-mono" style={{ textAlign: "right", fontWeight: 700 }}>{r.ukupno > 0 ? r.ukupno.toFixed(1) : "—"}</td>
+                          <td className="f-mono" style={{ textAlign: "right", color: "var(--ink-soft)" }}>{r.ukupno > 0 && ukupnoMjesec > 0 ? `${((r.ukupno / ukupnoMjesec) * 100).toFixed(1)} %` : ""}</td>
+                          <td style={{ fontSize: 12 }}>{[...r.poOsobi.map(([id, h]) => `${zaposlenikIme(id)} ${h.toFixed(1)} h`), ...(r.bezOsobe > 0 ? [`ukupni unos voditelja ${r.bezOsobe.toFixed(1)} h`] : [])].join("; ")}</td>
+                          <td style={{ fontSize: 12 }}>{r.poProjektu.map(([id, h]) => `${projektOznaka(id)} ${h.toFixed(1)} h`).join("; ")}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
           </>
         );
       })()}
@@ -12636,12 +12762,23 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
               {redoviUnos.map((r, i) => (
                 <tr key={i}>
                   <td>
-                    <select className="select" value={r.radniNalogId} onChange={(e) => azurirajRedak(i, { radniNalogId: e.target.value })}>
+                    <select className="select" value={r.radniNalogId} onChange={(e) => azurirajRedak(i, { radniNalogId: e.target.value, projektId: "" })}>
                       <option value="">— odaberi —</option>
-                      {naloziZaOdabir(trenutniRadnik.zaposlenik).map((n) => (
-                        <option key={n.id} value={n.id}>{(trenutniRadnik.zaposlenik.kompetencije || []).includes(n.faza) ? "★ " : ""}{n.broj} — {n.naziv} ({n.faza})</option>
-                      ))}
+                      <optgroup label="Stalni poslovi (bez projekta)">
+                        {STALNI_POSLOVI.map((sp) => <option key={sp.id} value={sp.id}>{nazivStalnogPosla(sp)}</option>)}
+                      </optgroup>
+                      <optgroup label="Radni nalozi">
+                        {naloziZaOdabir(trenutniRadnik.zaposlenik).map((n) => (
+                          <option key={n.id} value={n.id}>{(trenutniRadnik.zaposlenik.kompetencije || []).includes(n.faza) ? "★ " : ""}{n.broj} — {n.naziv} ({fazaOznaka(n.faza)})</option>
+                        ))}
+                      </optgroup>
                     </select>
+                    {stalniPosao(r.radniNalogId)?.projekt && (
+                      <select className="select" aria-label="Projekt na koji se odnosi" style={{ marginTop: 6 }} value={r.projektId || ""} onChange={(e) => azurirajRedak(i, { projektId: e.target.value })}>
+                        <option value="">— projekt (neobavezno) —</option>
+                        {[...db.projekti].filter((pr) => !["Završen", "Otkazan"].includes(pr.status)).sort((a, b) => String(b.sifra).localeCompare(String(a.sifra), "hr", { numeric: true })).map((pr) => <option key={pr.id} value={pr.id}>{pr.sifra} — {pr.naziv}</option>)}
+                      </select>
+                    )}
                   </td>
                   <td><input className="input f-mono" type="number" min="0" step="0.5" value={r.sati} onChange={(e) => azurirajRedak(i, { sati: e.target.value })} /></td>
                   <td><button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => obrisiRedak(i))}><Trash2 size={14} /></button></td>
