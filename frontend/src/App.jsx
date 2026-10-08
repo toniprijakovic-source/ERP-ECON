@@ -10340,20 +10340,20 @@ function TransportPrintModal({ tip, d, db, onClose }) {
             <div>{t.web}</div>
           </div>
         </div>
-        <table style={{ fontSize: 11.5, margin: "0 auto 20px", borderCollapse: "collapse" }}>
+        <table style={{ fontSize: 11.5, marginBottom: 16, borderCollapse: "collapse" }}>
           <tbody>
-            <tr><td style={{ paddingRight: 10, color: "#555", textAlign: "right" }}>Datum:</td><td style={{ fontWeight: 600 }}>{fmtDate(d.datum)}</td></tr>
-            <tr><td style={{ paddingRight: 10, color: "#555", textAlign: "right" }}>Izradio:</td><td style={{ fontWeight: 600 }}>{izradioIme}</td></tr>
-            <tr><td style={{ paddingRight: 10, color: "#555", textAlign: "right" }}>{jeNarudzba ? "Narudžba broj" : "Upit broj"}:</td><td style={{ fontWeight: 600 }}>{d.broj}</td></tr>
+            <tr><td style={{ paddingRight: 10, color: "#555" }}>Datum:</td><td style={{ fontWeight: 600 }}>{fmtDate(d.datum)}</td></tr>
+            <tr><td style={{ paddingRight: 10, color: "#555" }}>Izradio:</td><td style={{ fontWeight: 600 }}>{izradioIme}</td></tr>
+            <tr><td style={{ paddingRight: 10, color: "#555" }}>{jeNarudzba ? "Narudžba broj" : "Upit broj"}:</td><td style={{ fontWeight: 600 }}>{d.broj}</td></tr>
           </tbody>
         </table>
 
-        <div style={{ fontSize: 12.5, lineHeight: 1.6, textAlign: "center" }}>
+        <div style={{ fontSize: 12, lineHeight: 1.5 }}>
           <div>Poštovani,</div>
           <div style={{ margin: "8px 0 12px" }}>{jeNarudzba ? "Temeljem Vaše ponude naručujemo sljedeći transport:" : "Molim ponudu za sljedeći transport:"}</div>
 
-          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, paddingTop: 4 }}>Utovar:</div>
-          <ul style={{ listStyle: "none", margin: "0 0 14px", padding: 0 }}>
+          <div style={{ fontWeight: 700, marginBottom: 3 }}>Utovar:</div>
+          <ul style={{ margin: "0 0 12px 18px", padding: 0 }}>
             {red("Tvrtka utovara", d.utovarTvrtka)}
             {red("Adresa utovara", d.utovarAdresa)}
             {red("Datum utovara", d.utovarDatum ? fmtDate(d.utovarDatum) : "")}
@@ -10363,8 +10363,8 @@ function TransportPrintModal({ tip, d, db, onClose }) {
             {red(d.prostorVrsta === "palete" ? "Veličina paleta i količina" : "Potreban utovarni prostor", d.prostor)}
           </ul>
 
-          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, paddingTop: 4 }}>Istovar:</div>
-          <ul style={{ listStyle: "none", margin: "0 0 14px", padding: 0 }}>
+          <div style={{ fontWeight: 700, marginBottom: 3 }}>Istovar:</div>
+          <ul style={{ margin: "0 0 12px 18px", padding: 0 }}>
             {red("Tvrtka istovara", d.istovarTvrtka)}
             {red("Mjesto istovara", d.istovarMjesto)}
             {red("Datum istovara", d.istovarDatum ? fmtDate(d.istovarDatum) : "")}
@@ -10373,8 +10373,8 @@ function TransportPrintModal({ tip, d, db, onClose }) {
 
           {(d.kontaktOsoba || d.kontaktEmail || d.kontaktTelefon) && (
             <>
-              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, paddingTop: 4 }}>Kontakt na gradilištu:</div>
-              <ul style={{ listStyle: "none", margin: "0 0 14px", padding: 0 }}>
+              <div style={{ fontWeight: 700, marginBottom: 3 }}>Kontakt na gradilištu:</div>
+              <ul style={{ margin: "0 0 12px 18px", padding: 0 }}>
                 {red("Osoba", d.kontaktOsoba)}
                 {red("E-mail", d.kontaktEmail)}
                 {red("Kontakt", d.kontaktTelefon)}
@@ -10384,8 +10384,8 @@ function TransportPrintModal({ tip, d, db, onClose }) {
 
           {posebni.length > 0 && (
             <>
-              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, paddingTop: 4 }}>Posebni zahtjevi:</div>
-              <ul style={{ listStyle: "none", margin: "0 0 14px", padding: 0 }}>{posebni.map((p) => <li key={p} style={{ marginBottom: 2 }}>{p}</li>)}</ul>
+              <div style={{ fontWeight: 700, marginBottom: 3 }}>Posebni zahtjevi:</div>
+              <ul style={{ margin: "0 0 12px 18px", padding: 0 }}>{posebni.map((p) => <li key={p} style={{ marginBottom: 2 }}>{p}</li>)}</ul>
             </>
           )}
           {d.napomena && <div style={{ marginBottom: 12, whiteSpace: "pre-wrap" }}><strong>Napomena:</strong> {d.napomena}</div>}
