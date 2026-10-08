@@ -2484,13 +2484,7 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
   const [dodajZadatakOtvoreno, setDodajZadatakOtvoreno] = useState(false);
   const [noviSlobodni, setNoviSlobodni] = useState({ naziv: "", datum: "", kome: "" });
   const aktivniProjekti = db.projekti.filter((p) => ["U izradi", "Montaža"].includes(p.status));
-  const otvorenePonude = db.ponude.filter((p) => p.status === "Poslana" || p.status === "U izradi");
-  const vrijednostPonuda = otvorenePonude.reduce((s, p) => s + izracunPonude(p, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala).cijenaKonacna, 0);
   const radniNaloziUTijeku = db.radniNalozi.filter((r) => r.status === "U tijeku");
-  const niskaZaliha = db.materijali.filter((m) => m.kolicina < m.minZaliha);
-  const neplaceneFakture = db.fakture.filter((f) => f.status !== "Plaćeno");
-  const dugovanje = neplaceneFakture.reduce((s, f) => s + izracunFakture(f, db.postavkeTvrtke?.pdvStopa).ukupno, 0);
-  const kasneFakture = db.fakture.filter((f) => f.status === "Kasni" || (f.status !== "Plaćeno" && daysUntil(f.rokPlacanja) < 0));
   const uskoroRokovi = db.projekti.filter((p) => !["Završen", "Otkazan"].includes(p.status) && daysUntil(p.rokZavrsetka) <= 30 && daysUntil(p.rokZavrsetka) >= 0).sort((a, b) => daysUntil(a.rokZavrsetka) - daysUntil(b.rokZavrsetka));
 
   // Zadaci dodijeljeni MENI, na bilo kojem projektu, koji još nisu izvršeni — čim ih netko
@@ -2520,13 +2514,9 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
     setNoviSlobodni({ naziv: "", datum: "", kome: "" });
   };
   const mozeMijenjatiProjekte = (mojaPozicija?.moduli || []).includes("projekti") && dozvolaZaKarticu(mojaPozicija, "projekti", "projekti").izmjene;
-  // Financijske brojke (nenaplaćeno, nedovršena proizvodnja) samo za pozicije s modulom Financije.
-  const imaFinancije = (mojaPozicija?.moduli || []).includes("fakturiranje");
   // Transporti koji još nisu obavljeni (narudžba za transport bez isporučenog CMR-a), po datumu utovara.
   const vidiTransporte = (mojaPozicija?.moduli || []).includes("transporti");
   const transportiUToku = vidiTransporte ? (db.narudzbeTransporta || []).filter((n) => statusNarudzbeTransporta(n, db.cmr) !== "Prevezeno").sort((a, b) => (a.utovarDatum || "9999").localeCompare(b.utovarDatum || "9999")) : [];
-  const vidiNedovrsenu = imaFinancije && dozvolaZaKarticu(mojaPozicija, "fakturiranje", "nedovrsena").pristup;
-  const nedovrsenaProslogMjeseca = useMemo(() => (vidiNedovrsenu ? ukupnoNedovrseneZaMjesec(db, prethodniMjesec(todayISO().slice(0, 7))) : 0), [db, vidiNedovrsenu]);
   const spremiNapomenuSlobodnog = (id, tekst) => update("slobodniZadaci", slobodniZadaci.map((z) => (z.id === id ? { ...z, napomena: tekst || null, napomenaAutorId: tekst ? mojId : null, napomenaDatum: tekst ? todayISO() : null } : z)));
   const oznaciSlobodniIzvrsenim = (id) => update("slobodniZadaci", slobodniZadaci.map((z) => (z.id === id ? { ...z, izvrseno: true, izvrsioId: mojId, datumIzvrsenja: todayISO() } : z)));
   const obrisiSlobodni = (id) => { if (window.confirm("Obrisati ovaj zadatak?")) update("slobodniZadaci", slobodniZadaci.filter((z) => z.id !== id)); };
@@ -2568,30 +2558,10 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
           <div className="kpi-num">{aktivniProjekti.length}</div>
           <div className="kpi-label">Aktivni projekti</div>
         </div>
-        <div className="kpi-card beam-tick" onClick={() => setPage("ponude")} style={{ cursor: "pointer" }}>
-          <div className="kpi-num">{fmtCur(vrijednostPonuda)}</div>
-          <div className="kpi-label">Otvorene ponude ({otvorenePonude.length})</div>
-        </div>
         <div className="kpi-card beam-tick" onClick={() => setPage("proizvodnja")} style={{ cursor: "pointer" }}>
           <div className="kpi-num">{radniNaloziUTijeku.length}</div>
           <div className="kpi-label">Radni nalozi u tijeku</div>
         </div>
-        <div className="kpi-card beam-tick" onClick={() => setPage("skladiste")} style={{ cursor: "pointer", borderColor: niskaZaliha.length ? "#F0C2B5" : undefined }}>
-          <div className="kpi-num" style={{ color: niskaZaliha.length ? "var(--rust)" : undefined }}>{niskaZaliha.length}</div>
-          <div className="kpi-label">Materijali ispod min. zalihe</div>
-        </div>
-        {imaFinancije && (
-          <div className="kpi-card beam-tick" onClick={() => setPage("fakturiranje")} style={{ cursor: "pointer", borderColor: kasneFakture.length ? "#F0C2B5" : undefined }}>
-            <div className="kpi-num">{fmtCur(dugovanje)}</div>
-            <div className="kpi-label">Nenaplaćeno ({neplaceneFakture.length} faktura)</div>
-          </div>
-        )}
-        {vidiNedovrsenu && (
-          <div className="kpi-card beam-tick" onClick={() => setPage("fakturiranje")} style={{ cursor: "pointer" }}>
-            <div className="kpi-num">{fmtCur(nedovrsenaProslogMjeseca)}</div>
-            <div className="kpi-label">Nedovršena proizvodnja ({nazivMjeseca(prethodniMjesec(todayISO().slice(0, 7)))})</div>
-          </div>
-        )}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }} className="dash-grid">
