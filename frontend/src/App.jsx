@@ -3300,17 +3300,30 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
   const [form, setForm] = useState(empty);
   // Opcionalni pomoćni unos "iz kataloga" — bira se profil/lim, upiše dužina (i za lim širina) +
   // komada + kvaliteta materijala, a masa (Trenutno stanje) se sama izračuna umjesto ručnog unosa.
-  const emptyKatalogUnos = { katalogId: "", duzinaMM: "", sirinaMM: "", komada: 1, kvaliteta: "celik" };
+  // Više dužina istog profila/lima: svaki redak = dužina (i za lim širina) × komada; šifra je ista, stanje je zbroj komada.
+  const emptyKatalogUnos = { katalogId: "", kvaliteta: "celik", redovi: [{ duzinaMM: "", sirinaMM: "", komada: 1 }] };
   const [katalogUnos, setKatalogUnos] = useState(emptyKatalogUnos);
   const katalogEntry = db.katalogProfila.find((k) => k.id === katalogUnos.katalogId);
   const jeLimUnos = katalogEntry?.jedinica === "kg/m2";
   const jeKomadUnos = katalogEntry?.jedinica === "kg/kom";
   const faktorKvaliteteUnos = faktorGustoce(db.kvaliteteMaterijala, katalogUnos.kvaliteta);
-  const izracunataMasaUnos = !katalogEntry ? 0 : jeKomadUnos
-    ? Number(katalogEntry.vrijednost) * (Number(katalogUnos.komada) || 0)
-    : jeLimUnos
-    ? ((Number(katalogUnos.duzinaMM) || 0) / 1000) * ((Number(katalogUnos.sirinaMM) || 0) / 1000) * Number(katalogEntry.vrijednost) * faktorKvaliteteUnos * (Number(katalogUnos.komada) || 1)
-    : ((Number(katalogUnos.duzinaMM) || 0) / 1000) * Number(katalogEntry.vrijednost) * faktorKvaliteteUnos * (Number(katalogUnos.komada) || 1);
+  const masaRedaUnos = (r) => {
+    if (!katalogEntry) return 0;
+    const komada = Number(r.komada) || 0;
+    const vr = Number(katalogEntry.vrijednost);
+    if (jeKomadUnos) return vr * komada;
+    if (jeLimUnos) return ((Number(r.duzinaMM) || 0) / 1000) * ((Number(r.sirinaMM) || 0) / 1000) * vr * faktorKvaliteteUnos * komada;
+    return ((Number(r.duzinaMM) || 0) / 1000) * vr * faktorKvaliteteUnos * komada;
+  };
+  const izracunataMasaUnos = katalogUnos.redovi.reduce((a, r) => a + masaRedaUnos(r), 0);
+  const ukupnoKomadaUnos = Math.round(katalogUnos.redovi.reduce((a, r) => a + (Number(r.komada) || 0), 0) * 1000) / 1000;
+  const viseRedaka = katalogUnos.redovi.length > 1;
+  const dimenzijeUnos = !katalogEntry ? "" : jeKomadUnos
+    ? `${ukupnoKomadaUnos} kom × ${katalogEntry.vrijednost} kg`
+    : katalogUnos.redovi.map((r) => `${jeLimUnos ? `${r.duzinaMM || 0}×${r.sirinaMM || 0}` : `${r.duzinaMM || 0}`} mm${viseRedaka ? ` × ${Number(r.komada) || 0}` : ""}`).join("; ");
+  const postaviRedUnos = (i, patch) => setKatalogUnos((k) => ({ ...k, redovi: k.redovi.map((r, idx) => (idx === i ? { ...r, ...patch } : r)) }));
+  const dodajRedUnos = () => setKatalogUnos((k) => ({ ...k, redovi: [...k.redovi, { duzinaMM: "", sirinaMM: "", komada: 1 }] }));
+  const ukloniRedUnos = (i) => setKatalogUnos((k) => ({ ...k, redovi: k.redovi.filter((_, idx) => idx !== i) }));
 
   const odaberiKatalogUnos = (katalogId) => {
     setKatalogUnos({ ...emptyKatalogUnos, katalogId });
@@ -3318,7 +3331,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
     if (entry) {
       // Šifra se predlaže iz oznake (isti obrazac kao sifraIzKataloga) ali ostaje uredljiva —
       // predlaže se samo ako korisnik već nije nešto upisao, da ne prepiše ručni unos.
-      setForm((f) => ({ ...f, sifra: sifraMaterijala(entry, db.kvaliteteMaterijala, f.kvaliteta), tip: entry.tip, naziv: `${entry.tip} ${entry.oznaka}`, jm: "kom" }));
+      setForm((f) => ({ ...f, sifra: sifraMaterijala(entry, db.kvaliteteMaterijala, f.kvaliteta), tip: entry.tip, naziv: katalogOznakaPuna(entry), jm: "kom" }));
     }
   };
 
@@ -3330,11 +3343,11 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
     const sifraZaSpremanje = (form.sifra || "").trim() || sljedecaSifraIzvanKataloga(form.tip, db.materijali, db.kvaliteteMaterijala, form.kvaliteta);
     const duplikat = db.materijali.some((m) => m.sifra.trim().toLowerCase() === sifraZaSpremanje.toLowerCase() && m.id !== form.id);
     if (duplikat) { showToast(`Šifra "${form.sifra}" već postoji na drugom materijalu — koristi drugu šifru.`); return; }
-    const dimenzijeIzKataloga = !katalogEntry ? form.dimenzije : jeKomadUnos ? `${katalogUnos.komada || 0} kom × ${katalogEntry.vrijednost} kg` : jeLimUnos ? `${katalogUnos.duzinaMM || 0}×${katalogUnos.sirinaMM || 0} mm` : `${katalogUnos.duzinaMM || 0} mm`;
+    const dimenzijeIzKataloga = !katalogEntry ? form.dimenzije : dimenzijeUnos;
     const payload = {
       ...form, sifra: sifraZaSpremanje, katalogId: katalogEntry ? katalogEntry.id : (form.katalogId || null), projektId: null, cijena: Number(form.cijena), minZaliha: Number(form.minZaliha),
       dimenzije: dimenzijeIzKataloga,
-      kolicina: katalogEntry ? Math.round((Number(katalogUnos.komada) || 0) * 1000) / 1000 : Number(form.kolicina),
+      kolicina: katalogEntry ? ukupnoKomadaUnos : Number(form.kolicina),
       jm: katalogEntry ? "kom" : form.jm,
       kgPoM: katalogEntry ? (jeLimUnos || jeKomadUnos ? 0 : Number(katalogEntry.vrijednost)) : Number(form.kgPoM) || 0,
       kgPoKom: katalogEntry ? (jeKomadUnos ? Number(katalogEntry.vrijednost) : 0) : Number(form.kgPoKom) || 0,
@@ -3504,32 +3517,41 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
 
           {katalogEntry && (
             <div className="card" style={{ padding: 10, marginBottom: 14, background: "var(--surface-alt)" }}>
-              <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
-                {!jeKomadUnos && <div style={{ width: 130 }}>
-                  <label className="label">Dužina (mm)</label>
-                  <input className="input f-mono" type="number" min="0" value={katalogUnos.duzinaMM} onChange={(e) => setKatalogUnos({ ...katalogUnos, duzinaMM: e.target.value })} />
-                </div>}
-                {jeLimUnos && (
-                  <div style={{ width: 130 }}>
-                    <label className="label">Širina (mm)</label>
-                    <input className="input f-mono" type="number" min="0" value={katalogUnos.sirinaMM} onChange={(e) => setKatalogUnos({ ...katalogUnos, sirinaMM: e.target.value })} />
+              {katalogUnos.redovi.map((r, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 8 }}>
+                  {!jeKomadUnos && <div style={{ width: 130 }}>
+                    {i === 0 && <label className="label">Dužina (mm)</label>}
+                    <input className="input f-mono" type="number" min="0" aria-label={`Dužina ${i + 1}`} value={r.duzinaMM} onChange={(e) => postaviRedUnos(i, { duzinaMM: e.target.value })} />
+                  </div>}
+                  {jeLimUnos && (
+                    <div style={{ width: 130 }}>
+                      {i === 0 && <label className="label">Širina (mm)</label>}
+                      <input className="input f-mono" type="number" min="0" aria-label={`Širina ${i + 1}`} value={r.sirinaMM} onChange={(e) => postaviRedUnos(i, { sirinaMM: e.target.value })} />
+                    </div>
+                  )}
+                  <div style={{ width: 100 }}>
+                    {i === 0 && <label className="label">Komada</label>}
+                    <input className="input f-mono" type="number" min="0" step="1" aria-label={`Komada ${i + 1}`} value={r.komada} onChange={(e) => postaviRedUnos(i, { komada: e.target.value })} />
                   </div>
-                )}
-                <div style={{ width: 100 }}>
-                  <label className="label">Komada</label>
-                  <input className="input f-mono" type="number" min="0" step="1" value={katalogUnos.komada} onChange={(e) => setKatalogUnos({ ...katalogUnos, komada: e.target.value })} />
+                  {i === 0 && (
+                    <div style={{ width: 170 }}>
+                      <label className="label">Kvaliteta materijala</label>
+                      <select className="select" value={katalogUnos.kvaliteta} onChange={(e) => setKatalogUnos({ ...katalogUnos, kvaliteta: e.target.value })}>
+                        <KvalitetaIdOptions kvalitete={db.kvaliteteMaterijala} />
+                      </select>
+                    </div>
+                  )}
+                  {i === 0 && (
+                    <div style={{ width: 130 }}>
+                      <label className="label">Masa (ukupno)</label>
+                      <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{izracunataMasaUnos.toFixed(2)} kg</div>
+                    </div>
+                  )}
+                  {katalogUnos.redovi.length > 1 && <button type="button" className="btn btn-icon btn-ghost" aria-label={`Ukloni dužinu ${i + 1}`} onClick={() => ukloniRedUnos(i)}><X size={14} /></button>}
                 </div>
-                <div style={{ width: 170 }}>
-                  <label className="label">Kvaliteta materijala</label>
-                  <select className="select" value={katalogUnos.kvaliteta} onChange={(e) => setKatalogUnos({ ...katalogUnos, kvaliteta: e.target.value })}>
-                    <KvalitetaIdOptions kvalitete={db.kvaliteteMaterijala} />
-                  </select>
-                </div>
-                <div style={{ width: 130 }}>
-                  <label className="label">Masa (izračunato)</label>
-                  <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{izracunataMasaUnos.toFixed(2)} kg</div>
-                </div>
-              </div>
+              ))}
+              {!jeKomadUnos && <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajRedUnos}>Dodaj još jednu {jeLimUnos ? "dimenziju" : "dužinu"}</Btn>}
+              {viseRedaka && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 6 }}>Ukupno {ukupnoKomadaUnos} kom, različitih {jeLimUnos ? "dimenzija" : "dužina"}: {katalogUnos.redovi.length}. Sve se vodi pod istom šifrom; dimenzije se zapisuju kao popis.</div>}
             </div>
           )}
 
@@ -3540,12 +3562,12 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
             <Field label="Naziv"><input className="input" value={form.naziv} onChange={(e) => setForm({ ...form, naziv: e.target.value })} /></Field>
             <Field label="Tip"><select className="select" value={form.tip} onChange={(e) => setForm({ ...form, tip: e.target.value })}>{TIPOVI_MATERIJALA.map((t) => <option key={t}>{t}</option>)}</select></Field>
             <Field label="Kvaliteta — za prepoznavanje istog materijala kod zaprimanja"><KvalitetaOznakaSelect kvalitete={db.kvaliteteMaterijala} value={form.kvaliteta} onChange={(v) => setForm({ ...form, kvaliteta: v, ...(katalogEntry ? { sifra: sifraMaterijala(katalogEntry, db.kvaliteteMaterijala, v) } : {}) })} /></Field>
-            <Field label="Dimenzije">{katalogEntry ? <div className="input" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{jeKomadUnos ? `${katalogUnos.komada || 0} kom × ${katalogEntry.vrijednost} kg` : jeLimUnos ? `${katalogUnos.duzinaMM || 0}×${katalogUnos.sirinaMM || 0} mm` : `${katalogUnos.duzinaMM || 0} mm`}</div> : <input className="input" value={form.dimenzije} onChange={(e) => setForm({ ...form, dimenzije: e.target.value })} />}</Field>
+            <Field label="Dimenzije">{katalogEntry ? <div className="input" style={{ background: "var(--surface)", color: "var(--ink-soft)", height: "auto", minHeight: 36, whiteSpace: "normal" }}>{dimenzijeUnos}</div> : <input className="input" value={form.dimenzije} onChange={(e) => setForm({ ...form, dimenzije: e.target.value })} />}</Field>
             <Field label="Jedinica mjere">{katalogEntry ? <div className="input" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>kom</div> : <select className="select" value={form.jm} onChange={(e) => setForm({ ...form, jm: e.target.value })}>{JEDINICE.map((j) => <option key={j}>{j}</option>)}</select>}</Field>
             <Field label={katalogEntry ? "Cijena po komadu (€/kom)" : "Cijena po jedinici (€)"}><input className="input f-mono" type="number" step="0.01" value={form.cijena} onChange={(e) => setForm({ ...form, cijena: e.target.value })} /></Field>
             <Field label="Masa po m' (kg/m) — za auto-izračun po dužini">{katalogEntry && !jeLimUnos && !jeKomadUnos ? <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{katalogEntry.vrijednost}</div> : <input className="input f-mono" type="number" step="0.01" value={form.kgPoM || 0} onChange={(e) => setForm({ ...form, kgPoM: e.target.value })} />}</Field>
             <Field label="Masa po m² (kg/m²) — za auto-izračun lima">{katalogEntry && jeLimUnos ? <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{katalogEntry.vrijednost}</div> : <input className="input f-mono" type="number" step="0.01" value={form.kgPoM2 || 0} onChange={(e) => setForm({ ...form, kgPoM2: e.target.value })} />}</Field>
-            <Field label={katalogEntry ? "Trenutno stanje (komada; masa ≈ " + izracunataMasaUnos.toFixed(1) + " kg)" : "Trenutno stanje"}>{katalogEntry ? <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{Number(katalogUnos.komada) || 0} kom</div> : <input className="input f-mono" type="number" value={form.kolicina} onChange={(e) => setForm({ ...form, kolicina: e.target.value })} />}</Field>
+            <Field label={katalogEntry ? "Trenutno stanje (komada; masa ≈ " + izracunataMasaUnos.toFixed(1) + " kg)" : "Trenutno stanje"}>{katalogEntry ? <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{ukupnoKomadaUnos} kom</div> : <input className="input f-mono" type="number" value={form.kolicina} onChange={(e) => setForm({ ...form, kolicina: e.target.value })} />}</Field>
             <Field label="Minimalna zaliha"><input className="input f-mono" type="number" value={form.minZaliha} onChange={(e) => setForm({ ...form, minZaliha: e.target.value })} /></Field>
             <Field label="Lokacija na skladištu"><input className="input" value={form.lokacija} onChange={(e) => setForm({ ...form, lokacija: e.target.value })} /></Field>
             <div style={{ gridColumn: "1 / -1", fontSize: 12, color: "var(--ink-faint)" }}>Rezervacije za projekte vode se na popisu zaliha (gumb „Rezervacije“) i nastaju same pri zaprimanju narudžbenice.</div>
