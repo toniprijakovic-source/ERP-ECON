@@ -4,7 +4,7 @@ import {
   Plus, Pencil, Trash2, X, Search, AlertTriangle, CheckCircle2, ArrowRight,
   Clock, ChevronRight, Save, PackageCheck, PackageMinus, Settings, Layers,
   ChevronDown, ChevronUp, FolderInput, Eye, UserCog, CalendarRange,
-  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors, Printer, Bell, Menu, ShieldCheck
+  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors, Printer, Bell, Menu, ShieldCheck, Container
 } from "lucide-react";
 import logoEcon from "./assets/logo-econ.jpg";
 import QRCode from "qrcode";
@@ -951,7 +951,7 @@ const STATUS_TONE = {
   "Poslano": "info", "Poslana": "info", "Odobren": "info",
   "Djelomično primljeno": "warning", "U izradi": "warning", "Montaža": "warning",
   "U tijeku": "warning", "Pauziran": "warning", "Djelomično plaćeno": "warning",
-  "Primljeno": "success", "Završen": "success", "Prihvaćena": "success", "Plaćeno": "success",
+  "Primljeno": "success", "Prevezeno": "success", "Završen": "success", "Prihvaćena": "success", "Plaćeno": "success",
   "Otkazan": "danger", "Odbijena": "danger", "Kasni": "danger",
   "Aktivan": "success", "Neaktivan": "muted",
 };
@@ -1047,7 +1047,7 @@ const generirajRfidKod = (ime, prezime, postojeciKodovi) => {
   return kod;
 };
 
-const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi", "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca", "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije", "maticnaKnjiga"];
+const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi", "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca", "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije", "maticnaKnjiga", "upitiTransporta", "narudzbeTransporta"];
 
 /* ============================== SMALL UI PRIMITIVES ============================== */
 const Btn = ({ variant = "ghost", size, icon: Icon, children, className = "", ...rest }) => (
@@ -1504,6 +1504,7 @@ const MODULI_APLIKACIJE = [
   { key: "projekti", label: "Projekti", icon: Building2 },
   { key: "proizvodnja", label: "Proizvodnja", icon: Factory },
   { key: "nabava", label: "Nabava", icon: Truck },
+  { key: "transporti", label: "Transporti", icon: Container },
   { key: "skladiste", label: "Skladište", icon: Package },
   { key: "kontrola", label: "Kontrola kvalitete", icon: ShieldCheck },
   { key: "otpremnice", label: "Otpremnice i CMR", icon: PackageCheck },
@@ -1519,6 +1520,7 @@ const MODULI_APLIKACIJE = [
 const KARTICE_MODULA = {
   dashboard: { kartice: [{ key: "pregled", naziv: "Pregled" }] },
   skladiste: { kartice: [{ key: "zalihe", naziv: "Zalihe" }, { key: "katalog", naziv: "Katalog profila i limova" }, { key: "kvaliteta", naziv: "Kvaliteta materijala" }, { key: "izdatnice", naziv: "Izdatnice" }] },
+  transporti: { kartice: [{ key: "upiti", naziv: "Upiti za transport" }, { key: "narudzbe", naziv: "Narudžbe za transport" }] },
   kontrola: { kartice: [{ key: "maticna", naziv: "Matična knjiga" }, { key: "ugradeni", naziv: "Ugrađeni materijal" }] },
   nabava: { kartice: [{ key: "narudzbenice", naziv: "Narudžbenice" }, { key: "upiti", naziv: "Upiti materijala" }, { key: "postavke", naziv: "Postavke tvrtke" }] },
   proizvodnja: { kartice: [{ key: "tablica", naziv: "Tablica" }, { key: "gantogram", naziv: "Plan proizvodnje" }, { key: "rezanje", naziv: "Plan rezanja" }, { key: "isporuke", naziv: "Isporuke kupaonica" }] },
@@ -1909,6 +1911,7 @@ function BackupModal({ db, update, showToast, onClose }) {
 export default function App() {
   const [db, setDb] = useState(null);
   const [page, setPage] = useState("dashboard");
+  const [transportiTab, setTransportiTab] = useState(null); // kartica Transporta koja se otvara iz nadzorne ploče
   const [kkProjektId, setKkProjektId] = useState(null); // projekt čiji se popis ugrađenog materijala otvara u Kontroli kvalitete
   const [otvoriProjektId, setOtvoriProjektId] = useState(null); // id projekta čije detalje treba otvoriti pri dolasku na Projekte
   const [toast, setToast] = useState(null);
@@ -2041,7 +2044,7 @@ export default function App() {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` },
       body: JSON.stringify({ upsert, remove }),
     }).then(async (res) => {
-      if (!res.ok) { showToast({ cmr: "Greška pri spremanju CMR-a.", slobodniZadaci: "Greška pri spremanju zadatka.", radniNalozi: "Greška pri spremanju radnog naloga.", materijali: "Greška pri spremanju materijala.", rezervacije: "Greška pri spremanju rezervacija.", maticnaKnjiga: "Greška pri spremanju matične knjige." }[kljuc] || "Greška pri spremanju otpremnice."); return; }
+      if (!res.ok) { showToast({ cmr: "Greška pri spremanju CMR-a.", slobodniZadaci: "Greška pri spremanju zadatka.", radniNalozi: "Greška pri spremanju radnog naloga.", materijali: "Greška pri spremanju materijala.", rezervacije: "Greška pri spremanju rezervacija.", maticnaKnjiga: "Greška pri spremanju matične knjige.", upitiTransporta: "Greška pri spremanju upita za transport.", narudzbeTransporta: "Greška pri spremanju narudžbe za transport." }[kljuc] || "Greška pri spremanju otpremnice."); return; }
       const data = await res.json();
       setDb((prev) => ({ ...prev, [kljuc]: data[kljuc] }));
       (data.promijenjeniBrojevi || []).forEach((p) => showToast(`Broj ${p.staro} je već bio zauzet — spremljeno kao ${p.novo}.`));
@@ -2068,7 +2071,7 @@ export default function App() {
   };
 
   const update = (key, newArr) => {
-    if (key === "otpremnice" || key === "cmr" || key === "slobodniZadaci" || key === "radniNalozi" || key === "materijali" || key === "rezervacije" || key === "maticnaKnjiga") { patchOtpremnice(newArr, key); return; }
+    if (key === "otpremnice" || key === "cmr" || key === "slobodniZadaci" || key === "radniNalozi" || key === "materijali" || key === "rezervacije" || key === "maticnaKnjiga" || key === "upitiTransporta" || key === "narudzbeTransporta") { patchOtpremnice(newArr, key); return; }
     setDb((prev) => ({ ...prev, [key]: newArr }));
     fetch(`${API_URL}/api/data/${key}`, {
       method: "PUT",
@@ -2382,9 +2385,10 @@ export default function App() {
         )}
 
         <div className="erp-sadrzaj" style={{ padding: 24, flex: 1, overflowY: "auto", minWidth: 0 }}>
-          {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} patchZadatakNapomena={patchZadatakNapomena} potvrdiObavijesti={potvrdiObavijesti} />}
+          {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} patchZadatakNapomena={patchZadatakNapomena} potvrdiObavijesti={potvrdiObavijesti} otvoriTransporte={() => { setTransportiTab("narudzbe"); setPage("transporti"); }} />}
           {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "kontrola" && <KontrolaKvalitetePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} projektId={kkProjektId} ocistiProjekt={() => setKkProjektId(null)} />}
+          {aktivnaStranica === "transporti" && <TransportiPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} pocetniTab={transportiTab} ocistiTab={() => setTransportiTab(null)} />}
           {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} dodajMaticne={dodajMaticne} />}
           {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjekt={dopusteniKljucevi.includes("projekti") ? (id) => { setOtvoriProjektId(id); setPage("projekti"); } : undefined} />}
           {(aktivnaStranica === "projekti" || aktivnaStranica === "ponude") && <ProjektiPage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} patchProjekt={patchProjekt} patchProjekti={patchProjekti} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjektId={otvoriProjektId} ocistiOtvoriProjekt={() => setOtvoriProjektId(null)} otvoriKvalitetu={dopusteniKljucevi.includes("kontrola") ? (id) => { setKkProjektId(id); setPage("kontrola"); } : undefined} />}
@@ -2474,7 +2478,7 @@ function NapomenaZadatka({ zadatak, imeZaposlenika, mozeUredjivati, onSpremi, uv
 }
 
 /* ============================== DASHBOARD ============================== */
-function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, patchZadatakIzvrseno, patchZadatakNapomena, potvrdiObavijesti }) {
+function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, patchZadatakIzvrseno, patchZadatakNapomena, potvrdiObavijesti, otvoriTransporte }) {
   const [zadaciZa, setZadaciZa] = useState("moji"); // "moji" | "svi" | id zaposlenika
   const [skupinaZadataka, setSkupinaZadataka] = useState("aktualni"); // "aktualni" | "zavrseni"
   const [dodajZadatakOtvoreno, setDodajZadatakOtvoreno] = useState(false);
@@ -2518,6 +2522,9 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
   const mozeMijenjatiProjekte = (mojaPozicija?.moduli || []).includes("projekti") && dozvolaZaKarticu(mojaPozicija, "projekti", "projekti").izmjene;
   // Financijske brojke (nenaplaćeno, nedovršena proizvodnja) samo za pozicije s modulom Financije.
   const imaFinancije = (mojaPozicija?.moduli || []).includes("fakturiranje");
+  // Transporti koji još nisu obavljeni (narudžba za transport bez isporučenog CMR-a), po datumu utovara.
+  const vidiTransporte = (mojaPozicija?.moduli || []).includes("transporti");
+  const transportiUToku = vidiTransporte ? (db.narudzbeTransporta || []).filter((n) => statusNarudzbeTransporta(n, db.cmr) !== "Prevezeno").sort((a, b) => (a.utovarDatum || "9999").localeCompare(b.utovarDatum || "9999")) : [];
   const vidiNedovrsenu = imaFinancije && dozvolaZaKarticu(mojaPozicija, "fakturiranje", "nedovrsena").pristup;
   const nedovrsenaProslogMjeseca = useMemo(() => (vidiNedovrsenu ? ukupnoNedovrseneZaMjesec(db, prethodniMjesec(todayISO().slice(0, 7))) : 0), [db, vidiNedovrsenu]);
   const spremiNapomenuSlobodnog = (id, tekst) => update("slobodniZadaci", slobodniZadaci.map((z) => (z.id === id ? { ...z, napomena: tekst || null, napomenaAutorId: tekst ? mojId : null, napomenaDatum: tekst ? todayISO() : null } : z)));
@@ -2703,6 +2710,34 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
             </table>
           )}
         </div>
+
+        {vidiTransporte && (
+          <div className="card" style={{ padding: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
+              <Container size={15} color="var(--steel)" />
+              <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600 }}>Transporti</h3>
+              <Btn variant="ghost" size="sm" onClick={otvoriTransporte} style={{ marginLeft: "auto" }}>Otvori</Btn>
+            </div>
+            {transportiUToku.length === 0 ? <EmptyState text="Nema transporta u tijeku." /> : (
+              <div>
+                {transportiUToku.map((n) => {
+                  const c = (db.cmr || []).find((x) => x.transportNarudzbaId === n.id);
+                  const kasni = n.utovarDatum && daysUntil(n.utovarDatum) < 0;
+                  const proj = db.projekti.find((p) => p.id === n.projektId);
+                  return (
+                    <div key={n.id} onClick={otvoriTransporte} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "7px 0", borderBottom: "1px solid var(--line)", cursor: "pointer" }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13 }}><span className="f-mono">{n.broj}</span> · {n.istovarTvrtka || "—"}{proj ? ` · ${proj.sifra}` : ""}</div>
+                        <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{[kratkoMjestoTransporta(n), (db.dobavljaci || []).find((d) => d.id === n.prijevoznikId)?.naziv, c ? `CMR ${c.broj} (${c.status})` : "CMR nije izdan"].filter(Boolean).join(" · ")}</div>
+                      </div>
+                      <span className="f-mono" style={{ fontSize: 11.5, flexShrink: 0, whiteSpace: "nowrap", color: kasni ? "var(--rust)" : "var(--ink-soft)" }}>{n.utovarDatum ? fmtDate(n.utovarDatum) : "—"}{n.istovarDatum ? ` → ${fmtDate(n.istovarDatum)}` : ""}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -7538,8 +7573,9 @@ function NormativiModal({ db, update, showToast, onClose }) {
 /* ============================== DETALJI PROJEKTA ============================== */
 // Vanjski troškovi projekta (cinčanje, bojanje vani, kooperanti, prijevoz…) — ulaze u nedovršenu
 // proizvodnju od svog datuma. Spremaju se na sam projekt (projekt.vanjskiTroskovi).
-function VanjskiTroskoviModal({ projekt, dobavljaci, patchProjekt, onClose }) {
+function VanjskiTroskoviModal({ projekt, dobavljaci, patchProjekt, onClose, dodatni = [] }) {
   const troskovi = projekt.vanjskiTroskovi || [];
+  const svi = [...troskovi, ...dodatni]; // dodatni = troškovi transporta (narudžbe za transport), samo za pregled
   const prazno = () => ({ datum: todayISO(), dobavljacId: "", opis: "", iznos: "" });
   const [novi, setNovi] = useState(prazno());
   const nazivDobavljaca = (id) => dobavljaci.find((d) => d.id === id)?.naziv || "";
@@ -7550,21 +7586,21 @@ function VanjskiTroskoviModal({ projekt, dobavljaci, patchProjekt, onClose }) {
     setNovi(prazno());
   };
   const obrisi = (id) => patchProjekt({ vanjskiTroskovi: troskovi.filter((t) => t.id !== id) });
-  const ukupno = troskovi.reduce((s, t) => s + (Number(t.iznos) || 0), 0);
+  const ukupno = svi.reduce((s, t) => s + (Number(t.iznos) || 0), 0);
   return (
     <Modal wide title={`Vanjski troškovi — ${projekt.sifra}`} onClose={onClose} footer={<Btn onClick={onClose}>Zatvori</Btn>}>
       <p style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 0 }}>Cinčanje, bojanje izvan tvrtke, kooperanti, prijevoz i ostali vanjski troškovi ovog projekta. Ulaze u nedovršenu proizvodnju od upisanog datuma.</p>
-      {troskovi.length === 0 ? <EmptyState text="Još nema upisanih vanjskih troškova." /> : (
+      {svi.length === 0 ? <EmptyState text="Još nema upisanih vanjskih troškova." /> : (
         <table className="erp-table" style={{ marginBottom: 14 }}>
           <thead><tr><th style={{ width: 110 }}>Datum</th><th>Dobavljač</th><th>Opis</th><th style={{ width: 120, textAlign: "right" }}>Iznos</th><th style={{ width: 40 }} /></tr></thead>
           <tbody>
-            {[...troskovi].sort((a, b) => (a.datum || "").localeCompare(b.datum || "")).map((t) => (
+            {[...svi].sort((a, b) => (a.datum || "").localeCompare(b.datum || "")).map((t) => (
               <tr key={t.id}>
                 <td className="f-mono">{fmtDate(t.datum)}</td>
                 <td>{nazivDobavljaca(t.dobavljacId) || <span style={{ color: "var(--ink-faint)" }}>—</span>}</td>
-                <td>{t.opis}</td>
+                <td>{t.opis}{t.izTransporta && <span style={{ marginLeft: 6, fontSize: 11, color: "var(--ink-faint)" }}>(iz modula Transporti)</span>}</td>
                 <td className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(t.iznos)}</td>
-                <td><button className="btn btn-icon btn-ghost" aria-label="Obriši trošak" onClick={() => potvrdiBrisanje(() => obrisi(t.id))}><Trash2 size={14} color="var(--rust)" /></button></td>
+                <td>{!t.izTransporta && <button className="btn btn-icon btn-ghost" aria-label="Obriši trošak" onClick={() => potvrdiBrisanje(() => obrisi(t.id))}><Trash2 size={14} color="var(--rust)" /></button>}</td>
               </tr>
             ))}
             <tr><td colSpan={3} style={{ fontWeight: 700 }}>Ukupno</td><td className="f-mono" style={{ textAlign: "right", fontWeight: 700 }}>{fmtCurDec(ukupno)}</td><td /></tr>
@@ -7589,6 +7625,7 @@ function VanjskiTroskoviModal({ projekt, dobavljaci, patchProjekt, onClose }) {
 function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsync, patchUpiti, showToast, setPage, onClose, mojId, otvoriKvalitetu }) {
   const kupac = db.kupci.find((k) => k.id === projekt.kupacId);
   const voditelj = db.zaposlenici.find((z) => z.id === projekt.voditeljId);
+  const vanjskiSvi = [...(projekt.vanjskiTroskovi || []), ...troskoviTransportaProjekta(db, projekt.id)];
   const nalozi = db.radniNalozi.filter((r) => r.projektId === projekt.id);
   // Kreira po jedan radni nalog za svaku fazu koja na projektu ima planiranih, a još
   // nerasporedenih sati (preostaloSatiFaze) — ne diraju se faze bez planiranih sati ili one
@@ -7848,10 +7885,10 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Btn variant="ghost" icon={Truck} onClick={() => setOtpremniceModal(true)}>Otpremnice{brojOtpremnica > 0 ? ` (${brojOtpremnica})` : ""}</Btn>
-        <Btn variant="ghost" icon={Receipt} onClick={() => setVanjskiModal(true)}>Vanjski troškovi{(projekt.vanjskiTroskovi || []).length > 0 ? ` (${fmtCur((projekt.vanjskiTroskovi || []).reduce((s, v) => s + (Number(v.iznos) || 0), 0))})` : ""}</Btn>
+        <Btn variant="ghost" icon={Receipt} onClick={() => setVanjskiModal(true)}>Vanjski troškovi{vanjskiSvi.length > 0 ? ` (${fmtCur(vanjskiSvi.reduce((s, v) => s + (Number(v.iznos) || 0), 0))})` : ""}</Btn>
         </div>
       </div>
-      {vanjskiModal && <VanjskiTroskoviModal projekt={projekt} dobavljaci={db.dobavljaci || []} patchProjekt={patchProjekt} onClose={() => setVanjskiModal(false)} />}
+      {vanjskiModal && <VanjskiTroskoviModal projekt={projekt} dobavljaci={db.dobavljaci || []} patchProjekt={patchProjekt} dodatni={troskoviTransportaProjekta(db, projekt.id)} onClose={() => setVanjskiModal(false)} />}
 
       <div style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
@@ -10167,6 +10204,401 @@ function CmrTab({ db, update, patchProjekt, showToast, mozeMijenjati, mojId }) {
   );
 }
 
+/* ============================== TRANSPORTI ============================== */
+// Upit za transport (ponude prijevoznika) → narudžba za transport → CMR. Brojevi: TU-GGGG-NNN (upit), TN-GGGG-NNN (narudžba).
+// Status narudžbe je "Prevezeno" čim je povezani CMR isporučen (potpisao primatelj) — ne sprema se zasebno.
+const TRANSPORT_STATUSI = ["Nacrt", "Poslano", "Prevezeno"];
+const POLJA_TRANSPORTA = ["projektId", "utovarTvrtka", "utovarAdresa", "utovarDatum", "utovarVrijeme", "teret", "tezina", "prostorVrsta", "prostor",
+  "istovarTvrtka", "istovarMjesto", "istovarDatum", "istovarVrijeme", "kontaktOsoba", "kontaktEmail", "kontaktTelefon", "rampa", "megaSleper", "napomena"];
+
+const prazniPodaciTransporta = (db) => {
+  const t = db.postavkeTvrtke || {};
+  return {
+    projektId: "", utovarTvrtka: t.naziv || "", utovarAdresa: t.adresa || "", utovarDatum: "", utovarVrijeme: "", teret: "", tezina: "", prostorVrsta: "prostor", prostor: "",
+    istovarTvrtka: "", istovarMjesto: "", istovarDatum: "", istovarVrijeme: "", kontaktOsoba: "", kontaktEmail: "", kontaktTelefon: "", rampa: false, megaSleper: false, napomena: "",
+  };
+};
+// Istovar i kontakt na gradilištu iz projekta (kupac, mjesto isporuke, kontakt osoba) — sve se može ručno promijeniti.
+const podaciProjektaZaTransport = (db, projektId) => {
+  const p = (db.projekti || []).find((x) => x.id === projektId);
+  if (!p) return {};
+  const kupac = (db.kupci || []).find((k) => k.id === p.kupacId);
+  return {
+    istovarTvrtka: kupac?.naziv || "",
+    istovarMjesto: String(p.mjestoIsporuke || kupac?.adresa || "").split(/\n+/).map((x) => x.trim()).filter(Boolean).join(", "),
+    kontaktOsoba: p.kontaktOsoba || kupac?.kontaktOsoba || "", kontaktEmail: p.kontaktEmail || kupac?.email || "", kontaktTelefon: p.kontaktTelefon || kupac?.telefon || "",
+  };
+};
+const kratkoMjestoTransporta = (n) => String(n.istovarMjesto || "").split(",").map((x) => x.trim()).filter(Boolean).slice(-2).join(", ");
+const statusNarudzbeTransporta = (n, cmrLista) => {
+  const cmr = (cmrLista || []).find((c) => c.transportNarudzbaId === n.id);
+  return cmr && cmr.status === CMR_STATUSI[2] ? "Prevezeno" : (n.status || "Nacrt");
+};
+// Dogovorena cijena transporta ulazi u vanjske troškove projekta (i nedovršenu proizvodnju) od datuma utovara.
+const troskoviTransportaProjekta = (db, projektId) => (db.narudzbeTransporta || [])
+  .filter((n) => n.projektId === projektId && Number(n.cijena) > 0)
+  .map((n) => ({ id: `tn-${n.id}`, datum: n.utovarDatum || n.datum, dobavljacId: n.prijevoznikId || null, opis: `Transport ${n.broj}${kratkoMjestoTransporta(n) ? ` — ${kratkoMjestoTransporta(n)}` : ""}`, iznos: Number(n.cijena), izTransporta: true }));
+
+function TransportForma({ f, set, db }) {
+  const projekti = [...db.projekti].sort((a, b) => String(b.sifra).localeCompare(String(a.sifra), "hr", { numeric: true }));
+  const I = (label, k, o = {}) => <Field label={label}><input className="input" type={o.type || "text"} placeholder={o.placeholder} value={f[k] || ""} onChange={(e) => set({ [k]: e.target.value })} /></Field>;
+  return (
+    <>
+      <Field label="Projekt (neobavezno — iz projekta se popunjavaju istovar i kontakt)">
+        <select className="select" value={f.projektId || ""} onChange={(e) => set({ projektId: e.target.value, ...podaciProjektaZaTransport(db, e.target.value) })}>
+          <option value="">— bez projekta —</option>
+          {projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
+        </select>
+      </Field>
+      <div className="label" style={{ marginTop: 8 }}>Utovar</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        {I("Tvrtka utovara", "utovarTvrtka")}
+        {I("Adresa utovara", "utovarAdresa")}
+        {I("Datum utovara", "utovarDatum", { type: "date" })}
+        {I("Vrijeme utovara", "utovarVrijeme", { placeholder: "npr. 13h" })}
+        {I("Teret", "teret", { placeholder: "npr. čelične pozicije konstrukcije na paleti" })}
+        {I("Težina (kg)", "tezina", { placeholder: "npr. 450" })}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "230px 1fr", gap: 12 }}>
+        <Field label="Definiram">
+          <select className="select" value={f.prostorVrsta || "prostor"} onChange={(e) => set({ prostorVrsta: e.target.value })}>
+            <option value="prostor">Potreban utovarni prostor</option>
+            <option value="palete">Veličina paleta i količina</option>
+          </select>
+        </Field>
+        <Field label={f.prostorVrsta === "palete" ? "Veličina paleta i količina" : "Potreban utovarni prostor"}><input className="input" placeholder={f.prostorVrsta === "palete" ? "npr. 2 palete 120 × 80 cm" : "npr. 3 m"} value={f.prostor || ""} onChange={(e) => set({ prostor: e.target.value })} /></Field>
+      </div>
+      <div className="label" style={{ marginTop: 8 }}>Istovar</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        {I("Tvrtka istovara", "istovarTvrtka")}
+        {I("Mjesto istovara", "istovarMjesto")}
+        {I("Datum istovara", "istovarDatum", { type: "date" })}
+        {I("Vrijeme istovara", "istovarVrijeme", { placeholder: "npr. odmah ujutro do 7-8h" })}
+      </div>
+      <div className="label" style={{ marginTop: 8 }}>Posebne napomene — kontakt na gradilištu</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+        {I("Osoba", "kontaktOsoba")}
+        {I("E-mail", "kontaktEmail", { type: "email" })}
+        {I("Kontakt (telefon)", "kontaktTelefon")}
+      </div>
+      <div className="label" style={{ marginTop: 8 }}>Posebni zahtjevi</div>
+      <div style={{ display: "flex", gap: 24, marginBottom: 10 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer", fontSize: 13 }}><input type="checkbox" checked={!!f.rampa} onChange={(e) => set({ rampa: e.target.checked })} /> Istovarna rampa</label>
+        <label style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer", fontSize: 13 }}><input type="checkbox" checked={!!f.megaSleper} onChange={(e) => set({ megaSleper: e.target.checked })} /> Mega šleper</label>
+      </div>
+      <Field label="Ostale napomene"><textarea className="textarea" rows={2} value={f.napomena || ""} onChange={(e) => set({ napomena: e.target.value })} /></Field>
+    </>
+  );
+}
+
+// Ispis upita / narudžbe za transport (isti okvir kao ostali dokumenti, podnožje s podacima tvrtke na svakoj stranici).
+function TransportPrintModal({ tip, d, db, onClose }) {
+  const t = db.postavkeTvrtke || {};
+  const izradio = (db.zaposlenici || []).find((z) => z.id === d.izradioId);
+  const izradioIme = izradio ? `${izradio.ime} ${izradio.prezime}` : "";
+  const prijevoznik = (db.dobavljaci || []).find((x) => x.id === d.prijevoznikId);
+  const jeNarudzba = tip === "Narudžba";
+  const red = (naziv, v) => (v ? <li style={{ marginBottom: 2 }}>{naziv}: <strong>{v}</strong></li> : null);
+  const posebni = [d.rampa ? "Istovarna rampa" : "", d.megaSleper ? "Mega šleper" : ""].filter(Boolean);
+  const naslov = jeNarudzba ? "NARUDŽBA ZA TRANSPORT" : "UPIT ZA TRANSPORT";
+  return (
+    <Modal wide title={`Pregled za ispis — ${tip} za transport ${d.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(`${naslov} ${d.broj}`)}>Ispis / Spremi kao PDF</Btn></>}>
+      <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+          <div style={{ maxWidth: 260 }}>
+            <div style={{ fontWeight: 700, fontSize: 15, lineHeight: 1.3 }}>{naslov}</div>
+            {jeNarudzba && prijevoznik && <div style={{ fontSize: 12.5, marginTop: 8 }}>Prijevoznik: <strong>{prijevoznik.naziv}</strong></div>}
+          </div>
+          <div style={{ textAlign: "right", fontSize: 10.5, lineHeight: 1.5 }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>{t.naziv}</div>
+            <div style={{ fontSize: 9.5, color: "#555", marginBottom: 4, maxWidth: 260 }}>{t.djelatnost}</div>
+            <div>{t.adresa}</div>
+            <div>{t.telefon}</div>
+            <div>{t.email}</div>
+            <div>{t.web}</div>
+          </div>
+        </div>
+        <table style={{ fontSize: 11.5, marginBottom: 16, borderCollapse: "collapse" }}>
+          <tbody>
+            <tr><td style={{ paddingRight: 10, color: "#555" }}>Datum:</td><td style={{ fontWeight: 600 }}>{fmtDate(d.datum)}</td></tr>
+            <tr><td style={{ paddingRight: 10, color: "#555" }}>Izradio:</td><td style={{ fontWeight: 600 }}>{izradioIme}</td></tr>
+            <tr><td style={{ paddingRight: 10, color: "#555" }}>{jeNarudzba ? "Narudžba broj" : "Upit broj"}:</td><td style={{ fontWeight: 600 }}>{d.broj}</td></tr>
+          </tbody>
+        </table>
+
+        <div style={{ fontSize: 12, lineHeight: 1.5 }}>
+          <div>Poštovani,</div>
+          <div style={{ margin: "8px 0 12px" }}>{jeNarudzba ? "Temeljem Vaše ponude naručujemo sljedeći transport:" : "Molim ponudu za sljedeći transport:"}</div>
+
+          <div style={{ fontWeight: 700, marginBottom: 3 }}>Utovar:</div>
+          <ul style={{ margin: "0 0 12px 18px", padding: 0 }}>
+            {red("Tvrtka utovara", d.utovarTvrtka)}
+            {red("Adresa utovara", d.utovarAdresa)}
+            {red("Datum utovara", d.utovarDatum ? fmtDate(d.utovarDatum) : "")}
+            {red("Vrijeme utovara", d.utovarVrijeme)}
+            {red("Teret", d.teret)}
+            {red("Težina", d.tezina ? `${d.tezina} kg` : "")}
+            {red(d.prostorVrsta === "palete" ? "Veličina paleta i količina" : "Potreban utovarni prostor", d.prostor)}
+          </ul>
+
+          <div style={{ fontWeight: 700, marginBottom: 3 }}>Istovar:</div>
+          <ul style={{ margin: "0 0 12px 18px", padding: 0 }}>
+            {red("Tvrtka istovara", d.istovarTvrtka)}
+            {red("Mjesto istovara", d.istovarMjesto)}
+            {red("Datum istovara", d.istovarDatum ? fmtDate(d.istovarDatum) : "")}
+            {red("Vrijeme istovara", d.istovarVrijeme)}
+          </ul>
+
+          {(d.kontaktOsoba || d.kontaktEmail || d.kontaktTelefon) && (
+            <>
+              <div style={{ fontWeight: 700, marginBottom: 3 }}>Kontakt na gradilištu:</div>
+              <ul style={{ margin: "0 0 12px 18px", padding: 0 }}>
+                {red("Osoba", d.kontaktOsoba)}
+                {red("E-mail", d.kontaktEmail)}
+                {red("Kontakt", d.kontaktTelefon)}
+              </ul>
+            </>
+          )}
+
+          {posebni.length > 0 && (
+            <>
+              <div style={{ fontWeight: 700, marginBottom: 3 }}>Posebni zahtjevi:</div>
+              <ul style={{ margin: "0 0 12px 18px", padding: 0 }}>{posebni.map((p) => <li key={p} style={{ marginBottom: 2 }}>{p}</li>)}</ul>
+            </>
+          )}
+          {d.napomena && <div style={{ marginBottom: 12, whiteSpace: "pre-wrap" }}><strong>Napomena:</strong> {d.napomena}</div>}
+
+          {jeNarudzba && Number(d.cijena) > 0 && <div style={{ marginBottom: 12 }}>Dogovorena cijena transporta: <strong>{fmtCurDec(d.cijena)}</strong>{d.napomenaPonude ? ` (${d.napomenaPonude})` : ""}</div>}
+          <div style={{ marginTop: 14 }}>{jeNarudzba ? "Molimo Vas da nam potvrdite narudžbu i izvijestite nas o vozilu i vozaču." : "Molimo Vas da nam pošaljete ponudu s cijenom."}</div>
+          <div>Za eventualne potrebne informacije stojimo Vam na raspolaganju!</div>
+          <div style={{ marginTop: 10 }}>S poštovanjem,</div>
+          <div style={{ fontWeight: 700, marginTop: 8 }}>{t.naziv}</div>
+          <div style={{ marginBottom: 20 }}>{izradioIme}</div>
+        </div>
+
+        <div className="doc-footer" style={{ borderTop: "1px solid #999", paddingTop: 8, fontSize: 8.5, color: "#333", lineHeight: 1.5 }}>
+          <strong>OIB</strong>: {t.oib} | <strong>MB</strong>: {t.mb} | <strong>VAT-ID:</strong> {t.vatId} | <strong>Žiro račun:</strong> {t.ziroRacun}<br />
+          <strong>IBAN:</strong> {t.iban} | <strong>SWIFT:</strong> {t.swift} | Poduzeće je upisano na {t.sud}, <strong>MBS:</strong> {t.mbs} | <strong>Temeljni kapital:</strong> {t.temeljniKapital} | <strong>Uprava:</strong> {t.uprava}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function UpitTransportaPonudeModal({ upit, db, update, showToast, mojId, onClose }) {
+  const ponude = upit.ponude || [];
+  const zakljucano = !!upit.narudzbaId;
+  const sviPrijevoznici = db.dobavljaci.filter((d) => d.prijevoznik);
+  const prijevoznici = sviPrijevoznici.length ? sviPrijevoznici : db.dobavljaci;
+  const azuriraj = (patch) => update("upitiTransporta", db.upitiTransporta.map((u) => (u.id === upit.id ? { ...u, ...patch } : u)));
+  const azurirajPonudu = (id, patch) => azuriraj({ ponude: ponude.map((p) => (p.id === id ? { ...p, ...patch } : p)) });
+  const dodaj = () => azuriraj({ ponude: [...ponude, { id: uid("tp"), dobavljacId: prijevoznici[0]?.id || "", cijena: "", napomena: "" }] });
+  const obrisi = (id) => azuriraj({ ponude: ponude.filter((p) => p.id !== id), odabranaPonudaId: upit.odabranaPonudaId === id ? null : upit.odabranaPonudaId });
+  const cijene = ponude.map((p) => Number(p.cijena)).filter((c) => c > 0);
+  const najnizi = cijene.length ? Math.min(...cijene) : null;
+  const kreiraj = () => {
+    const ponuda = ponude.find((p) => p.id === upit.odabranaPonudaId);
+    if (!ponuda) { showToast("Označi ponudu koju odabireš."); return; }
+    if (!(Number(ponuda.cijena) > 0)) { showToast("Odabrana ponuda nema upisanu cijenu."); return; }
+    const god = new Date().getFullYear();
+    const nova = {
+      ...Object.fromEntries(POLJA_TRANSPORTA.map((k) => [k, upit[k] ?? ""])), rampa: !!upit.rampa, megaSleper: !!upit.megaSleper,
+      id: uid("tn"), broj: sljedeciBroj(db.narudzbeTransporta || [], "broj", `TN-${god}-`), datum: todayISO(), upitId: upit.id, upitBroj: upit.broj,
+      izradioId: mojId || upit.izradioId || "", prijevoznikId: ponuda.dobavljacId, cijena: Number(ponuda.cijena), napomenaPonude: ponuda.napomena || "", status: "Nacrt",
+    };
+    update("narudzbeTransporta", [...(db.narudzbeTransporta || []), nova]);
+    update("upitiTransporta", db.upitiTransporta.map((u) => (u.id === upit.id ? { ...u, narudzbaId: nova.id, status: "Zatvoreno" } : u)));
+    showToast(`Narudžba za transport ${nova.broj} kreirana.`);
+    onClose();
+  };
+  const narudzba = (db.narudzbeTransporta || []).find((n) => n.id === upit.narudzbaId);
+  return (
+    <Modal wide title={`Ponude prijevoznika — Upit ${upit.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn>{!zakljucano && <Btn variant="primary" icon={FolderInput} onClick={kreiraj}>Kreiraj narudžbu za odabranu ponudu</Btn>}</>}>
+      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 0 }}>Unesi ponude prijevoznika (ukupna cijena prijevoza u €), označi odabranu i kreiraj narudžbu za transport. Zelenom je označena najjeftinija ponuda.</p>
+      {zakljucano && <div className="card" style={{ padding: 10, marginBottom: 10, background: "#EAF6EF", fontSize: 13 }}>✓ Narudžba je kreirana: <strong className="f-mono">{narudzba?.broj || "(obrisana)"}</strong>. Ponude se više ne mogu mijenjati.</div>}
+      {sviPrijevoznici.length === 0 && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 8 }}>Nijedan dobavljač nije označen kao "Prijevoznik" (Partneri → Dobavljači) — nudi se cijeli popis dobavljača.</div>}
+      {ponude.length === 0 ? <EmptyState text="Još nema unesenih ponuda." /> : (
+        <table className="erp-table" style={{ marginBottom: 10 }}>
+          <thead><tr><th style={{ width: 30 }} /><th>Prijevoznik</th><th style={{ width: 130 }}>Cijena (€)</th><th>Napomena (vozilo, rok valjanosti…)</th><th style={{ width: 36 }} /></tr></thead>
+          <tbody>
+            {ponude.map((p) => {
+              const najjeftinija = najnizi != null && Number(p.cijena) === najnizi;
+              return (
+                <tr key={p.id} style={upit.odabranaPonudaId === p.id ? { background: "#EAF6EF" } : undefined}>
+                  <td><input type="radio" name={`tp-${upit.id}`} aria-label="Odaberi ponudu" disabled={zakljucano} checked={upit.odabranaPonudaId === p.id} onChange={() => azuriraj({ odabranaPonudaId: p.id })} /></td>
+                  <td><select className="select" disabled={zakljucano} value={p.dobavljacId} onChange={(e) => azurirajPonudu(p.id, { dobavljacId: e.target.value })}>{prijevoznici.map((d) => <option key={d.id} value={d.id}>{d.naziv}</option>)}</select></td>
+                  <td><input className="input f-mono" inputMode="decimal" disabled={zakljucano} style={najjeftinija ? { color: "var(--green)", fontWeight: 700 } : undefined} value={p.cijena} onChange={(e) => azurirajPonudu(p.id, { cijena: e.target.value.replace(",", ".") })} /></td>
+                  <td><input className="input" disabled={zakljucano} value={p.napomena || ""} onChange={(e) => azurirajPonudu(p.id, { napomena: e.target.value })} /></td>
+                  <td>{!zakljucano && <button className="btn btn-icon btn-ghost" aria-label="Obriši ponudu" onClick={() => potvrdiBrisanje(() => obrisi(p.id), "ovu ponudu")}><X size={13} /></button>}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {!zakljucano && <Btn variant="ghost" size="sm" icon={Plus} onClick={dodaj}>Dodaj ponudu</Btn>}
+    </Modal>
+  );
+}
+
+function TransportiPage({ db, update, showToast, mojaPozicija, mojId, pocetniTab, ocistiTab }) {
+  const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "transporti");
+  const [tab, setTab] = useState(() => (pocetniTab && dozvKartice.some((k) => k.key === pocetniTab) ? pocetniTab : (dozvKartice[0]?.key || "upiti")));
+  useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "upiti"); }, [dozvKartice, tab]);
+  useEffect(() => { if (pocetniTab && ocistiTab) ocistiTab(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const mozeUpite = dozvolaZaKarticu(mojaPozicija, "transporti", "upiti").izmjene;
+  const mozeNarudzbe = dozvolaZaKarticu(mojaPozicija, "transporti", "narudzbe").izmjene;
+  const [forma, setForma] = useState(null); // { vrsta: "upit"|"narudzba", f }
+  const [ponudeZa, setPonudeZa] = useState(null);
+  const [print, setPrint] = useState(null); // { tip, d }
+  const [cmrForma, setCmrForma] = useState(null);
+  const [printCmr, setPrintCmr] = useState(null);
+  const god = new Date().getFullYear();
+  const upiti = db.upitiTransporta || [];
+  const narudzbe = db.narudzbeTransporta || [];
+  const projSifra = (id) => db.projekti.find((p) => p.id === id)?.sifra || "—";
+  const dobNaziv = (id) => db.dobavljaci.find((d) => d.id === id)?.naziv || "—";
+  const relacija = (r) => kratkoMjestoTransporta(r) || "—";
+  const postavi = (patch) => setForma((x) => ({ ...x, f: { ...x.f, ...patch } }));
+
+  const noviUpit = () => setForma({ vrsta: "upit", f: { ...prazniPodaciTransporta(db), id: null, broj: sljedeciBroj(upiti, "broj", `TU-${god}-`), datum: todayISO(), izradioId: mojId || "", status: "Priprema", ponude: [], odabranaPonudaId: null, narudzbaId: null } });
+  const novaNarudzba = () => setForma({ vrsta: "narudzba", f: { ...prazniPodaciTransporta(db), id: null, broj: sljedeciBroj(narudzbe, "broj", `TN-${god}-`), datum: todayISO(), izradioId: mojId || "", prijevoznikId: "", cijena: "", status: "Nacrt", napomenaPonude: "" } });
+  const spremi = () => {
+    const { vrsta, f } = forma;
+    if (vrsta === "narudzba") {
+      if (!f.prijevoznikId) { showToast("Odaberi prijevoznika."); return; }
+      const zapis = { ...f, cijena: Number(String(f.cijena).replace(",", ".")) || 0, id: f.id || uid("tn") };
+      update("narudzbeTransporta", f.id ? narudzbe.map((n) => (n.id === f.id ? zapis : n)) : [...narudzbe, zapis]);
+      showToast("Narudžba za transport spremljena.");
+    } else {
+      const zapis = { ...f, id: f.id || uid("tu") };
+      update("upitiTransporta", f.id ? upiti.map((u) => (u.id === f.id ? zapis : u)) : [...upiti, zapis]);
+      showToast("Upit za transport spremljen.");
+    }
+    setForma(null);
+  };
+  const brisiUpit = (u) => potvrdiBrisanje(() => update("upitiTransporta", upiti.filter((x) => x.id !== u.id)), `upit ${u.broj}`);
+  const brisiNarudzbu = (n) => potvrdiBrisanje(() => {
+    update("narudzbeTransporta", narudzbe.filter((x) => x.id !== n.id));
+    // upit iz kojeg je narudžba nastala ponovno se otvara, da se može izabrati druga ponuda
+    const u = upiti.find((x) => x.narudzbaId === n.id);
+    if (u) update("upitiTransporta", upiti.map((x) => (x.id === u.id ? { ...x, narudzbaId: null, status: "Priprema" } : x)));
+  }, `narudžbu ${n.broj}`);
+  const promijeniStatus = (n, status) => update("narudzbeTransporta", narudzbe.map((x) => (x.id === n.id ? { ...x, status } : x)));
+
+  // CMR iz narudžbe za transport: projekt, prijevoznik, utovar, istovar, težina i posebni zahtjevi se prenose, ostalo se dopunjuje u obrascu.
+  const cmrZa = (n) => (db.cmr || []).find((c) => c.transportNarudzbaId === n.id);
+  const kreirajCmr = (n) => {
+    const projekt = db.projekti.find((p) => p.id === n.projektId);
+    const datum = n.utovarDatum || todayISO();
+    const prijedlog = cmrPrijedlog(db, projekt, [], datum);
+    const prijevoznik = db.dobavljaci.find((d) => d.id === n.prijevoznikId);
+    const mjestoIsporuke = [n.istovarTvrtka, n.istovarMjesto].filter(Boolean).join("\n") || prijedlog.mjestoIsporuke;
+    const zadnja = String(n.istovarMjesto || "").split(",").map((x) => x.trim()).filter(Boolean).pop() || "";
+    const t = db.postavkeTvrtke || {};
+    setCmrForma({ pocetni: {
+      id: null, broj: sljedeciBrojCmr(db.cmr, datum), status: CMR_STATUSI[0], statusDatumi: {}, ...prijedlog, izradioId: mojId || "", transportNarudzbaId: n.id,
+      prijevoznikId: n.prijevoznikId, prijevoznikTekst: [prijevoznik?.naziv, prijevoznik?.adresa].filter(Boolean).join("\n"),
+      mjestoPreuzimanja: [n.utovarTvrtka, n.utovarAdresa, fmtDate(datum)].filter(Boolean).join("\n"),
+      mjestoIsporuke, uvjetIsporuke: `${t.cmrUvjetIsporuke || "DAP"}${zadnja ? `: ${zadnja}` : ""}`,
+      brutoTezina: Number(n.tezina) > 0 ? String(Number(n.tezina)) : prijedlog.brutoTezina,
+      posebniDogovori: [n.rampa ? "Istovarna rampa" : "", n.megaSleper ? "Mega šleper" : ""].filter(Boolean).join(", "),
+    } });
+  };
+  const spremiCmr = (f, pregled) => {
+    if (!f.projektId) { showToast("Odaberi projekt."); return; }
+    if (!f.otpremniceIds.length) { showToast("Odaberi barem jednu otpremnicu."); return; }
+    const zapis = { ...f, id: f.id || uid("cmr") };
+    update("cmr", [...(db.cmr || []), zapis]);
+    setCmrForma(null);
+    showToast("CMR spremljen i povezan s narudžbom za transport.");
+    if (pregled) setPrintCmr(zapis);
+  };
+
+  const podaciUpita = [...upiti].sort((a, b) => String(b.broj).localeCompare(String(a.broj)));
+  const podaciNarudzbi = [...narudzbe].sort((a, b) => String(b.broj).localeCompare(String(a.broj)));
+  return (
+    <div>
+      <PageHeader title="Transporti" icon={Container} subtitle="Upiti prijevoznicima, narudžbe za transport i povezani CMR" />
+      <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
+        {dozvKartice.some((k) => k.key === "upiti") && <div className={`nav-tab ${tab === "upiti" ? "active" : ""}`} onClick={() => setTab("upiti")}>Upiti za transport</div>}
+        {dozvKartice.some((k) => k.key === "narudzbe") && <div className={`nav-tab ${tab === "narudzbe" ? "active" : ""}`} onClick={() => setTab("narudzbe")}>Narudžbe za transport</div>}
+      </div>
+
+      {tab === "upiti" && (
+        <EntityPage
+          title="" data={podaciUpita} onAdd={noviUpit} onEdit={(r) => setForma({ vrsta: "upit", f: JSON.parse(JSON.stringify(r)) })} onDelete={brisiUpit}
+          addLabel="Novi upit za transport" searchKeys={["broj", "istovarTvrtka", "istovarMjesto", "utovarTvrtka", "teret"]} readOnly={!mozeUpite}
+          columns={[
+            { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
+            { key: "datum", label: "Datum", render: (r) => fmtDate(r.datum) },
+            { key: "projekt", label: "Projekt", render: (r) => projSifra(r.projektId) },
+            { key: "relacija", label: "Istovar", render: (r) => <div>{r.istovarTvrtka || "—"}<div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{relacija(r)}</div></div> },
+            { key: "utovar", label: "Utovar", render: (r) => (r.utovarDatum ? fmtDate(r.utovarDatum) : "—") },
+            { key: "ponude", label: "Ponude", render: (r) => <span className="f-mono">{(r.ponude || []).length}</span> },
+            { key: "status", label: "Status", render: (r) => <Badge status={r.status || "Priprema"} /> },
+            { key: "pdf", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrint({ tip: "Upit", d: r })}>PDF upita</Btn> },
+            { key: "ponudeBtn", label: "", render: (r) => <Btn size="sm" variant="ghost" onClick={() => setPonudeZa(r.id)}>{r.narudzbaId ? "Ponude" : "Ponude / narudžba"}</Btn> },
+          ]}
+        />
+      )}
+
+      {tab === "narudzbe" && (
+        <EntityPage
+          title="" data={podaciNarudzbi} onAdd={novaNarudzba} onEdit={(r) => setForma({ vrsta: "narudzba", f: { ...JSON.parse(JSON.stringify(r)), cijena: String(r.cijena ?? "") } })} onDelete={brisiNarudzbu}
+          addLabel="Nova narudžba za transport" searchKeys={["broj", "istovarTvrtka", "istovarMjesto", "utovarTvrtka", "teret"]} readOnly={!mozeNarudzbe}
+          columns={[
+            { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
+            { key: "datum", label: "Datum", render: (r) => fmtDate(r.datum) },
+            { key: "projekt", label: "Projekt", render: (r) => projSifra(r.projektId) },
+            { key: "relacija", label: "Istovar", render: (r) => <div>{r.istovarTvrtka || "—"}<div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{relacija(r)}</div></div> },
+            { key: "prijevoznik", label: "Prijevoznik", render: (r) => dobNaziv(r.prijevoznikId) },
+            { key: "utovar", label: "Utovar", render: (r) => (r.utovarDatum ? fmtDate(r.utovarDatum) : "—") },
+            { key: "cijena", label: "Cijena", render: (r) => <span className="f-mono">{fmtCurDec(r.cijena)}</span> },
+            { key: "cmr", label: "CMR", render: (r) => {
+              const c = cmrZa(r);
+              if (c) return <div><span className="f-mono">{c.broj}</span><div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{c.status}</div></div>;
+              return r.projektId && mozeNarudzbe ? <Btn size="sm" variant="ghost" onClick={() => kreirajCmr(r)}>Kreiraj CMR</Btn> : <span style={{ color: "var(--ink-faint)" }}>—</span>;
+            } },
+            { key: "status", label: "Status", render: (r) => {
+              const s = statusNarudzbeTransporta(r, db.cmr);
+              if (s === "Prevezeno" && r.status !== "Prevezeno") return <div><Badge status="Prevezeno" /><div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>prema CMR-u</div></div>;
+              return mozeNarudzbe
+                ? <select className="select" style={{ fontSize: 12, padding: "4px 8px", width: 120 }} value={r.status || "Nacrt"} onChange={(e) => promijeniStatus(r, e.target.value)}>{TRANSPORT_STATUSI.map((x) => <option key={x}>{x}</option>)}</select>
+                : <Badge status={s} />;
+            } },
+            { key: "pdf", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrint({ tip: "Narudžba", d: r })}>PDF</Btn> },
+          ]}
+        />
+      )}
+
+      {forma && (
+        <Modal wide title={`${forma.vrsta === "upit" ? "Upit za transport" : "Narudžba za transport"} ${forma.f.broj}`} onClose={() => setForma(null)} footer={<><Btn onClick={() => setForma(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi}>Spremi</Btn></>}>
+          {forma.vrsta === "narudzba" && (
+            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12, marginBottom: 6 }}>
+              <Field label="Prijevoznik">
+                <select className="select" value={forma.f.prijevoznikId || ""} onChange={(e) => postavi({ prijevoznikId: e.target.value })}>
+                  <option value="">— odaberi —</option>
+                  {(db.dobavljaci.some((d) => d.prijevoznik) ? db.dobavljaci.filter((d) => d.prijevoznik || d.id === forma.f.prijevoznikId) : db.dobavljaci).map((d) => <option key={d.id} value={d.id}>{d.naziv}</option>)}
+                </select>
+              </Field>
+              <Field label="Dogovorena cijena (€)"><input className="input f-mono" inputMode="decimal" value={forma.f.cijena} onChange={(e) => postavi({ cijena: e.target.value.replace(",", ".") })} /></Field>
+              <Field label="Status">
+                <select className="select" value={forma.f.status || "Nacrt"} onChange={(e) => postavi({ status: e.target.value })}>{TRANSPORT_STATUSI.map((x) => <option key={x}>{x}</option>)}</select>
+              </Field>
+            </div>
+          )}
+          <TransportForma f={forma.f} set={postavi} db={db} />
+        </Modal>
+      )}
+      {ponudeZa && upiti.find((u) => u.id === ponudeZa) && <UpitTransportaPonudeModal upit={upiti.find((u) => u.id === ponudeZa)} db={db} update={update} showToast={showToast} mojId={mojId} onClose={() => setPonudeZa(null)} />}
+      {print && <TransportPrintModal tip={print.tip} d={print.d} db={db} onClose={() => setPrint(null)} />}
+      {cmrForma && <CmrFormModal db={db} pocetni={cmrForma.pocetni} onSpremi={spremiCmr} onClose={() => setCmrForma(null)} />}
+      {printCmr && <CmrPrintModal cmr={printCmr} db={db} showToast={showToast} onClose={() => setPrintCmr(null)} />}
+    </div>
+  );
+}
+
 /* ============================== NEDOVRŠENA PROIZVODNJA ============================== */
 // Mjesečni izvještaj: za svaki projekt koji na zadnji dan mjeseca nije potpuno isporučen —
 //   (materijal izdan na projekt + sati na nalozima × trošak sata + vanjski troškovi) × (1 − isporučeni %).
@@ -10237,7 +10669,7 @@ function izracunNedovrseneProizvodnje(db, mjesec, trosakSata, rucno = {}) {
     const materijal = materijalPoProjektu.get(p.id) || 0;
     const sati = satiPoProjektu.get(p.id) || 0;
     const rad = sati * (Number(trosakSata) || 0);
-    const vanjski = (p.vanjskiTroskovi || []).filter((v) => (v.datum || "") <= doDatuma).reduce((a, v) => a + (Number(v.iznos) || 0), 0);
+    const vanjski = [...(p.vanjskiTroskovi || []), ...troskoviTransportaProjekta(db, p.id)].filter((v) => (v.datum || "") <= doDatuma).reduce((a, v) => a + (Number(v.iznos) || 0), 0);
     const ulozeno = materijal + rad + vanjski;
     if (ulozeno <= 0) return null;
     const isp = isporucenoProjekta(p, db, doDatuma);
@@ -10457,7 +10889,7 @@ function NedovrsenaDetaljModal({ red, db, mjesec, trosakSata, zakljucan, onClose
   const cijena = (st) => (st.cijena != null ? Number(st.cijena) || 0 : Number(db.materijali.find((m) => m.id === st.materijalId)?.cijena) || 0);
   const nalozi = db.radniNalozi.filter((n) => n.projektId === red.projektId);
   const satiPoNalogu = nalozi.map((n) => ({ n, sati: (db.satiPoNalogu || []).filter((s) => s.radniNalogId === n.id && (s.datum || "") <= doDatuma).reduce((a, s) => a + (Number(s.sati) || 0), 0) })).filter((x) => x.sati > 0);
-  const vanjski = (projekt?.vanjskiTroskovi || []).filter((v) => (v.datum || "") <= doDatuma);
+  const vanjski = [...(projekt?.vanjskiTroskovi || []), ...troskoviTransportaProjekta(db, red.projektId)].filter((v) => (v.datum || "") <= doDatuma);
   const otpremnice = (db.otpremnice || []).filter((o) => o.projektId === red.projektId && (o.datum || "") <= doDatuma).sort((a, b) => (a.datum || "").localeCompare(b.datum || ""));
   const isp = projekt ? isporucenoProjekta(projekt, db, doDatuma) : null;
   return (

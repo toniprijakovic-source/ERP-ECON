@@ -31,7 +31,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada",
   "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
   "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca",
-  "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije", "maticnaKnjiga",
+  "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije", "maticnaKnjiga", "upitiTransporta", "narudzbeTransporta",
 ];
 
 // Svaki modul (isti "moduli" popis kao u pozicijeZaposlenika) dijeli se na kartice — iste
@@ -67,7 +67,7 @@ const KARTICE_MODULA = {
   // Projekti i Ponude su od 2026-10 zasebni moduli (prije jedan "Projekti i ponude"), kao i
   // Otpremnice i CMR naspram Financija (prije jedan "Otpremnice i fakturiranje").
   projekti: {
-    projekti: { citanje: ["cjenikRada", "katalogProfila", "kupci", "materijali", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "zaposlenici", "upitiNabave", "kvaliteteMaterijala", "narudzbenice", "dobavljaci"], pisanje: ["projekti", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "materijali", "radniNalozi", "upitiNabave"] },
+    projekti: { citanje: ["cjenikRada", "katalogProfila", "kupci", "materijali", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "zaposlenici", "upitiNabave", "kvaliteteMaterijala", "narudzbenice", "dobavljaci", "narudzbeTransporta"], pisanje: ["projekti", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "materijali", "radniNalozi", "upitiNabave"] },
     zavrseni: { citanje: ["projekti", "radniNalozi", "kupci", "narudzbe"], pisanje: [] },
     // Popis potvrda narudžbe (Auftragsbestätigung) — potvrda se sprema na narudžbu kupca.
     potvrde: { citanje: ["narudzbe", "projekti", "kupci", "zaposlenici", "postavkeTvrtke"], pisanje: ["narudzbe"] },
@@ -84,8 +84,13 @@ const KARTICE_MODULA = {
   fakturiranje: {
     fakture: { citanje: ["fakture", "kupci", "projekti"], pisanje: ["fakture"] },
     podloge: { citanje: ["podlogeZaFakturu", "projekti", "materijali"], pisanje: ["podlogeZaFakturu"] },
-    nedovrsena: { citanje: ["nedovrsenaProizvodnja", "projekti", "radniNalozi", "satiPoNalogu", "izdatnice", "materijali", "otpremnice", "narudzbe", "kupci", "dobavljaci"], pisanje: ["nedovrsenaProizvodnja"] },
+    nedovrsena: { citanje: ["nedovrsenaProizvodnja", "projekti", "radniNalozi", "satiPoNalogu", "izdatnice", "materijali", "otpremnice", "narudzbe", "kupci", "dobavljaci", "narudzbeTransporta"], pisanje: ["nedovrsenaProizvodnja"] },
     analiza: { citanje: ["projekti", "radniNalozi", "ponude", "izdatnice", "materijali", "kupci", "cjenikRada", "katalogProfila", "kvaliteteMaterijala"], pisanje: [] },
+  },
+  // Transporti (od 2026-10): upiti prijevoznicima, narudžbe za transport (+ CMR iz narudžbe).
+  transporti: {
+    upiti: { citanje: ["upitiTransporta", "narudzbeTransporta", "dobavljaci", "projekti", "kupci", "zaposlenici", "postavkeTvrtke"], pisanje: ["upitiTransporta", "narudzbeTransporta"] },
+    narudzbe: { citanje: ["narudzbeTransporta", "upitiTransporta", "cmr", "otpremnice", "dobavljaci", "projekti", "kupci", "narudzbe", "zaposlenici", "postavkeTvrtke"], pisanje: ["narudzbeTransporta", "cmr"] },
   },
   // Kontrola kvalitete (od 2026-10): matična knjiga materijala i popis ugrađenog materijala po projektu.
   kontrola: {
@@ -804,7 +809,7 @@ app.put("/api/upiti/patch", autentikacija, async (req, res) => {
 // računao iz zastarjelog popisa). Zato server primjenjuje izmjenu na trenutni zaključani popis, a
 // novi dokument čiji je broj već zauzet dobiva sljedeći slobodan broj. prilagodiUpsert (neobavezno)
 // dobiva poslane zapise i trenutni popis prije spajanja (radni nalozi: zadrziNoveOznakeNaloga).
-const patchPoIdHandler = (kljuc, brojRegex, naziv, prilagodiUpsert = (upsert) => upsert) => async (req, res) => {
+const patchPoIdHandler = (kljuc, brojRegex, naziv, prilagodiUpsert = (upsert) => upsert, sirinaBroja = 0) => async (req, res) => {
   const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
   const { pisivo } = izracunajDozvoljeneKljuceve(pozicija);
   if (!pisivo.has(kljuc)) return res.status(403).json({ error: `Vaša pozicija nema ovlaštenje za mijenjanje: ${naziv}.` });
@@ -830,7 +835,7 @@ const patchPoIdHandler = (kljuc, brojRegex, naziv, prilagodiUpsert = (upsert) =>
       const m = brojRegex.exec(u.broj || "");
       if (m && rezultat.some((o) => o.broj === u.broj)) {
         const brojevi = rezultat.filter((o) => o.broj && o.broj.startsWith(m[1]) && o.broj.endsWith(m[3])).map((o) => parseInt(o.broj.slice(m[1].length, o.broj.length - m[3].length), 10)).filter((n) => !isNaN(n));
-        const novi = `${m[1]}${Math.max(...brojevi) + 1}${m[3]}`;
+        const novi = `${m[1]}${String(Math.max(...brojevi) + 1).padStart(sirinaBroja, "0")}${m[3]}`;
         promijenjeniBrojevi.push({ id: u.id, staro: u.broj, novo: novi });
         rezultat.push({ ...u, broj: novi });
       } else {
@@ -859,6 +864,9 @@ app.put("/api/cmr/patch", autentikacija, patchPoIdHandler("cmr", /^(CMR-\d{2}-\d
 // sljedeći slobodan broj tog projekta.
 // Materijali i rezervacije: isto ciljano spremanje po id-u (nema broja dokumenta, pa se regex nikad ne podudara).
 app.put("/api/materijali/patch", autentikacija, patchPoIdHandler("materijali", /^(?!)$/, "materijala"));
+// Transporti: TU-GGGG-NNN (upit) i TN-GGGG-NNN (narudžba); zauzet broj dobiva sljedeći slobodan.
+app.put("/api/upitiTransporta/patch", autentikacija, patchPoIdHandler("upitiTransporta", /^(TU-\d{4}-)(\d+)()$/, "upita za transport", (upsert) => upsert, 3));
+app.put("/api/narudzbeTransporta/patch", autentikacija, patchPoIdHandler("narudzbeTransporta", /^(TN-\d{4}-)(\d+)()$/, "narudžbi za transport", (upsert) => upsert, 3));
 app.put("/api/rezervacije/patch", autentikacija, patchPoIdHandler("rezervacije", /^(?!)$/, "rezervacija"));
 // Matična knjiga: matični broj (od 3700, uzlazno) dodjeljuje isključivo poslužitelj, pod zaključanim popisom —
 // preglednik sa zastarjelim popisom inače bi dvaput dobio isti broj. Broj postojećeg zapisa se ne može promijeniti.
