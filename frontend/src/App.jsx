@@ -7094,6 +7094,27 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
     setOtvorene((o) => ({ ...o, [id]: true }));
     setAktivnaKartica(id);
   };
+  // Kopija stavke: sve (profili/limovi, sati po operacijama, AKZ, materijal, ostalo) uz nove id-eve; oznaka dobiva
+  // sljedeći slobodan broj (01.01.0030 → 01.01.0031), a kopija se umeće odmah iza izvorne i otvara.
+  const kopirajPoz = (id) => {
+    const izvor = pozicije.find((p) => p.id === id);
+    if (!izvor) return;
+    const kopija = JSON.parse(JSON.stringify(izvor));
+    kopija.id = uid("poz");
+    ["stavke", "stavkeAKZ", "materijalStavke", "ostaleStavke"].forEach((k) => { if (Array.isArray(kopija[k])) kopija[k] = kopija[k].map((r) => ({ ...r, id: uid("k") })); });
+    const zauzete = new Set(pozicije.map((p) => p.oznaka));
+    const m = /^(.*?)(\d+)(\D*)$/.exec(izvor.oznaka || "");
+    if (m) {
+      let broj = parseInt(m[2], 10);
+      let nova;
+      do { broj += 1; nova = `${m[1]}${String(broj).padStart(m[2].length, "0")}${m[3]}`; } while (zauzete.has(nova));
+      kopija.oznaka = nova;
+    } else kopija.oznaka = `${izvor.oznaka || "Stavka"} (kopija)`;
+    const i = pozicije.findIndex((p) => p.id === id);
+    setPozicije([...pozicije.slice(0, i + 1), kopija, ...pozicije.slice(i + 1)]);
+    setOtvorene((o) => ({ ...o, [kopija.id]: !!o[id] }));
+    setAktivnaKartica(kopija.id);
+  };
   const updatePoz = (id, patch) => setPozicije(pozicije.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   const updateOp = (id, key, val) => setPozicije(pozicije.map((p) => (p.id === id ? { ...p, operacije: { ...p.operacije, [key]: val } } : p)));
   const removePoz = (id) => {
@@ -7164,6 +7185,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
               <div style={{ flex: "2 1 220px" }}><label className="label">Naziv stavke</label><input className="input" placeholder="npr. Glavni nosači rešetke" value={p.naziv} onChange={(e) => updatePoz(p.id, { naziv: e.target.value })} /></div>
               <div style={{ width: 90 }}><label className="label">Količina</label><input className="input f-mono" type="number" min="0" value={p.kolicina} onChange={(e) => updatePoz(p.id, { kolicina: e.target.value })} /></div>
               <button className="btn btn-icon btn-ghost" onClick={() => toggle(p.id)} title="Prikaži/sakrij sate po operaciji">{otvorene[p.id] ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button>
+              <button className="btn btn-icon btn-ghost" onClick={() => kopirajPoz(p.id)} title="Kopiraj stavku" aria-label="Kopiraj stavku"><Copy size={14} /></button>
               <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => removePoz(p.id))}><Trash2 size={14} color="var(--rust)" /></button>
             </div>
 
