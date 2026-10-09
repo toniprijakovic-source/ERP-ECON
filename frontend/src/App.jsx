@@ -4874,6 +4874,7 @@ function PlanProizvodnjeView({ db, update, patchProjekt, showToast, mozeMijenjat
   if (!plan) return <EmptyState text="Računam plan proizvodnje…" />;
   const tabovi = [
     { key: "projekt", naziv: "Po projektu" },
+    { key: "aktivni", naziv: `Aktivni projekti (${db.projekti.filter((p) => !["Završen", "Otkazan"].includes(p.status)).length})` },
     { key: "opterecenje", naziv: "Opterećenje i smjene" },
     { key: "danas", naziv: "Danas – unos" },
     { key: "bezFaza", naziv: `Projekti bez faza (${plan.bezFaza.length})` },
@@ -4886,11 +4887,37 @@ function PlanProizvodnjeView({ db, update, patchProjekt, showToast, mozeMijenjat
       </div>
       {podaci?.greska && <div style={{ fontSize: 12.5, color: "var(--rust)", marginBottom: 10 }}>Normativ i odsutnosti nisu učitani — kupaonice i godišnji odmori nisu u planu. Osvježi stranicu.</div>}
       {podTab === "projekt" && <PlanPoProjektu plan={plan} patchProjekt={patchProjekt} mozeMijenjati={mozeMijenjati} otvoriProjekt={otvoriProjekt} />}
+      {podTab === "aktivni" && <PlanAktivniProjekti db={db} podaci={podaci} otvoriProjekt={otvoriProjekt} />}
       {podTab === "opterecenje" && <PlanOpterecenje plan={plan} db={db} podaci={podaci} update={update} showToast={showToast} mozeMijenjati={mozeMijenjati} />}
       {podTab === "danas" && <PlanDanasUnos plan={plan} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeMijenjati} />}
       {podTab === "bezFaza" && <PlanBezFaza plan={plan} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeMijenjati} />}
       {podTab === "postavke" && <PlanPostavke plan={plan} db={db} update={update} showToast={showToast} mozeMijenjati={mozeMijenjati} />}
     </div>
+  );
+}
+
+/* ---------- Aktivni projekti: pregled (šifra, naziv, voditelj, kupac, broj narudžbe, rok) ---------- */
+// Isti popis kao u Projektima (bez završenih i otkazanih), samo za čitanje. Kupac i broj narudžbe dolaze s poslužitelja
+// (/api/plan/podaci) bez cijena, pa popis vide i pozicije koje ne smiju čitati narudžbe kupaca.
+function PlanAktivniProjekti({ db, podaci, otvoriProjekt }) {
+  const pregled = podaci?.projektiPregled || {};
+  const lista = useMemo(() => {
+    const aktivni = db.projekti.filter((p) => !["Završen", "Otkazan"].includes(p.status));
+    const imaRucniPoredak = db.projekti.some((p) => p.poredak != null);
+    return aktivni.sort(imaRucniPoredak ? (a, b) => (a.poredak ?? Infinity) - (b.poredak ?? Infinity) : (a, b) => usporediPrirodno(a.sifra, b.sifra));
+  }, [db.projekti]);
+  return (
+    <EntityPage
+      title="" data={lista} readOnly searchKeys={["sifra", "naziv"]}
+      columns={[
+        { key: "sifra", label: "Šifra", render: (r) => (otvoriProjekt ? <a href="#" className="f-mono" onClick={(e) => { e.preventDefault(); otvoriProjekt(r.id); }}>{r.sifra}</a> : <span className="f-mono">{r.sifra}</span>) },
+        { key: "naziv", label: "Naziv" },
+        { key: "voditelj", label: "Voditelj", render: (r) => { const v = db.zaposlenici.find((z) => z.id === r.voditeljId); return v ? `${v.prezime} ${v.ime}` : <span style={{ color: "var(--ink-faint)" }}>—</span>; } },
+        { key: "kupac", label: "Kupac", render: (r) => pregled[r.id]?.kupac || "—" },
+        { key: "brojNarudzbe", label: "Broj narudžbe", render: (r) => { const brojevi = pregled[r.id]?.narudzbe || []; return brojevi.length ? <span className="f-mono">{brojevi.join(", ")}</span> : <span style={{ color: "var(--ink-faint)" }}>—</span>; } },
+        { key: "rokZavrsetka", label: "Rok završetka", render: (r) => fmtDate(r.rokZavrsetka) },
+      ]}
+    />
   );
 }
 

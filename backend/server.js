@@ -554,7 +554,11 @@ app.get("/api/plan/podaci", autentikacija, async (req, res) => {
   const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
   const { citljivo } = izracunajDozvoljeneKljuceve(pozicija);
   if (!citljivo.has("planProizvodnje")) return res.status(403).json({ error: "Vaša pozicija nema pristup planu proizvodnje." });
-  const [normativi, evidencija] = await Promise.all([ucitajKljuc("normativi"), ucitajKljuc("evidencijaRada")]);
+  const [normativi, evidencija, projekti, kupci, narudzbe] = await Promise.all([ucitajKljuc("normativi"), ucitajKljuc("evidencijaRada"), ucitajKljuc("projekti"), ucitajKljuc("kupci"), ucitajKljuc("narudzbe")]);
+  // Za popis aktivnih projekata: samo naziv kupca i brojevi narudžbi kupca — bez ugovorenih cijena (zato ne čita izravno kupce i narudžbe).
+  const nazivKupca = new Map((kupci || []).map((k) => [k.id, k.naziv]));
+  const brojeviNarudzbi = {};
+  (narudzbe || []).forEach((n) => { if (n.projektId && n.broj) (brojeviNarudzbi[n.projektId] = brojeviNarudzbi[n.projektId] || []).push(n.broj); });
   const odDatuma = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
   const odsutnosti = [];
   const vidjeno = new Set();
@@ -569,6 +573,7 @@ app.get("/api/plan/podaci", autentikacija, async (req, res) => {
   res.json({
     normativ: { naziv: normativi?.naziv || "", grupe: (normativi?.grupe || []).map((g) => ({ kljuc: g.kljuc, naziv: g.naziv, ucinakKgH: Number(g.ucinakKgH) || 0, raspodjela: g.raspodjela || {} })) },
     odsutnosti,
+    projektiPregled: Object.fromEntries((projekti || []).map((p) => [p.id, { kupac: nazivKupca.get(p.kupacId) || "", narudzbe: brojeviNarudzbi[p.id] || [] }])),
   });
 });
 
