@@ -121,12 +121,13 @@ const kodirajNaslov = (naslov) => {
 };
 
 // Poruka koju Outlook otvara kao NEPOSLANU skicu (X-Unsent: 1) s primateljima, naslovom, tekstom i priloženim PDF-om.
-export function napraviEml({ primatelji, naslov, tekst, pdf, imePdfa }) {
+export function napraviEml({ primatelji = [], skriveni = [], naslov, tekst, pdf, imePdfa }) {
   const granica = `----=_Part_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
   const sigurnoIme = String(imePdfa).replace(/[^A-Za-z0-9._-]+/g, "_");
   const zaglavlje = [
     "X-Unsent: 1",
-    `To: ${primatelji.join(", ")}`,
+    ...(primatelji.length ? [`To: ${primatelji.join(", ")}`] : []),
+    ...(skriveni.length ? [`Bcc: ${skriveni.join(", ")}`] : []),
     `Subject: ${kodirajNaslov(naslov)}`,
     "MIME-Version: 1.0",
     `Content-Type: multipart/mixed; boundary="${granica}"`,

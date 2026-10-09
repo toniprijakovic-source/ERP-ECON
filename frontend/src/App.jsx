@@ -4113,14 +4113,13 @@ function SlanjeUpitaModal({ upit, db, patchUpiti, showToast, izradioIme, posilja
     setRadim(true);
     try {
       const pdf = await napraviPdfUpitaMaterijala({ broj: upit.broj, datum: upit.datum, izradioIme, stavke: upit.stavke, tvrtka: db.postavkeTvrtke, formatDimenzije: formatDimenzijaStavke, fmtDatum: fmtDate });
-      for (const d of ciljevi) {
-        const eml = napraviEml({ primatelji: adrese(d), naslov, tekst, pdf, imePdfa: `Upit_${upit.broj}.pdf` });
-        preuzmiDatoteku(eml, `Upit_${upit.broj}_${(d.naziv || "dobavljac").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/đ/gi, "d").slice(0, 30)}.eml`.replace(/[^A-Za-z0-9._-]+/g, "_"));
-        await new Promise((r) => setTimeout(r, 500));
-      }
+      // Jedna poruka za sve odabrane dobavljače; adrese idu u skrivenu kopiju (Bcc), pa dobavljači ne vide jedni druge.
+      const skriveni = [...new Set(ciljevi.flatMap((d) => adrese(d).map((a) => a.toLowerCase())))];
+      const eml = napraviEml({ skriveni, naslov, tekst, pdf, imePdfa: `Upit_${upit.broj}.pdf` });
+      preuzmiDatoteku(eml, `Upit_${upit.broj}.eml`.replace(/[^A-Za-z0-9._-]+/g, "_"));
       const datum = todayISO();
       patchUpiti([{ ...upit, poslano: [...(upit.poslano || []).filter((p) => !ciljevi.some((d) => d.id === p.dobavljacId)), ...ciljevi.map((d) => ({ dobavljacId: d.id, datum }))] }], []);
-      showToast(`Pripremljeno poruka: ${ciljevi.length}. Otvori ih iz preuzimanja (dvoklik), provjeri i klikni Pošalji u Outlooku.`);
+      showToast(`Pripremljena je jedna poruka za ${ciljevi.length} dobavljača (skrivena kopija). Otvori je iz preuzimanja (dvoklik), provjeri i klikni Pošalji u Outlooku.`);
       onClose();
     } catch (e) {
       console.error(e);
@@ -4131,8 +4130,8 @@ function SlanjeUpitaModal({ upit, db, patchUpiti, showToast, izradioIme, posilja
   };
   return (
     <Modal wide title={`Pošalji upit ${upit.broj} dobavljačima`} onClose={onClose}
-      footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Mail} onClick={pripremi} disabled={radim || brojOdabranih === 0}>{radim ? "Pripremam…" : `Pripremi poruke u Outlooku (${brojOdabranih})`}</Btn></>}>
-      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 0 }}>Za svakog odabranog dobavljača priprema se zasebna poruka s priloženim PDF-om upita. Preuzete datoteke otvori dvoklikom — Outlook ih otvara kao neposlane skice, a ti provjeriš i klikneš „Pošalji“.</p>
+      footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Mail} onClick={pripremi} disabled={radim || brojOdabranih === 0}>{radim ? "Pripremam…" : `Pripremi poruku u Outlooku (${brojOdabranih} dobavljača)`}</Btn></>}>
+      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 0 }}>Priprema se jedna poruka s priloženim PDF-om upita; adrese svih odabranih dobavljača idu u skrivenu kopiju (Bcc), pa dobavljači ne vide jedni druge. Preuzetu datoteku otvori dvoklikom — Outlook je otvara kao neposlanu skicu, a ti provjeriš i klikneš „Pošalji“.</p>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
         <select className="select" aria-label="Skupina dobavljača" style={{ width: 240 }} value={skupina} onChange={(e) => setSkupina(e.target.value)}>
           <option value="">Sve skupine ({db.dobavljaci.length})</option>
