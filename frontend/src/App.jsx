@@ -4090,15 +4090,21 @@ const generirajNarudzbeIzUpita = (upit, db, update, patchUpiti, showToast) => {
 // Outlook je otvara kao neposlanu skicu — poruku se provjeri i pošalje jednim klikom.
 function SlanjeUpitaModal({ upit, db, patchUpiti, showToast, izradioIme, posiljatelj, onClose }) {
   const [trazi, setTrazi] = useState("");
+  const [skupina, setSkupina] = useState(""); // "" = sve skupine, "__bez" = dobavljači bez skupine, inače vrsta dobavljača
   const [odabrani, setOdabrani] = useState(() => new Set());
   const [naslov, setNaslov] = useState(`Upit za materijal ${upit.broj}${db.postavkeTvrtke?.naziv ? ` — ${db.postavkeTvrtke.naziv}` : ""}`);
   const [tekst, setTekst] = useState(() => `Poštovani,\n\nu privitku Vam šaljemo upit za materijal br. ${upit.broj}.\nMolimo Vas da nam dostavite ponudu s cijenama i rokom isporuke.\n\nZa sve dodatne informacije stojimo Vam na raspolaganju.\n\n${potpisEmail(posiljatelj, db.postavkeTvrtke)}`);
   const [radim, setRadim] = useState(false);
   const adrese = (d) => String(d.email || "").split(/[;,\s]+/).filter((x) => x.includes("@"));
   const poslano = new Map((upit.poslano || []).map((p) => [p.dobavljacId, p.datum]));
+  const skupine = [...new Set(db.dobavljaci.map((d) => (d.vrsta || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "hr"));
+  const brojUSkupini = (k) => db.dobavljaci.filter((d) => ((d.vrsta || "").trim() || "") === k).length;
+  const bezSkupine = db.dobavljaci.filter((d) => !(d.vrsta || "").trim()).length;
   const popis = [...db.dobavljaci]
+    .filter((d) => (skupina === "" ? true : skupina === "__bez" ? !(d.vrsta || "").trim() : (d.vrsta || "").trim() === skupina))
     .filter((d) => !trazi.trim() || `${d.naziv || ""} ${d.vrsta || ""}`.toLowerCase().includes(trazi.trim().toLowerCase()))
     .sort((a, b) => (a.naziv || "").localeCompare(b.naziv || "", "hr"));
+  const oznaciSveUPrikazu = (oznaci) => setOdabrani((prev) => { const n = new Set(prev); popis.filter((d) => adrese(d).length).forEach((d) => (oznaci ? n.add(d.id) : n.delete(d.id))); return n; });
   const prebaci = (id) => setOdabrani((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const brojOdabranih = db.dobavljaci.filter((d) => odabrani.has(d.id) && adrese(d).length).length;
   const pripremi = async () => {
@@ -4127,7 +4133,16 @@ function SlanjeUpitaModal({ upit, db, patchUpiti, showToast, izradioIme, posilja
     <Modal wide title={`Pošalji upit ${upit.broj} dobavljačima`} onClose={onClose}
       footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Mail} onClick={pripremi} disabled={radim || brojOdabranih === 0}>{radim ? "Pripremam…" : `Pripremi poruke u Outlooku (${brojOdabranih})`}</Btn></>}>
       <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 0 }}>Za svakog odabranog dobavljača priprema se zasebna poruka s priloženim PDF-om upita. Preuzete datoteke otvori dvoklikom — Outlook ih otvara kao neposlane skice, a ti provjeriš i klikneš „Pošalji“.</p>
-      <input className="input" placeholder="Traži dobavljača…" value={trazi} onChange={(e) => setTrazi(e.target.value)} style={{ marginBottom: 8 }} />
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+        <select className="select" aria-label="Skupina dobavljača" style={{ width: 240 }} value={skupina} onChange={(e) => setSkupina(e.target.value)}>
+          <option value="">Sve skupine ({db.dobavljaci.length})</option>
+          {skupine.map((k) => <option key={k} value={k}>{k} ({brojUSkupini(k)})</option>)}
+          {bezSkupine > 0 && <option value="__bez">Bez skupine ({bezSkupine})</option>}
+        </select>
+        <input className="input" placeholder="Traži dobavljača…" value={trazi} onChange={(e) => setTrazi(e.target.value)} style={{ flex: 1, minWidth: 160 }} />
+        <Btn size="sm" variant="ghost" onClick={() => oznaciSveUPrikazu(true)}>Označi sve u prikazu</Btn>
+        <Btn size="sm" variant="ghost" onClick={() => oznaciSveUPrikazu(false)}>Poništi u prikazu</Btn>
+      </div>
       <div className="card" style={{ maxHeight: 280, overflowY: "auto", padding: 4 }}>
         {popis.length === 0 ? <EmptyState text="Nema dobavljača." /> : popis.map((d) => {
           const a = adrese(d);
