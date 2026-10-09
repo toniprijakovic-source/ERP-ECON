@@ -10258,8 +10258,8 @@ const otvoriIspisCmr = (html, naslov) => {
 
 function CmrPrintModal({ cmr, db, showToast, onClose }) {
   const html = useMemo(() => cmrPrintHtml(cmr, db), [cmr, db]);
-  const projekt = db.projekti.find((p) => p.id === cmr.projektId);
-  const naslov = `${String(cmr.datum || "").slice(2).replace(/-/g, "")}_CMR_${(projekt?.sifra || "").replace(/\s+/g, "_")}`;
+  const sifre = (cmr.projektIds && cmr.projektIds.length ? cmr.projektIds : [cmr.projektId]).map((id) => db.projekti.find((p) => p.id === id)?.sifra || "").filter(Boolean).join("+");
+  const naslov = `${String(cmr.datum || "").slice(2).replace(/-/g, "")}_CMR_${sifre.replace(/\s+/g, "_")}`;
   const ispisi = () => { if (!otvoriIspisCmr(html, naslov)) showToast("Preglednik je blokirao novi prozor — dozvoli skočne prozore za ovu stranicu i pokušaj ponovno."); };
   return (
     <Modal wide title={`Pregled za ispis — ${cmr.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={ispisi}>Ispis / Spremi kao PDF (3 primjerka)</Btn></>}>
@@ -10271,23 +10271,46 @@ function CmrPrintModal({ cmr, db, showToast, onClose }) {
 }
 
 function CmrFormModal({ db, pocetni, onSpremi, onClose }) {
-  const [f, setF] = useState(pocetni);
-  const projekt = db.projekti.find((p) => p.id === f.projektId);
-  const otpremniceProjekta = db.otpremnice.filter((o) => o.projektId === f.projektId && o.vrsta !== "kooperant").sort((a, b) => a.datum.localeCompare(b.datum));
+  // Jedan CMR može obuhvatiti više projekata: projektIds = svi projekti, projektId = prvi (radi starijih zapisa).
+  const [f, setF] = useState(() => ({ ...pocetni, projektIds: pocetni.projektIds && pocetni.projektIds.length ? pocetni.projektIds : (pocetni.projektId ? [pocetni.projektId] : []) }));
+  const projektiCmr = f.projektIds.map((id) => db.projekti.find((x) => x.id === id)).filter(Boolean);
+  const projekt = projektiCmr[0];
+  const otpremniceZaProjekt = (id) => db.otpremnice.filter((o) => o.projektId === id && o.vrsta !== "kooperant").sort((a, b) => a.datum.localeCompare(b.datum));
   const prijevoznici = db.dobavljaci.filter((d) => d.prijevoznik);
   const set = (patch) => setF((p) => ({ ...p, ...patch }));
-  const odaberiProjekt = (id) => {
-    const p = db.projekti.find((x) => x.id === id);
-    setF((prev) => ({ ...prev, ...cmrPrijedlog(db, p, [], prev.datum), id: prev.id, broj: prev.broj, status: prev.status, statusDatumi: prev.statusDatumi,
-      prijevoznikId: prev.prijevoznikId, registracija: prev.registracija, vozac: prev.vozac, prijevoznikTekst: prev.prijevoznikTekst, izradioId: prev.izradioId }));
-  };
-  const promijeniOtpremnice = (ids) => {
+  const izvedeno = (ids, prethodnaTezina) => {
     const odabrane = db.otpremnice.filter((o) => ids.includes(o.id));
-    const tezina = odabrane.reduce((s, o) => s + tezinaOtpremnice(o, db).ukupno, 0);
-    set({ otpremniceIds: ids,
-      dokumenti: odabrane.length ? `Otpremnice: ${odabrane.map((o) => String(o.broj).replace(/^OTP-/, "")).join("; ")}` : "",
-      brutoTezina: tezina > 0 ? String(Math.round(tezina * 10) / 10) : f.brutoTezina });
+    const tezina = odabrane.reduce((a, o) => a + tezinaOtpremnice(o, db).ukupno, 0);
+    return { dokumenti: odabrane.length ? `Otpremnice: ${odabrane.map((o) => String(o.broj).replace(/^OTP-/, "")).join("; ")}` : "", brutoTezina: tezina > 0 ? String(Math.round(tezina * 10) / 10) : prethodnaTezina };
   };
+  const sifreProjekata = (ids) => ids.map((id) => db.projekti.find((x) => x.id === id)?.sifra).filter(Boolean).join(", ");
+  const sacuvaj = (prev) => ({ id: prev.id, broj: prev.broj, status: prev.status, statusDatumi: prev.statusDatumi, prijevoznikId: prev.prijevoznikId, registracija: prev.registracija, vozac: prev.vozac, prijevoznikTekst: prev.prijevoznikTekst, izradioId: prev.izradioId, transportNarudzbaId: prev.transportNarudzbaId });
+  // Dodavanje projekta automatski označava njegove otpremnice koje još nisu ni u jednom drugom CMR-u.
+  const dodajProjekt = (id) => {
+    if (!id || f.projektIds.includes(id)) return;
+    const p = db.projekti.find((x) => x.id === id);
+    const nove = otpremniceZaProjekt(id).filter((o) => !db.cmr.some((c) => c.id !== f.id && (c.otpremniceIds || []).includes(o.id))).map((o) => o.id);
+    const ids = [...f.otpremniceIds, ...nove.filter((x) => !f.otpremniceIds.includes(x))];
+    const projektIds = [...f.projektIds, id];
+    if (f.projektIds.length === 0) {
+      // prvi projekt: primatelj, mjesto isporuke, opis robe… iz projekta, kao i dosad
+      setF((prev) => ({ ...prev, ...cmrPrijedlog(db, p, ids, prev.datum), projektId: id, projektIds, otpremniceIds: ids, ...sacuvaj(prev) }));
+    } else {
+      setF((prev) => ({ ...prev, projektIds, otpremniceIds: ids, oznake: sifreProjekata(projektIds), ...izvedeno(ids, prev.brutoTezina) }));
+    }
+  };
+  const ukloniProjekt = (id) => {
+    if (f.id && f.projektIds.length === 1) return; // izdani CMR mora imati projekt
+    const projektIds = f.projektIds.filter((x) => x !== id);
+    const ids = f.otpremniceIds.filter((oid) => !otpremniceZaProjekt(id).some((o) => o.id === oid));
+    if (projektIds.length === 0) {
+      setF((prev) => ({ ...prev, ...cmrPrijedlog(db, null, [], prev.datum), projektId: "", projektIds: [], otpremniceIds: [], ...sacuvaj(prev) }));
+    } else {
+      setF((prev) => ({ ...prev, projektIds, projektId: projektIds[0], otpremniceIds: ids, oznake: sifreProjekata(projektIds), ...izvedeno(ids, prev.brutoTezina) }));
+    }
+  };
+  const promijeniOtpremnice = (ids) => set({ otpremniceIds: ids, ...izvedeno(ids, f.brutoTezina) });
+  const kupciRazliciti = new Set(projektiCmr.map((x) => x.kupacId)).size > 1;
   const tekstPrijevoznika = (id, reg, vozac) => {
     const d = db.dobavljaci.find((x) => x.id === id);
     return [d?.naziv, d?.adresa, reg ? `Reg. oznaka / Kennzeichen: ${reg}` : "", vozac ? `Vozač / Fahrer: ${vozac}` : ""].filter(Boolean).join("\n");
@@ -10303,11 +10326,22 @@ function CmrFormModal({ db, pocetni, onSpremi, onClose }) {
     <Modal wide title={f.id ? `Uredi ${f.broj}` : "Novi CMR"} onClose={onClose}
       footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={() => onSpremi(f, false)}>Spremi</Btn><Btn variant="primary" icon={Eye} onClick={() => onSpremi(f, true)}>Spremi i pregledaj ispis</Btn></>}>
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
-        <Field label="Projekt">
-          <select className="select" disabled={!!f.id} value={f.projektId} onChange={(e) => odaberiProjekt(e.target.value)}>
-            <option value="">— odaberi projekt —</option>
-            {db.projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
+        <Field label="Projekti (u jedan CMR može ući više projekata)">
+          {projektiCmr.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
+              {projektiCmr.map((pr) => (
+                <span key={pr.id} className="badge badge-info" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  {pr.sifra}
+                  {!(f.id && projektiCmr.length === 1) && <button type="button" aria-label={`Ukloni projekt ${pr.sifra}`} title="Ukloni projekt (i njegove otpremnice iz ovog CMR-a)" onClick={() => ukloniProjekt(pr.id)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, display: "inline-flex", color: "inherit" }}><X size={11} /></button>}
+                </span>
+              ))}
+            </div>
+          )}
+          <select className="select" value="" onChange={(e) => dodajProjekt(e.target.value)}>
+            <option value="">{projektiCmr.length ? "+ dodaj još jedan projekt…" : "— odaberi projekt —"}</option>
+            {[...db.projekti].filter((pr) => !f.projektIds.includes(pr.id)).sort((a, b) => String(b.sifra).localeCompare(String(a.sifra), "hr", { numeric: true })).map((pr) => <option key={pr.id} value={pr.id}>{pr.sifra} — {pr.naziv}</option>)}
           </select>
+          {kupciRazliciti && <div style={{ fontSize: 11, color: "var(--rust)", marginTop: 3 }}>Projekti imaju različite kupce — provjeri primatelja (polje 2) i mjesto isporuke (polje 3).</div>}
         </Field>
         <Field label="Broj CMR-a"><input className="input f-mono" value={f.broj} disabled /></Field>
         <Field label="Datum"><input className="input" type="date" value={f.datum} onChange={(e) => set({ datum: e.target.value, broj: f.id ? f.broj : sljedeciBrojCmr(db.cmr, e.target.value), mjestoPreuzimanja: [(db.postavkeTvrtke || {}).adresa, fmtDate(e.target.value)].filter(Boolean).join("\n") })} /></Field>
@@ -10316,22 +10350,30 @@ function CmrFormModal({ db, pocetni, onSpremi, onClose }) {
       {projekt && (
         <>
           <div className="label" style={{ marginTop: 6 }}>Otpremnice koje ulaze u ovaj CMR (polje 5)</div>
-          {otpremniceProjekta.length === 0 ? <EmptyState text="Za ovaj projekt još nema otpremnica." /> : (
-            <div className="card" style={{ padding: 8, marginBottom: 10 }}>
-              {otpremniceProjekta.map((o) => {
-                const drugiCmr = db.cmr.find((c) => c.id !== f.id && (c.otpremniceIds || []).includes(o.id));
-                const t = tezinaOtpremnice(o, db);
-                return (
-                  <label key={o.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", cursor: "pointer", fontSize: 12.5 }}>
-                    <input type="checkbox" checked={f.otpremniceIds.includes(o.id)} onChange={(e) => promijeniOtpremnice(e.target.checked ? [...f.otpremniceIds, o.id] : f.otpremniceIds.filter((i) => i !== o.id))} />
-                    <span className="f-mono">{o.broj}</span> · {fmtDate(o.datum)} · {(o.stavke || []).length} stavki
-                    <span style={{ color: "var(--ink-faint)" }}>· {t.ukupno > 0 ? `${Math.round(t.ukupno * 10) / 10} kg${t.nedostaje ? ` (+ ${t.nedostaje} stavki bez težine)` : ""}` : "težina nije upisana"}</span>
-                    {drugiCmr && <span style={{ color: "var(--rust)" }}>· već u {drugiCmr.broj}</span>}
-                  </label>
-                );
-              })}
-            </div>
-          )}
+          {projektiCmr.map((pr) => {
+            const lista = otpremniceZaProjekt(pr.id);
+            return (
+              <div key={pr.id} style={{ marginBottom: 10 }}>
+                {projektiCmr.length > 1 && <div style={{ fontSize: 12, fontWeight: 700, margin: "4px 0" }}>{pr.sifra} — {pr.naziv}</div>}
+                {lista.length === 0 ? <EmptyState text="Za ovaj projekt još nema otpremnica." /> : (
+                  <div className="card" style={{ padding: 8 }}>
+                    {lista.map((o) => {
+                      const drugiCmr = db.cmr.find((c) => c.id !== f.id && (c.otpremniceIds || []).includes(o.id));
+                      const t = tezinaOtpremnice(o, db);
+                      return (
+                        <label key={o.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", cursor: "pointer", fontSize: 12.5 }}>
+                          <input type="checkbox" checked={f.otpremniceIds.includes(o.id)} onChange={(e) => promijeniOtpremnice(e.target.checked ? [...f.otpremniceIds, o.id] : f.otpremniceIds.filter((i) => i !== o.id))} />
+                          <span className="f-mono">{o.broj}</span> · {fmtDate(o.datum)} · {(o.stavke || []).length} stavki
+                          <span style={{ color: "var(--ink-faint)" }}>· {t.ukupno > 0 ? `${Math.round(t.ukupno * 10) / 10} kg${t.nedostaje ? ` (+ ${t.nedostaje} stavki bez težine)` : ""}` : "težina nije upisana"}</span>
+                          {drugiCmr && <span style={{ color: "var(--rust)" }}>· već u {drugiCmr.broj}</span>}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             {T("1 — Pošiljatelj", "posiljatelj", 3)}
@@ -10412,7 +10454,8 @@ function CmrTab({ db, update, patchProjekt, showToast, mozeMijenjati, mojId }) {
     const zapis = { ...f, id: f.id || uid("cmr") };
     update("cmr", f.id ? db.cmr.map((c) => (c.id === f.id ? zapis : c)) : [...db.cmr, zapis]);
     const projekt = db.projekti.find((p) => p.id === f.projektId);
-    if (projekt && f.opisRobe && projekt.cmrOpisRobe !== f.opisRobe) patchProjekt(projekt.id, { cmrOpisRobe: f.opisRobe });
+    // opis robe pamti se po projektu samo kad je CMR vezan uz jedan projekt
+    if (projekt && (f.projektIds || []).length <= 1 && f.opisRobe && projekt.cmrOpisRobe !== f.opisRobe) patchProjekt(projekt.id, { cmrOpisRobe: f.opisRobe });
     setForma(null);
     showToast("CMR spremljen.");
     if (pregled) setPrintCmr(zapis);
@@ -10428,7 +10471,7 @@ function CmrTab({ db, update, patchProjekt, showToast, mozeMijenjati, mojId }) {
         columns={[
           { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
           { key: "datum", label: "Datum", render: (r) => fmtDate(r.datum) },
-          { key: "projekt", label: "Projekt", render: (r) => projSifra(r.projektId) },
+          { key: "projekt", label: "Projekt", render: (r) => (r.projektIds && r.projektIds.length ? r.projektIds : [r.projektId]).map(projSifra).join(", ") },
           { key: "primatelj", label: "Primatelj", render: (r) => String(r.primatelj || "").split("\n")[0] || "—" },
           { key: "otpremnice", label: "Otpremnice", render: (r) => <span style={{ fontSize: 11.5 }}>{brojeviOtpremnica(r) || "—"}</span> },
           { key: "tezina", label: "Težina", render: (r) => <span className="f-mono">{r.brutoTezina ? `${r.brutoTezina} kg` : "—"}</span> },
@@ -10748,7 +10791,7 @@ function TransportiPage({ db, update, showToast, mojaPozicija, mojId, pocetniTab
     const zadnja = String(n.istovarMjesto || "").split(",").map((x) => x.trim()).filter(Boolean).pop() || "";
     const t = db.postavkeTvrtke || {};
     setCmrForma({ pocetni: {
-      id: null, broj: sljedeciBrojCmr(db.cmr, datum), status: CMR_STATUSI[0], statusDatumi: {}, ...prijedlog, izradioId: mojId || "", transportNarudzbaId: n.id,
+      id: null, broj: sljedeciBrojCmr(db.cmr, datum), status: CMR_STATUSI[0], statusDatumi: {}, ...prijedlog, projektIds: n.projektId ? [n.projektId] : [], izradioId: mojId || "", transportNarudzbaId: n.id,
       prijevoznikId: n.prijevoznikId, prijevoznikTekst: [prijevoznik?.naziv, prijevoznik?.adresa].filter(Boolean).join("\n"),
       mjestoPreuzimanja: [n.utovarTvrtka, n.utovarAdresa, fmtDate(datum)].filter(Boolean).join("\n"),
       mjestoIsporuke, uvjetIsporuke: `${t.cmrUvjetIsporuke || "DAP"}${zadnja ? `: ${zadnja}` : ""}`,
