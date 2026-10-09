@@ -5836,6 +5836,7 @@ const sljedeciBrojNastavka = (programi, originalBroj) => {
 
 function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
   const [stroj, setStroj] = useState("laserProfili");
+  const [popisTab, setPopisTab] = useState("aktualni"); // "aktualni" | "zavrseni"
   const emptyForm = () => ({ brojPrograma: "", trajanjeRezanjaMin: 60, pripremaMin: 0, radniNalogId: "", napomena: "", status: "Na čekanju" });
   const [form, setForm] = useState(emptyForm());
   const prazanRedMaterijala = () => ({ materijalId: "", nacinUnosa: "kolicina", duzinaM: 6, sirinaM: 1.25, komada: 1, kolicina: "" });
@@ -5974,7 +5975,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
       let pokrenuoId = p.pokrenuoId, zavrsioId = p.zavrsioId;
       if (noviStatus === "Početak") { segmentPocetak = sada; if (!pokrenuoId) pokrenuoId = p.operaterId || null; }
       if (noviStatus === "Završeno") zavrsioId = p.operaterId || null;
-      return { ...p, status: noviStatus, odradjenoMin, segmentPocetak, pokrenuoId, zavrsioId };
+      return { ...p, status: noviStatus, odradjenoMin, segmentPocetak, pokrenuoId, zavrsioId, zavrsetak: noviStatus === "Završeno" ? sada : null };
     }));
   };
   // Dijeljenje programa: kad jedan operater ne stigne završiti (npr. kraj smjene), program se
@@ -6021,7 +6022,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
     };
     update("programiRezanja", [
       ...db.programiRezanja.map((p) => (p.id === programId
-        ? { ...p, status: "Završeno", odradjenoMin: konacnoOdradjenoMin, segmentPocetak: null, zavrsioId: p.operaterId || p.zavrsioId || null, stavkeMaterijala: zatvoreneStavke }
+        ? { ...p, status: "Završeno", zavrsetak: sada, odradjenoMin: konacnoOdradjenoMin, segmentPocetak: null, zavrsioId: p.operaterId || p.zavrsioId || null, stavkeMaterijala: zatvoreneStavke }
         : p)),
       noviProgram,
     ]);
@@ -6030,7 +6031,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
   };
   const pomakni = (id, smjer) => {
     const svi = [...db.programiRezanja];
-    const indeksiStroj = svi.map((p, i) => ({ p, i })).filter((x) => x.p.stroj === stroj).map((x) => x.i);
+    const indeksiStroj = svi.map((p, i) => ({ p, i })).filter((x) => x.p.stroj === stroj && x.p.status !== "Završeno").map((x) => x.i);
     const trenutniIdx = indeksiStroj.findIndex((i) => svi[i].id === id);
     const noviIdx = trenutniIdx + smjer;
     if (noviIdx < 0 || noviIdx >= indeksiStroj.length) return;
@@ -6191,19 +6192,50 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
         )}
 
         <div>
-          <div className="label" style={{ marginBottom: 8 }}>Popis programa (redoslijed rezanja)</div>
-          {programiZaStroj.length === 0 ? <EmptyState text="Nema unesenih programa rezanja za ovaj stroj." /> : (
+          <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 12 }}>
+            <div className={`nav-tab ${popisTab === "aktualni" ? "active" : ""}`} onClick={() => setPopisTab("aktualni")}>Aktualni programi ({nezavrseni.length})</div>
+            <div className={`nav-tab ${popisTab === "zavrseni" ? "active" : ""}`} onClick={() => setPopisTab("zavrseni")}>Završeni programi ({zavrseni.length})</div>
+          </div>
+          {popisTab === "zavrseni" ? (
+            zavrseni.length === 0 ? <EmptyState text="Još nema završenih programa za ovaj stroj." /> : (
+              <div className="card" style={{ overflowX: "auto" }}>
+                <table className="erp-table">
+                  <thead><tr><th>Program</th><th>Radni nalog</th><th style={{ width: 80 }}>Trajanje</th><th style={{ width: 90 }}>Stvarno</th><th style={{ width: 130 }}>Operater</th>{!ogranicen && <th>Napomena</th>}<th style={{ width: 150 }}>Datum završetka</th><th style={{ width: 90 }} /></tr></thead>
+                  <tbody>
+                    {[...zavrseni].sort((a, b) => String(b.zavrsetak || "").localeCompare(String(a.zavrsetak || ""))).map((pr) => {
+                      const operater = db.zaposlenici.find((z) => z.id === (pr.zavrsioId || pr.operaterId));
+                      return (
+                        <tr key={pr.id}>
+                          <td className="f-mono">{pr.brojPrograma}</td>
+                          <td style={{ fontSize: 12.5 }}>{radniNalogLabel(pr.radniNalogId)}</td>
+                          <td className="f-mono">{fmtMin(pr.trajanjeMin)}</td>
+                          <td className="f-mono">{pr.odradjenoMin ? fmtMin(pr.odradjenoMin) : "—"}</td>
+                          <td style={{ fontSize: 12.5 }}>{operater ? `${operater.prezime} ${operater.ime}` : "—"}</td>
+                          {!ogranicen && <td style={{ fontSize: 12, color: "var(--ink-soft)" }}>{pr.napomena}</td>}
+                          <td className="f-mono">{pr.zavrsetak ? new Date(pr.zavrsetak).toLocaleString("hr-HR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : <span style={{ color: "var(--ink-faint)" }}>—</span>}</td>
+                          <td><Btn size="sm" variant="ghost" onClick={() => postaviStatus(pr.id, "Na čekanju")} title="Vrati program među aktualne (npr. ako je greškom označen završenim)">Vrati</Btn></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )
+          ) : (
+          <>
+          {nezavrseni.length === 0 ? <EmptyState text="Nema aktualnih programa rezanja za ovaj stroj." /> : (
             <div className="card" style={{ overflowX: "auto" }}>
               <table className="erp-table">
                 <thead><tr><th>Program</th><th>Radni nalog</th><th style={{ width: 150 }}>Planirani materijal</th><th style={{ width: 80 }}>Trajanje</th><th style={{ width: 90 }}>Stvarno</th><th style={{ width: 130 }}>Operater</th>{!ogranicen && <th>Napomena</th>}<th style={{ width: 130 }}>Status</th><th style={{ width: 110 }}></th>{!ogranicen && <th style={{ width: 100 }}></th>}</tr></thead>
                 <tbody>
-                  {programiZaStroj.map((p) => {
+                  {nezavrseni.map((p) => {
                     const stavke = p.stavkeMaterijala || [];
+                    const jeAktivan = p.status === "Početak";
                     const uTijeku = p.status === "Početak" && p.segmentPocetak;
                     const odradjenoPrikaz = (p.odradjenoMin || 0) + (uTijeku ? Math.max(0, Math.round((sadaMs() - new Date(p.segmentPocetak).getTime()) / 60000)) : 0);
                     return (
-                      <tr key={p.id}>
-                        <td className="f-mono">{p.brojPrograma}</td>
+                      <tr key={p.id} style={jeAktivan ? { background: "#FBEAE6", boxShadow: "inset 3px 0 0 var(--rust)" } : undefined}>
+                        <td className="f-mono" style={jeAktivan ? { color: "var(--rust)", fontWeight: 700 } : undefined}>{p.brojPrograma}{jeAktivan && <div style={{ fontFamily: "var(--font-body)", fontSize: 10.5, fontWeight: 600 }}>● u radu</div>}</td>
                         <td style={{ fontSize: 12.5 }}>{radniNalogLabel(p.radniNalogId)}</td>
                         <td>
                           <Btn size="sm" variant="ghost" onClick={() => setMaterijalModalId(p.id)}>
@@ -6242,6 +6274,8 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
                 </tbody>
               </table>
             </div>
+          )}
+          </>
           )}
           <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 8 }}>Stvarno vrijeme se mjeri od trenutka kad je program označen "Početak" do "Završeno" (vrijeme u statusu "Pauzirano" se ne broji), prema satu poslužitelja — ne prema satu računala na kojem se klikne. Operater odabran u retku bilježi se kao tko je pokrenuo/završio.</p>
         </div>
