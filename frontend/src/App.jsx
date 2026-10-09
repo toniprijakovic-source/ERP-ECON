@@ -3792,7 +3792,7 @@ function ZaprimiPovratModal({ izdatnica, db, update, showToast, onClose }) {
 
 /* ============================== NABAVA ============================== */
 /* ============================== ISPIS DOKUMENTA (UPIT / NARUDŽBA) ============================== */
-function DokumentNabavePrintModal({ tip, brojDokumenta, datum, izradioIme, dobavljacIme, stavke, postavkeTvrtke, onClose }) {
+function DokumentNabavePrintModal({ tip, brojDokumenta, datum, izradioIme, dobavljacIme, stavke, napomena, postavkeTvrtke, onClose }) {
   const t = postavkeTvrtke || {};
   return (
     <Modal wide title={`Pregled za ispis — ${tip} ${brojDokumenta}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(`${tip} ${brojDokumenta}`)}>Ispis / Spremi kao PDF</Btn></>}>
@@ -3842,6 +3842,13 @@ function DokumentNabavePrintModal({ tip, brojDokumenta, datum, izradioIme, dobav
             ))}
           </tbody>
         </table>
+
+        {napomena && (
+          <div style={{ fontSize: 11.5, marginBottom: 14 }}>
+            <strong>Napomena:</strong>
+            <div style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>{napomena}</div>
+          </div>
+        )}
 
         <div style={{ fontSize: 11, marginBottom: 14 }}>
           <strong>Opći zahtjevi:</strong>
@@ -4394,7 +4401,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
         const dim = nacin === "duzina" ? String(mm(s.duzinaM)) : nacin === "lim" ? `${mm(s.duzinaM)}×${mm(s.sirinaM)}` : "";
         return { kolicina: kom, dimenzijaMM: dim, vrstaStavke: "", vrstaMaterijala: m ? m.naziv : kat ? katalogOznakaPuna(kat) : "—", kvaliteta: s.kvaliteta || m?.kvaliteta || "", normaIsporuke: "", dodatniZahtjevi: projekt ? `Za projekt ${projekt.sifra}` : "" };
       });
-    setPrintDoc({ tip: "Narudžba", brojDokumenta: row.broj, datum: row.datum, izradioIme: zaposlenikIme(row.izradioId), dobavljacIme: db.dobavljaci.find((d) => d.id === row.dobavljacId)?.naziv || "", stavke });
+    setPrintDoc({ tip: "Narudžba", brojDokumenta: row.broj, datum: row.datum, izradioIme: zaposlenikIme(row.izradioId), dobavljacIme: db.dobavljaci.find((d) => d.id === row.dobavljacId)?.naziv || "", stavke, napomena: /^Generirano iz upita \S+$/.test(String(row.napomena || "").trim()) ? "" : String(row.napomena || "").trim() });
   };
 
   return (
