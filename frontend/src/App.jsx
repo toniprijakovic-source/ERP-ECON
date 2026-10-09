@@ -1115,7 +1115,11 @@ const zadnjaCijenaIzNarudzbenice = (materijalId, narudzbenice) => {
   return sve[0]?.cijenaPoJed ?? null;
 };
 
-function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = [], narudzbenice = [], dozvoliKatalog = false, projekti = null, kvalitete = [] }) {
+// Materijal na projektu: označeni redci ulaze u upit. Zadano su označeni oni koji još nisu bili ni u jednom upitu
+// (redak pamti broj upita u upitBroj), pa se novi materijal naknadno dodan na projekt lako uključi u novi upit.
+const izabranZaUpit = (r) => (r.izborUpita !== undefined ? !!r.izborUpita : !r.upitBroj);
+
+function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = [], narudzbenice = [], dozvoliKatalog = false, projekti = null, kvalitete = [], izborUpita = false }) {
   const addRow = () => setRows([...rows, mode === "materijal" ? { materijalId: "", nacinUnosa: "kolicina", kolicina: 1, duzinaM: 6, sirinaM: 1.25, komada: 1, cijenaPoJed: 0, kvaliteta: "" } : { opis: "", kolicina: 1, jm: "kom", cijenaJed: 0 }]);
   const removeRow = (i) => setRows(rows.filter((_, idx) => idx !== i));
   const update = (i, patch) => setRows(rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
@@ -1215,6 +1219,13 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
           return (
             <div key={i} className="card" style={{ padding: 10, marginBottom: 8, background: "var(--surface-alt)" }}>
               <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                {izborUpita && (
+                  <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, width: 64, cursor: "pointer", paddingBottom: 6 }} title="Uključi ovaj materijal u upit">
+                    <span className="label" style={{ margin: 0 }}>U upit</span>
+                    <input type="checkbox" aria-label={`Uključi redak ${i + 1} u upit`} checked={izabranZaUpit(r)} onChange={(e) => update(i, { izborUpita: e.target.checked })} style={{ width: 18, height: 18 }} />
+                    {r.upitBroj && <span style={{ fontSize: 9.5, color: "var(--ink-faint)", textAlign: "center", lineHeight: 1.1 }}>već u upitu {r.upitBroj}</span>}
+                  </label>
+                )}
                 <div style={{ flex: 1 }}>
                   <label className="label">Materijal</label>
                   <select className="select" value={r.materijalId || (r.katalogId ? `kat::${r.katalogId}` : "")} onChange={(e) => odaberiMaterijal(i, e.target.value)}>
@@ -7889,9 +7900,16 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
   const azurirajZadatke = (noviZadaci) => patchProjekt({ zadaci: noviZadaci });
   const azurirajMaterijal = (noveStavke) => patchProjekt({ materijalStavke: noveStavke });
   const pokreniKreiranjeUpita = () => {
-    const noviUpit = kreirajUpitIzMaterijala({ ...projekt, materijalStavke }, db, patchUpiti, showToast);
-    if (noviUpit && setPage) setPage("nabava");
+    const izabrane = materijalStavke.filter((st) => (st.materijalId || st.katalogId) && izabranZaUpit(st));
+    if (izabrane.length === 0) { showToast("Označi materijal koji želiš uključiti u upit (kvačica „U upit“)."); return; }
+    const noviUpit = kreirajUpitIzMaterijala({ ...projekt, materijalStavke: izabrane }, db, patchUpiti, showToast);
+    if (!noviUpit) return;
+    // upisani redci pamte broj upita i ostaju neoznačeni, da se kod sljedećeg upita ne dupliraju
+    azurirajMaterijal(materijalStavke.map((st) => (izabrane.includes(st) ? { ...st, upitBroj: noviUpit.broj, izborUpita: false } : st)));
+    if (setPage) setPage("nabava");
   };
+  const brojZaUpit = materijalStavke.filter((st) => (st.materijalId || st.katalogId) && izabranZaUpit(st)).length;
+  const oznaciSveZaUpit = (v) => azurirajMaterijal(materijalStavke.map((st) => ({ ...st, izborUpita: v })));
   const toggleZadatak = (zadId, checked) => azurirajZadatke(zadaci.map((z) => (z.id === zadId ? { ...z, izvrseno: checked, izvrsioId: checked ? (z.izvrsioId || mojId) : null, datumIzvrsenja: checked ? z.datumIzvrsenja || todayISO() : null, ...(checked ? {} : { zavrsetakVidjenZadao: null, zavrsetakVidjenDatum: null }) } : z)));
   const postaviIzvrsitelja = (zadId, izvrsioId) => azurirajZadatke(zadaci.map((z) => (z.id === zadId ? { ...z, izvrsioId, izvrseno: true, datumIzvrsenja: z.datumIzvrsenja || todayISO() } : z)));
   const postaviPlaniraniDatum = (zadId, datum) => azurirajZadatke(zadaci.map((z) => (z.id === zadId ? { ...z, planiraniDatum: datum } : z)));
@@ -8147,9 +8165,13 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
       <div style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <div className="label" style={{ marginBottom: 0 }}>Potreban materijal za izradu</div>
-          <Btn variant="ghost" size="sm" icon={FolderInput} onClick={pokreniKreiranjeUpita}>Kreiraj upit iz materijala</Btn>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            {materijalStavke.length > 1 && <Btn variant="ghost" size="sm" onClick={() => oznaciSveZaUpit(true)}>Označi sve</Btn>}
+            {materijalStavke.length > 1 && <Btn variant="ghost" size="sm" onClick={() => oznaciSveZaUpit(false)}>Poništi oznake</Btn>}
+            <Btn variant="ghost" size="sm" icon={FolderInput} onClick={pokreniKreiranjeUpita}>Kreiraj upit iz označenog ({brojZaUpit})</Btn>
+          </div>
         </div>
-        <LineItemsEditor mode="materijal" rows={materijalStavke} setRows={azurirajMaterijal} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} dozvoliKatalog kvalitete={db.kvaliteteMaterijala} />
+        <LineItemsEditor mode="materijal" izborUpita rows={materijalStavke} setRows={azurirajMaterijal} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} dozvoliKatalog kvalitete={db.kvaliteteMaterijala} />
       </div>
 
       {ostaleStavke.length > 0 && (
