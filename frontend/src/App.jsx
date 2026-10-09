@@ -4,10 +4,11 @@ import {
   Plus, Pencil, Trash2, X, Search, AlertTriangle, CheckCircle2, ArrowRight,
   Clock, ChevronRight, Save, PackageCheck, PackageMinus, Settings, Layers,
   ChevronDown, ChevronUp, FolderInput, Eye, UserCog, CalendarRange,
-  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors, Printer, Bell, Menu, ShieldCheck, Container
+  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors, Printer, Bell, Menu, ShieldCheck, Container, Mail
 } from "lucide-react";
 import logoEcon from "./assets/logo-econ.jpg";
 import QRCode from "qrcode";
+import { napraviPdfUpitaMaterijala, napraviEml, preuzmiDatoteku } from "./pdfNabave";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
@@ -4085,6 +4086,69 @@ const generirajNarudzbeIzUpita = (upit, db, update, patchUpiti, showToast) => {
   showToast(`Generirano ${Object.keys(poDobavljacu).length} narudžbenica prema dobavljačima.`);
 };
 
+// Slanje upita za materijal dobavljačima: za svakog odabranog dobavljača priprema se poruka (.eml) s priloženim PDF-om upita.
+// Outlook je otvara kao neposlanu skicu — poruku se provjeri i pošalje jednim klikom.
+function SlanjeUpitaModal({ upit, db, patchUpiti, showToast, izradioIme, onClose }) {
+  const [trazi, setTrazi] = useState("");
+  const [odabrani, setOdabrani] = useState(() => new Set());
+  const [naslov, setNaslov] = useState(`Upit za materijal ${upit.broj}${db.postavkeTvrtke?.naziv ? ` — ${db.postavkeTvrtke.naziv}` : ""}`);
+  const [tekst, setTekst] = useState(() => `Poštovani,\n\nu privitku Vam šaljemo upit za materijal br. ${upit.broj}.\nMolimo Vas da nam dostavite ponudu s cijenama i rokom isporuke.\n\nZa sve dodatne informacije stojimo Vam na raspolaganju.\n\nS poštovanjem,\n${izradioIme || ""}\n${db.postavkeTvrtke?.naziv || ""}`);
+  const [radim, setRadim] = useState(false);
+  const adrese = (d) => String(d.email || "").split(/[;,\s]+/).filter((x) => x.includes("@"));
+  const poslano = new Map((upit.poslano || []).map((p) => [p.dobavljacId, p.datum]));
+  const popis = [...db.dobavljaci]
+    .filter((d) => !trazi.trim() || `${d.naziv || ""} ${d.vrsta || ""}`.toLowerCase().includes(trazi.trim().toLowerCase()))
+    .sort((a, b) => (a.naziv || "").localeCompare(b.naziv || "", "hr"));
+  const prebaci = (id) => setOdabrani((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const brojOdabranih = db.dobavljaci.filter((d) => odabrani.has(d.id) && adrese(d).length).length;
+  const pripremi = async () => {
+    const ciljevi = db.dobavljaci.filter((d) => odabrani.has(d.id) && adrese(d).length);
+    if (!ciljevi.length) { showToast("Odaberi barem jednog dobavljača s e-mail adresom."); return; }
+    setRadim(true);
+    try {
+      const pdf = await napraviPdfUpitaMaterijala({ broj: upit.broj, datum: upit.datum, izradioIme, stavke: upit.stavke, tvrtka: db.postavkeTvrtke, formatDimenzije: formatDimenzijaStavke, fmtDatum: fmtDate });
+      for (const d of ciljevi) {
+        const eml = napraviEml({ primatelji: adrese(d), naslov, tekst, pdf, imePdfa: `Upit_${upit.broj}.pdf` });
+        preuzmiDatoteku(eml, `Upit_${upit.broj}_${(d.naziv || "dobavljac").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/đ/gi, "d").slice(0, 30)}.eml`.replace(/[^A-Za-z0-9._-]+/g, "_"));
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      const datum = todayISO();
+      patchUpiti([{ ...upit, poslano: [...(upit.poslano || []).filter((p) => !ciljevi.some((d) => d.id === p.dobavljacId)), ...ciljevi.map((d) => ({ dobavljacId: d.id, datum }))] }], []);
+      showToast(`Pripremljeno poruka: ${ciljevi.length}. Otvori ih iz preuzimanja (dvoklik), provjeri i klikni Pošalji u Outlooku.`);
+      onClose();
+    } catch (e) {
+      console.error(e);
+      showToast("Greška pri izradi PDF-a ili poruka.");
+    } finally {
+      setRadim(false);
+    }
+  };
+  return (
+    <Modal wide title={`Pošalji upit ${upit.broj} dobavljačima`} onClose={onClose}
+      footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Mail} onClick={pripremi} disabled={radim || brojOdabranih === 0}>{radim ? "Pripremam…" : `Pripremi poruke u Outlooku (${brojOdabranih})`}</Btn></>}>
+      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 0 }}>Za svakog odabranog dobavljača priprema se zasebna poruka s priloženim PDF-om upita. Preuzete datoteke otvori dvoklikom — Outlook ih otvara kao neposlane skice, a ti provjeriš i klikneš „Pošalji“.</p>
+      <input className="input" placeholder="Traži dobavljača…" value={trazi} onChange={(e) => setTrazi(e.target.value)} style={{ marginBottom: 8 }} />
+      <div className="card" style={{ maxHeight: 280, overflowY: "auto", padding: 4 }}>
+        {popis.length === 0 ? <EmptyState text="Nema dobavljača." /> : popis.map((d) => {
+          const a = adrese(d);
+          return (
+            <label key={d.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 8px", fontSize: 13, cursor: a.length ? "pointer" : "not-allowed", opacity: a.length ? 1 : 0.55 }}>
+              <input type="checkbox" disabled={!a.length} checked={odabrani.has(d.id)} onChange={() => prebaci(d.id)} />
+              <span style={{ flex: 1, minWidth: 0 }}>{d.naziv}{d.vrsta ? <span style={{ color: "var(--ink-faint)", fontSize: 11.5 }}> · {d.vrsta}</span> : null}</span>
+              <span className="f-mono" style={{ fontSize: 11.5, color: a.length ? "var(--ink-soft)" : "var(--rust)" }}>{a.length ? a.join(", ") : "nema e-mail adrese"}</span>
+              {poslano.get(d.id) && <span style={{ fontSize: 11, color: "var(--green)", whiteSpace: "nowrap" }}>pripremljeno {fmtDate(poslano.get(d.id))}</span>}
+            </label>
+          );
+        })}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8, marginTop: 12 }}>
+        <Field label="Naslov poruke"><input className="input" value={naslov} onChange={(e) => setNaslov(e.target.value)} /></Field>
+        <Field label="Tekst poruke"><textarea className="textarea" rows={8} value={tekst} onChange={(e) => setTekst(e.target.value)} /></Field>
+      </div>
+    </Modal>
+  );
+}
+
 function UpitDetaljModal({ upit, db, update, patchUpiti, showToast, onClose, onOtvoriPrint }) {
   const azuriraj = (noveStavke) => patchUpiti([{ ...upit, stavke: noveStavke }], []);
   const dodajPonudu = (stavkaId) => azuriraj(upit.stavke.map((s) => (s.id === stavkaId ? { ...s, ponude: [...s.ponude, { id: uid("usp"), dobavljacId: db.dobavljaci[0]?.id || "", cijena: 0, jedinicaCijene: "kg", dodatak: Number(db.dobavljaci[0]?.dodatakIznos) || 0, napomena: "" }] } : s)));
@@ -4165,6 +4229,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
   const [postavkeOpen, setPostavkeOpen] = useState(false);
   const [printDoc, setPrintDoc] = useState(null); // { tip, brojDokumenta, datum, izradioIme, stavke }
   const [upitDetalj, setUpitDetalj] = useState(null);
+  const [slanjeZa, setSlanjeZa] = useState(null); // upit koji se šalje dobavljačima e-poštom
 
   // "Izradio" na upitu smije biti samo netko tko uopće ima dodijeljen modul Nabave na svojoj
   // poziciji — bilo tko drugi tu ionako ne bi trebao ni raditi upite.
@@ -4348,6 +4413,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
             { key: "stavke", label: "Stavki", render: (r) => <span className="f-mono">{r.stavke.length}</span> },
             { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
             { key: "pdf", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => otvoriPrintUpit(r)}>PDF upita</Btn> },
+            { key: "mail", label: "", render: (r) => (mozeUpiti ? <Btn size="sm" icon={Mail} onClick={() => setSlanjeZa(r)}>Pošalji dobavljačima</Btn> : null) },
             { key: "ponude", label: "", render: (r) => <Btn size="sm" variant="primary" icon={FolderInput} onClick={() => setUpitDetalj(r)}>Ponude i odabir</Btn> },
           ]}
         />
@@ -4429,6 +4495,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
       )}
 
       {postavkeOpen && <PostavkeTvrtkeModal postavke={db.postavkeTvrtke} onSave={savePostavke} onClose={() => setPostavkeOpen(false)} />}
+      {slanjeZa && <SlanjeUpitaModal upit={db.upitiNabave.find((u) => u.id === slanjeZa.id) || slanjeZa} db={db} patchUpiti={patchUpiti} showToast={showToast} izradioIme={zaposlenikIme(slanjeZa.izradioId)} onClose={() => setSlanjeZa(null)} />}
       {upitDetalj && <UpitDetaljModal upit={db.upitiNabave.find((u) => u.id === upitDetalj.id) || upitDetalj} db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} onClose={() => setUpitDetalj(null)} />}
       {printDoc && <DokumentNabavePrintModal {...printDoc} postavkeTvrtke={db.postavkeTvrtke} onClose={() => setPrintDoc(null)} />}
     </div>
