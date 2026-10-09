@@ -159,3 +159,34 @@ export function preuzmiDatoteku(blob, imeDatoteke) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
+
+const IZJAVA_ODRICANJA = `-----------------------------------------------------------------------------------------
+IZJAVA O ODRICANJU OD ODGOVORNOSTI:
+Ova elektronička poruka i njeni prilozi mogu sadržavati povlaštene informacije i/ili povjerljive informacije. Molimo Vas da poruku ne čitate ako niste njen naznačeni primatelj. Ako ste ovu poruku primili greškom, molimo Vas da o tome obavijestite pošiljatelja i da izvornu poruku i njene privitke uništite bez čitanja ili bilo kakvog pohranjivanja. Svaka neovlaštena upotreba, distribucija, reprodukcija ili priopćavanje ove poruke zabranjena je. ECON d.o.o. ne preuzima odgovornost za  sadržaj ove poruke, odnosno za posljedice radnji koje bi proizašle iz proslijeđenih informacija, a niti stajališta izražena u ovoj poruci ne odražavaju nužno službena stajališta ECON d.o.o.. S obzirom na nepostojanje potpune sigurnosti e-mail komunikacije, ECON d.o.o. ne preuzima odgovornost za eventualnu štetu nastalu uslijed zaraženosti e-mail poruke virusom ili drugim štetnim programom, neovlaštene interferencije, pogrešne ili zakašnjele dostave poruke uslijed tehničkih problema.
+
+DISCLAIMER:
+This e-mail message and its attachments may contain privileged and/or confidential information. Please do not read the message if You are not its designated recipient. If You have received this message by mistake, please inform its sender and destroy the original message and its attachments without reading or storing of any kind. Any unauthorized use, distribution, reproduction or publication of this message is forbidden. ECON d.o.o. is neither responsible for the contents of this message, nor for the consequences arising from actions based on the forwarded information, nor do opinions contained within this message necessarily reflect the official opinions of  ECON d.o.o. Considering the lack of complete security of e-mail communication, ECON d.o.o. is not responsible for the potential damage created due to infection of an e-mail message with a virus or other malicious program, unauthorized interference, erroneous or delayed delivery of the message due to technical problem`;
+
+// Potpis e-pošte prilagođen osobi koja šalje: ime i prezime, GSM (zaposlenik.telefon) i e-mail osobe, a ostalo iz postavki tvrtke.
+export function potpisEmail(posiljatelj, tvrtka) {
+  const t = tvrtka || {};
+  const adresa = String(t.adresa || "").split(/\s*,\s*/).filter(Boolean).join(" | ");
+  const web = t.web ? (/^https?:\/\//i.test(t.web) ? t.web : `http://${t.web}`) : "";
+  const email = (posiljatelj && posiljatelj.email) || t.email || "";
+  const redci = [
+    "Srdačan pozdrav! / Mit freundlichen Grüßen / Best regards",
+    "",
+    posiljatelj ? `${posiljatelj.ime || ""} ${posiljatelj.prezime || ""}`.trim() : "",
+    "",
+    t.naziv || "",
+    adresa,
+    t.telefon ? `Tel: ${t.telefon}` : "",
+    t.faks ? `Fax: ${t.faks}` : "",
+    posiljatelj && posiljatelj.telefon ? `GSM: ${posiljatelj.telefon}` : "",
+    email ? `E-mail: ${email}` : "",
+    web,
+  ];
+  // prazan redak ostaje samo ako je razmak između dijelova potpisa (ne uklanjaju se redci s podacima koji nedostaju)
+  const tekst = redci.filter((r, i) => r !== "" || i === 1 || i === 3).join("\n");
+  return `${tekst}\n\n${IZJAVA_ODRICANJA}`;
+}

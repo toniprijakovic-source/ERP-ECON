@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import logoEcon from "./assets/logo-econ.jpg";
 import QRCode from "qrcode";
-import { napraviPdfUpitaMaterijala, napraviEml, preuzmiDatoteku } from "./pdfNabave";
+import { napraviPdfUpitaMaterijala, napraviEml, preuzmiDatoteku, potpisEmail } from "./pdfNabave";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
@@ -4088,11 +4088,11 @@ const generirajNarudzbeIzUpita = (upit, db, update, patchUpiti, showToast) => {
 
 // Slanje upita za materijal dobavljačima: za svakog odabranog dobavljača priprema se poruka (.eml) s priloženim PDF-om upita.
 // Outlook je otvara kao neposlanu skicu — poruku se provjeri i pošalje jednim klikom.
-function SlanjeUpitaModal({ upit, db, patchUpiti, showToast, izradioIme, onClose }) {
+function SlanjeUpitaModal({ upit, db, patchUpiti, showToast, izradioIme, posiljatelj, onClose }) {
   const [trazi, setTrazi] = useState("");
   const [odabrani, setOdabrani] = useState(() => new Set());
   const [naslov, setNaslov] = useState(`Upit za materijal ${upit.broj}${db.postavkeTvrtke?.naziv ? ` — ${db.postavkeTvrtke.naziv}` : ""}`);
-  const [tekst, setTekst] = useState(() => `Poštovani,\n\nu privitku Vam šaljemo upit za materijal br. ${upit.broj}.\nMolimo Vas da nam dostavite ponudu s cijenama i rokom isporuke.\n\nZa sve dodatne informacije stojimo Vam na raspolaganju.\n\nS poštovanjem,\n${izradioIme || ""}\n${db.postavkeTvrtke?.naziv || ""}`);
+  const [tekst, setTekst] = useState(() => `Poštovani,\n\nu privitku Vam šaljemo upit za materijal br. ${upit.broj}.\nMolimo Vas da nam dostavite ponudu s cijenama i rokom isporuke.\n\nZa sve dodatne informacije stojimo Vam na raspolaganju.\n\n${potpisEmail(posiljatelj, db.postavkeTvrtke)}`);
   const [radim, setRadim] = useState(false);
   const adrese = (d) => String(d.email || "").split(/[;,\s]+/).filter((x) => x.includes("@"));
   const poslano = new Map((upit.poslano || []).map((p) => [p.dobavljacId, p.datum]));
@@ -4143,7 +4143,7 @@ function SlanjeUpitaModal({ upit, db, patchUpiti, showToast, izradioIme, onClose
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8, marginTop: 12 }}>
         <Field label="Naslov poruke"><input className="input" value={naslov} onChange={(e) => setNaslov(e.target.value)} /></Field>
-        <Field label="Tekst poruke"><textarea className="textarea" rows={8} value={tekst} onChange={(e) => setTekst(e.target.value)} /></Field>
+        <Field label="Tekst poruke (potpis je prilagođen osobi koja šalje — ime, GSM i e-mail iz Zaposlenika)"><textarea className="textarea" rows={14} value={tekst} onChange={(e) => setTekst(e.target.value)} /></Field>
       </div>
     </Modal>
   );
@@ -4495,7 +4495,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
       )}
 
       {postavkeOpen && <PostavkeTvrtkeModal postavke={db.postavkeTvrtke} onSave={savePostavke} onClose={() => setPostavkeOpen(false)} />}
-      {slanjeZa && <SlanjeUpitaModal upit={db.upitiNabave.find((u) => u.id === slanjeZa.id) || slanjeZa} db={db} patchUpiti={patchUpiti} showToast={showToast} izradioIme={zaposlenikIme(slanjeZa.izradioId)} onClose={() => setSlanjeZa(null)} />}
+      {slanjeZa && <SlanjeUpitaModal upit={db.upitiNabave.find((u) => u.id === slanjeZa.id) || slanjeZa} db={db} patchUpiti={patchUpiti} showToast={showToast} izradioIme={zaposlenikIme(slanjeZa.izradioId)} posiljatelj={db.zaposlenici.find((z) => z.id === mojId)} onClose={() => setSlanjeZa(null)} />}
       {upitDetalj && <UpitDetaljModal upit={db.upitiNabave.find((u) => u.id === upitDetalj.id) || upitDetalj} db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} onClose={() => setUpitDetalj(null)} />}
       {printDoc && <DokumentNabavePrintModal {...printDoc} postavkeTvrtke={db.postavkeTvrtke} onClose={() => setPrintDoc(null)} />}
     </div>
