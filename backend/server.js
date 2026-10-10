@@ -387,7 +387,11 @@ app.post("/api/kiosk/scan", async (req, res) => {
         upisano = u.rowCount === 1;
         odgovor = { tip: "dolazak", ime: zaposlenik.ime, prezime: zaposlenik.prezime, vrijeme: sadaISO };
       }
-      if (upisano) return res.json(odgovor);
+      if (upisano) {
+        res.json(odgovor);
+        if (odgovor.tip === "odlazak") podijeliZaboravljeneProgrameRezanja().catch(() => {});
+        return;
+      }
       // stanje tog zaposlenika se u međuvremenu promijenilo (istovremeno skeniranje) — ponovi na svježim podacima
     }
     res.status(503).json({ error: "Poslužitelj je zauzet — pokušaj ponovno." });
@@ -1019,9 +1023,104 @@ async function provjeriAutoOdjavu() {
   }
 }
 
+// ---------- Automatska podjela programa rezanja nakon odjave operatera ----------
+// Operater pokrene program na laseru, ode kući i zaboravi ga pauzirati/podijeliti — program ostaje
+// "Početak" i stvarno vrijeme teče cijelu noć. Ovdje se takav program (status "Početak", operater
+// više nema otvorenu smjenu, a zadnja odjava je poslije početka segmenta) dijeli na isti način kao
+// gumb "Podijeli": postojeći se zatvara kao "Završeno" s vremenom odrađenim DO ODJAVE, a preostalo
+// vrijeme ide u novi program-nastavak (broj/NN, "Na čekanju"). Pokreće se nakon svake odjave na
+// kiosku i svakih 15 min (hvata i zaostale programe te automatske odjave).
+const bazniBrojPrograma = (broj) => {
+  const k = String(broj).lastIndexOf("/");
+  if (k === -1) return String(broj);
+  return /^\d+$/.test(String(broj).slice(k + 1)) ? String(broj).slice(0, k) : String(broj);
+};
+const sljedeciBrojNastavka = (programi, originalBroj) => {
+  const baza = bazniBrojPrograma(originalBroj);
+  let max = 0;
+  programi.forEach((pr) => {
+    if (pr.brojPrograma !== baza && bazniBrojPrograma(pr.brojPrograma) === baza) {
+      const n = parseInt(pr.brojPrograma.slice(baza.length + 1), 10);
+      if (!isNaN(n)) max = Math.max(max, n);
+    }
+  });
+  return `${baza}/${String(max + 1).padStart(2, "0")}`;
+};
+let podjelaProgramaUTijeku = false;
+async function podijeliZaboravljeneProgrameRezanja() {
+  if (podjelaProgramaUTijeku) return;
+  podjelaProgramaUTijeku = true;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const rP = await client.query("SELECT value FROM app_data WHERE key = 'programiRezanja' FOR UPDATE");
+    const programi = rP.rows[0]?.value || [];
+    const aktivni = programi.filter((pr) => pr.status === "Početak" && pr.segmentPocetak && (pr.operaterId || pr.pokrenuoId));
+    if (aktivni.length === 0) { await client.query("COMMIT"); return; }
+    const evidencija = (await client.query("SELECT value FROM app_data WHERE key = 'evidencijaRada'")).rows[0]?.value || [];
+    const sada = new Date();
+    let nova = [...programi];
+    const dodani = [];
+    let promijenjeno = false;
+    for (const pr of aktivni) {
+      const operaterId = pr.operaterId || pr.pokrenuoId;
+      const moji = evidencija.filter((e) => e.zaposlenikId === operaterId);
+      if (moji.length === 0 || moji.some((e) => !e.vrijemeOdlaska)) continue; // još je prijavljen (ili ga kiosk ne prati)
+      const pocetak = new Date(pr.segmentPocetak).getTime();
+      const odlazak = moji.reduce((naj, e) => Math.max(naj, new Date(e.vrijemeOdlaska).getTime()), 0);
+      if (!(odlazak > pocetak) || odlazak > sada.getTime() + 60000) continue; // odjava je bila prije pokretanja programa
+      const odlazakISO = new Date(odlazak).toISOString();
+      const odradjenoMin = (Number(pr.odradjenoMin) || 0) + Math.max(0, Math.round((odlazak - pocetak) / 60000));
+      const preostaloMin = Math.max(0, (Number(pr.trajanjeMin) || 0) - odradjenoMin);
+      // Utrošak materijala se ne može znati: ako ima preostalog vremena, nedovršene stavke u cijelosti
+      // prelaze na nastavak (skladište se ne mijenja, kao kod "Podijeli" s nula utrošenog); ako je
+      // planirano vrijeme već potrošeno, program se zatvara s planiranim utroškom.
+      const zatvorene = [], noveStavke = [];
+      (pr.stavkeMaterijala || []).forEach((st) => {
+        if (st.finalizirano) { zatvorene.push(st); return; }
+        if (preostaloMin > 0) {
+          zatvorene.push({ ...st, stvarnoKolicina: 0, finalizirano: true });
+          noveStavke.push({ id: `prm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, materijalId: st.materijalId, planiranoKolicina: st.planiranoKolicina, stvarnoKolicina: null, finalizirano: false });
+        } else {
+          zatvorene.push({ ...st, stvarnoKolicina: st.planiranoKolicina, finalizirano: true });
+        }
+      });
+      const zatvoren = { ...pr, status: "Završeno", zavrsetak: odlazakISO, odradjenoMin, segmentPocetak: null, zavrsioId: operaterId, stavkeMaterijala: zatvorene, autoPodijeljen: preostaloMin > 0 };
+      nova = nova.map((x) => (x.id === pr.id ? zatvoren : x));
+      if (preostaloMin > 0) {
+        const broj = sljedeciBrojNastavka(nova, pr.brojPrograma);
+        dodani.push({
+          id: `pr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, stroj: pr.stroj, brojPrograma: broj,
+          trajanjeMin: preostaloMin, radniNalogId: pr.radniNalogId, napomena: pr.napomena, status: "Na čekanju",
+          stavkeMaterijala: noveStavke, operaterId: "", pokrenuoId: null, zavrsioId: null, segmentPocetak: null, odradjenoMin: 0, autoPodijeljen: true,
+        });
+        nova = [...nova, dodani[dodani.length - 1]];
+      }
+      promijenjeno = true;
+      console.log(`Program rezanja ${pr.brojPrograma} automatski ${preostaloMin > 0 ? "podijeljen" : "zatvoren"} nakon odjave operatera ${operaterId} (${odlazakISO}).`);
+    }
+    if (promijenjeno) {
+      await client.query(
+        `INSERT INTO app_data (key, value, updated_at) VALUES ('programiRezanja', $1, now())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        [JSON.stringify(nova)]
+      );
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Greška kod automatske podjele programa rezanja:", e);
+  } finally {
+    client.release();
+    podjelaProgramaUTijeku = false;
+  }
+}
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`ERP backend sluša na portu ${PORT}`);
   provjeriAutoOdjavu();
   setInterval(provjeriAutoOdjavu, 15 * 60 * 1000);
+  podijeliZaboravljeneProgrameRezanja();
+  setInterval(podijeliZaboravljeneProgrameRezanja, 15 * 60 * 1000);
 });

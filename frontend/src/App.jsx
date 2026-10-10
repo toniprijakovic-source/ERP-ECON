@@ -2402,7 +2402,7 @@ export default function App() {
           {aktivnaStranica === "kontrola" && <KontrolaKvalitetePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} projektId={kkProjektId} ocistiProjekt={() => setKkProjektId(null)} />}
           {aktivnaStranica === "transporti" && <TransportiPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} pocetniTab={transportiTab} ocistiTab={() => setTransportiTab(null)} />}
           {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} dodajMaticne={dodajMaticne} />}
-          {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjekt={dopusteniKljucevi.includes("projekti") ? (id) => { setOtvoriProjektId(id); setPage("projekti"); } : undefined} />}
+          {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage refetchKljuc={refetchKljuc} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjekt={dopusteniKljucevi.includes("projekti") ? (id) => { setOtvoriProjektId(id); setPage("projekti"); } : undefined} />}
           {(aktivnaStranica === "projekti" || aktivnaStranica === "ponude") && <ProjektiPage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} patchProjekt={patchProjekt} patchProjekti={patchProjekti} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjektId={otvoriProjektId} ocistiOtvoriProjekt={() => setOtvoriProjektId(null)} otvoriKvalitetu={dopusteniKljucevi.includes("kontrola") ? (id) => { setKkProjektId(id); setPage("kontrola"); } : undefined} />}
           {(aktivnaStranica === "otpremnice" || aktivnaStranica === "fakturiranje") && <FakturiranjePage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} />}
           {aktivnaStranica === "partneri" && <PartneriPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
@@ -5834,7 +5834,7 @@ const sljedeciBrojNastavka = (programi, originalBroj) => {
   return `${baza}/${String(max + 1).padStart(2, "0")}`;
 };
 
-function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
+function PlanRezanjaView({ db, update, showToast, mojaPozicija, refetchKljuc }) {
   const [stroj, setStroj] = useState("laserProfili");
   const [popisTab, setPopisTab] = useState("aktualni"); // "aktualni" | "zavrseni"
   const emptyForm = () => ({ brojPrograma: "", trajanjeRezanjaMin: 60, pripremaMin: 0, radniNalogId: "", napomena: "", status: "Na čekanju" });
@@ -5847,6 +5847,12 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
   // Gantogram računa preostalo vrijeme programa koji je u tijeku, pa se osvježava svake minute.
   const [, setMinutniTik] = useState(0);
   useEffect(() => { const t = setInterval(() => setMinutniTik((n) => n + 1), 60000); return () => clearInterval(t); }, []);
+  // Poslužitelj sam podijeli program ako operater zaboravi i odjavi se — osvježi popis da prikaz (i sljedeće spremanje) ne ostane na starom stanju.
+  useEffect(() => {
+    if (!refetchKljuc) return;
+    const t = setInterval(() => { if (document.visibilityState === "visible") refetchKljuc("programiRezanja").catch(() => {}); }, 60000);
+    return () => clearInterval(t);
+  }, []);
 
   // Planirani materijal se skida sa skladišta ODMAH (rezervacija) kad se stavka doda programu;
   // ako se stavka ukloni ili program obriše prije nego je stvarno utrošeno evidentirano, planirana
@@ -6206,7 +6212,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
                       const operater = db.zaposlenici.find((z) => z.id === (pr.zavrsioId || pr.operaterId));
                       return (
                         <tr key={pr.id}>
-                          <td className="f-mono">{pr.brojPrograma}</td>
+                          <td className="f-mono">{pr.brojPrograma}{pr.autoPodijeljen && <div style={{ fontFamily: "var(--font-body)", fontSize: 10.5, color: "var(--ink-faint)" }}>podijeljeno nakon odjave</div>}</td>
                           <td style={{ fontSize: 12.5 }}>{radniNalogLabel(pr.radniNalogId)}</td>
                           <td className="f-mono">{fmtMin(pr.trajanjeMin)}</td>
                           <td className="f-mono">{pr.odradjenoMin ? fmtMin(pr.odradjenoMin) : "—"}</td>
@@ -6235,7 +6241,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija }) {
                     const odradjenoPrikaz = (p.odradjenoMin || 0) + (uTijeku ? Math.max(0, Math.round((sadaMs() - new Date(p.segmentPocetak).getTime()) / 60000)) : 0);
                     return (
                       <tr key={p.id} style={jeAktivan ? { background: "#FBEAE6", boxShadow: "inset 3px 0 0 var(--rust)" } : undefined}>
-                        <td className="f-mono" style={jeAktivan ? { color: "var(--rust)", fontWeight: 700 } : undefined}>{p.brojPrograma}{jeAktivan && <div style={{ fontFamily: "var(--font-body)", fontSize: 10.5, fontWeight: 600 }}>● u radu</div>}</td>
+                        <td className="f-mono" style={jeAktivan ? { color: "var(--rust)", fontWeight: 700 } : undefined}>{p.brojPrograma}{jeAktivan && <div style={{ fontFamily: "var(--font-body)", fontSize: 10.5, fontWeight: 600 }}>● u radu</div>}{p.autoPodijeljen && !jeAktivan && <div style={{ fontFamily: "var(--font-body)", fontSize: 10.5, color: "var(--ink-faint)" }}>nastavak nakon odjave</div>}</td>
                         <td style={{ fontSize: 12.5 }}>{radniNalogLabel(p.radniNalogId)}</td>
                         <td>
                           <Btn size="sm" variant="ghost" onClick={() => setMaterijalModalId(p.id)}>
@@ -7037,7 +7043,7 @@ function IsporukeKupaonicaView({ db, patchProjekt, mozeMijenjati = true }) {
   );
 }
 
-function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija, mojId, otvoriProjekt }) {
+function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija, mojId, otvoriProjekt, refetchKljuc }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "proizvodnja");
   const [prikaz, setPrikaz] = useState(dozvKartice[0]?.key || "tablica");
   useEffect(() => { if (!dozvKartice.some((k) => k.key === prikaz)) setPrikaz(dozvKartice[0]?.key || "tablica"); }, [dozvKartice, prikaz]);
@@ -7118,7 +7124,7 @@ function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija, mo
       </div>
 
       {prikaz === "gantogram" && <PlanProizvodnjeView db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozePlan} otvoriProjekt={otvoriProjekt} />}
-      {prikaz === "rezanje" && <PlanRezanjaView db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
+      {prikaz === "rezanje" && <PlanRezanjaView db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} refetchKljuc={refetchKljuc} />}
       {prikaz === "isporuke" && <IsporukeKupaonicaView db={db} patchProjekt={patchProjekt} mozeMijenjati={mozeIsporuke} />}
 
       {prikaz === "tablica" && (
