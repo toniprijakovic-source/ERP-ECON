@@ -9342,6 +9342,10 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
               </Field>
             ))}
           </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, padding: "8px 14px", background: "var(--surface-alt)", border: "1px solid var(--line-strong)", borderRadius: 3 }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>Ukupno planirano</span>
+            <span className="f-mono" style={{ fontSize: 16, fontWeight: 700 }}>{Math.round(FAZE.reduce((zbroj, f) => zbroj + (Number(projForm.faze?.[f]) || 0), 0) * 10) / 10} h</span>
+          </div>
         </Modal>
       )}
 
