@@ -4557,10 +4557,18 @@ const nazivStalnogPosla = (p) => `${p.slovo} – ${p.naziv}`;
 
 // Koliko je sati od planiranih na projektu za danu fazu već raspoređeno po (ostalim) radnim nalozima —
 // vraća null ako faza uopće nije definirana na projektu (nema smisla nuditi "preostalo" za nju).
-function preostaloSatiFaze(projekt, faza, radniNalozi, iskljuciNalogId) {
-  const planirano = Number(projekt?.faze?.[faza]) || 0;
+// Projekt = osnovna narudžba + dodatne narudžbe (projekt.dodaci). projekt.faze je UKUPNO (osnovna + svi dodaci),
+// a svaki dodatak ima svoje sate (dodatak.faze) i rok. Osnovna = ukupno − zbroj dodataka, pa projekti
+// bez dodataka rade isto kao prije. Radni nalog pripada dodatku preko dodatakId (prazno = osnovna).
+const satiDijelaFaze = (projekt, faza, dodatakId) => {
+  const dodaci = projekt?.dodaci || [];
+  if (dodatakId) return Number(dodaci.find((d) => d.id === dodatakId)?.faze?.[faza]) || 0;
+  return Math.max(0, (Number(projekt?.faze?.[faza]) || 0) - dodaci.reduce((s, d) => s + (Number(d.faze?.[faza]) || 0), 0));
+};
+function preostaloSatiFaze(projekt, faza, radniNalozi, iskljuciNalogId, dodatakId = "") {
+  const planirano = satiDijelaFaze(projekt, faza, dodatakId);
   if (planirano <= 0) return null;
-  const rasporedeno = radniNalozi.filter((r) => r.projektId === projekt.id && r.faza === faza && r.id !== iskljuciNalogId).reduce((s, r) => s + (Number(r.planiranoSati) || 0), 0);
+  const rasporedeno = radniNalozi.filter((r) => r.projektId === projekt.id && r.faza === faza && r.id !== iskljuciNalogId && (r.dodatakId || "") === dodatakId).reduce((s, r) => s + (Number(r.planiranoSati) || 0), 0);
   return Math.max(0, planirano - rasporedeno);
 }
 
@@ -4688,11 +4696,18 @@ function izracunajPlanProizvodnje({ db, normativ, odsutnosti, danas, drugaSmjena
   uPlanu.filter((p) => !p.koristiNormativ).forEach((p) => {
     const nn = (db.radniNalozi || []).filter((n) => n.projektId === p.id && n.status !== "Završen" && !PLAN_IZVAN_KAPACITETA.has(n.faza) && (Number(n.planiranoSati) || 0) > 0);
     if (!nn.length) return;
-    const rok = p.rokZavrsetka || plusDanaPlana(danas, 365);
-    poslovi.push({
-      id: p.id, tip: "projekt", projekt: p, rok, bezRoka: !p.rokZavrsetka, cilj: kal.minusRadnih(rok, post.rezervaProjektDana),
-      hitno: p.planStatus === "hitno", zavrsna: zavrsnaObradaProjekta(p, db.radniNalozi),
-      nalozi: nn.map((n) => ({ id: n.id, broj: n.broj, faza: n.faza, plan: Number(n.planiranoSati) || 0, utroseno: Number(n.utrosenoSati) || 0, status: n.status })),
+    const dodaci = p.dodaci || [];
+    const dijelovi = [{ id: "", rokDijela: p.rokZavrsetka }, ...dodaci.map((d) => ({ id: d.id, naziv: d.naziv, rokDijela: d.rok || p.rokZavrsetka }))];
+    dijelovi.forEach((dio) => {
+      // nalog s nepoznatim dodatkom (obrisan) računa se u osnovnu narudžbu
+      const nd = nn.filter((n) => (dio.id ? n.dodatakId === dio.id : !n.dodatakId || !dodaci.some((d) => d.id === n.dodatakId)));
+      if (!nd.length) return;
+      const rok = dio.rokDijela || plusDanaPlana(danas, 365);
+      poslovi.push({
+        id: dio.id ? `${p.id}#${dio.id}` : p.id, tip: "projekt", projekt: dio.id ? { ...p, sifra: `${p.sifra} · ${dio.naziv}` } : p, rok, bezRoka: !dio.rokDijela, cilj: kal.minusRadnih(rok, post.rezervaProjektDana),
+        hitno: p.planStatus === "hitno", zavrsna: zavrsnaObradaProjekta(p, db.radniNalozi),
+        nalozi: nd.map((n) => ({ id: n.id, broj: n.broj, faza: n.faza, plan: Number(n.planiranoSati) || 0, utroseno: Number(n.utrosenoSati) || 0, status: n.status })),
+      });
     });
   });
 
@@ -7058,7 +7073,7 @@ function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija, mo
   const emptyForm = () => {
     const projekt = db.projekti[0];
     const preostalo = preostaloSatiFaze(projekt, FAZE[0], db.radniNalozi, null);
-    return { id: null, broj: projekt ? sljedeciBrojRadnogNaloga(db.radniNalozi, projekt.sifra) : "", projektId: projekt?.id || "", naziv: projekt?.naziv || "", faza: FAZE[0], zaduzenTim: "", status: "Planiran", planiranoSati: preostalo != null ? preostalo : 0, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: todayISO(), stavke: [], materijalIzdan: false, ovisiONalogId: null, ovisnostTip: "zavrsetak", ovisnostSati: 8 };
+    return { id: null, dodatakId: "", broj: projekt ? sljedeciBrojRadnogNaloga(db.radniNalozi, projekt.sifra) : "", projektId: projekt?.id || "", naziv: projekt?.naziv || "", faza: FAZE[0], zaduzenTim: "", status: "Planiran", planiranoSati: preostalo != null ? preostalo : 0, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: todayISO(), stavke: [], materijalIzdan: false, ovisiONalogId: null, ovisnostTip: "zavrsetak", ovisnostSati: 8 };
   };
   const [form, setForm] = useState(emptyForm());
 
@@ -7151,22 +7166,34 @@ function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija, mo
 
       {modal && (() => {
         const trenutniProjekt = db.projekti.find((p) => p.id === form.projektId);
-        const preostaloFaze = preostaloSatiFaze(trenutniProjekt, form.faza, db.radniNalozi, form.id);
+        const preostaloFaze = preostaloSatiFaze(trenutniProjekt, form.faza, db.radniNalozi, form.id, form.dodatakId || "");
         return (
         <Modal wide title={form.id ? `Radni nalog ${form.broj}` : "Novi radni nalog"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={save}>Spremi</Btn></>}>
           <Field label="Projekt">
             <select className="select" value={form.projektId} onChange={(e) => {
               const noviProjekt = db.projekti.find((p) => p.id === e.target.value);
               const preostalo = preostaloSatiFaze(noviProjekt, form.faza, db.radniNalozi, form.id);
-              setForm({ ...form, projektId: e.target.value, naziv: noviProjekt?.naziv || form.naziv, broj: !form.id && noviProjekt ? sljedeciBrojRadnogNaloga(db.radniNalozi, noviProjekt.sifra) : form.broj, planiranoSati: preostalo != null ? preostalo : form.planiranoSati });
+              setForm({ ...form, dodatakId: "", projektId: e.target.value, naziv: noviProjekt?.naziv || form.naziv, broj: !form.id && noviProjekt ? sljedeciBrojRadnogNaloga(db.radniNalozi, noviProjekt.sifra) : form.broj, planiranoSati: preostalo != null ? preostalo : form.planiranoSati });
             }}>{db.projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}</select>
           </Field>
+          {(trenutniProjekt?.dodaci || []).length > 0 && (
+            <Field label="Narudžba (osnovna / dodatak)">
+              <select className="select" value={form.dodatakId || ""} onChange={(e) => {
+                const dodatakId = e.target.value;
+                const preostalo = preostaloSatiFaze(trenutniProjekt, form.faza, db.radniNalozi, form.id, dodatakId);
+                setForm({ ...form, dodatakId, planiranoSati: preostalo != null ? preostalo : form.planiranoSati });
+              }}>
+                <option value="">Osnovna narudžba</option>
+                {trenutniProjekt.dodaci.map((d) => <option key={d.id} value={d.id}>{d.naziv}</option>)}
+              </select>
+            </Field>
+          )}
           <Field label="Naziv radnog naloga (uvijek jednak nazivu projekta)"><input className="input" value={trenutniProjekt?.naziv || form.naziv} disabled /></Field>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
             <Field label="Faza proizvodnje">
               <select className="select" value={form.faza} onChange={(e) => {
                 const novaFaza = e.target.value;
-                const preostalo = preostaloSatiFaze(trenutniProjekt, novaFaza, db.radniNalozi, form.id);
+                const preostalo = preostaloSatiFaze(trenutniProjekt, novaFaza, db.radniNalozi, form.id, form.dodatakId || "");
                 setForm({ ...form, faza: novaFaza, planiranoSati: preostalo != null ? preostalo : form.planiranoSati });
               }}>{FAZE.map((f) => <option key={f} value={f}>{fazaOznaka(f)}</option>)}</select>
             </Field>
@@ -7174,7 +7201,7 @@ function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija, mo
             <Field label="Status"><select className="select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{["Planiran", "U tijeku", "Pauziran", "Završen"].map((s) => <option key={s}>{s}</option>)}</select></Field>
             <Field label="Planirano sati">
               <input className="input f-mono" type="number" value={form.planiranoSati} onChange={(e) => setForm({ ...form, planiranoSati: e.target.value })} />
-              {preostaloFaze != null && <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 4 }}>Planirano na projektu: {trenutniProjekt.faze[form.faza]} h · Preostalo (neraspoređeno): {preostaloFaze} h</div>}
+              {preostaloFaze != null && <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 4 }}>Planirano {(trenutniProjekt.dodaci || []).length ? (form.dodatakId ? "na dodatku" : "na osnovnoj narudžbi") : "na projektu"}: {satiDijelaFaze(trenutniProjekt, form.faza, form.dodatakId || "")} h · Preostalo (neraspoređeno): {preostaloFaze} h</div>}
             </Field>
             <Field label="Utrošeno sati">
               <input className="input f-mono" value={`${zbrojSatiZaNalog(form.id, db.satiPoNalogu)} (izvedeno)`} disabled style={{ opacity: 0.7 }} />
@@ -7898,11 +7925,11 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
   // za koje je već sve raspoređeno. Ručno pokrenuto gumbom, nikad automatski.
   const kreirajRadneNaloge = () => {
     let brojac = parseInt(sljedeciBrojRadnogNaloga(db.radniNalozi, projekt.sifra).split("/").pop(), 10);
-    const noviNalozi = FAZE
-      .map((faza) => ({ faza, preostalo: preostaloSatiFaze(projekt, faza, db.radniNalozi, null) }))
+    const noviNalozi = [{ id: "" }, ...(projekt.dodaci || [])]
+      .flatMap((dio) => FAZE.map((faza) => ({ faza, dio, preostalo: preostaloSatiFaze(projekt, faza, db.radniNalozi, null, dio.id) })))
       .filter(({ preostalo }) => preostalo > 0)
-      .map(({ faza, preostalo }) => ({
-        id: uid("rn"), broj: `${projekt.sifra}/${brojac++}`, projektId: projekt.id,
+      .map(({ faza, dio, preostalo }) => ({
+        id: uid("rn"), dodatakId: dio.id, broj: `${projekt.sifra}/${brojac++}`, projektId: projekt.id,
         naziv: projekt.naziv, faza, zaduzenTim: "", status: "Planiran",
         planiranoSati: preostalo, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: todayISO(),
         stavke: [], materijalIzdan: false, ovisiONalogId: null, ovisnostTip: "zavrsetak", ovisnostSati: 8,
@@ -8269,7 +8296,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
             <tbody>
               {nalozi.map((n) => (
                 <tr key={n.id}>
-                  <td className="f-mono">{n.broj}</td>
+                  <td className="f-mono">{n.broj}{n.dodatakId && (projekt.dodaci || []).find((d) => d.id === n.dodatakId) && <div style={{ fontFamily: "var(--font-body)", fontSize: 10.5, color: "var(--ink-faint)" }}>{(projekt.dodaci || []).find((d) => d.id === n.dodatakId).naziv}</div>}</td>
                   <td>{fazaOznaka(n.faza)}</td>
                   <td>{n.zaduzenTim || "—"}</td>
                   <td className="f-mono">{n.utrosenoSati} / {n.planiranoSati}</td>
@@ -8908,6 +8935,23 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
   const kupacNaziv = (id) => db.kupci.find((k) => k.id === id)?.naziv || "—";
   const projSifra = (id) => db.projekti.find((p) => p.id === id)?.sifra || "";
 
+  const dodajDodatak = () => setProjForm((pf) => ({ ...pf, dodaci: [...(pf.dodaci || []), { id: uid("dod"), naziv: `Dodatak ${(pf.dodaci || []).length + 1}`, rok: "", napomena: "", faze: praznaFazaSati() }] }));
+  const urediDodatak = (id, izmjene) => setProjForm((pf) => ({ ...pf, dodaci: (pf.dodaci || []).map((d) => (d.id === id ? { ...d, ...izmjene } : d)) }));
+  // Promjena sati dodatka mijenja i UKUPNE sate projekta (projForm.faze) za istu razliku, pa osnovna ostaje nepromijenjena.
+  const promijeniSateDodatka = (id, faza, v) => setProjForm((pf) => {
+    const d = (pf.dodaci || []).find((x) => x.id === id);
+    const staro = Number(d?.faze?.[faza]) || 0, novo = Math.max(0, Number(v) || 0);
+    return { ...pf, faze: { ...(pf.faze || praznaFazaSati()), [faza]: Math.max(0, (Number(pf.faze?.[faza]) || 0) + novo - staro) }, dodaci: pf.dodaci.map((x) => (x.id === id ? { ...x, faze: { ...praznaFazaSati(), ...(x.faze || {}), [faza]: novo } } : x)) };
+  });
+  const ukloniDodatak = (id) => {
+    if (db.radniNalozi.some((r) => r.dodatakId === id)) { showToast("Dodatak već ima radne naloge — prvo ih obriši ili prebaci na osnovnu narudžbu."); return; }
+    setProjForm((pf) => {
+      const d = (pf.dodaci || []).find((x) => x.id === id);
+      const faze = { ...(pf.faze || praznaFazaSati()) };
+      FAZE.forEach((f) => { faze[f] = Math.max(0, (Number(faze[f]) || 0) - (Number(d?.faze?.[f]) || 0)); });
+      return { ...pf, faze, dodaci: pf.dodaci.filter((x) => x.id !== id) };
+    });
+  };
   const saveProj = () => {
     if (!projForm.sifra.trim() || !projForm.naziv.trim()) return;
     // Šifra je i prefiks oznaka radnih naloga ("<šifra>/1", "/2"…) — dva projekta s istom šifrom
@@ -9339,17 +9383,36 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
             <Field label="Rok završetka (isporuka kupcu)"><input className="input" type="date" value={projForm.rokZavrsetka} onChange={(e) => setProjForm({ ...projForm, rokZavrsetka: e.target.value })} /></Field>
           </div>
           <Field label="Opis"><textarea className="textarea" rows={3} value={projForm.opis} onChange={(e) => setProjForm({ ...projForm, opis: e.target.value })} /></Field>
-          <div className="label" style={{ marginTop: 6 }}>Faze izrade (planirani sati)</div>
+          <div className="label" style={{ marginTop: 6 }}>{(projForm.dodaci || []).length ? "Osnovna narudžba — faze izrade (planirani sati)" : "Faze izrade (planirani sati)"}</div>
           <div style={{ fontSize: 11, color: "var(--ink-faint)", marginBottom: 8 }}>Sati po fazi koriste se kao predložak kad se za ovaj projekt kasnije kreira radni nalog — nisu obavezni za faze koje se ne planiraju.</div>
           <div className="card" style={{ padding: 14, background: "var(--surface-alt)", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
             {FAZE.map((f) => (
               <Field key={f} label={fazaOznaka(f)}>
-                <input className="input f-mono" type="number" min="0" step="0.5" value={projForm.faze?.[f] ?? 0} onChange={(e) => setProjForm({ ...projForm, faze: { ...(projForm.faze || praznaFazaSati()), [f]: Number(e.target.value) || 0 } })} />
+                <input className="input f-mono" type="number" min="0" step="0.5" value={satiDijelaFaze(projForm, f, "")} onChange={(e) => setProjForm({ ...projForm, faze: { ...(projForm.faze || praznaFazaSati()), [f]: (Number(e.target.value) || 0) + (projForm.dodaci || []).reduce((z, d) => z + (Number(d.faze?.[f]) || 0), 0) } })} />
               </Field>
             ))}
           </div>
+          {(projForm.dodaci || []).map((d) => (
+            <div key={d.id} className="card" style={{ padding: 14, marginTop: 12, borderColor: "var(--line-strong)" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end", marginBottom: 8 }}>
+                <Field label="Dodatna narudžba (naziv)"><input className="input" value={d.naziv} onChange={(e) => urediDodatak(d.id, { naziv: e.target.value })} /></Field>
+                <Field label="Rok završetka dodatka"><input className="input" type="date" value={d.rok || ""} onChange={(e) => urediDodatak(d.id, { rok: e.target.value })} /></Field>
+                <Btn size="sm" variant="ghost" onClick={() => ukloniDodatak(d.id)} title="Ukloni dodatak">Ukloni</Btn>
+              </div>
+              <Field label="Napomena (npr. broj narudžbe kupca)"><input className="input" value={d.napomena || ""} onChange={(e) => urediDodatak(d.id, { napomena: e.target.value })} /></Field>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginTop: 8 }}>
+                {FAZE.map((f) => (
+                  <Field key={f} label={fazaOznaka(f)}>
+                    <input className="input f-mono" type="number" min="0" step="0.5" value={d.faze?.[f] ?? 0} onChange={(e) => promijeniSateDodatka(d.id, f, e.target.value)} />
+                  </Field>
+                ))}
+              </div>
+              <div style={{ fontSize: 12, marginTop: 8, color: "var(--ink-soft)" }}>Ukupno dodatak: <strong className="f-mono">{Math.round(FAZE.reduce((z, f) => z + (Number(d.faze?.[f]) || 0), 0) * 10) / 10} h</strong></div>
+            </div>
+          ))}
+          <div style={{ marginTop: 10 }}><Btn size="sm" variant="ghost" onClick={dodajDodatak}>+ Dodatna narudžba (dodatak)</Btn></div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, padding: "8px 14px", background: "var(--surface-alt)", border: "1px solid var(--line-strong)", borderRadius: 3 }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>Ukupno planirano</span>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>Ukupno planirano{(projForm.dodaci || []).length > 0 && <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}> (osnovna {Math.round(FAZE.reduce((z, f) => z + satiDijelaFaze(projForm, f, ""), 0) * 10) / 10} h + dodaci {Math.round(FAZE.reduce((z, f) => z + (projForm.dodaci || []).reduce((a, d) => a + (Number(d.faze?.[f]) || 0), 0), 0) * 10) / 10} h)</span>}</span>
             <span className="f-mono" style={{ fontSize: 16, fontWeight: 700 }}>{Math.round(FAZE.reduce((zbroj, f) => zbroj + (Number(projForm.faze?.[f]) || 0), 0) * 10) / 10} h</span>
           </div>
         </Modal>
