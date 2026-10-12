@@ -3976,7 +3976,7 @@ const duzinaUkupnaMStavke = (s) => ((Number(s.dimenzijaMM) || 0) / 1000) * (Numb
 // Lim koji nije u katalogu (npr. Magnelis, Inox) računa se iz debljine u nazivu ("… 2 mm", "… 1,2 mm"),
 // dimenzija stavke i gustoće upisane kvalitete (iz popisa kvaliteta materijala; bez nje 7,85 kg/dm³).
 const tezinaLimaIzNaziva = (s, kvalitete) => {
-  const deblj = parseFloat(String(s.vrstaMaterijala || "").match(/(d+(?:[.,]d+)?)s*mm/i)?.[1]?.replace(",", "."));
+  const deblj = parseFloat(String(s.vrstaMaterijala || "").match(/(\d+(?:[.,]\d+)?)\s*mm/i)?.[1]?.replace(",", "."));
   const duzinaM = (Number(s.dimenzijaMM) || 0) / 1000, sirinaM = (Number(s.sirinaMM) || 0) / 1000;
   if (!(deblj > 0) || !(duzinaM > 0) || !(sirinaM > 0)) return null;
   const traz = String(s.kvaliteta || "").trim().toLowerCase();
