@@ -3272,6 +3272,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
   const [modal, setModal] = useState(null); // {mode:'add'|'edit', item}
   const [del, setDel] = useState(null);
   const [izdajZa, setIzdajZa] = useState(null); // materijalId za predpunjenje IzdatnicaModal, ili true za praznu
+  const [prikaziNulte, setPrikaziNulte] = useState(false); // materijal sa stanjem 0 je inače skriven s popisa zaliha
   const [rezZa, setRezZa] = useState(null); // materijalId čije se rezervacije uređuju
   const [naljepnicaZa, setNaljepnicaZa] = useState(null); // materijalId za ispis naljepnice
   const rezPoMaterijalu = useMemo(() => { const m = new Map(); (db.rezervacije || []).forEach((r) => m.set(r.materijalId, (m.get(r.materijalId) || 0) + (Number(r.kolicina) || 0))); return m; }, [db.rezervacije]);
@@ -3385,9 +3386,18 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
         {dozvKartice.some((k) => k.key === "izdatnice") && <div className={`nav-tab ${tab === "izdatnice" ? "active" : ""}`} onClick={() => setTab("izdatnice")}>Izdatnice</div>}
       </div>
 
-      {tab === "zalihe" && (
+      {tab === "zalihe" && (<>
+        {(() => {
+          const nultih = db.materijali.filter((m) => !(Number(m.kolicina) > 0)).length;
+          return nultih > 0 && (
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 10, cursor: "pointer" }}>
+              <input type="checkbox" checked={prikaziNulte} onChange={(e) => setPrikaziNulte(e.target.checked)} />
+              Prikaži i materijal sa stanjem 0 ({nultih} {nultih === 1 ? "artikl skriven" : "artikala skriveno"})
+            </label>
+          );
+        })()}
         <EntityPage
-          title="" data={db.materijali} onAdd={openAdd} onEdit={openEdit} onDelete={(row) => setDel(row)}
+          title="" data={prikaziNulte ? db.materijali : db.materijali.filter((m) => Number(m.kolicina) > 0)} onAdd={openAdd} onEdit={openEdit} onDelete={(row) => setDel(row)}
           addLabel="Novi materijal" searchKeys={["sifra", "naziv", "tip"]} readOnly={!mozeZalihe}
           rowClass={(row) => (row.kolicina < row.minZaliha ? "row-warn" : "")}
           columns={[
@@ -3407,7 +3417,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
             { key: "izdaj", label: "", render: (r) => mozeIzdatnice && r.kolicina > 0 && <Btn size="sm" variant="ghost" icon={PackageMinus} onClick={() => setIzdajZa(r.id)}>Izdaj na projekt</Btn> },
           ]}
         />
-      )}
+      </>)}
 
       {tab === "katalog" && (
         <>
@@ -3588,7 +3598,17 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
 // količine (ograničene na trenutno stanje), stvara se Izdatnica koja se poslije može ispisati i
 // dati u proizvodnju; povrat ostatka rješava se posebno kroz ZaprimiPovratModal.
 function IzdatnicaModal({ db, update, showToast, initialMaterijalId, onClose, onCreated }) {
-  const [projektId, setProjektId] = useState(db.projekti[0]?.id || "");
+  // Projekti za koje je odabrani materijal rezerviran idu prvi; završeni/otkazani projekti se ne nude.
+  const aktualniProjekti = db.projekti.filter((p) => !["Završen", "Otkazan"].includes(p.status));
+  const rezerviraniZa = (materijalIds) => {
+    const m = new Map();
+    (db.rezervacije || []).filter((r) => materijalIds.includes(r.materijalId)).forEach((r) => m.set(r.projektId, (m.get(r.projektId) || 0) + (Number(r.kolicina) || 0)));
+    return m;
+  };
+  const [projektId, setProjektId] = useState(() => {
+    const rez = initialMaterijalId ? aktualniProjekti.filter((p) => rezerviraniZa([initialMaterijalId]).has(p.id)) : [];
+    return rez.length === 1 ? rez[0].id : "";
+  });
   const [izdaoId, setIzdaoId] = useState("");
   const [napomena, setNapomena] = useState("");
   const [stavke, setStavke] = useState([{ materijalId: initialMaterijalId || "", kolicina: "" }]);
@@ -3641,9 +3661,21 @@ function IzdatnicaModal({ db, update, showToast, initialMaterijalId, onClose, on
     <Modal wide title="Nova izdatnica — izdaj materijal na projekt" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi} disabled={saljem}>{saljem ? "Spremanje…" : "Kreiraj izdatnicu"}</Btn></>}>
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
         <Field label="Projekt">
-          <select className="select" value={projektId} onChange={(e) => setProjektId(e.target.value)}>
-            {db.projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
-          </select>
+          {(() => {
+            const odabraniIds = [...new Set(stavke.map((st) => st.materijalId).filter(Boolean))];
+            const rez = rezerviraniZa(odabraniIds);
+            const jm = odabraniIds.length === 1 ? (db.materijali.find((m) => m.id === odabraniIds[0])?.jm || "") : "";
+            const rezervirani = aktualniProjekti.filter((p) => rez.has(p.id));
+            const ostali = aktualniProjekti.filter((p) => !rez.has(p.id));
+            const opcija = (p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}{rez.has(p.id) && odabraniIds.length === 1 ? ` (rezervirano: ${rez.get(p.id)} ${jm})` : ""}</option>;
+            return (
+              <select className="select" value={projektId} onChange={(e) => setProjektId(e.target.value)}>
+                <option value="">Odaberi projekt…</option>
+                {rezervirani.length > 0 && <optgroup label="Projekti s rezerviranim materijalom">{rezervirani.map(opcija)}</optgroup>}
+                <optgroup label={rezervirani.length > 0 ? "Ostali aktualni projekti" : "Aktualni projekti"}>{ostali.map(opcija)}</optgroup>
+              </select>
+            );
+          })()}
         </Field>
         <Field label="Izdao (zaposlenik)">
           <select className="select" value={izdaoId} onChange={(e) => setIzdaoId(e.target.value)}>
