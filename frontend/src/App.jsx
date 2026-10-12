@@ -2921,16 +2921,16 @@ const upozorenjeUgradnje = (r) => {
 };
 
 // Podaci s naljepnice: naziv materijala, kvaliteta, šarža i matični broj (sve iz matične knjige).
-const podaciNaljepnice = (zapis) => ({ naziv: zapis.naziv || "", kvaliteta: zapis.kvaliteta || "", sarza: zapis.sarza || "", maticniBroj: String(zapis.broj ?? "") });
-// Ispis naljepnica 90×38 mm (Brother DK-11208 / QL pisači): svaka naljepnica je jedna stranica te veličine.
+const podaciNaljepnice = (zapis) => ({ naziv: zapis.naziv || "", sifra: zapis.sifra ? formatSifre(zapis.sifra) : "", kvaliteta: zapis.kvaliteta || "", sarza: zapis.sarza || "", maticniBroj: String(zapis.broj ?? "") });
+// Ispis naljepnica 70×48 mm: svaka naljepnica je jedna stranica te veličine; svi podaci su iste veličine slova (13 pt) kao matični broj.
 // Radi preko skrivenog okvira (bez skočnog prozora), pa smije biti pozvan i nakon asinkronog dijela.
 async function ispisiNaljepniceMaterijala(popis, nazivTvrtke) {
   if (!popis.length) return;
   const qr = {};
   for (const n of popis) if (!qr[n.maticniBroj]) qr[n.maticniBroj] = await QRCode.toDataURL(n.maticniBroj || "-", { margin: 0, width: 220, errorCorrectionLevel: "M" });
-  const css = "@page{size:90mm 38mm;margin:0}html,body{margin:0;padding:0}.n{width:90mm;height:38mm;box-sizing:border-box;padding:2.2mm 2.6mm;display:flex;gap:2.6mm;page-break-after:always;overflow:hidden;font-family:Arial,Helvetica,sans-serif;color:#000}.n:last-child{page-break-after:auto}.q{width:25mm;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:space-between}.q img{width:25mm;height:25mm;image-rendering:pixelated}.q .f{font-size:5.6pt;color:#333;text-align:center;line-height:1.1}.t{flex:1;min-width:0;display:flex;flex-direction:column;font-size:9pt;line-height:1.3}.t .naziv{font-weight:700;font-size:11pt;line-height:1.12;margin-bottom:1.2mm;max-height:2.3em;overflow:hidden}.t .r{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.t .r b{font-weight:700}.t .mb{margin-top:auto;font-size:13pt;font-weight:700;white-space:nowrap}";
+  const css = "@page{size:70mm 48mm;margin:0}html,body{margin:0;padding:0}.n{width:70mm;height:48mm;box-sizing:border-box;padding:2mm;display:flex;gap:2mm;page-break-after:always;overflow:hidden;font-family:Arial,Helvetica,sans-serif;color:#000}.n:last-child{page-break-after:auto}.q{width:17mm;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:space-between}.q img{width:17mm;height:17mm;image-rendering:pixelated}.q .f{font-size:5pt;color:#333;text-align:center;line-height:1.1}.t{flex:1;min-width:0;display:flex;flex-direction:column;font-size:13pt;line-height:1.15;overflow-wrap:anywhere}.t .naziv{font-weight:700;margin-bottom:1mm;max-height:3.45em;overflow:hidden}.t .r b{font-weight:700}.t .mb{margin-top:auto;font-weight:700}";
   const tijelo = popis.map((n) => `<div class="n"><div class="q"><img src="${qr[n.maticniBroj]}" alt=""><div class="f">${escHtml(nazivTvrtke || "Econ d.o.o.")}</div></div><div class="t"><div class="naziv">${escHtml(n.naziv)}</div>`
-    + [["Kvaliteta", n.kvaliteta], ["Šarža", n.sarza]].filter(([, v]) => v).map(([k, v]) => `<div class="r"><b>${k}:</b> ${escHtml(v)}</div>`).join("")
+    + [["Šifra", n.sifra], ["Kvaliteta", n.kvaliteta], ["Šarža", n.sarza]].filter(([, v]) => v).map(([k, v]) => `<div class="r"><b>${k}:</b> ${escHtml(v)}</div>`).join("")
     + `<div class="mb">Matični broj: ${escHtml(n.maticniBroj)}</div></div></div>`).join("");
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Naljepnice materijala</title><style>${css}</style></head><body>${tijelo}</body></html>`;
   const okvir = document.createElement("iframe");
@@ -2972,20 +2972,20 @@ function NaljepnicaMaterijalaModal({ materijal, db, onClose, showToast }) {
             </Field>
             <Field label="Broj naljepnica"><input className="input f-mono" type="number" min="1" max="200" value={kopija} onChange={(e) => setKopija(e.target.value)} /></Field>
           </div>
-          <div className="label">Pregled (90 × 38 mm)</div>
-          <div style={{ border: "1px solid var(--line-strong)", background: "#fff", width: 340, height: 144, padding: 8, display: "flex", gap: 8, fontSize: 12, lineHeight: 1.3, overflow: "hidden", color: "#000" }}>
-            <div style={{ width: 94, flex: "none" }}>
-              <div style={{ width: 94, height: 94, background: "repeating-conic-gradient(#000 0% 25%, #fff 0% 50%) 50% / 12px 12px" }} title="QR kôd s matičnim brojem" />
+          <div className="label">Pregled (70 × 48 mm)</div>
+          <div style={{ border: "1px solid var(--line-strong)", background: "#fff", width: 280, height: 192, boxSizing: "content-box", padding: 8, display: "flex", gap: 8, fontSize: 18, lineHeight: 1.15, overflow: "hidden", color: "#000", overflowWrap: "anywhere" }}>
+            <div style={{ width: 68, flex: "none" }}>
+              <div style={{ width: 68, height: 68, background: "repeating-conic-gradient(#000 0% 25%, #fff 0% 50%) 50% / 8px 8px" }} title="QR kôd s matičnim brojem" />
             </div>
             <div style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column" }}>
-              <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.12, marginBottom: 4 }}>{podaci.naziv}</div>
-              {[["Kvaliteta", podaci.kvaliteta], ["Šarža", podaci.sarza]].filter(([, v]) => v).map(([k, v]) => (
-                <div key={k} style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}><b>{k}:</b> {v}</div>
+              <div style={{ fontWeight: 700, marginBottom: 4, maxHeight: "3.45em", overflow: "hidden" }}>{podaci.naziv}</div>
+              {[["Šifra", podaci.sifra], ["Kvaliteta", podaci.kvaliteta], ["Šarža", podaci.sarza]].filter(([, v]) => v).map(([k, v]) => (
+                <div key={k}><b>{k}:</b> {v}</div>
               ))}
-              <div style={{ marginTop: "auto", fontWeight: 700, fontSize: 16, whiteSpace: "nowrap" }}>Matični broj: {podaci.maticniBroj}</div>
+              <div style={{ marginTop: "auto", fontWeight: 700 }}>Matični broj: {podaci.maticniBroj}</div>
             </div>
           </div>
-          <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>U pregledu je QR kôd samo označen; na naljepnici je pravi kôd koji sadrži matični broj. U dijalogu ispisa odaberi pisač naljepnica i veličinu papira 90 × 38 mm (DK-11208), bez margina i bez zaglavlja/podnožja.</p>
+          <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>U pregledu je QR kôd samo označen; na naljepnici je pravi kôd koji sadrži matični broj. U dijalogu ispisa odaberi pisač naljepnica i veličinu papira 70 × 48 mm, bez margina i bez zaglavlja/podnožja.</p>
         </>
       )}
     </Modal>
@@ -3079,7 +3079,7 @@ function ZaprimanjeModal({ narudzbenica, db, onPotvrdi, onClose }) {
         </tbody>
       </table>
       <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, fontSize: 13, cursor: "pointer" }}>
-        <input type="checkbox" checked={ispis} onChange={(e) => setIspis(e.target.checked)} /> Nakon zaprimanja ispiši naljepnice (90 × 38 mm)
+        <input type="checkbox" checked={ispis} onChange={(e) => setIspis(e.target.checked)} /> Nakon zaprimanja ispiši naljepnice (70 × 48 mm)
       </label>
       <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>Stavke s odabranim projektom automatski se rezerviraju za taj projekt. Svaka zaprimljena stavka dobiva matični broj u Kontroli kvalitete (Matična knjiga), a atest se tamo upisuje kad stigne. Šarža i matični broj ispisuju se na naljepnici.</p>
     </Modal>
