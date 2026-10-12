@@ -1927,6 +1927,7 @@ export default function App() {
   const [kkProjektId, setKkProjektId] = useState(null); // projekt čiji se popis ugrađenog materijala otvara u Kontroli kvalitete
   const [otvoriProjektId, setOtvoriProjektId] = useState(null); // id projekta čije detalje treba otvoriti pri dolasku na Projekte
   const [toast, setToast] = useState(null);
+  const [mbKartica, setMbKartica] = useState(() => new URLSearchParams(window.location.search).get("mb") || ""); // matični broj iz skenirane naljepnice
   const [backupOpen, setBackupOpen] = useState(false);
   const [potrebnaPrijava, setPotrebnaPrijava] = useState(false);
   const [prijavljenId, setPrijavljenIdInternal] = useState(() => {
@@ -2255,7 +2256,7 @@ export default function App() {
 
   // Početna stranica (bez prijave) je kiosk zaslon za evidenciju radnog vremena — gumb "Prijava"
   // u kutu prebacuje na stvarni login (?prijava=1), da uređaj na ulazu ne mora biti posebno adresiran.
-  const zeliPrijavu = urlParametri.get("prijava") === "1";
+  const zeliPrijavu = urlParametri.get("prijava") === "1" || !!urlParametri.get("mb"); // skenirana naljepnica (?mb=) traži prijavu, ne kiosk
   if ((potrebnaPrijava || !prijavljenId) && !zeliPrijavu) {
     return <KioskView onPrijava={() => { window.location.href = `${window.location.pathname}?prijava=1`; }} />;
   }
@@ -2413,6 +2414,7 @@ export default function App() {
 
       {cekaBrisanje && <ConfirmDelete label={cekaBrisanje.naziv} onCancel={() => setCekaBrisanje(null)} onConfirm={() => { const akcija = cekaBrisanje.akcija; setCekaBrisanje(null); akcija(); }} />}
       {backupOpen && <BackupModal db={db} update={update} showToast={showToast} onClose={() => setBackupOpen(false)} />}
+      {mbKartica && <MaticniBrojKarticaModal broj={mbKartica} db={db} onClose={() => { setMbKartica(""); window.history.replaceState(null, "", window.location.pathname); }} />}
 
       {toast && (
         <div style={{ position: "fixed", bottom: 20, right: 20, maxWidth: "calc(100vw - 40px)", background: "var(--ink)", color: "#fff", padding: "10px 16px", borderRadius: 3, fontSize: 13, display: "flex", alignItems: "center", gap: 8, zIndex: 100 }}>
@@ -2927,11 +2929,15 @@ const podaciNaljepnice = (zapis) => ({ naziv: zapis.naziv || "", sifra: zapis.si
 async function ispisiNaljepniceMaterijala(popis, nazivTvrtke) {
   if (!popis.length) return;
   const qr = {};
-  for (const n of popis) if (!qr[n.maticniBroj]) qr[n.maticniBroj] = await QRCode.toDataURL(n.maticniBroj || "-", { margin: 0, width: 220, errorCorrectionLevel: "M" });
-  const css = "@page{size:70mm 48mm;margin:0}html,body{margin:0;padding:0}.n{width:70mm;height:48mm;box-sizing:border-box;padding:2mm;display:flex;gap:2mm;page-break-after:always;overflow:hidden;font-family:Arial,Helvetica,sans-serif;color:#000}.n:last-child{page-break-after:auto}.q{width:17mm;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:space-between}.q img{width:17mm;height:17mm;image-rendering:pixelated}.q .f{font-size:5pt;color:#333;text-align:center;line-height:1.1}.t{flex:1;min-width:0;display:flex;flex-direction:column;font-size:13pt;line-height:1.15;overflow-wrap:anywhere}.t .naziv{font-weight:700;margin-bottom:1mm;max-height:3.45em;overflow:hidden}.t .r b{font-weight:700}.t .mb{margin-top:auto;font-weight:700}";
-  const tijelo = popis.map((n) => `<div class="n"><div class="q"><img src="${qr[n.maticniBroj]}" alt=""><div class="f">${escHtml(nazivTvrtke || "Econ d.o.o.")}</div></div><div class="t"><div class="naziv">${escHtml(n.naziv)}</div>`
-    + [["Šifra", n.sifra], ["Kvaliteta", n.kvaliteta], ["Šarža", n.sarza]].filter(([, v]) => v).map(([k, v]) => `<div class="r"><b>${k}:</b> ${escHtml(v)}</div>`).join("")
-    + `<div class="mb">Matični broj: ${escHtml(n.maticniBroj)}</div></div></div>`).join("");
+  // QR kôd sadrži poveznicu na aplikaciju (…/?mb=3700): skeniranje mobitelom otvara karticu tog matičnog broja.
+  for (const n of popis) if (!qr[n.maticniBroj]) qr[n.maticniBroj] = await QRCode.toDataURL(`${window.location.origin}/?mb=${encodeURIComponent(n.maticniBroj || "")}`, { margin: 0, scale: 8, errorCorrectionLevel: "M" });
+  const css = "@page{size:70mm 48mm;margin:0}html,body{margin:0;padding:0}.n{width:70mm;height:48mm;box-sizing:border-box;padding:2mm;display:flex;gap:2mm;page-break-after:always;overflow:hidden;font-family:Arial,Helvetica,sans-serif;color:#000}.n:last-child{page-break-after:auto}.q{width:17mm;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:space-between}.q img{width:17mm;height:17mm;image-rendering:pixelated}.q .f{font-size:5pt;color:#333;text-align:center;line-height:1.1}.t{flex:1;min-width:0;display:flex;flex-direction:column;font-size:13pt;line-height:1.15;overflow-wrap:anywhere}.t .sif,.t .mb{font-weight:700}.t .naziv{font-weight:700;margin:1mm 0;max-height:3.45em;overflow:hidden}.t .r b{font-weight:700}";
+  // redoslijed na naljepnici: šifra, matični broj, pa naziv, kvaliteta i šarža
+  const tijelo = popis.map((n) => `<div class="n"><div class="q"><img src="${qr[n.maticniBroj]}" alt=""><div class="f">${escHtml(nazivTvrtke || "Econ d.o.o.")}</div></div><div class="t">`
+    + (n.sifra ? `<div class="sif">Šifra: ${escHtml(n.sifra)}</div>` : "")
+    + `<div class="mb">Matični broj: ${escHtml(n.maticniBroj)}</div><div class="naziv">${escHtml(n.naziv)}</div>`
+    + [["Kvaliteta", n.kvaliteta], ["Šarža", n.sarza]].filter(([, v]) => v).map(([k, v]) => `<div class="r"><b>${k}:</b> ${escHtml(v)}</div>`).join("")
+    + `</div></div>`).join("");
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Naljepnice materijala</title><style>${css}</style></head><body>${tijelo}</body></html>`;
   const okvir = document.createElement("iframe");
   okvir.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
@@ -2942,6 +2948,58 @@ async function ispisiNaljepniceMaterijala(popis, nazivTvrtke) {
   const ispisi = () => { okvir.contentWindow.focus(); okvir.contentWindow.onafterprint = ukloni; okvir.contentWindow.print(); setTimeout(() => { if (okvir.isConnected) okvir.remove(); }, 60000); };
   const slike = [...d.images];
   Promise.all(slike.map((i) => (i.complete ? Promise.resolve() : new Promise((r) => { i.onload = r; i.onerror = r; })))).then(() => setTimeout(ispisi, 100));
+}
+
+// Kartica matičnog broja: otvara se skeniranjem QR koda s naljepnice (?mb=3700) — materijal, šarža, atest,
+// stanje i na koje je projekte izdano. Prikazuje samo ono što prijavljena pozicija smije vidjeti.
+function MaticniBrojKarticaModal({ broj, db, onClose }) {
+  const z = (db.maticnaKnjiga || []).find((x) => String(x.broj) === String(broj).trim());
+  const potrosnja = useMemo(() => potrosnjaPoMaticnim(db.izdatnice), [db.izdatnice]);
+  const dobavljac = z ? (db.dobavljaci || []).find((d) => d.id === z.dobavljacId)?.naziv || "" : "";
+  const izdano = useMemo(() => {
+    if (!z) return [];
+    const r = [];
+    (db.izdatnice || []).forEach((i) => (i.stavke || []).forEach((st) => netoPoMaticnim(st).filter((a) => a.maticniId === z.id).forEach((a) => {
+      const p = (db.projekti || []).find((x) => x.id === i.projektId);
+      r.push({ id: `${i.id}-${st.id}`, izdatnica: i.broj, datum: i.datum, projekt: p ? `${p.sifra} — ${p.naziv}` : "—", kolicina: a.kolicina, jm: st.jm || z.jm });
+    })));
+    return r.sort((a, b) => String(a.datum).localeCompare(String(b.datum)));
+  }, [z, db.izdatnice, db.projekti]);
+  const Red = ({ k, v }) => (v ? <tr><td style={{ color: "var(--ink-soft)", width: 150, paddingRight: 12 }}>{k}</td><td style={{ fontWeight: 600 }}>{v}</td></tr> : null);
+  return (
+    <Modal title={`Matični broj ${broj}`} onClose={onClose} footer={<Btn onClick={onClose}>Zatvori</Btn>}>
+      {!z ? (
+        <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>Matični broj {broj} nije pronađen, ili tvoja pozicija nema pristup matičnoj knjizi.</p>
+      ) : (
+        <>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 2 }}>{z.naziv}</div>
+          <div className="f-mono" style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 12 }}>{formatSifre(z.sifra)}</div>
+          <table style={{ fontSize: 13, borderCollapse: "collapse", marginBottom: 14 }}>
+            <tbody>
+              <Red k="Kvaliteta" v={z.kvaliteta} />
+              <Red k="Šarža" v={z.sarza} />
+              <Red k="Atest" v={z.atestBroj ? `${z.atestVrsta ? `${z.atestVrsta} · ` : ""}${z.atestBroj}` : ""} />
+              {(!z.atestBroj || !z.atestVrsta) && <tr><td style={{ color: "var(--ink-soft)" }}>Atest</td><td style={{ color: "var(--rust)", fontWeight: 600 }}>nedostaje</td></tr>}
+              <Red k="Dobavljač" v={dobavljac} />
+              <Red k="Narudžbenica" v={z.narudzbenicaBroj} />
+              <Red k="Datum primitka" v={z.datum ? fmtDate(z.datum) : ""} />
+              <Red k="Primljeno" v={`${z.kolicinaPrimljeno} ${z.jm || ""}`} />
+              <Red k="Iskorišteno" v={`${zaokruziKolicinu(potrosnja.get(z.id) || 0)} ${z.jm || ""}`} />
+              <Red k="Preostalo" v={`${preostaloMaticnog(z, potrosnja)} ${z.jm || ""}`} />
+              <Red k="Napomena" v={z.napomena} />
+            </tbody>
+          </table>
+          <div className="label" style={{ marginBottom: 6 }}>Izdano na projekte</div>
+          {izdano.length === 0 ? <EmptyState text="Ništa od ovog matičnog broja još nije izdano." /> : (
+            <table className="erp-table">
+              <thead><tr><th>Izdatnica</th><th>Datum</th><th>Projekt</th><th style={{ width: 90 }}>Količina</th></tr></thead>
+              <tbody>{izdano.map((r) => <tr key={r.id}><td className="f-mono">{r.izdatnica}</td><td>{r.datum ? fmtDate(r.datum) : ""}</td><td style={{ fontSize: 12.5 }}>{r.projekt}</td><td className="f-mono">{r.kolicina} {r.jm}</td></tr>)}</tbody>
+            </table>
+          )}
+        </>
+      )}
+    </Modal>
+  );
 }
 
 // Naljepnica za postojeći matični broj (npr. zamjena izgubljene ili dodatni komadi). Bira se matični broj materijala.
@@ -2978,14 +3036,15 @@ function NaljepnicaMaterijalaModal({ materijal, db, onClose, showToast }) {
               <div style={{ width: 68, height: 68, background: "repeating-conic-gradient(#000 0% 25%, #fff 0% 50%) 50% / 8px 8px" }} title="QR kôd s matičnim brojem" />
             </div>
             <div style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column" }}>
-              <div style={{ fontWeight: 700, marginBottom: 4, maxHeight: "3.45em", overflow: "hidden" }}>{podaci.naziv}</div>
-              {[["Šifra", podaci.sifra], ["Kvaliteta", podaci.kvaliteta], ["Šarža", podaci.sarza]].filter(([, v]) => v).map(([k, v]) => (
+              {podaci.sifra && <div style={{ fontWeight: 700 }}>Šifra: {podaci.sifra}</div>}
+              <div style={{ fontWeight: 700 }}>Matični broj: {podaci.maticniBroj}</div>
+              <div style={{ fontWeight: 700, margin: "4px 0", maxHeight: "3.45em", overflow: "hidden" }}>{podaci.naziv}</div>
+              {[["Kvaliteta", podaci.kvaliteta], ["Šarža", podaci.sarza]].filter(([, v]) => v).map(([k, v]) => (
                 <div key={k}><b>{k}:</b> {v}</div>
               ))}
-              <div style={{ marginTop: "auto", fontWeight: 700 }}>Matični broj: {podaci.maticniBroj}</div>
             </div>
           </div>
-          <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>U pregledu je QR kôd samo označen; na naljepnici je pravi kôd koji sadrži matični broj. U dijalogu ispisa odaberi pisač naljepnica i veličinu papira 70 × 48 mm, bez margina i bez zaglavlja/podnožja.</p>
+          <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>U pregledu je QR kôd samo označen; na naljepnici je pravi kôd s poveznicom koja otvara karticu ovog matičnog broja u aplikaciji. U dijalogu ispisa odaberi pisač naljepnica i veličinu papira 70 × 48 mm, bez margina i bez zaglavlja/podnožja.</p>
         </>
       )}
     </Modal>
