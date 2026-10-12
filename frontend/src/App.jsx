@@ -6534,8 +6534,24 @@ function NarudzbaModal({ narudzba, projekt, db, update, showToast, onClose }) {
     onClose();
   };
 
+  // Brisanje je moguće samo dok na narudžbu nije vezana nijedna otpremnica ili podloga za fakturu —
+  // inače bi one ostale bez veze sa stavkama narudžbe i izgubile cijene.
+  const obrisi = () => {
+    const ids = new Set((narudzba.stavke || []).map((st) => st.id));
+    const otp = (db.otpremnice || []).filter((o) => o.narudzbaId === narudzba.id || (o.stavke || []).some((st) => ids.has(st.narudzbaStavkaId)));
+    const pod = (db.podlogeZaFakturu || []).filter((pd) => pd.narudzbaId === narudzba.id);
+    if (otp.length || pod.length) {
+      showToast(`Narudžba se ne može obrisati — na nju je vezano: ${[otp.length ? `otpremnice (${otp.map((o) => o.broj).join(", ")})` : "", pod.length ? `podloge za fakturu (${pod.map((pd) => pd.broj).join(", ")})` : ""].filter(Boolean).join(" i ")}.`);
+      return;
+    }
+    if (!window.confirm(`Obrisati narudžbu ${narudzba.broj || "(bez broja)"}${narudzba.potvrda ? " zajedno s potvrdom narudžbe" : ""}? Ovo se ne može poništiti.`)) return;
+    update("narudzbe", db.narudzbe.filter((n) => n.id !== narudzba.id));
+    showToast("Narudžba obrisana.");
+    onClose();
+  };
+
   return (
-    <Modal wide title={narudzba ? `Narudžba ${narudzba.broj}` : "Nova narudžba kupca"} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi}>Spremi</Btn></>}>
+    <Modal wide title={narudzba ? `Narudžba ${narudzba.broj}` : "Nova narudžba kupca"} onClose={onClose} footer={<>{narudzba && <Btn variant="danger" icon={Trash2} onClick={obrisi}>Obriši narudžbu</Btn>}<Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi}>Spremi</Btn></>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
         <Field label="Broj narudžbe kupca"><input className="input f-mono" value={form.broj} onChange={(e) => setForm({ ...form, broj: e.target.value })} placeholder="npr. E-BEST-2026-106" /></Field>
         <Field label="Datum narudžbe"><input className="input" type="date" value={form.datum} onChange={(e) => setForm({ ...form, datum: e.target.value })} /></Field>
