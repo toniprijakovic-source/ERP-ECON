@@ -9731,7 +9731,7 @@ const izracunajStavkePodloge = (otpremniceOdabrane, narudzba) => {
     o.stavke.forEach((s) => {
       const nst = narudzba?.stavke?.find((n) => n.id === s.narudzbaStavkaId);
       const key = s.narudzbaStavkaId || s.naziv;
-      if (!mapa[key]) mapa[key] = { naziv: s.naziv, sifra: nst?.sifra || "", jm: s.jm, cijena: Number(nst?.cijena) || 0, kolicina: 0 };
+      if (!mapa[key]) mapa[key] = { naziv: s.naziv, sifra: nst?.sifra || "", jm: s.jm, cijena: Number(nst?.cijena) || 0, nemaVezeSNarudzbom: !nst, kolicina: 0 };
       mapa[key].kolicina += Number(s.kolicina) || 0;
     });
   });
@@ -9822,7 +9822,7 @@ function PodlogaZaFakturuFormModal({ db, update, showToast, onClose, pocetniProj
               <div className="label" style={{ marginTop: 14, marginBottom: 6 }}>Pregled stavki</div>
               <table className="erp-table">
                 <thead><tr><th>Naziv</th><th style={{ width: 70 }}>JM</th><th style={{ width: 80 }}>Kol.</th><th style={{ width: 100 }}>Cijena</th><th style={{ width: 110 }}>Ukupno</th></tr></thead>
-                <tbody>{stavke.map((s, i) => <tr key={i}><td>{s.sifra ? `${s.sifra} — ` : ""}{s.naziv}</td><td className="f-mono">{s.jm}</td><td className="f-mono">{s.kolicina}</td><td className="f-mono">{fmtCurDec(s.cijena)}</td><td className="f-mono">{fmtCurDec(s.ukupno)}</td></tr>)}</tbody>
+                <tbody>{stavke.map((s, i) => <tr key={i}><td>{s.sifra ? `${s.sifra} — ` : ""}{s.naziv}</td><td className="f-mono">{s.jm}</td><td className="f-mono">{s.kolicina}</td><td className="f-mono">{fmtCurDec(s.cijena)}{s.nemaVezeSNarudzbom && <div title="Otpremnica nije povezana sa stavkom narudžbe ovog projekta — cijena se ne može povući." style={{ fontFamily: "var(--font-body)", fontSize: 10.5, color: "var(--rust)", whiteSpace: "nowrap" }}>nema cijene u narudžbi</div>}</td><td className="f-mono">{fmtCurDec(s.ukupno)}</td></tr>)}</tbody>
               </table>
 
               <div className="card" style={{ padding: 12, background: "var(--surface-alt)", marginTop: 12 }}>
