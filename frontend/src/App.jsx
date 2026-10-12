@@ -3304,6 +3304,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
   // Više dužina istog profila/lima: svaki redak = dužina (i za lim širina) × komada; šifra je ista, stanje je zbroj komada.
   const emptyKatalogUnos = { katalogId: "", kvaliteta: "celik", redovi: [{ duzinaMM: "", sirinaMM: "", komada: 1 }] };
   const [katalogUnos, setKatalogUnos] = useState(emptyKatalogUnos);
+  const [maticniBrojUnos, setMaticniBrojUnos] = useState(""); // ranije dodijeljen matični broj pri unosu novog materijala
   const katalogEntry = db.katalogProfila.find((k) => k.id === katalogUnos.katalogId);
   const jeLimUnos = katalogEntry?.jedinica === "kg/m2";
   const jeKomadUnos = katalogEntry?.jedinica === "kg/kom";
@@ -3336,7 +3337,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
     }
   };
 
-  const openAdd = () => { setForm(empty); setKatalogUnos(emptyKatalogUnos); setModal({ mode: "add" }); };
+  const openAdd = () => { setForm(empty); setKatalogUnos(emptyKatalogUnos); setMaticniBrojUnos(""); setModal({ mode: "add" }); };
   // Kod uređivanja profila/lima iz kataloga vraćaju se retci "dužina × komada" pročitani iz teksta dimenzija.
   const openEdit = (item) => {
     setForm(item);
@@ -3362,7 +3363,21 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
       kgPoKom: katalogEntry ? (jeKomadUnos ? Number(katalogEntry.vrijednost) : 0) : Number(form.kgPoKom) || 0,
       kgPoM2: katalogEntry ? (jeLimUnos ? Number(katalogEntry.vrijednost) : 0) : Number(form.kgPoM2) || 0,
     };
-    if (modal.mode === "add") update("materijali", [...db.materijali, { ...payload, id: uid("mat") }]);
+    if (modal.mode === "add") {
+      const noviMat = { ...payload, id: uid("mat") };
+      // Ranije dodijeljen matični broj: stanje se vodi pod tim brojem (zapis u matičnoj knjizi, izvor "ranije").
+      const maticni = modal.mode === "add" && String(maticniBrojUnos).trim() ? Number(String(maticniBrojUnos).trim()) : null;
+      if (maticni != null) {
+        if (!Number.isInteger(maticni) || maticni <= 0) { showToast("Matični broj mora biti cijeli broj veći od 0."); return; }
+        if (!(Number(noviMat.kolicina) > 0)) { showToast("Matični broj traži početno stanje veće od 0."); return; }
+        const zauzet = (db.maticnaKnjiga || []).find((z) => Number(z.broj) === maticni);
+        if (zauzet) { showToast(`Matični broj ${maticni} već postoji (${zauzet.sifra} ${zauzet.naziv}).`); return; }
+      }
+      update("materijali", [...db.materijali, noviMat]);
+      if (maticni != null) {
+        update("maticnaKnjiga", [...(db.maticnaKnjiga || []), { ...noviZapisMaticneKnjige({ mat: noviMat, kolicina: noviMat.kolicina, sarza: "", kvaliteta: noviMat.kvaliteta, narudzbenica: null, knjiga: db.maticnaKnjiga }), izvor: "ranije", rucniBroj: maticni, broj: maticni, napomena: "Matični broj dodijeljen prije unosa u sustav" }]);
+      }
+    }
     else update("materijali", db.materijali.map((m) => (m.id === form.id ? payload : m)));
     showToast("Materijal spremljen.");
     setModal(null);
@@ -3591,6 +3606,12 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
             <Field label={katalogEntry ? "Trenutno stanje (komada; masa ≈ " + izracunataMasaUnos.toFixed(1) + " kg)" : "Trenutno stanje"}>{katalogEntry ? <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{ukupnoKomadaUnos} kom</div> : <input className="input f-mono" type="number" value={form.kolicina} onChange={(e) => setForm({ ...form, kolicina: e.target.value })} />}</Field>
             <Field label="Minimalna zaliha"><input className="input f-mono" type="number" value={form.minZaliha} onChange={(e) => setForm({ ...form, minZaliha: e.target.value })} /></Field>
             <Field label="Lokacija na skladištu"><input className="input" value={form.lokacija} onChange={(e) => setForm({ ...form, lokacija: e.target.value })} /></Field>
+            {modal?.mode === "add" && (
+              <Field label="Matični broj (ako je materijal već evidentiran)">
+                <input className="input f-mono" type="number" min="1" step="1" placeholder="npr. 3650 — prazno = bez matičnog broja" aria-label="Matični broj" value={maticniBrojUnos} onChange={(e) => setMaticniBrojUnos(e.target.value)} />
+                <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 4 }}>Ako upišeš, početno stanje se vodi pod tim matičnim brojem (kod izdavanja se troši po njemu). Šaržu i atest možeš dopuniti u Kontroli kvalitete.</div>
+              </Field>
+            )}
             <div style={{ gridColumn: "1 / -1", fontSize: 12, color: "var(--ink-faint)" }}>Rezervacije za projekte vode se na popisu zaliha (gumb „Rezervacije“) i nastaju same pri zaprimanju narudžbenice.</div>
           </div>
         </Modal>

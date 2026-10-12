@@ -880,10 +880,25 @@ app.put("/api/rezervacije/patch", autentikacija, patchPoIdHandler("rezervacije",
 // Matična knjiga: matični broj (od 3700, uzlazno) dodjeljuje isključivo poslužitelj, pod zaključanim popisom —
 // preglednik sa zastarjelim popisom inače bi dvaput dobio isti broj. Broj postojećeg zapisa se ne može promijeniti.
 const POCETNI_MATICNI_BROJ = 3700;
+// Iznimka: materijal evidentiran prije matične knjige može ući s ranije dodijeljenim brojem (izvor "ranije",
+// rucniBroj) — prihvaća se samo ako broj nije zauzet (inače dobiva sljedeći automatski) i ne pomiče slijed.
 const dodijeliMaticneBrojeve = (poslano, trenutno) => {
   const postojeci = new Map(trenutno.map((z) => [z.id, z]));
-  let iduci = Math.max(POCETNI_MATICNI_BROJ - 1, ...trenutno.map((z) => Number(z.broj) || 0)) + 1;
-  return poslano.map((z) => (postojeci.has(z.id) ? { ...z, broj: postojeci.get(z.id).broj } : { ...z, broj: iduci++ }));
+  const zauzeti = new Set(trenutno.map((z) => Number(z.broj)).filter(Boolean));
+  let iduci = Math.max(POCETNI_MATICNI_BROJ - 1, ...trenutno.filter((z) => z.izvor !== "ranije").map((z) => Number(z.broj) || 0)) + 1;
+  return poslano.map((z) => {
+    if (postojeci.has(z.id)) return { ...z, broj: postojeci.get(z.id).broj };
+    const rucni = z.izvor === "ranije" ? Math.floor(Number(z.rucniBroj)) : NaN;
+    if (rucni > 0 && !zauzeti.has(rucni)) {
+      zauzeti.add(rucni);
+      const { rucniBroj, ...ostalo } = z;
+      return { ...ostalo, broj: rucni };
+    }
+    while (zauzeti.has(iduci)) iduci++;
+    zauzeti.add(iduci);
+    const { rucniBroj, ...ostalo } = z;
+    return { ...ostalo, broj: iduci++ };
+  });
 };
 app.put("/api/maticnaKnjiga/patch", autentikacija, patchPoIdHandler("maticnaKnjiga", /^(?!)$/, "matične knjige", dodijeliMaticneBrojeve));
 app.put("/api/radniNalozi/patch", autentikacija, patchPoIdHandler("radniNalozi", /^(.*\/)(\d+)()$/, "radnih naloga", zadrziNoveOznakeNaloga));
