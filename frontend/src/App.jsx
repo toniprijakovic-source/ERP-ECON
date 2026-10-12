@@ -3640,18 +3640,39 @@ function IzdatnicaModal({ db, update, showToast, initialMaterijalId, onClose, on
   });
   const [izdaoId, setIzdaoId] = useState("");
   const [napomena, setNapomena] = useState("");
-  const [stavke, setStavke] = useState([{ materijalId: initialMaterijalId || "", kolicina: "" }]);
+  const [stavke, setStavke] = useState([{ materijalId: initialMaterijalId || "", kolicina: "", po: {} }]);
   const [saljem, setSaljem] = useState(false);
 
+  // Materijal s više dužina (npr. "3115 mm × 14; 3050 mm × 1"): umjesto jedne količine bira se koliko komada koje dužine se izdaje.
+  const jeLimMat = (mat) => db.katalogProfila.find((k) => k.id === mat?.katalogId)?.jedinica === "kg/m2";
+  const redoviZa = (mat) => {
+    if (!mat || mat.jm !== "kom") return null;
+    const kat = db.katalogProfila.find((k) => k.id === mat.katalogId);
+    if (!kat || kat.jedinica === "kg/kom") return null;
+    const redovi = redoviIzDimenzija(mat.dimenzije, mat.kolicina, kat.jedinica === "kg/m2");
+    return redovi && redovi.length > 1 ? redovi : null;
+  };
+  const opisDuzine = (r, jeLim) => `${jeLim ? `${r.duzinaMM}×${r.sirinaMM}` : r.duzinaMM} mm`;
+  const kolicinaStavke = (st) => (redoviZa(db.materijali.find((m) => m.id === st.materijalId)) ? Object.values(st.po || {}).reduce((a, v) => a + brojIzUnosa(v), 0) : Number(st.kolicina) || 0);
+
   const azurirajStavku = (i, patch) => setStavke(stavke.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
-  const dodajStavku = () => setStavke([...stavke, { materijalId: "", kolicina: "" }]);
+  const dodajStavku = () => setStavke([...stavke, { materijalId: "", kolicina: "", po: {} }]);
   const obrisiStavku = (i) => setStavke(stavke.filter((_, idx) => idx !== i));
 
   const spremi = () => {
     if (saljem) return; // spriječi dvostruki klik — dvostruko slanje bi dvaput skinulo isto sa skladišta
     if (!projektId) { showToast("Odaberi projekt."); return; }
-    const validne = stavke.filter((s) => s.materijalId && Number(s.kolicina) > 0);
+    const validne = stavke.map((st) => ({ ...st, kolicina: kolicinaStavke(st) })).filter((st) => st.materijalId && Number(st.kolicina) > 0);
     if (validne.length === 0) { showToast("Dodaj barem jednu stavku s materijalom i količinom."); return; }
+    for (const st of validne) {
+      const mat = db.materijali.find((m) => m.id === st.materijalId);
+      const redovi = redoviZa(mat);
+      if (!redovi) continue;
+      const jeLim = jeLimMat(mat);
+      for (let i = 0; i < redovi.length; i++) {
+        if (brojIzUnosa(st.po?.[i]) > (Number(redovi[i].komada) || 0) + 1e-9) { showToast(`Za "${mat.naziv}" na stanju je samo ${redovi[i].komada} kom dužine ${opisDuzine(redovi[i], jeLim)}.`); return; }
+      }
+    }
     // Zbraja po materijalu — ako je isti materijal odabran u više redaka, provjerava se i skida
     // ZBROJ svih redaka odjednom, ne svaki redak zasebno (inače bi dva retka od po pola stanja
     // oba "prošla" provjeru pojedinačno, a zajedno tražila više nego što skladište ima).
@@ -3663,15 +3684,33 @@ function IzdatnicaModal({ db, update, showToast, initialMaterijalId, onClose, on
     }
     setSaljem(true);
     const potrosnja = potrosnjaPoMaticnim(db.izdatnice);
-    const noviMaterijali = db.materijali.map((m) => (zbrojPoMaterijalu.has(m.id) ? { ...m, kolicina: m.kolicina - zbrojPoMaterijalu.get(m.id) } : m));
+    let noviMaterijali = db.materijali.map((m) => (zbrojPoMaterijalu.has(m.id) ? { ...m, kolicina: m.kolicina - zbrojPoMaterijalu.get(m.id) } : m));
+    // popis dužina: izdani komadi se oduzimaju od svoje dužine, ispražnjena dužina nestaje s popisa
+    const izdaneDuzine = new Map(); // id stavke -> redovi koji su izdani
+    validne.forEach((st, k) => {
+      const mat = db.materijali.find((m) => m.id === st.materijalId);
+      const redovi = redoviZa(mat);
+      if (!redovi) return;
+      const jeLim = jeLimMat(mat);
+      const izdano = redovi.map((r, i) => ({ ...r, izdano: brojIzUnosa(st.po?.[i]) }));
+      izdaneDuzine.set(k, izdano.filter((r) => r.izdano > 0));
+      const trenutni = noviMaterijali.find((m) => m.id === mat.id);
+      const tekuci = redoviIzDimenzija(trenutni.dimenzije, db.materijali.find((m) => m.id === mat.id).kolicina, jeLim) || redovi;
+      const nakon = tekuci.map((r) => ({ ...r, komada: Math.round(((Number(r.komada) || 0) - (izdano.find((x) => x.duzinaMM === r.duzinaMM && x.sirinaMM === r.sirinaMM)?.izdano || 0)) * 1000) / 1000 })).filter((r) => r.komada > 0.0005);
+      const tekst = nakon.map((r) => `${opisDuzine(r, jeLim)}${nakon.length > 1 ? ` × ${r.komada}` : ""}`).join("; ");
+      noviMaterijali = noviMaterijali.map((m) => (m.id === mat.id ? { ...m, dimenzije: tekst } : m));
+    });
     const novaIzdatnica = {
       id: uid("izd"), broj: sljedeciBroj(db.izdatnice, "broj", "IZD-2026-"), datum: todayISO(),
       projektId, izdaoId: izdaoId || null, napomena, status: "Izdano",
-      stavke: validne.map((s) => {
+      stavke: validne.map((s, k) => {
         const mat = db.materijali.find((m) => m.id === s.materijalId);
+        const izd = izdaneDuzine.get(k);
+        const jeLim = jeLimMat(mat);
+        const izdanoRedovi = izd ? izd.map((r) => ({ duzinaMM: Number(r.duzinaMM), sirinaMM: r.sirinaMM ? Number(r.sirinaMM) : null, komada: r.izdano })) : null;
         // cijena: cijena na skladištu u trenutku izdavanja — da vrijednost izdanog materijala (npr.
         // u izvještaju nedovršene proizvodnje) ostane ista i kad se cijena na skladištu kasnije promijeni.
-        return { id: uid("izds"), materijalId: s.materijalId, sifra: mat.sifra, naziv: mat.naziv, jm: mat.jm, dimenzije: mat.dimenzije || "", kolicinaIzdano: Number(s.kolicina), kolicinaVraceno: null, cijena: Number(mat.cijena) || 0, matBrojevi: rasporediFifo(db.maticnaKnjiga || [], potrosnja, s.materijalId, Number(s.kolicina)) };
+        return { id: uid("izds"), materijalId: s.materijalId, sifra: mat.sifra, naziv: mat.naziv, jm: mat.jm, dimenzije: izd ? izd.map((r) => `${opisDuzine(r, jeLim)} × ${r.izdano}`).join("; ") : (mat.dimenzije || ""), ...(izdanoRedovi ? { izdanoRedovi } : {}), kolicinaIzdano: Number(s.kolicina), kolicinaVraceno: null, cijena: Number(mat.cijena) || 0, matBrojevi: rasporediFifo(db.maticnaKnjiga || [], potrosnja, s.materijalId, Number(s.kolicina)) };
       }),
     };
     update("materijali", noviMaterijali);
@@ -3722,14 +3761,29 @@ function IzdatnicaModal({ db, update, showToast, initialMaterijalId, onClose, on
             return (
               <tr key={i}>
                 <td>
-                  <select className="select" value={s.materijalId} onChange={(e) => azurirajStavku(i, { materijalId: e.target.value })}>
+                  <select className="select" value={s.materijalId} onChange={(e) => azurirajStavku(i, { materijalId: e.target.value, kolicina: "", po: {} })}>
                     <option value="">Odaberi materijal…</option>
                     {db.materijali.filter((m) => m.kolicina > 0).map((m) => <option key={m.id} value={m.id}>{m.sifra} — {m.naziv} (na stanju: {m.kolicina} {m.jm})</option>)}
                   </select>
+                  {redoviZa(mat) && (
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginBottom: 4 }}>Upiši koliko komada koje dužine izdaješ (prazno = ne izdaje se):</div>
+                      {redoviZa(mat).map((r, idx) => (
+                        <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                          <span className="f-mono" style={{ width: 210, fontSize: 12 }}>{opisDuzine(r, jeLimMat(mat))} <span style={{ color: "var(--ink-faint)" }}>(na stanju: {r.komada})</span></span>
+                          <input className="input f-mono" style={{ width: 90 }} inputMode="decimal" placeholder="izdaj" aria-label={`Izdaj dužinu ${opisDuzine(r, jeLimMat(mat))}`} value={s.po?.[idx] ?? ""} onChange={(e) => azurirajStavku(i, { po: { ...(s.po || {}), [idx]: e.target.value } })} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </td>
                 <td>
-                  <input className="input f-mono" type="number" min="0" max={mat?.kolicina ?? undefined} step="0.01" value={s.kolicina} onChange={(e) => azurirajStavku(i, { kolicina: e.target.value })} />
-                  {mat && <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 2 }}>Na stanju: {mat.kolicina} {mat.jm}</div>}
+                  {redoviZa(mat) ? (
+                    <div className="input f-mono" style={{ background: "var(--surface-alt)" }}>{Math.round(kolicinaStavke(s) * 1000) / 1000}</div>
+                  ) : (
+                    <input className="input f-mono" type="number" min="0" max={mat?.kolicina ?? undefined} step="0.01" value={s.kolicina} onChange={(e) => azurirajStavku(i, { kolicina: e.target.value })} />
+                  )}
+                  {mat && <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 2 }}>{redoviZa(mat) ? "Ukupno izdaješ" : "Na stanju"}: {redoviZa(mat) ? `${Math.round(kolicinaStavke(s) * 1000) / 1000} od ${mat.kolicina}` : mat.kolicina} {mat.jm}</div>}
                 </td>
                 <td>{stavke.length > 1 && <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => obrisiStavku(i))}><X size={14} /></button>}</td>
               </tr>
@@ -3782,7 +3836,7 @@ function IzdatnicaPrintModal({ izdatnica, projekt, izdao, postavkeTvrtke, onClos
           <tbody>
             {izdatnica.stavke.map((s, i) => (
               <tr key={s.id || i}>
-                <td>{i + 1}.</td><td className="f-mono">{s.sifra}</td><td>{s.naziv}{(s.matBrojevi || []).some((a) => a.broj) && <div style={{ fontSize: 9.5, color: "#555" }}>Matični br.: {s.matBrojevi.filter((a) => a.broj).map((a) => a.broj).join(", ")}</div>}</td><td>{s.jm}</td>
+                <td>{i + 1}.</td><td className="f-mono">{s.sifra}</td><td>{s.naziv}{(s.izdanoRedovi || []).length > 0 && <div style={{ fontSize: 9.5, color: "#555" }}>Dimenzije: {s.dimenzije}</div>}{(s.matBrojevi || []).some((a) => a.broj) && <div style={{ fontSize: 9.5, color: "#555" }}>Matični br.: {s.matBrojevi.filter((a) => a.broj).map((a) => a.broj).join(", ")}</div>}</td><td>{s.jm}</td>
                 <td className="f-mono">{s.kolicinaIzdano}</td>
                 <td className="f-mono">{s.kolicinaVraceno != null ? s.kolicinaVraceno : ""}{(s.povratRedovi || []).length > 0 && <div style={{ fontSize: 9.5, color: "#555" }}>{s.povratRedovi.map((r) => `${r.duzinaMM ? `${(r.duzinaMM / 1000).toLocaleString("hr-HR")}${r.sirinaMM ? `×${(r.sirinaMM / 1000).toLocaleString("hr-HR")}` : ""} m` : "cijeli"} × ${r.komada}`).join("; ")}</div>}</td>
               </tr>
