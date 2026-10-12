@@ -12168,6 +12168,24 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true })
                     </tr>
                   );
                 })}
+                {(() => {
+                  // zbroj cijele skupine za odabrani mjesec
+                  const uk = { ukupno: 0, redovni: 0, prekovremeni: 0, praznikDana: 0, goDana: 0, boDana: 0 };
+                  lista.forEach((z) => { const zb = sazetci.get(z.id); if (zb) Object.keys(uk).forEach((k) => { uk[k] += zb[k] || 0; }); });
+                  const stilUk = { textAlign: "center", fontWeight: 700, background: "var(--line)" };
+                  return (
+                    <tr style={{ borderTop: "2px solid var(--line-strong)" }}>
+                      <td style={{ ...stilPrviStupac, fontWeight: 700, background: "var(--line)" }}>UKUPNO ({lista.length})</td>
+                      <td colSpan={dani.length} style={{ background: "var(--line)" }} />
+                      <td className="f-mono" style={{ ...stilUk, borderLeft: "2px solid var(--line-strong)" }}>{uk.ukupno.toFixed(1)}</td>
+                      <td className="f-mono" style={stilUk}>{uk.redovni.toFixed(1)}</td>
+                      <td className="f-mono" style={stilUk}>{uk.prekovremeni.toFixed(1)}</td>
+                      <td className="f-mono" style={stilUk}>{uk.praznikDana}</td>
+                      <td className="f-mono" style={stilUk}>{uk.goDana}</td>
+                      <td className="f-mono" style={stilUk}>{uk.boDana}</td>
+                    </tr>
+                  );
+                })()}
               </tbody>
             </table>
           </div>
