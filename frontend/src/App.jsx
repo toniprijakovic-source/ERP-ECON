@@ -3261,6 +3261,24 @@ function UgradeniMaterijalTab({ db, showToast, pocetniProjektId }) {
   );
 }
 
+// Dimenzije artikla su tekst "3115 mm × 14; 3050 mm × 1" (za lim "3000×1500 mm × 5"). Vraća retke za uređivanje
+// ({ duzinaMM, sirinaMM, komada }) ili null ako se tekst ne može pročitati. Dužina bez broja komada (npr. "6000 mm"
+// uz druge dužine) dobiva ostatak do trenutnog stanja.
+const redoviIzDimenzija = (dimenzije, kolicina, jeLim) => {
+  const dijelovi = String(dimenzije || "").split(";").map((x) => x.trim()).filter(Boolean);
+  if (!dijelovi.length) return null;
+  const redovi = [];
+  for (const d of dijelovi) {
+    const m = d.match(/^(\d+(?:[.,]\d+)?)(?:\s*×\s*(\d+(?:[.,]\d+)?))?\s*mm(?:\s*×\s*(\d+(?:[.,]\d+)?))?$/);
+    if (!m || (jeLim && !m[2]) || (!jeLim && m[2])) return null;
+    redovi.push({ duzinaMM: m[1].replace(",", "."), sirinaMM: m[2] ? m[2].replace(",", ".") : "", komada: m[3] ? m[3].replace(",", ".") : null });
+  }
+  const poznato = redovi.reduce((a, r) => a + (r.komada != null ? Number(r.komada) : 0), 0);
+  const nepoznati = redovi.filter((r) => r.komada == null);
+  nepoznati.forEach((r) => { r.komada = nepoznati.length === 1 ? String(Math.max(0, Math.round(((Number(kolicina) || 0) - poznato) * 1000) / 1000)) : "1"; });
+  return redovi;
+};
+
 function SkladistePage({ db, update, showToast, mojaPozicija }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "skladiste");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "zalihe");
@@ -3319,7 +3337,15 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
   };
 
   const openAdd = () => { setForm(empty); setKatalogUnos(emptyKatalogUnos); setModal({ mode: "add" }); };
-  const openEdit = (item) => { setForm(item); setKatalogUnos(emptyKatalogUnos); setModal({ mode: "edit" }); };
+  // Kod uređivanja profila/lima iz kataloga vraćaju se retci "dužina × komada" pročitani iz teksta dimenzija.
+  const openEdit = (item) => {
+    setForm(item);
+    const kat = db.katalogProfila.find((k) => k.id === item.katalogId);
+    const redovi = kat && kat.jedinica !== "kg/kom" ? redoviIzDimenzija(item.dimenzije, item.kolicina, kat.jedinica === "kg/m2") : null;
+    const kv = (db.kvaliteteMaterijala || []).find((k) => k.id === item.kvaliteta || (k.oznaka && k.oznaka === item.kvaliteta));
+    setKatalogUnos(redovi ? { katalogId: kat.id, kvaliteta: kv?.id || "celik", redovi } : emptyKatalogUnos);
+    setModal({ mode: "edit" });
+  };
   const save = () => {
     if (!form.naziv.trim()) { showToast("Naziv je obavezan."); return; }
     // Šifra se računa sama: iz kataloga (vrsta + broj artikla + kvaliteta) ili, za artikl izvan kataloga, sljedeći slobodni broj.
@@ -3543,6 +3569,9 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
                 </div>
               ))}
               {!jeKomadUnos && <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajRedUnos}>Dodaj još jednu {jeLimUnos ? "dimenziju" : "dužinu"}</Btn>}
+              {modal?.mode === "edit" && form.id && Math.abs((Number(form.kolicina) || 0) - ukupnoKomadaUnos) > 0.0005 && (
+                <div style={{ fontSize: 12, color: "var(--rust)", marginTop: 6, fontWeight: 600 }}>Pažnja: trenutno stanje na skladištu je {form.kolicina} kom, a zbroj redaka je {ukupnoKomadaUnos} kom — spremanjem stanje postaje {ukupnoKomadaUnos} kom.</div>
+              )}
               {viseRedaka && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 6 }}>Ukupno {ukupnoKomadaUnos} kom, različitih {jeLimUnos ? "dimenzija" : "dužina"}: {katalogUnos.redovi.length}. Sve se vodi pod istom šifrom; dimenzije se zapisuju kao popis.</div>}
             </div>
           )}
