@@ -7965,6 +7965,16 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
     update("radniNalozi", [...db.radniNalozi, ...noviNalozi]);
     showToast(`Kreirano ${noviNalozi.length} radnih naloga.`);
   };
+  // Brisanje radnog naloga: nije moguće ako su na njega već upisani sati (ostali bi bez naloga);
+  // nalozi koji su ovisili o obrisanom gube tu ovisnost.
+  const obrisiNalog = (n) => {
+    const upisano = zbrojSatiZaNalog(n.id, db.satiPoNalogu);
+    if (upisano > 0) { showToast(`Nalog ${n.broj} ima upisanih ${upisano} h — nije ga moguće obrisati. Smanji plan ili ga označi završenim.`); return; }
+    const ovisni = db.radniNalozi.filter((r) => r.ovisiONalogId === n.id);
+    if (!window.confirm(`Obrisati radni nalog ${n.broj} (${fazaOznaka(n.faza)}, ${n.planiranoSati} h)?${n.materijalIzdan ? " Materijal za njega je već izdan — izdatnica ostaje." : ""}${ovisni.length ? ` Ovisnost naloga ${ovisni.map((r) => r.broj).join(", ")} o njemu se uklanja.` : ""}`)) return;
+    update("radniNalozi", db.radniNalozi.filter((r) => r.id !== n.id).map((r) => (r.ovisiONalogId === n.id ? { ...r, ovisiONalogId: null } : r)));
+    showToast("Radni nalog obrisan.");
+  };
   const planiranoUkupno = nalozi.reduce((s, n) => s + (Number(n.planiranoSati) || 0), 0);
   const utrosenoUkupno = nalozi.reduce((s, n) => s + (Number(n.utrosenoSati) || 0), 0);
   const postotak = planiranoUkupno > 0 ? Math.min(100, Math.round((utrosenoUkupno / planiranoUkupno) * 100)) : 0;
@@ -8319,7 +8329,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
         </div>
         {nalozi.length === 0 ? <EmptyState text="Nema radnih naloga za ovaj projekt." /> : (
           <table className="erp-table">
-            <thead><tr><th>Broj</th><th>Faza</th><th>Tim</th><th>Sati (utr./plan.)</th><th>Status</th></tr></thead>
+            <thead><tr><th>Broj</th><th>Faza</th><th>Tim</th><th>Sati (utr./plan.)</th><th>Status</th><th style={{ width: 40 }} /></tr></thead>
             <tbody>
               {nalozi.map((n) => (
                 <tr key={n.id}>
@@ -8328,6 +8338,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
                   <td>{n.zaduzenTim || "—"}</td>
                   <td className="f-mono">{n.utrosenoSati} / {n.planiranoSati}</td>
                   <td><Badge status={n.status} /></td>
+                  <td><button className="btn btn-icon btn-ghost" title="Obriši radni nalog" aria-label={`Obriši nalog ${n.broj}`} onClick={() => obrisiNalog(n)}><Trash2 size={14} color="var(--rust)" /></button></td>
                 </tr>
               ))}
             </tbody>
