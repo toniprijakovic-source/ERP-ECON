@@ -3973,9 +3973,20 @@ const duzinaUkupnaMStavke = (s) => ((Number(s.dimenzijaMM) || 0) / 1000) * (Numb
 // "Vrstom materijala" (upit ne čuva izravnu vezu na katalog, samo slobodan tekst — vidi
 // prijedloziVrsteMaterijala u UpitStavkeEditor, koji te oznake i nudi za odabir). Bez podudaranja
 // težinu nije moguće izračunati (vraća null).
-const tezinaStavkeUpita = (s, katalogProfila) => {
+// Lim koji nije u katalogu (npr. Magnelis, Inox) računa se iz debljine u nazivu ("… 2 mm", "… 1,2 mm"),
+// dimenzija stavke i gustoće upisane kvalitete (iz popisa kvaliteta materijala; bez nje 7,85 kg/dm³).
+const tezinaLimaIzNaziva = (s, kvalitete) => {
+  const deblj = parseFloat(String(s.vrstaMaterijala || "").match(/(d+(?:[.,]d+)?)s*mm/i)?.[1]?.replace(",", "."));
+  const duzinaM = (Number(s.dimenzijaMM) || 0) / 1000, sirinaM = (Number(s.sirinaMM) || 0) / 1000;
+  if (!(deblj > 0) || !(duzinaM > 0) || !(sirinaM > 0)) return null;
+  const traz = String(s.kvaliteta || "").trim().toLowerCase();
+  const kv = traz ? (kvalitete || []).find((k) => String(k.oznaka || "").trim().toLowerCase() === traz || k.id === s.kvaliteta) : null;
+  const gustoca = kv ? Number(kv.gustoca) || GUSTOCA_CELIKA : GUSTOCA_CELIKA;
+  return deblj * gustoca * duzinaM * sirinaM * (Number(s.kolicina) || 0);
+};
+const tezinaStavkeUpita = (s, katalogProfila, kvalitete) => {
   const kat = (katalogProfila || []).find((k) => katalogOznakaPuna(k) === s.vrstaMaterijala);
-  if (!kat) return null;
+  if (!kat) return tezinaLimaIzNaziva(s, kvalitete);
   if (kat.jedinica === "kg/kom") return (Number(kat.vrijednost) || 0) * (Number(s.kolicina) || 0);
   const jeLim = kat.jedinica === "kg/m2";
   const duzinaM = (Number(s.dimenzijaMM) || 0) / 1000;
@@ -3988,8 +3999,8 @@ const tezinaStavkeUpita = (s, katalogProfila) => {
 // dodatak se namjerno unosi po stavci, ne kao jedan fiksni iznos za cijelog dobavljača, jer se
 // razlikuje od narudžbe do narudžbe. Vraća null ako se ne može izračunati (npr. cijena po kg bez
 // poznate težine).
-const ukupnaCijenaPonude = (s, p, katalogProfila) => {
-  const kolicinaZaCijenu = p.jedinicaCijene === "m" ? duzinaUkupnaMStavke(s) : tezinaStavkeUpita(s, katalogProfila);
+const ukupnaCijenaPonude = (s, p, katalogProfila, kvalitete) => {
+  const kolicinaZaCijenu = p.jedinicaCijene === "m" ? duzinaUkupnaMStavke(s) : tezinaStavkeUpita(s, katalogProfila, kvalitete);
   if (kolicinaZaCijenu == null) return null;
   return kolicinaZaCijenu * (Number(p.cijena) || 0) + (Number(p.dodatak) || 0);
 };
@@ -4059,7 +4070,7 @@ const generirajNarudzbeIzUpita = (upit, db, update, patchUpiti, showToast) => {
       // Ponuda je unesena po kg ili po m (jedinicaCijene), a skladišni materijal se uvijek vodi po
       // komadu (jm: "kom") — cijenu treba pretvoriti prema stvarnoj masi/dužini stavke, ne prepisati
       // sirovu vrijednost iz ponude izravno kao cijenu po komadu.
-      const kolicinaZaCijenu = ponuda.jedinicaCijene === "m" ? duzinaUkupnaMStavke(stavka) : tezinaStavkeUpita(stavka, db.katalogProfila);
+      const kolicinaZaCijenu = ponuda.jedinicaCijene === "m" ? duzinaUkupnaMStavke(stavka) : tezinaStavkeUpita(stavka, db.katalogProfila, db.kvaliteteMaterijala);
       const cijenaPoKomadu = kolicinaZaCijenu != null
         ? (kolicinaZaCijenu / (Number(stavka.kolicina) || 1)) * (Number(ponuda.cijena) || 0)
         : Number(ponuda.cijena) || 0;
@@ -4201,8 +4212,8 @@ function UpitDetaljModal({ upit, db, update, patchUpiti, showToast, onClose, onO
     }>
       <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Za svaku stavku unesi ponude pristiglih dobavljača (cijena po kg ili po m, prema tome kako je dobavljač naveo), zatim označi koju ponudu odabireš. Zelenom je označena trenutno najjeftinija ponuda za tu stavku (uključuje i eventualni dodatak dobavljača za transport/pakiranje). Nakon toga generiraj narudžbe — automatski grupirane po dobavljaču.</p>
       {upit.stavke.map((s) => {
-        const tezina = tezinaStavkeUpita(s, db.katalogProfila);
-        const ponudeSaCijenom = s.ponude.map((p) => ({ p, ukupno: ukupnaCijenaPonude(s, p, db.katalogProfila) }));
+        const tezina = tezinaStavkeUpita(s, db.katalogProfila, db.kvaliteteMaterijala);
+        const ponudeSaCijenom = s.ponude.map((p) => ({ p, ukupno: ukupnaCijenaPonude(s, p, db.katalogProfila, db.kvaliteteMaterijala) }));
         const najnizaCijena = ponudeSaCijenom.reduce((min, { ukupno }) => (ukupno != null && (min == null || ukupno < min) ? ukupno : min), null);
         return (
         <div key={s.id} className="card" style={{ padding: 12, marginBottom: 10, background: "var(--surface-alt)" }}>
