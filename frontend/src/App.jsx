@@ -4352,9 +4352,13 @@ const kreirajUpitIzMaterijala = (projekt, db, patchUpiti, showToast) => {
   return noviUpit;
 };
 
+// Stavka upita je naručena samo dok njezina narudžbenica stvarno postoji — ako je narudžbenica obrisana ili je nestala
+// (npr. prepisana zastarjelom kopijom), stavka je opet slobodna za odabir ponude i novu narudžbenicu.
+const jeStavkaNarucena = (s, db) => !!s.narudzbenicaId && (db.narudzbenice || []).some((n) => n.id === s.narudzbenicaId);
+
 // Grupira odabrane (a još nenaručene) stavke upita po dobavljaču i stvara narudžbenice + skladišne artikle
 const generirajNarudzbeIzUpita = (upit, db, update, patchUpiti, showToast) => {
-  const zaObradu = upit.stavke.filter((s) => s.odabranaPonudaId && !s.narudzbenicaId);
+  const zaObradu = upit.stavke.filter((s) => s.odabranaPonudaId && !jeStavkaNarucena(s, db));
   if (zaObradu.length === 0) { showToast("Nema odabranih pozicija spremnih za narudžbu."); return; }
   const poDobavljacu = {};
   zaObradu.forEach((s) => {
@@ -4525,7 +4529,7 @@ function UpitDetaljModal({ upit, db, update, patchUpiti, showToast, onClose, onO
         <div key={s.id} className="card" style={{ padding: 12, marginBottom: 10, background: "var(--surface-alt)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
             <div style={{ fontSize: 13.5, fontWeight: 600 }}>{s.vrstaMaterijala} <span className="f-mono" style={{ fontWeight: 400, color: "var(--ink-soft)" }}>· {s.kolicina} kom × {formatDimenzijaStavke(s)}mm{s.kvaliteta ? ` · ${s.kvaliteta}` : ""}{tezina != null && ` · ${tezina.toFixed(1)} kg ukupno`}</span></div>
-            {s.narudzbenicaId ? <Badge status="Primljeno" /> : (s.odabranaPonudaId ? <Badge status="Odobren" /> : <Badge status="Nacrt" />)}
+            {jeStavkaNarucena(s, db) ? <Badge status="Primljeno" /> : (s.odabranaPonudaId ? <Badge status="Odobren" /> : <Badge status="Nacrt" />)}
           </div>
           {s.ponude.length === 0 ? <div style={{ fontSize: 12, color: "var(--ink-faint)", marginBottom: 8 }}>Još nema unesenih ponuda.</div> : (
             <table className="erp-table" style={{ marginBottom: 8 }}>
@@ -4535,19 +4539,19 @@ function UpitDetaljModal({ upit, db, update, patchUpiti, showToast, onClose, onO
                   const najjeftinija = ukupno != null && ukupno === najnizaCijena;
                   return (
                   <tr key={p.id} style={s.odabranaPonudaId === p.id ? { background: "#EAF6EF" } : undefined}>
-                    <td><input type="radio" name={`odabir-${s.id}`} checked={s.odabranaPonudaId === p.id} onChange={() => odaberiPonudu(s.id, p.id)} disabled={!!s.narudzbenicaId} /></td>
-                    <td><select className="select" style={{ fontSize: 12.5 }} value={p.dobavljacId} disabled={!!s.narudzbenicaId} onChange={(e) => promijeniDobavljaca(s.id, p.id, e.target.value)}>{db.dobavljaci.map((d) => <option key={d.id} value={d.id}>{d.naziv}</option>)}</select></td>
-                    <td><input className="input f-mono" type="number" min="0" step="0.01" disabled={!!s.narudzbenicaId} value={p.cijena} onChange={(e) => azurirajPonudu(s.id, p.id, { cijena: e.target.value })} /></td>
+                    <td><input type="radio" name={`odabir-${s.id}`} checked={s.odabranaPonudaId === p.id} onChange={() => odaberiPonudu(s.id, p.id)} disabled={!!jeStavkaNarucena(s, db)} /></td>
+                    <td><select className="select" style={{ fontSize: 12.5 }} value={p.dobavljacId} disabled={!!jeStavkaNarucena(s, db)} onChange={(e) => promijeniDobavljaca(s.id, p.id, e.target.value)}>{db.dobavljaci.map((d) => <option key={d.id} value={d.id}>{d.naziv}</option>)}</select></td>
+                    <td><input className="input f-mono" type="number" min="0" step="0.01" disabled={!!jeStavkaNarucena(s, db)} value={p.cijena} onChange={(e) => azurirajPonudu(s.id, p.id, { cijena: e.target.value })} /></td>
                     <td>
-                      <select className="select" style={{ fontSize: 12.5 }} value={p.jedinicaCijene || "kg"} disabled={!!s.narudzbenicaId} onChange={(e) => azurirajPonudu(s.id, p.id, { jedinicaCijene: e.target.value })}>
+                      <select className="select" style={{ fontSize: 12.5 }} value={p.jedinicaCijene || "kg"} disabled={!!jeStavkaNarucena(s, db)} onChange={(e) => azurirajPonudu(s.id, p.id, { jedinicaCijene: e.target.value })}>
                         <option value="kg">€/kg</option>
                         <option value="m">€/m</option>
                       </select>
                     </td>
-                    <td><input className="input f-mono" type="number" min="0" step="0.01" title="Dodatak za ovu stavku (npr. transport, pakiranje)" disabled={!!s.narudzbenicaId} value={p.dodatak ?? 0} onChange={(e) => azurirajPonudu(s.id, p.id, { dodatak: e.target.value })} /></td>
+                    <td><input className="input f-mono" type="number" min="0" step="0.01" title="Dodatak za ovu stavku (npr. transport, pakiranje)" disabled={!!jeStavkaNarucena(s, db)} value={p.dodatak ?? 0} onChange={(e) => azurirajPonudu(s.id, p.id, { dodatak: e.target.value })} /></td>
                     <td className="f-mono" style={{ fontWeight: najjeftinija ? 700 : 400, color: najjeftinija ? "var(--green)" : undefined }}>{ukupno != null ? fmtCurDec(ukupno) : "—"}</td>
-                    <td><input className="input" disabled={!!s.narudzbenicaId} value={p.napomena} onChange={(e) => azurirajPonudu(s.id, p.id, { napomena: e.target.value })} /></td>
-                    <td>{!s.narudzbenicaId && <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => obrisiPonudu(s.id, p.id))}><X size={13} /></button>}</td>
+                    <td><input className="input" disabled={!!jeStavkaNarucena(s, db)} value={p.napomena} onChange={(e) => azurirajPonudu(s.id, p.id, { napomena: e.target.value })} /></td>
+                    <td>{!jeStavkaNarucena(s, db) && <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => obrisiPonudu(s.id, p.id))}><X size={13} /></button>}</td>
                   </tr>
                   );
                 })}
@@ -4557,8 +4561,8 @@ function UpitDetaljModal({ upit, db, update, patchUpiti, showToast, onClose, onO
           {s.ponude.some((p) => p.jedinicaCijene !== "m") && tezina == null && (
             <div style={{ fontSize: 11, color: "var(--ink-faint)", marginBottom: 6 }}>Težina se ne može izračunati — "Vrsta materijala" ne odgovara točno nijednoj stavci u katalogu profila/limova.</div>
           )}
-          {!s.narudzbenicaId && <Btn variant="ghost" size="sm" icon={Plus} onClick={() => dodajPonudu(s.id)}>Dodaj ponudu</Btn>}
-          {s.narudzbenicaId && <div style={{ fontSize: 11.5, color: "var(--green)" }}>✓ Naručeno od {dobNaziv(s.ponude.find((p) => p.id === s.odabranaPonudaId)?.dobavljacId)}</div>}
+          {!jeStavkaNarucena(s, db) && <Btn variant="ghost" size="sm" icon={Plus} onClick={() => dodajPonudu(s.id)}>Dodaj ponudu</Btn>}
+          {jeStavkaNarucena(s, db) && <div style={{ fontSize: 11.5, color: "var(--green)" }}>✓ Naručeno od {dobNaziv(s.ponude.find((p) => p.id === s.odabranaPonudaId)?.dobavljacId)}</div>}
         </div>
         );
       })}
