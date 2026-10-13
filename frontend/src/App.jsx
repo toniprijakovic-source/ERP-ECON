@@ -2966,16 +2966,16 @@ const upozorenjeUgradnje = (r) => {
 
 // Podaci s naljepnice: naziv materijala, kvaliteta, šarža i matični broj (sve iz matične knjige).
 const podaciNaljepnice = (zapis) => ({ naziv: zapis.naziv || "", sifra: zapis.sifra ? formatSifre(zapis.sifra) : "", kvaliteta: zapis.kvaliteta || "", sarza: zapis.sarza || "", maticniBroj: String(zapis.broj ?? "") });
-// Ispis naljepnica 70×48 mm: svaka naljepnica je jedna stranica te veličine; svi podaci su iste veličine slova (13 pt) kao matični broj.
+// Ispis naljepnica 70×48 mm: svaka naljepnica je jedna stranica te veličine; svi podaci su iste veličine slova (12 pt) kao matični broj.
 // Radi preko skrivenog okvira (bez skočnog prozora), pa smije biti pozvan i nakon asinkronog dijela.
 async function ispisiNaljepniceMaterijala(popis, nazivTvrtke) {
   if (!popis.length) return;
   const qr = {};
   // QR kôd sadrži poveznicu na aplikaciju (…/?mb=3700): skeniranje mobitelom otvara karticu tog matičnog broja.
   for (const n of popis) if (!qr[n.maticniBroj]) qr[n.maticniBroj] = await QRCode.toDataURL(`${window.location.origin}/?mb=${encodeURIComponent(n.maticniBroj || "")}`, { margin: 0, scale: 8, errorCorrectionLevel: "M" });
-  const css = "@page{size:70mm 48mm;margin:0}html,body{margin:0;padding:0}.n{width:70mm;height:48mm;box-sizing:border-box;padding:2mm;display:flex;gap:2mm;page-break-after:always;overflow:hidden;font-family:Arial,Helvetica,sans-serif;color:#000}.n:last-child{page-break-after:auto}.q{width:23mm;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:space-between}.q img{width:23mm;height:23mm;image-rendering:pixelated}.q .f{font-size:5pt;color:#333;text-align:center;line-height:1.1}.t{flex:1;min-width:0;display:flex;flex-direction:column;font-size:13pt;line-height:1.15;overflow-wrap:anywhere}.t .sif,.t .mb{font-weight:700}.t .naziv{font-weight:700;margin:1mm 0;max-height:3.45em;overflow:hidden}.t .r b{font-weight:700}";
+  const css = "@page{size:70mm 48mm;margin:0}html,body{margin:0;padding:0}.n{width:70mm;height:48mm;box-sizing:border-box;padding:2mm;display:flex;gap:2mm;page-break-after:always;overflow:hidden;font-family:Arial,Helvetica,sans-serif;color:#000}.n:last-child{page-break-after:auto}.q{width:23mm;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:space-between}.q img{width:23mm;height:23mm;image-rendering:pixelated}.q .f{font-size:5pt;color:#333;text-align:center;line-height:1.1}.t{flex:1;min-width:0;display:flex;flex-direction:column;font-size:12pt;line-height:1.15;overflow-wrap:anywhere}.t .sif,.t .mb{font-weight:700}.t .naziv{font-weight:700;margin:1mm 0;max-height:3.45em;overflow:hidden}.t .r b{font-weight:700}";
   // redoslijed na naljepnici: šifra, matični broj, pa naziv, kvaliteta i šarža
-  const tijelo = popis.map((n) => `<div class="n"><div class="q"><img src="${qr[n.maticniBroj]}" alt=""><div class="f">${escHtml(nazivTvrtke || "Econ d.o.o.")}</div></div><div class="t">`
+  const tijelo = popis.map((n) => `<div class="n"><div class="q"><img src="${qr[n.maticniBroj]}" alt=""></div><div class="t">`
     + (n.sifra ? `<div class="sif">Šifra: ${escHtml(n.sifra)}</div>` : "")
     + `<div class="mb">Matični broj: ${escHtml(n.maticniBroj)}</div><div class="naziv">${escHtml(n.naziv)}</div>`
     + [["Kvaliteta", n.kvaliteta], ["Šarža", n.sarza]].filter(([, v]) => v).map(([k, v]) => `<div class="r"><b>${k}:</b> ${escHtml(v)}</div>`).join("")
@@ -3073,7 +3073,7 @@ function NaljepnicaMaterijalaModal({ materijal, db, onClose, showToast }) {
             <Field label="Broj naljepnica"><input className="input f-mono" type="number" min="1" max="200" value={kopija} onChange={(e) => setKopija(e.target.value)} /></Field>
           </div>
           <div className="label">Pregled (70 × 48 mm)</div>
-          <div style={{ border: "1px solid var(--line-strong)", background: "#fff", width: 280, height: 192, boxSizing: "content-box", padding: 8, display: "flex", gap: 8, fontSize: 18, lineHeight: 1.15, overflow: "hidden", color: "#000", overflowWrap: "anywhere" }}>
+          <div style={{ border: "1px solid var(--line-strong)", background: "#fff", width: 280, height: 192, boxSizing: "content-box", padding: 8, display: "flex", gap: 8, fontSize: 17, lineHeight: 1.15, overflow: "hidden", color: "#000", overflowWrap: "anywhere" }}>
             <div style={{ width: 92, flex: "none" }}>
               <div style={{ width: 92, height: 92, background: "repeating-conic-gradient(#000 0% 25%, #fff 0% 50%) 50% / 8px 8px" }} title="QR kôd s matičnim brojem" />
             </div>
