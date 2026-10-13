@@ -2463,6 +2463,37 @@ function ObavijestiPanel({ obavijesti, zaposlenici, onPotvrdi, onOtvoriProjekt, 
 // Napomena uz zadatak (projektni ili slobodni): prikaz teksta s autorom i datumom te uređivanje u
 // retku. Prazna napomena briše postojeću. Klikovi ne idu dalje (redak na nadzornoj ploči otvara projekt).
 const STIL_LINK_GUMBA = { background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit", fontSize: 11.5, fontWeight: 600, color: "var(--steel)" };
+
+// Mape na serveru: putanja iz teksta zadatka ili polje "Mapa projekta". Poveznica econ-mapa:<putanja> otvara Explorer
+// na računalima na kojima je jednom pokrenuta datoteka econ-mapa-instalacija.reg (frontend/public); inače preglednik
+// ne smije otvarati mape, pa uz svaku putanju stoji i gumb "Kopiraj".
+const izvuciPutanjuMape = (tekst) => { const m = String(tekst || "").match(/([A-Za-z]:\\[^)\n]+|\\\\[^\s)\\]+\\[^)\n]+)/); return m ? m[1].trim() : ""; };
+const urlOtvoriMapu = (putanja) => `econ-mapa:${encodeURIComponent(putanja).replace(/'/g, "%27")}`;
+function MapaGumbi({ putanja, oznaka = "Otvori mapu" }) {
+  const [kopirano, setKopirano] = useState(false);
+  const kopiraj = (e) => {
+    e.stopPropagation();
+    const gotovo = () => { setKopirano(true); setTimeout(() => setKopirano(false), 1800); };
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(putanja).then(gotovo).catch(() => window.prompt("Kopiraj putanju (Ctrl+C):", putanja));
+    else window.prompt("Kopiraj putanju (Ctrl+C):", putanja);
+  };
+  return (
+    <span style={{ display: "inline-flex", gap: 10, marginLeft: 8, whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
+      <a href={urlOtvoriMapu(putanja)} title={putanja} style={{ ...STIL_LINK_GUMBA, textDecoration: "none" }}>{oznaka}</a>
+      <button type="button" onClick={kopiraj} title="Kopiraj putanju u međuspremnik" style={STIL_LINK_GUMBA}>{kopirano ? "✓ Kopirano" : "Kopiraj"}</button>
+    </span>
+  );
+}
+// Putanja iz naslova zadatka i/ili mapa projekta kojem zadatak pripada.
+function MapaZadatka({ z }) {
+  const izTeksta = izvuciPutanjuMape(z.naziv);
+  return (
+    <>
+      {izTeksta && <MapaGumbi putanja={izTeksta} />}
+      {z.projektMapa && z.projektMapa !== izTeksta && <MapaGumbi putanja={z.projektMapa} oznaka="Mapa projekta" />}
+    </>
+  );
+}
 function NapomenaZadatka({ zadatak, imeZaposlenika, mozeUredjivati, onSpremi, uvlaka = 0 }) {
   const [uredjujem, setUredjujem] = useState(false);
   const [tekst, setTekst] = useState("");
@@ -2512,7 +2543,7 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
   const sviOtvoreniZadaci = [];
   db.projekti.forEach((p) => {
     (p.zadaci || []).forEach((z) => {
-      if (z.dodijeljenoId && !z.izvrseno) sviOtvoreniZadaci.push({ ...z, projektId: p.id, projektNaziv: p.naziv, projektSifra: p.sifra });
+      if (z.dodijeljenoId && !z.izvrseno) sviOtvoreniZadaci.push({ ...z, projektId: p.id, projektNaziv: p.naziv, projektSifra: p.sifra, projektMapa: p.mapa || "" });
     });
   });
   // Zadaci koji nisu vezani uz projekt (dodaju se izravno s nadzorne ploče).
@@ -2547,7 +2578,7 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
   // zapisanim zadavateljem (zadaoId; kod zadataka bez projekta i onaj tko ga je dodao).
   const granicaZavrsenih = addDays(todayISO(), -30);
   const zavrseniZadaci = [
-    ...db.projekti.flatMap((p) => (p.zadaci || []).map((z) => ({ ...z, projektId: p.id, projektNaziv: p.naziv, projektSifra: p.sifra, izvor: "projekt" }))),
+    ...db.projekti.flatMap((p) => (p.zadaci || []).map((z) => ({ ...z, projektId: p.id, projektNaziv: p.naziv, projektSifra: p.sifra, projektMapa: p.mapa || "", izvor: "projekt" }))),
     ...slobodniZadaci.map((z) => ({ ...z, projektId: null, projektNaziv: "", projektSifra: "", slobodan: true, izvor: "slobodni" })),
   ].map((z) => {
     const zadao = z.zadaoId || (z.slobodan ? z.kreiraoId : null);
@@ -2618,7 +2649,7 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
                 <div key={`${z.izvor}-${z.projektId || ""}-${z.id}`} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "7px 0", borderBottom: "1px solid var(--line)", background: z.novo ? "rgba(37,107,69,0.06)" : "transparent" }}>
                   <CheckCircle2 size={15} color="var(--green)" style={{ flexShrink: 0, marginTop: 2 }} />
                   <div style={{ flex: 1, minWidth: 0, cursor: z.slobodan ? "default" : "pointer" }} title={z.slobodan ? undefined : "Otvori projekt"} onClick={() => { if (!z.slobodan) otvoriProjekt(z.projektId); }}>
-                    <div style={{ fontSize: 13 }}>{z.naziv}{z.novo && <span className="badge badge-success" style={{ marginLeft: 6 }}>novo</span>}</div>
+                    <div style={{ fontSize: 13 }}>{z.naziv}<MapaZadatka z={z} />{z.novo && <span className="badge badge-success" style={{ marginLeft: 6 }}>novo</span>}</div>
                     <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{z.slobodan ? "Bez projekta" : `${z.projektSifra} — ${z.projektNaziv}`}{z.sebi ? " · moj zadatak" : <> · završeno — <strong style={{ color: "var(--ink-soft)" }}>{imeZaposlenika(z.izvrsioId)}</strong></>}{z.datumIzvrsenja ? ` · ${fmtDate(z.datumIzvrsenja)}` : ""}</div>
                     {z.napomena && <div style={{ marginTop: 4, padding: "4px 8px", background: "var(--surface-alt)", borderRadius: 3, fontSize: 12, whiteSpace: "pre-wrap" }}>{z.napomena}</div>}
                   </div>
@@ -2634,7 +2665,7 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
                 return (
                   <div key={`${z.slobodan ? "s" : z.projektId}-${z.id}`} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "7px 0", borderBottom: "1px solid var(--line)" }}>
                     <div style={{ flex: 1, minWidth: 0, cursor: z.slobodan ? "default" : "pointer" }} title={z.slobodan ? undefined : "Otvori projekt"} onClick={() => { if (!z.slobodan) otvoriProjekt(z.projektId); }}>
-                      <div style={{ fontSize: 13 }}>{z.naziv}</div>
+                      <div style={{ fontSize: 13 }}>{z.naziv}<MapaZadatka z={z} /></div>
                       <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{z.slobodan ? "Bez projekta" : `${z.projektSifra} — ${z.projektNaziv}`} · dodijeljeno: <strong style={{ color: "var(--steel)" }}>{imeZaposlenika(z.dodijeljenoId)}</strong>{z.zadanoDatum ? ` · zadano ${fmtDate(z.zadanoDatum)}` : ""}</div>
                       <NapomenaZadatka
                         zadatak={z}
@@ -2660,7 +2691,7 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
                       ? <input type="checkbox" checked={false} onChange={() => (z.slobodan ? oznaciSlobodniIzvrsenim(z.id) : patchZadatakIzvrseno(z.projektId, z.id, true))} style={{ width: 15, height: 15, flexShrink: 0, marginTop: 2 }} />
                       : <span style={{ width: 15, flexShrink: 0 }} />}
                     <div style={{ flex: 1, minWidth: 0, cursor: z.slobodan ? "default" : "pointer" }} title={z.slobodan ? undefined : "Otvori projekt"} onClick={() => { if (!z.slobodan) otvoriProjekt(z.projektId); }}>
-                      <div style={{ fontSize: 13 }}>{z.naziv}{z.dodijeljenoId === mojId && z.zadaoId && z.zadaoId !== mojId && !z.dodjelaVidjena && <span className="badge badge-info" style={{ marginLeft: 6 }}>novo</span>}</div>
+                      <div style={{ fontSize: 13 }}>{z.naziv}<MapaZadatka z={z} />{z.dodijeljenoId === mojId && z.zadaoId && z.zadaoId !== mojId && !z.dodjelaVidjena && <span className="badge badge-info" style={{ marginLeft: 6 }}>novo</span>}</div>
                       <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{z.slobodan ? "Bez projekta" : `${z.projektSifra} — ${z.projektNaziv}`}{(z.zadaoId || (z.slobodan && z.kreiraoId)) && (z.zadaoId || z.kreiraoId) !== z.dodijeljenoId && <> · zadano od: {imeZaposlenika(z.zadaoId || z.kreiraoId)}</>}{odabrano === "svi" && z.dodijeljenoId !== mojId && <> · <strong style={{ color: "var(--steel)" }}>{imeZaposlenika(z.dodijeljenoId)}</strong></>}</div>
                       <NapomenaZadatka
                         zadatak={z}
@@ -8324,6 +8355,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
         <div>
           <div style={{ fontSize: 17, fontWeight: 600 }} className="f-display">{projekt.naziv}</div>
           <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>{kupac?.naziv || "—"} · Rok: {fmtDate(projekt.rokPocetka)} – {fmtDate(projekt.rokZavrsetka)}</div>
+          {projekt.mapa && <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2, wordBreak: "break-all" }}>Mapa projekta: <span className="f-mono" style={{ fontSize: 11.5 }}>{projekt.mapa}</span><MapaGumbi putanja={projekt.mapa} /></div>}
           <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2, display: "flex", alignItems: "center", gap: 8 }}>
             Voditelj projekta: <strong style={{ color: "var(--ink)" }}>{voditelj ? `${voditelj.prezime} ${voditelj.ime}` : "nije dodijeljen"}</strong>
             {voditelj && <Btn variant="ghost" size="sm" onClick={() => { const ok = posaljiObavijestVoditelju(projekt, voditelj); showToast && showToast(ok ? "Otvoren e-mail za slanje obavijesti." : "Voditelj nema unesen e-mail."); }}>Pošalji obavijest</Btn>}
@@ -8491,7 +8523,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
               <div key={z.id} style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <input type="checkbox" checked={z.izvrseno} onChange={(e) => toggleZadatak(z.id, e.target.checked)} style={{ width: 15, height: 15, flexShrink: 0 }} />
-                  <span style={{ flex: 1, fontSize: 13.5, textDecoration: z.izvrseno ? "line-through" : "none", color: z.izvrseno ? "var(--ink-faint)" : "var(--ink)" }}>{z.naziv}</span>
+                  <span style={{ flex: 1, fontSize: 13.5, textDecoration: z.izvrseno ? "line-through" : "none", color: z.izvrseno ? "var(--ink-faint)" : "var(--ink)" }}>{z.naziv}<MapaZadatka z={z} /></span>
                   {zakasnio && <Badge status="Kasni" />}
                   <button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => obrisiZadatak(z.id))}><X size={14} /></button>
                 </div>
@@ -9464,7 +9496,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
     if (!sifra) { showToast("Upiši broj naloga."); return; }
     if (!naziv) { showToast("Upiši naziv projekta."); return; }
     if (db.projekti.some((p) => p.sifra.trim().toLowerCase() === sifra.toLowerCase())) { showToast(`Broj naloga ${sifra} je već iskorišten na drugom projektu.`); return; }
-    const { izvorPonudaId, izvorPonudaLaseraId, poredak, planStatus, autoZavrsenoNalozi, statusPrijeZavrsetka, zavrsenDatum, vanjskiTroskovi, ...sadrzaj } = JSON.parse(JSON.stringify(izvor));
+    const { izvorPonudaId, izvorPonudaLaseraId, poredak, planStatus, autoZavrsenoNalozi, statusPrijeZavrsetka, zavrsenDatum, vanjskiTroskovi, mapa, ...sadrzaj } = JSON.parse(JSON.stringify(izvor));
     const bezVezeNaNarudzbu = (stavke) => (stavke || []).map(({ izNarudzbeId, ...s }) => s);
     const noviProjekt = {
       ...sadrzaj,
@@ -9558,6 +9590,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
               ) : <Badge status={r.status} />
             },
             { key: "detalji", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setDetalj(r)}>Detalji</Btn> },
+            { key: "mapa", label: "", render: (r) => (r.mapa ? <MapaGumbi putanja={r.mapa} oznaka="Mapa" /> : null) },
             ...(mozeKopiratiProjekt ? [{ key: "kopiraj", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Copy} onClick={() => otvoriKopiju(r)}>Kopiraj</Btn> }] : []),
           ]}
           />
@@ -9672,6 +9705,10 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
             <Field label="Rok završetka (isporuka kupcu)"><input className="input" type="date" value={projForm.rokZavrsetka} onChange={(e) => setProjForm({ ...projForm, rokZavrsetka: e.target.value })} /></Field>
           </div>
           <Field label="Opis"><textarea className="textarea" rows={3} value={projForm.opis} onChange={(e) => setProjForm({ ...projForm, opis: e.target.value })} /></Field>
+          <Field label="Mapa projekta na serveru">
+            <input className="input f-mono" placeholder="npr. Z:\ECON_2026\ECON_2026\Econ_2026_Projekti\RN 170-307_…" value={projForm.mapa || ""} onChange={(e) => setProjForm({ ...projForm, mapa: e.target.value })} />
+            <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 4 }}>Prikazuje se uz zadatke projekta i u popisu projekata s gumbima "Otvori mapu" i "Kopiraj". Da "Otvori mapu" radi jednim klikom, na svakom računalu jednom pokreni <a href="/econ-mapa-instalacija.reg" download style={{ color: "var(--steel)", fontWeight: 600 }}>ovu datoteku</a> (otvara samo mape pod Z:\ECON_2026).</div>
+          </Field>
           <div className="label" style={{ marginTop: 6 }}>{(projForm.dodaci || []).length ? "Osnovna narudžba — faze izrade (planirani sati)" : "Faze izrade (planirani sati)"}</div>
           <div style={{ fontSize: 11, color: "var(--ink-faint)", marginBottom: 8 }}>Sati po fazi koriste se kao predložak kad se za ovaj projekt kasnije kreira radni nalog — nisu obavezni za faze koje se ne planiraju.</div>
           <div className="card" style={{ padding: 14, background: "var(--surface-alt)", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>

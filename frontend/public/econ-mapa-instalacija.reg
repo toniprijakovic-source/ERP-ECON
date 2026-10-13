@@ -1,0 +1,12 @@
+Windows Registry Editor Version 5.00
+
+; ECON ERP - otvaranje mapa projekata klikom na 'Otvori mapu' u aplikaciji.
+; Pokrece se jednom po racunalu (upisuje samo u HKEY_CURRENT_USER, ne treba administratora).
+; Otvara iskljucivo postojece mape pod Z:\ECON_2026 (promijeni 'Z:\\ECON_2026' ispod ako je mreza drugacije mapirana).
+
+[HKEY_CURRENT_USER\Software\Classes\econ-mapa]
+@="URL:ECON otvaranje mape"
+"URL Protocol"=""
+
+[HKEY_CURRENT_USER\Software\Classes\econ-mapa\shell\open\command]
+@="powershell.exe -NoProfile -WindowStyle Hidden -Command \"$u='%1'; $p=[uri]::UnescapeDataString($u.Substring(10)).TrimEnd('/'); if (($p -like 'Z:\\ECON_2026*') -and (Test-Path -LiteralPath $p -PathType Container)) { Invoke-Item -LiteralPath $p }\""
