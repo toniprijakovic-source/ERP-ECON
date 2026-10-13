@@ -2057,7 +2057,7 @@ export default function App() {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` },
       body: JSON.stringify({ upsert, remove }),
     }).then(async (res) => {
-      if (!res.ok) { showToast({ cmr: "Greška pri spremanju CMR-a.", slobodniZadaci: "Greška pri spremanju zadatka.", radniNalozi: "Greška pri spremanju radnog naloga.", materijali: "Greška pri spremanju materijala.", rezervacije: "Greška pri spremanju rezervacija.", maticnaKnjiga: "Greška pri spremanju matične knjige.", upitiTransporta: "Greška pri spremanju upita za transport.", narudzbeTransporta: "Greška pri spremanju narudžbe za transport." }[kljuc] || "Greška pri spremanju otpremnice."); return; }
+      if (!res.ok) { showToast({ cmr: "Greška pri spremanju CMR-a.", slobodniZadaci: "Greška pri spremanju zadatka.", radniNalozi: "Greška pri spremanju radnog naloga.", materijali: "Greška pri spremanju materijala.", rezervacije: "Greška pri spremanju rezervacija.", maticnaKnjiga: "Greška pri spremanju matične knjige.", upitiTransporta: "Greška pri spremanju upita za transport.", narudzbeTransporta: "Greška pri spremanju narudžbe za transport.", narudzbenice: "Greška pri spremanju narudžbenice." }[kljuc] || "Greška pri spremanju otpremnice."); return; }
       const data = await res.json();
       setDb((prev) => ({ ...prev, [kljuc]: data[kljuc] }));
       (data.promijenjeniBrojevi || []).forEach((p) => showToast(`Broj ${p.staro} je već bio zauzet — spremljeno kao ${p.novo}.`));
@@ -2084,7 +2084,7 @@ export default function App() {
   };
 
   const update = (key, newArr) => {
-    if (key === "otpremnice" || key === "cmr" || key === "slobodniZadaci" || key === "radniNalozi" || key === "materijali" || key === "rezervacije" || key === "maticnaKnjiga" || key === "upitiTransporta" || key === "narudzbeTransporta") { patchOtpremnice(newArr, key); return; }
+    if (key === "otpremnice" || key === "cmr" || key === "slobodniZadaci" || key === "radniNalozi" || key === "materijali" || key === "rezervacije" || key === "maticnaKnjiga" || key === "upitiTransporta" || key === "narudzbeTransporta" || key === "narudzbenice") { patchOtpremnice(newArr, key); return; }
     setDb((prev) => ({ ...prev, [key]: newArr }));
     fetch(`${API_URL}/api/data/${key}`, {
       method: "PUT",

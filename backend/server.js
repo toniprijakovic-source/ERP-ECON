@@ -875,6 +875,10 @@ app.put("/api/cmr/patch", autentikacija, patchPoIdHandler("cmr", /^(CMR-\d{2}-\d
 app.put("/api/materijali/patch", autentikacija, patchPoIdHandler("materijali", /^(?!)$/, "materijala"));
 // Transporti: TU-GGGG-NNN (upit) i TN-GGGG-NNN (narudžba); zauzet broj dobiva sljedeći slobodan.
 app.put("/api/upitiTransporta/patch", autentikacija, patchPoIdHandler("upitiTransporta", /^(TU-\d{4}-)(\d+)()$/, "upita za transport", (upsert) => upsert, 3));
+// Narudžbenice (materijal dobavljačima): isto kao otpremnice — izmjena po id-u na trenutnom zaključanom popisu, a broj
+// (NAR-2026-017) koji je u međuvremenu zauzet dobiva sljedeći slobodan. Prije je cijeli popis stizao iz zastarjelog
+// preglednika pa je nova narudžbenica prepisivala postojeću s istim brojem.
+app.put("/api/narudzbenice/patch", autentikacija, patchPoIdHandler("narudzbenice", /^(NAR-\d{4}-)(\d+)()$/, "narudžbenica", (upsert) => upsert, 3));
 app.put("/api/narudzbeTransporta/patch", autentikacija, patchPoIdHandler("narudzbeTransporta", /^(TN-\d{4}-)(\d+)()$/, "narudžbi za transport", (upsert) => upsert, 3));
 app.put("/api/rezervacije/patch", autentikacija, patchPoIdHandler("rezervacije", /^(?!)$/, "rezervacija"));
 // Matična knjiga: matični broj (od 3700, uzlazno) dodjeljuje isključivo poslužitelj, pod zaključanim popisom —
