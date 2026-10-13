@@ -2512,6 +2512,7 @@ function NapomenaZadatka({ zadatak, imeZaposlenika, mozeUredjivati, onSpremi, uv
   if (zadatak.napomena) return (
     <div onClick={stani} style={{ marginLeft: uvlaka, marginTop: 6, padding: "6px 10px", background: "var(--surface-alt)", borderRadius: 3, fontSize: 12.5 }}>
       <div style={{ whiteSpace: "pre-wrap", color: "var(--ink)" }}>{zadatak.napomena}</div>
+      {izvuciPutanjuMape(zadatak.napomena) && <div style={{ marginTop: 3, marginLeft: -8 }}><MapaGumbi putanja={izvuciPutanjuMape(zadatak.napomena)} /></div>}
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 3, fontSize: 11, color: "var(--ink-soft)", flexWrap: "wrap" }}>
         {zadatak.napomenaAutorId && <span>{imeZaposlenika(zadatak.napomenaAutorId)}</span>}
         {zadatak.napomenaDatum && <span>{fmtDate(zadatak.napomenaDatum)}</span>}
