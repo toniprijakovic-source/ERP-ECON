@@ -2762,6 +2762,16 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
 /* ============================== SKLADIŠTE ============================== */
 const TIPOVI_MATERIJALA = ["HEA", "HEB", "HEM", "IPE", "IPN", "UPN", "Kvadratna cijev", "Pravokutna cijev", "Okrugla cijev", "Okruglo", "Kvadratno", "Plosnato", "Kutni jednakokraki", "Kutni raznokraki", "Lim", "Vijčana roba", "Boja i premazi", "Ostalo"];
 const JEDINICE = ["kg", "kom", "m", "m2", "l"];
+// Skladište je podijeljeno na profile, ploče (limovi) i ostalo. Razvrstava se po katalogu (kg/m = profil, kg/m2 = ploča);
+// materijal izvan kataloga po tipu, a ako je tip "Ostalo" po nazivu ("Lim …", "Ploča …").
+const PROFILNI_TIPOVI = ["HEA", "HEB", "HEM", "IPE", "IPN", "UPN", "Kvadratna cijev", "Pravokutna cijev", "Okrugla cijev", "Okruglo", "Kvadratno", "Plosnato", "Kutni jednakokraki", "Kutni raznokraki"];
+const grupaMaterijala = (m, katalog) => {
+  const kat = (katalog || []).find((k) => k.id === m.katalogId);
+  if (kat) return kat.jedinica === "kg/m2" ? "ploce" : kat.jedinica === "kg/m" ? "profili" : "ostalo";
+  if (m.tip === "Lim" || /(^|\s)(lim|ploča|ploče)(\s|$)/i.test(m.naziv || "")) return "ploce";
+  if (PROFILNI_TIPOVI.includes(m.tip)) return "profili";
+  return "ostalo";
+};
 
 const TIPOVI_KATALOGA = ["HEA", "HEB", "HEM", "IPE", "IPN", "UPN", "Kvadratna cijev", "Pravokutna cijev", "Okrugla cijev", "Okruglo", "Kvadratno", "Plosnato", "Kutni jednakokraki", "Kutni raznokraki", "Lim", "Ostalo"];
 const katalogPoTipu = (katalog) => TIPOVI_KATALOGA.map((tip) => ({ tip, stavke: katalog.filter((k) => k.tip === tip) })).filter((g) => g.stavke.length);
@@ -3382,6 +3392,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
   const [del, setDel] = useState(null);
   const [izdajZa, setIzdajZa] = useState(null); // materijalId za predpunjenje IzdatnicaModal, ili true za praznu
   const [prikaziNulte, setPrikaziNulte] = useState(false); // materijal sa stanjem 0 je inače skriven s popisa zaliha
+  const [grupaZaliha, setGrupaZaliha] = useState(() => { try { return localStorage.getItem("erp_skladiste_grupa") || "profili"; } catch { return "profili"; } }); // "profili" | "ploce" | "ostalo"
   const [rezZa, setRezZa] = useState(null); // materijalId čije se rezervacije uređuju
   const [naljepnicaZa, setNaljepnicaZa] = useState(null); // materijalId za ispis naljepnice
   const rezPoMaterijalu = useMemo(() => { const m = new Map(); (db.rezervacije || []).forEach((r) => m.set(r.materijalId, (m.get(r.materijalId) || 0) + (Number(r.kolicina) || 0))); return m; }, [db.rezervacije]);
@@ -3428,7 +3439,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
     }
   };
 
-  const openAdd = () => { setForm(empty); setKatalogUnos(emptyKatalogUnos); setMaticniBrojUnos(""); setModal({ mode: "add" }); };
+  const openAdd = () => { setForm(grupaZaliha === "ploce" ? { ...empty, tip: "Lim" } : empty); setKatalogUnos(emptyKatalogUnos); setMaticniBrojUnos(""); setModal({ mode: "add" }); };
   // Kod uređivanja profila/lima iz kataloga vraćaju se retci "dužina × komada" pročitani iz teksta dimenzija.
   const openEdit = (item) => {
     setForm(item);
@@ -3520,6 +3531,18 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
 
       {tab === "zalihe" && (<>
         {(() => {
+          const vidljivi = prikaziNulte ? db.materijali : db.materijali.filter((m) => Number(m.kolicina) > 0);
+          const broj = (g) => vidljivi.filter((m) => grupaMaterijala(m, db.katalogProfila) === g).length;
+          const odaberi = (g) => { setGrupaZaliha(g); try { localStorage.setItem("erp_skladiste_grupa", g); } catch { /* pohrana nije dostupna */ } };
+          return (
+            <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+              {[["profili", "Skladište profila"], ["ploce", "Skladište ploča"], ["ostalo", "Ostalo"]].map(([g, naziv]) => (
+                <Btn key={g} variant={grupaZaliha === g ? "primary" : "ghost"} onClick={() => odaberi(g)}>{naziv} ({broj(g)})</Btn>
+              ))}
+            </div>
+          );
+        })()}
+        {(() => {
           const nultih = db.materijali.filter((m) => !(Number(m.kolicina) > 0)).length;
           return nultih > 0 && (
             <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 10, cursor: "pointer" }}>
@@ -3529,7 +3552,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
           );
         })()}
         <EntityPage
-          title="" data={prikaziNulte ? db.materijali : db.materijali.filter((m) => Number(m.kolicina) > 0)} onAdd={openAdd} onEdit={openEdit} onDelete={(row) => setDel(row)}
+          title="" data={(prikaziNulte ? db.materijali : db.materijali.filter((m) => Number(m.kolicina) > 0)).filter((m) => grupaMaterijala(m, db.katalogProfila) === grupaZaliha)} onAdd={openAdd} onEdit={openEdit} onDelete={(row) => setDel(row)}
           addLabel="Novi materijal" searchKeys={["sifra", "naziv", "tip"]} readOnly={!mozeZalihe}
           rowClass={(row) => (row.kolicina < row.minZaliha ? "row-warn" : "")}
           columns={[
