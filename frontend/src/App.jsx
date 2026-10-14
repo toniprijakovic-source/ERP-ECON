@@ -10882,7 +10882,10 @@ function CmrFormModal({ db, pocetni, onSpremi, onClose }) {
   const [f, setF] = useState(() => ({ ...pocetni, projektIds: pocetni.projektIds && pocetni.projektIds.length ? pocetni.projektIds : (pocetni.projektId ? [pocetni.projektId] : []) }));
   const projektiCmr = f.projektIds.map((id) => db.projekti.find((x) => x.id === id)).filter(Boolean);
   const projekt = projektiCmr[0];
-  const otpremniceZaProjekt = (id) => db.otpremnice.filter((o) => o.projektId === id && o.vrsta !== "kooperant").sort((a, b) => a.datum.localeCompare(b.datum));
+  // Uz otpremnice kupcu nude se i otpremnice kooperantu (dorada) — npr. kad se roba vozi na cinčanje u inozemstvo.
+  // Kod dodavanja projekta automatski se označavaju samo otpremnice kupcu.
+  const otpremniceZaProjekt = (id) => db.otpremnice.filter((o) => o.projektId === id).sort((a, b) => a.datum.localeCompare(b.datum));
+  const kooperantOtpremnice = (o) => db.dobavljaci.find((d) => d.id === o.dobavljacId);
   const prijevoznici = db.dobavljaci.filter((d) => d.prijevoznik);
   const set = (patch) => setF((p) => ({ ...p, ...patch }));
   const izvedeno = (ids, prethodnaTezina) => {
@@ -10896,7 +10899,7 @@ function CmrFormModal({ db, pocetni, onSpremi, onClose }) {
   const dodajProjekt = (id) => {
     if (!id || f.projektIds.includes(id)) return;
     const p = db.projekti.find((x) => x.id === id);
-    const nove = otpremniceZaProjekt(id).filter((o) => !db.cmr.some((c) => c.id !== f.id && (c.otpremniceIds || []).includes(o.id))).map((o) => o.id);
+    const nove = otpremniceZaProjekt(id).filter((o) => o.vrsta !== "kooperant" && !db.cmr.some((c) => c.id !== f.id && (c.otpremniceIds || []).includes(o.id))).map((o) => o.id);
     const ids = [...f.otpremniceIds, ...nove.filter((x) => !f.otpremniceIds.includes(x))];
     const projektIds = [...f.projektIds, id];
     if (f.projektIds.length === 0) {
@@ -10917,6 +10920,23 @@ function CmrFormModal({ db, pocetni, onSpremi, onClose }) {
     }
   };
   const promijeniOtpremnice = (ids) => set({ otpremniceIds: ids, ...izvedeno(ids, f.brutoTezina) });
+  // Ako su odabrane samo otpremnice jednom kooperantu, primatelj (2), mjesto isporuke (3) i uvoznik u uputama (13)
+  // mogu se jednim klikom preuzeti od kooperanta umjesto od kupca projekta.
+  const odabrane = db.otpremnice.filter((o) => f.otpremniceIds.includes(o.id));
+  const kooperantiOdabranih = [...new Set(odabrane.filter((o) => o.vrsta === "kooperant").map((o) => o.dobavljacId))];
+  const kooperantPrimatelj = odabrane.length > 0 && odabrane.every((o) => o.vrsta === "kooperant") && kooperantiOdabranih.length === 1
+    ? db.dobavljaci.find((d) => d.id === kooperantiOdabranih[0]) : null;
+  const primateljKooperant = () => {
+    const d = kooperantPrimatelj;
+    const adresa = [d.naziv, d.adresa].filter(Boolean).join("\n");
+    const zadnjaLinija = String(d.adresa || "").split("\n").map((l) => l.trim()).filter(Boolean).pop() || "";
+    const t = db.postavkeTvrtke || {};
+    set({
+      primatelj: adresa, mjestoIsporuke: adresa,
+      upute: [t.naziv ? `Exp: ${t.naziv}` : "", `Imp: ${d.naziv}`].filter(Boolean).join("\n"),
+      uvjetIsporuke: `${t.cmrUvjetIsporuke || "DAP"}${zadnjaLinija ? `: ${zadnjaLinija}` : ""}`,
+    });
+  };
   const kupciRazliciti = new Set(projektiCmr.map((x) => x.kupacId)).size > 1;
   const tekstPrijevoznika = (id, reg, vozac) => {
     const d = db.dobavljaci.find((x) => x.id === id);
@@ -10971,6 +10991,7 @@ function CmrFormModal({ db, pocetni, onSpremi, onClose }) {
                         <label key={o.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", cursor: "pointer", fontSize: 12.5 }}>
                           <input type="checkbox" checked={f.otpremniceIds.includes(o.id)} onChange={(e) => promijeniOtpremnice(e.target.checked ? [...f.otpremniceIds, o.id] : f.otpremniceIds.filter((i) => i !== o.id))} />
                           <span className="f-mono">{o.broj}</span> · {fmtDate(o.datum)} · {(o.stavke || []).length} stavki
+                          {o.vrsta === "kooperant" && <span className="badge badge-warning">kooperantu{kooperantOtpremnice(o) ? `: ${kooperantOtpremnice(o).naziv}` : " (dorada)"}</span>}
                           <span style={{ color: "var(--ink-faint)" }}>· {t.ukupno > 0 ? `${Math.round(t.ukupno * 10) / 10} kg${t.nedostaje ? ` (+ ${t.nedostaje} stavki bez težine)` : ""}` : "težina nije upisana"}</span>
                           {drugiCmr && <span style={{ color: "var(--rust)" }}>· već u {drugiCmr.broj}</span>}
                         </label>
@@ -10982,6 +11003,12 @@ function CmrFormModal({ db, pocetni, onSpremi, onClose }) {
             );
           })}
 
+          {kooperantPrimatelj && !(f.primatelj || "").includes(kooperantPrimatelj.naziv) && (
+            <div className="card" style={{ padding: "8px 12px", marginBottom: 10, background: "#FFF6DE", borderColor: "#F5D98A", fontSize: 12.5, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span>Odabrane su samo otpremnice kooperantu <strong>{kooperantPrimatelj.naziv}</strong>, a primatelj je još kupac projekta.</span>
+              <Btn size="sm" onClick={primateljKooperant}>Primatelj i mjesto isporuke = {kooperantPrimatelj.naziv}</Btn>
+            </div>
+          )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             {T("1 — Pošiljatelj", "posiljatelj", 3)}
             {T("2 — Primatelj", "primatelj", 3)}
