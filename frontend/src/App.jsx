@@ -197,7 +197,7 @@ const izracunPotrebnogMaterijala = (pozicije, katalog, otpadLimPoTipu = {}) => {
 const izracunPonude = (ponuda, materijali, cjenikRada, katalog = [], kvalitete = []) => {
   const satiPoOperaciji = praznaOperacijaSati();
   (ponuda.pozicije || []).forEach((p) => {
-    OPERACIJE.forEach((o) => { satiPoOperaciji[o.key] += Number(p.operacije?.[o.key] || 0); });
+    OPERACIJE.forEach((o) => { satiPoOperaciji[o.key] += satiOperacijePozicije(p, o.key); });
   });
   const trosakRada = OPERACIJE.reduce((s, o) => s + satiPoOperaciji[o.key] * (Number(cjenikRada?.[o.key]) || 0), 0)
     + (ponuda.pozicije || []).reduce((s, p) => s + trosakDodatnihOperacija(p), 0);
@@ -217,7 +217,7 @@ const izracunPonude = (ponuda, materijali, cjenikRada, katalog = [], kvalitete =
   // Dodatne operacije svih stavki zbrojene po fazi i nazivu — kad ponuda postane projekt, svaka je jedan radni nalog.
   const dodatneOperacije = [];
   (ponuda.pozicije || []).forEach((p) => (p.dodatneOperacije || []).forEach((o) => {
-    const sati = Number(o.sati) || 0;
+    const sati = satiDodatneOperacije(p, o);
     if (sati <= 0) return;
     const naziv = String(o.naziv || "").trim();
     const faza = FAZE.includes(o.faza) ? o.faza : FAZA_DODATNE_OPERACIJE;
@@ -2821,10 +2821,17 @@ const trosakMaterijalaIzKatalogaPozicije = (p, katalog, kvalitete) => (p.stavke 
 // Dodatne operacije stavke (izvan fiksnog popisa OPERACIJE): naziv, sati, vlastita cijena €/h i faza proizvodnje
 // u koju idu kad ponuda postane projekt (zadano "Ostalo"). Ulaze u sate i trošak rada stavke.
 const FAZA_DODATNE_OPERACIJE = "Ostalo";
-const satiDodatnihOperacija = (p) => (p.dodatneOperacije || []).reduce((s, o) => s + (Number(o.sati) || 0), 0);
-const trosakDodatnihOperacija = (p) => (p.dodatneOperacije || []).reduce((s, o) => s + (Number(o.sati) || 0) * (Number(o.cijenaH) || 0), 0);
-const satiPozicije = (p) => OPERACIJE.reduce((s, o) => s + (Number(p.operacije?.[o.key]) || 0), 0) + satiDodatnihOperacija(p);
-const trosakRadaPozicije = (p, cjenikRada) => OPERACIJE.reduce((s, o) => s + (Number(p.operacije?.[o.key]) || 0) * (Number(cjenikRada?.[o.key]) || 0), 0) + trosakDodatnihOperacija(p);
+// Rad po komadu (nove ponude od 2026-10): stavka ima operacijeMin = minute za 1 komad po operaciji, a dodatne operacije
+// minKom; sati za cijelu količinu = minute × količina / 60. Starije stavke čuvaju ukupne sate (operacije, o.sati).
+const minPoKomadu = (p) => !!p?.operacijeMin;
+const satiOperacijePozicije = (p, key) => (minPoKomadu(p) ? ((Number(p.operacijeMin[key]) || 0) * (Number(p.kolicina) || 0)) / 60 : Number(p.operacije?.[key]) || 0);
+const satiDodatneOperacije = (p, o) => (minPoKomadu(p) ? ((Number(o.minKom) || 0) * (Number(p.kolicina) || 0)) / 60 : Number(o.sati) || 0);
+const satiDodatnihOperacija = (p) => (p.dodatneOperacije || []).reduce((s, o) => s + satiDodatneOperacije(p, o), 0);
+const trosakDodatnihOperacija = (p) => (p.dodatneOperacije || []).reduce((s, o) => s + satiDodatneOperacije(p, o) * (Number(o.cijenaH) || 0), 0);
+const satiPozicije = (p) => OPERACIJE.reduce((s, o) => s + satiOperacijePozicije(p, o.key), 0) + satiDodatnihOperacija(p);
+const trosakRadaPozicije = (p, cjenikRada) => OPERACIJE.reduce((s, o) => s + satiOperacijePozicije(p, o.key) * (Number(cjenikRada?.[o.key]) || 0), 0) + trosakDodatnihOperacija(p);
+// Sati s najviše dvije decimale (iz minuta po komadu nastaju i vrijednosti poput 0,25 h).
+const fmtSatiPonude = (h) => (Math.round((Number(h) || 0) * 100) / 100).toLocaleString("hr-HR", { maximumFractionDigits: 2 });
 const akzPozicije = (p, katalog, kvalitete) => {
   const masaUkupnaPoz = masaPozicije(p, katalog, kvalitete) * (Number(p.kolicina) || 0);
   return (p.stavkeAKZ || []).reduce((s, a) => s + masaUkupnaPoz * (Number(a.cijenaKg) || 0), 0);
@@ -7704,7 +7711,8 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
   const praznaAkzStavka = () => ({ id: uid("akz"), tip: AKZ_TIPOVI[0].key, cijenaKg: 0 });
   const addPoz = () => {
     const id = uid("poz");
-    setPozicije([...pozicije, { id, oznaka: `P${pozicije.length + 1}`, naziv: "", kolicina: 1, stavke: [praznaStavka()], operacije: praznaOperacijaSati(), dodatneOperacije: [], brojMontera: 0, planiraniSatiMontaza: 0, stavkeAKZ: [], materijalStavke: [], ostaleStavke: [] }]);
+    const uMinutama = pozicije.length === 0 || pozicije.some(minPoKomadu); // stare ponude (sve stavke u satima) ostaju u satima
+    setPozicije([...pozicije, { id, oznaka: `P${pozicije.length + 1}`, naziv: "", kolicina: 1, stavke: [praznaStavka()], ...(uMinutama ? { operacijeMin: praznaOperacijaSati() } : { operacije: praznaOperacijaSati() }), dodatneOperacije: [], brojMontera: 0, planiraniSatiMontaza: 0, stavkeAKZ: [], materijalStavke: [], ostaleStavke: [] }]);
     setOtvorene((o) => ({ ...o, [id]: true }));
     setAktivnaKartica(id);
   };
@@ -7731,6 +7739,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
   };
   const updatePoz = (id, patch) => setPozicije(pozicije.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   const updateOp = (id, key, val) => setPozicije(pozicije.map((p) => (p.id === id ? { ...p, operacije: { ...p.operacije, [key]: val } } : p)));
+  const updateOpMin = (id, key, val) => setPozicije(pozicije.map((p) => (p.id === id ? { ...p, operacijeMin: { ...p.operacijeMin, [key]: val } } : p)));
   const removePoz = (id) => {
     setPozicije(pozicije.filter((p) => p.id !== id));
     if (aktivnaKartica === id) {
@@ -7761,13 +7770,13 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
 
   // Dodatne operacije: naziv koji je već korišten (u ovoj ili ranijim ponudama) predlaže se iz popisa, a ako
   // cijena još nije upisana, preuzima se zadnja cijena i faza te operacije.
-  const praznaDodatna = () => ({ id: uid("dop"), naziv: "", sati: 0, cijenaH: "", faza: FAZA_DODATNE_OPERACIJE });
+  const praznaDodatna = (poz) => ({ id: uid("dop"), naziv: "", ...(minPoKomadu(poz) ? { minKom: 0 } : { sati: 0 }), cijenaH: "", faza: FAZA_DODATNE_OPERACIJE });
   const sveOperacije = (() => {
     const m = new Map(poznateOperacije.map((o) => [o.naziv.toLowerCase(), o]));
     pozicije.forEach((p) => (p.dodatneOperacije || []).forEach((o) => { const n = String(o.naziv || "").trim(); if (n && Number(o.cijenaH) > 0) m.set(n.toLowerCase(), { naziv: n, cijenaH: o.cijenaH, faza: o.faza || FAZA_DODATNE_OPERACIJE }); }));
     return [...m.values()].sort((a, b) => a.naziv.localeCompare(b.naziv, "hr"));
   })();
-  const addDodatna = (pozId) => updatePoz(pozId, { dodatneOperacije: [...((pozicije.find((p) => p.id === pozId) || {}).dodatneOperacije || []), praznaDodatna()] });
+  const addDodatna = (pozId) => { const poz = pozicije.find((p) => p.id === pozId) || {}; updatePoz(pozId, { dodatneOperacije: [...(poz.dodatneOperacije || []), praznaDodatna(poz)] }); };
   const updateDodatna = (pozId, opId, patch) => {
     const poz = pozicije.find((p) => p.id === pozId);
     updatePoz(pozId, { dodatneOperacije: (poz.dodatneOperacije || []).map((o) => (o.id === opId ? { ...o, ...patch } : o)) });
@@ -7862,15 +7871,35 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
 
             {otvorene[p.id] && (
               <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line-strong)" }}>
-                <div className="label" style={{ marginBottom: 8 }}>Predviđeni sati po operaciji i trajanje</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, maxWidth: 340 }}>
-                  {OPERACIJE.map((o) => (
-                    <div key={o.key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <label style={{ fontSize: 12, color: "var(--ink-soft)", flex: 1 }}>{o.label}</label>
-                      <input className="input f-mono" style={{ width: 100 }} type="number" min="0" step="0.5" value={p.operacije?.[o.key] ?? 0} onChange={(e) => updateOp(p.id, o.key, e.target.value)} />
+                {minPoKomadu(p) ? (
+                  <>
+                    <div className="label" style={{ marginBottom: 8 }}>Predviđeni rad po operaciji — minute za 1 komad</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, maxWidth: 440 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 11, fontWeight: 600, color: "var(--ink-faint)", textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                        <span style={{ flex: 1 }}>Operacija</span><span style={{ width: 100 }}>min / kom</span><span style={{ width: 110, textAlign: "right" }}>ukupno ({fmtSatiPonude(p.kolicina)} kom)</span>
+                      </div>
+                      {OPERACIJE.map((o) => (
+                        <div key={o.key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <label style={{ fontSize: 12, color: "var(--ink-soft)", flex: 1 }}>{o.label}</label>
+                          <input className="input f-mono" style={{ width: 100 }} type="number" min="0" step="1" aria-label={`${o.label} — minuta po komadu`} value={p.operacijeMin?.[o.key] ?? 0} onChange={(e) => updateOpMin(p.id, o.key, e.target.value)} />
+                          <span className="f-mono" style={{ width: 110, textAlign: "right", fontSize: 12.5, color: satiOperacijePozicije(p, o.key) > 0 ? "var(--ink)" : "var(--ink-faint)" }}>= {fmtSatiPonude(satiOperacijePozicije(p, o.key))} h</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="label" style={{ marginBottom: 8 }}>Predviđeni sati po operaciji i trajanje (ukupno za stavku)</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, maxWidth: 340 }}>
+                      {OPERACIJE.map((o) => (
+                        <div key={o.key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <label style={{ fontSize: 12, color: "var(--ink-soft)", flex: 1 }}>{o.label}</label>
+                          <input className="input f-mono" style={{ width: 100 }} type="number" min="0" step="0.5" value={p.operacije?.[o.key] ?? 0} onChange={(e) => updateOp(p.id, o.key, e.target.value)} />
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
                 <div className="label" style={{ marginTop: 14, marginBottom: 2 }}>Dodatne operacije (kojih nema na popisu)</div>
                 {(p.dodatneOperacije || []).map((o) => (
                   <div key={o.id} style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap", padding: "6px 0", borderBottom: "1px dashed var(--line)" }}>
@@ -7878,10 +7907,20 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
                       <label className="label">Operacija</label>
                       <input className="input" list="dodatne-operacije-popis" placeholder="npr. Pjeskarenje" aria-label="Naziv dodatne operacije" value={o.naziv} onChange={(e) => promijeniNazivOperacije(p.id, o, e.target.value)} />
                     </div>
-                    <div style={{ width: 90 }}>
-                      <label className="label">Sati</label>
-                      <input className="input f-mono" type="number" min="0" step="0.5" aria-label="Sati dodatne operacije" value={o.sati} onChange={(e) => updateDodatna(p.id, o.id, { sati: e.target.value })} />
-                    </div>
+                    {minPoKomadu(p) ? (
+                      <div style={{ width: 150 }}>
+                        <label className="label">Min / kom</label>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <input className="input f-mono" style={{ width: 80 }} type="number" min="0" step="1" aria-label="Minuta dodatne operacije po komadu" value={o.minKom ?? 0} onChange={(e) => updateDodatna(p.id, o.id, { minKom: e.target.value })} />
+                          <span className="f-mono" style={{ fontSize: 12, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>= {fmtSatiPonude(satiDodatneOperacije(p, o))} h</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ width: 90 }}>
+                        <label className="label">Sati</label>
+                        <input className="input f-mono" type="number" min="0" step="0.5" aria-label="Sati dodatne operacije" value={o.sati} onChange={(e) => updateDodatna(p.id, o.id, { sati: e.target.value })} />
+                      </div>
+                    )}
                     <div style={{ width: 100 }}>
                       <label className="label">Cijena (€/h)</label>
                       <input className="input f-mono" type="number" min="0" step="0.5" aria-label="Cijena dodatne operacije po satu" value={o.cijenaH} onChange={(e) => updateDodatna(p.id, o.id, { cijenaH: e.target.value })} />
@@ -7894,7 +7933,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
                     </div>
                     <div style={{ width: 110 }}>
                       <label className="label">Iznos</label>
-                      <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{fmtCurDec((Number(o.sati) || 0) * (Number(o.cijenaH) || 0))}</div>
+                      <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{fmtCurDec(satiDodatneOperacije(p, o) * (Number(o.cijenaH) || 0))}</div>
                     </div>
                     <button className="btn btn-icon btn-ghost" aria-label="Obriši dodatnu operaciju" onClick={() => potvrdiBrisanje(() => removeDodatna(p.id, o.id), "ovu operaciju")}><Trash2 size={14} color="var(--rust)" /></button>
                   </div>
@@ -7959,7 +7998,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
             <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end", gap: 18, fontSize: 12.5, flexWrap: "wrap" }}>
               <span style={{ color: "var(--ink-soft)" }}>Masa/kom: <strong className="f-mono" style={{ color: "var(--ink)" }}>{masaJedEfektivna.toFixed(2)} kg</strong></span>
               <span style={{ color: "var(--ink-soft)" }}>Ukupno masa: <strong className="f-mono" style={{ color: "var(--ink)" }}>{(Number(p.kolicina) * masaJedEfektivna || 0).toLocaleString("hr-HR", { maximumFractionDigits: 1 })} kg</strong></span>
-              <span style={{ color: "var(--ink-soft)" }}>Ukupno sati: <strong className="f-mono" style={{ color: "var(--ink)" }}>{satiPoz(p)} h</strong></span>
+              <span style={{ color: "var(--ink-soft)" }}>Ukupno sati: <strong className="f-mono" style={{ color: "var(--ink)" }}>{fmtSatiPonude(satiPoz(p))} h</strong></span>
               <span style={{ color: "var(--ink-soft)" }}>Trošak rada: <strong className="f-mono" style={{ color: "var(--ink)" }}>{fmtCurDec(trosakPoz(p))}</strong></span>
             </div>
           </div>
@@ -8699,7 +8738,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
                     <td className="f-mono">{p.kolicina}</td>
                     <td className="f-mono">{masaJed.toFixed(1)} kg</td>
                     <td className="f-mono">{(masaJed * Number(p.kolicina)).toFixed(1)} kg</td>
-                    <td className="f-mono">{sati} h</td>
+                    <td className="f-mono">{fmtSatiPonude(sati)} h</td>
                   </tr>
                 );
               })}
@@ -9352,7 +9391,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
   const ispisiPonude = (lista, naslov, laser) => {
     ispisiTablicu(naslov, ["#Broj", "Naziv posla", "Kupac", ...(laser ? [] : ["#Sati"]), "#Vrijednost", "Status", "Projekt"], lista.map((p) => {
       const izr = laser ? izracunPonudeLasera(p, db.kvaliteteMaterijala) : izracunPonude(p, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala);
-      return [p.broj, p.naziv, kupacNaziv(p.kupacId), ...(laser ? [] : [`${izr.ukupnoSati} h`]), fmtCurDec(izr.cijenaKonacna), p.status, p.projektId ? projSifra(p.projektId) : ""];
+      return [p.broj, p.naziv, kupacNaziv(p.kupacId), ...(laser ? [] : [`${fmtSatiPonude(izr.ukupnoSati)} h`]), fmtCurDec(izr.cijenaKonacna), p.status, p.projektId ? projSifra(p.projektId) : ""];
     }));
   };
   const rasporediProjekte = (novaLista) => patchProjekti(novaLista.map((p, i) => ({ ...p, poredak: i })), []);
@@ -9521,7 +9560,10 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
     showToast("Cjenik rada ažuriran.");
   };
   const pretvoriUProjekt = (ponuda, sifra, naziv) => {
-    const calc = izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala);
+    const izracun = izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala);
+    // Sati iz minuta po komadu imaju puno decimala — u projekt i naloge idu zaokruženi na 2 decimale.
+    const h2 = (h) => Math.round((Number(h) || 0) * 100) / 100;
+    const calc = { ...izracun, satiPoOperaciji: Object.fromEntries(Object.entries(izracun.satiPoOperaciji).map(([k, v]) => [k, h2(v)])), dodatneOperacije: izracun.dodatneOperacije.map((o) => ({ ...o, sati: h2(o.sati) })), satiMontaze: h2(izracun.satiMontaze) };
     // Materijal (iz skladišta) i Ostalo se sad vode po stavci ponude — projekt ih i dalje drži
     // kao JEDAN zajednički popis, pa se ovdje zbrajaju preko svih stavki.
     const sviMaterijalStavke = (ponuda.pozicije || []).flatMap((p) => p.materijalStavke || []);
@@ -9760,7 +9802,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
             { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
             { key: "naziv", label: "Naziv posla" },
             { key: "kupac", label: "Kupac", render: (r) => kupacNaziv(r.kupacId) },
-            { key: "sati", label: "Sati", render: (r) => <span className="f-mono">{izracunPonude(r, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala).ukupnoSati} h</span> },
+            { key: "sati", label: "Sati", render: (r) => <span className="f-mono">{fmtSatiPonude(izracunPonude(r, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala).ukupnoSati)} h</span> },
             { key: "ukupno", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCurDec(izracunPonude(r, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala).cijenaKonacna)}</span> },
             { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
             { key: "pdf", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrintPonuda(r)}>PDF ponude</Btn> },
