@@ -997,6 +997,11 @@ app.put("/api/radniNalozi/patch", autentikacija, patchPoIdHandler("radniNalozi",
 // Sati po nalozima (dnevni unos u Planu proizvodnje i Sati po nalozima, uvoz iz Excela): izmjena po id-u, pa
 // zastarjela kopija u pregledniku više ne briše tuđe zapise; nakon spremanja se preračuna utrošeno na nalozima.
 app.put("/api/satiPoNalogu/patch", autentikacija, patchPoIdHandler("satiPoNalogu", /^(?!)$/, "sati po nalozima", (upsert) => upsert, 0, uskladiNalogeSaSatima));
+// Ponude (PON-2026-025) i ponude za lasersko rezanje (LAS-2026-003): izmjena po id-u na trenutnom popisu, pa kartica
+// otvorena prije tuđe izmjene više ne vraća tuđe ponude na staro; nova ponuda čiji je broj u međuvremenu zauzet
+// dobiva sljedeći slobodan broj.
+app.put("/api/ponude/patch", autentikacija, patchPoIdHandler("ponude", /^(PON-\d{4}-)(\d+)()$/, "ponuda", (upsert) => upsert, 3));
+app.put("/api/ponudeLasera/patch", autentikacija, patchPoIdHandler("ponudeLasera", /^(LAS-\d{4}-)(\d+)()$/, "ponuda za laser", (upsert) => upsert, 3));
 
 // ---------- Ciljana izmjena projekata (upsert po id-u + remove) ----------
 // Isti oblik kao /api/evidencija/patch i /api/upiti/patch — dodavanje/uređivanje/brisanje CIJELOG
@@ -1084,6 +1089,31 @@ app.put("/api/data/:key", autentikacija, async (req, res, next) => {
     } catch (e) {
       console.error("Greška kod spremanja radnih naloga:", e);
       return res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+    }
+    return res.json({ ok: true });
+  }
+  // Ponude iz preglednika sa starom verzijom aplikacije (cijeli popis): ponude koje su na poslužitelju, a nema ih u
+  // poslanom popisu, ostaju — nova verzija briše ponudu samo izričito, preko /api/ponude/patch (remove).
+  if (req.params.key === "ponude" || req.params.key === "ponudeLasera") {
+    if (!Array.isArray(req.body)) return res.status(400).json({ error: "Neispravan popis ponuda." });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const r = await client.query("SELECT value FROM app_data WHERE key = $1 FOR UPDATE", [req.params.key]);
+      const poslaniIds = new Set(req.body.map((p) => p?.id));
+      const rezultat = [...req.body, ...(r.rows[0]?.value || []).filter((p) => !poslaniIds.has(p.id))];
+      await client.query(
+        `INSERT INTO app_data (key, value, updated_at) VALUES ($1, $2, now())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        [req.params.key, JSON.stringify(rezultat)]
+      );
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      console.error("Greška kod spremanja ponuda:", e);
+      return res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+    } finally {
+      client.release();
     }
     return res.json({ ok: true });
   }
