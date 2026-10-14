@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Package, Truck, Factory, Building2, Receipt, Users,
   Plus, Pencil, Trash2, X, Search, AlertTriangle, CheckCircle2, ArrowRight,
   Clock, ChevronRight, Save, PackageCheck, PackageMinus, Settings, Layers,
-  ChevronDown, ChevronUp, FolderInput, Eye, UserCog, CalendarRange,
+  ChevronDown, ChevronUp, ChevronLeft, FolderInput, Eye, UserCog, CalendarRange,
   Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors, Printer, Bell, Menu, ShieldCheck, Container, Mail
 } from "lucide-react";
 import logoEcon from "./assets/logo-econ.jpg";
@@ -7690,6 +7690,15 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
   // skrolanje). Aktivna je uvijek samo jedna kartica.
   const [aktivnaKartica, setAktivnaKartica] = useState(pozicije[0]?.id || "materijal");
   const [opisOtvoren, setOpisOtvoren] = useState({}); // { [pozicijaId]: true } — red s opisom otvoren u Rekapitulaciji
+  // Redoslijed stavki (isti u PDF-u, rekapitulaciji i projektu): strelice na aktivnoj kartici ili povlačenje kartice.
+  const [vuceSe, setVuceSe] = useState(null); // id stavke čija se kartica povlači
+  const premjestiPoz = (id, naIndeks) => {
+    const i = pozicije.findIndex((p) => p.id === id);
+    if (i < 0 || naIndeks < 0 || naIndeks >= pozicije.length || naIndeks === i) return;
+    const bez = pozicije.filter((p) => p.id !== id);
+    setPozicije([...bez.slice(0, naIndeks), pozicije[i], ...bez.slice(naIndeks)]);
+  };
+  const STIL_STRELICE = { background: "none", border: "none", padding: "0 1px", cursor: "pointer", color: "var(--ink-soft)", display: "inline-flex", alignItems: "center" };
 
   const praznaStavka = () => ({ id: uid("pst"), nacinMase: "rucno", masaJed: 0, komada: 1, katalogId: "", dimenzija: 0, sirinaMM: 0, duzinaMM: 0, kvaliteta: "celik", cijenaKg: 0 });
   const praznaAkzStavka = () => ({ id: uid("akz"), tip: AKZ_TIPOVI[0].key, cijenaKg: 0 });
@@ -7786,11 +7795,28 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
   return (
     <div>
       <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--line)", marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
-        {pozicije.map((p) => (
-          <div key={p.id} className={`nav-tab ${aktivnaKartica === p.id ? "active" : ""}`} onClick={() => setAktivnaKartica(p.id)} style={{ padding: "6px 12px", fontSize: 12.5 }}>
-            {p.oznaka || "Stavka"}
-          </div>
-        ))}
+        {pozicije.map((p, i) => {
+          const aktivna = aktivnaKartica === p.id;
+          return (
+            <div
+              key={p.id} className={`nav-tab ${aktivna ? "active" : ""}`} onClick={() => setAktivnaKartica(p.id)}
+              draggable={pozicije.length > 1} title={pozicije.length > 1 ? "Povuci karticu lijevo ili desno za promjenu redoslijeda" : undefined}
+              onDragStart={(e) => { setVuceSe(p.id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", p.id); }}
+              onDragOver={(e) => { if (vuceSe && vuceSe !== p.id) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }}
+              onDrop={(e) => { e.preventDefault(); if (vuceSe) premjestiPoz(vuceSe, i); setVuceSe(null); }}
+              onDragEnd={() => setVuceSe(null)}
+              style={{ padding: aktivna && pozicije.length > 1 ? "6px 6px" : "6px 12px", fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 2, opacity: vuceSe === p.id ? 0.4 : 1 }}
+            >
+              {aktivna && pozicije.length > 1 && (
+                <button type="button" style={{ ...STIL_STRELICE, visibility: i > 0 ? "visible" : "hidden" }} aria-label="Pomakni stavku lijevo" title="Pomakni lijevo" onClick={(e) => { e.stopPropagation(); premjestiPoz(p.id, i - 1); }}><ChevronLeft size={14} /></button>
+              )}
+              {p.oznaka || "Stavka"}
+              {aktivna && pozicije.length > 1 && (
+                <button type="button" style={{ ...STIL_STRELICE, visibility: i < pozicije.length - 1 ? "visible" : "hidden" }} aria-label="Pomakni stavku desno" title="Pomakni desno" onClick={(e) => { e.stopPropagation(); premjestiPoz(p.id, i + 1); }}><ChevronRight size={14} /></button>
+              )}
+            </div>
+          );
+        })}
         <button className="btn btn-icon btn-ghost" onClick={addPoz} title="Dodaj stavku"><Plus size={15} /></button>
         <div className={`nav-tab ${aktivnaKartica === "materijal" ? "active" : ""}`} onClick={() => setAktivnaKartica("materijal")} style={{ padding: "6px 12px", fontSize: 12.5, marginLeft: "auto" }}>
           Materijal
