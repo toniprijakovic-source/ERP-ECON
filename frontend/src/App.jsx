@@ -1539,7 +1539,7 @@ const KARTICE_MODULA = {
   projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "potvrde", naziv: "Potvrde narudžbe" }, { key: "zavrseni", naziv: "Završeni projekti" }] },
   ponude: { kartice: [{ key: "ponude", naziv: "Ponude" }, { key: "laser", naziv: "Ponude - Laser" }] },
   otpremnice: { kartice: [{ key: "otpremnice", naziv: "Otpremnice" }, { key: "cmr", naziv: "CMR" }] },
-  fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "podloge", naziv: "Podloge za fakturu" }, { key: "nedovrsena", naziv: "Nedovršena proizvodnja" }, { key: "analiza", naziv: "Analiza projekata" }] },
+  fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "podloge", naziv: "Podloge za fakturu" }, { key: "nedovrsena", naziv: "Nedovršena proizvodnja" }, { key: "analiza", naziv: "Analiza projekata" }, { key: "produktivnost", naziv: "Produktivnost (kg/h)" }] },
   partneri: { kartice: [{ key: "kupci", naziv: "Kupci" }, { key: "dobavljaci", naziv: "Dobavljači" }] },
   zaposlenici: { kartice: [{ key: "zaposlenici", naziv: "Zaposlenici" }, { key: "pozicije", naziv: "Pozicije" }, { key: "evidencija", naziv: "Evidencija rada" }, { key: "obracun", naziv: "Obračun plaća" }, { key: "satinalozi", naziv: "Sati po nalozima" }] },
 };
@@ -11752,8 +11752,465 @@ function NedovrsenaDetaljModal({ red, db, mjesec, trosakSata, zakljucan, onClose
   );
 }
 
+/* ============================== PRODUKTIVNOST (kg/h) ==============================
+   Po projektima: masa projekta ÷ sati upisani na njegove radne naloge (Plan proizvodnje → Danas – unos i
+   Sati po nalozima), uz plan iz sati faza projekta (kupaonice: normativ). Stvarni kg/h prikazuje se tek
+   kad je projekt završen — prije toga je masa cijela, a sati tek djelomični.
+   Po mjesecima: isporučena masa ÷ sati prisutnosti radione s kioska. Mase po otpremnicama uglavnom nisu
+   upisane, pa je isporučena masa u mjesecu = masa projekta × porast isporučenog postotka u tom mjesecu
+   (isti postotak kao u Nedovršenoj proizvodnji: po vrijednosti iz narudžbe kupca, kupaonice po masi,
+   završen projekt = 100 %). */
+const FAZA_MONTAZE = "Montaža (teren)";
+const fmtKg = (n) => `${Math.round(Number(n) || 0).toLocaleString("hr-HR")} kg`;
+const fmtKgH = (n) => (n == null ? "—" : (Math.round(n * 10) / 10).toLocaleString("hr-HR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }));
+const brojOblik = (n, jedan, dva, pet) => (n % 10 === 1 && n % 100 !== 11 ? jedan : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? dva : pet);
+const mjeseciUnatrag = (doMjeseca, broj) => { const lista = [doMjeseca]; while (lista.length < broj) lista.push(prethodniMjesec(lista[lista.length - 1])); return lista; };
+
+// Upisana masa: "12500", "12.500" (točka kao razdjelnik tisuća), "12 500", "12500,5" ili "12.500,5".
+// Prazno = null (koristi se izračun), neispravno = NaN.
+const procitajKg = (tekst) => {
+  let t = String(tekst ?? "").trim().replace(/\s/g, "");
+  if (t === "") return null;
+  if (t.includes(",")) t = t.replace(/\./g, "").replace(",", ".");
+  else if (/^\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, "");
+  const v = Number(t);
+  return Number.isFinite(v) && v >= 0 ? v : NaN;
+};
+
+// Masa projekta (kg) — prvi izvor koji postoji: ručno upisana (projekt.masaKonstrukcijeKg) → normativ
+// kupaonica (pod + komplet) → narudžba kupca kad sve stavke imaju masu → kalkulacija ponude (pozicije) →
+// narudžba kupca s djelomičnom masom (uz upozorenje). bezRucne: samo izračun (za prijedlog uz polje).
+function masaProjektaKg(p, db, bezRucne = false) {
+  const rucno = Number(p.masaKonstrukcijeKg);
+  if (!bezRucne && rucno > 0) return { kg: rucno, izvor: "ručno upisano" };
+  if (p.koristiNormativ) {
+    const kg = [...(p.stavkePod || []), ...(p.stavkeKomplet || [])].reduce((a, s) => a + (Number(s.komada) || 0) * (Number(s.masaJed) || 0), 0);
+    if (kg > 0) return { kg, izvor: "normativ (pod + komplet)" };
+  }
+  const stavkeNarudzbe = (db.narudzbe || []).filter((n) => n.projektId === p.id).flatMap((n) => n.stavke || []).filter((s) => Number(s.kolicina) > 0);
+  const kgNarudzbe = stavkeNarudzbe.reduce((a, s) => a + (Number(s.kolicina) || 0) * (Number(s.masaJed) || 0), 0);
+  const bezMase = stavkeNarudzbe.filter((s) => !(Number(s.masaJed) > 0)).length;
+  if (kgNarudzbe > 0 && bezMase === 0) return { kg: kgNarudzbe, izvor: "narudžba kupca" };
+  const kgPozicija = (p.pozicije || []).reduce((a, poz) => a + masaPozicije(poz, db.katalogProfila || [], db.kvaliteteMaterijala || []) * (Number(poz.kolicina) || 0), 0);
+  if (kgPozicija > 0) return { kg: kgPozicija, izvor: "kalkulacija ponude" };
+  if (kgNarudzbe > 0) return { kg: kgNarudzbe, izvor: `narudžba kupca — ${bezMase} ${brojOblik(bezMase, "stavka", "stavke", "stavki")} bez mase`, upozorenje: true };
+  return { kg: 0, izvor: "" };
+}
+
+// Redak po projektu: plan i upisani sati po fazi, masa i kg/h. Projekti bez mase i bez ikakvih sati se ne prikazuju.
+function produktivnostProjekata(db, sMontazom) {
+  const nalogPoId = new Map((db.radniNalozi || []).map((n) => [n.id, n]));
+  const stvarnoPoProjektu = new Map();
+  (db.satiPoNalogu || []).forEach((s) => {
+    const n = nalogPoId.get(s.radniNalogId);
+    if (!n?.projektId) return;
+    const faza = n.faza || "Ostalo";
+    const poFazi = stvarnoPoProjektu.get(n.projektId) || {};
+    poFazi[faza] = (poFazi[faza] || 0) + (Number(s.sati) || 0);
+    stvarnoPoProjektu.set(n.projektId, poFazi);
+  });
+  const naloziPoProjektu = new Map();
+  (db.radniNalozi || []).forEach((n) => { if (n.projektId) naloziPoProjektu.set(n.projektId, [...(naloziPoProjektu.get(n.projektId) || []), n]); });
+  const kupacPoId = new Map((db.kupci || []).map((k) => [k.id, k.naziv]));
+  return (db.projekti || []).filter((p) => p.status !== "Otkazan").map((p) => {
+    const plan = {};
+    if (p.koristiNormativ) {
+      const izracun = izracunTipskogProjekta(p, db.normativi);
+      OPERACIJE.forEach((o) => { const h = izracun.ukupno.satiPoOperaciji[o.key] || 0; if (h > 0) plan[o.label] = h; });
+    } else {
+      Object.entries(p.faze || {}).forEach(([f, h]) => { if (Number(h) > 0) plan[f] = Number(h); });
+      // Projekt bez upisanih sati faza: plan su prvotno planirani sati njegovih naloga.
+      if (!Object.keys(plan).length) (naloziPoProjektu.get(p.id) || []).forEach((n) => { const h = Number(n.planiranoSatiPrvo ?? n.planiranoSati) || 0; if (h > 0) plan[n.faza] = (plan[n.faza] || 0) + h; });
+    }
+    const stvarno = stvarnoPoProjektu.get(p.id) || {};
+    const faze = [...new Set([...FAZE, ...Object.keys(plan), ...Object.keys(stvarno)])]
+      .filter((f) => (plan[f] || stvarno[f]) && (sMontazom || f !== FAZA_MONTAZE))
+      .map((f) => ({ faza: f, plan: plan[f] || 0, stvarno: stvarno[f] || 0 }));
+    const satiPlan = faze.reduce((a, f) => a + f.plan, 0);
+    const satiStvarno = faze.reduce((a, f) => a + f.stvarno, 0);
+    const masa = masaProjektaKg(p, db);
+    if (!(masa.kg > 0) && !satiPlan && !satiStvarno) return null;
+    const zavrsen = p.status === "Završen";
+    return {
+      projekt: p, sifra: p.sifra || "", naziv: p.naziv || "", kupac: kupacPoId.get(p.kupacId) || "", status: p.status || "", zavrsen,
+      masa, autoMasa: masaProjektaKg(p, db, true), faze, satiPlan, satiStvarno,
+      kghPlan: masa.kg > 0 && satiPlan > 0 ? masa.kg / satiPlan : null,
+      kghStvarno: zavrsen && masa.kg > 0 && satiStvarno > 0 ? masa.kg / satiStvarno : null,
+    };
+  }).filter(Boolean).sort((a, b) => usporediPrirodno(b.sifra, a.sifra));
+}
+
+// Redak po mjesecu: isporučena masa (vidi gore), obračunski sati radione s kioska (kao u plaćama; pozicije
+// radione, kooperanti i praktikanti — ured ne) i sati upisani na naloge (za usporedbu s prisutnošću).
+function produktivnostPoMjesecima(db, mjeseci) {
+  const zaposlenikPoId = new Map((db.zaposlenici || []).map((z) => [z.id, z]));
+  const satiRadione = new Map();
+  (db.evidencijaRada || []).forEach((e) => {
+    if ((e.vrsta || "rad") !== "rad" || !e.vrijemeDolaska || !e.vrijemeOdlaska) return;
+    if (grupaEvidencije(zaposlenikPoId.get(e.zaposlenikId), db.pozicijeZaposlenika) === "ostalo") return;
+    const mj = e.vrijemeDolaska.slice(0, 7);
+    const h = obracunskiSati(e.vrijemeDolaska, e.vrijemeOdlaska, odrediSmjenu(e.vrijemeDolaska, db.postavkePlaca), db.postavkePlaca);
+    satiRadione.set(mj, (satiRadione.get(mj) || 0) + h);
+  });
+  const satiNalozi = new Map();
+  (db.satiPoNalogu || []).forEach((s) => { const mj = (s.datum || "").slice(0, 7); satiNalozi.set(mj, (satiNalozi.get(mj) || 0) + (Number(s.sati) || 0)); });
+  // Završen projekt bez datuma završetka bio bi 100 % isporučen u svakom mjesecu pa se nikad ne bi zbrojio —
+  // za ovaj izračun mu se kao datum završetka uzima datum zadnje otpremnice kupcu.
+  const zadnjaOtpremnica = new Map();
+  (db.otpremnice || []).forEach((o) => { if (o.vrsta !== "kooperant" && o.datum && o.datum > (zadnjaOtpremnica.get(o.projektId) || "")) zadnjaOtpremnica.set(o.projektId, o.datum); });
+  const projekti = (db.projekti || []).filter((p) => p.status !== "Otkazan").map((p) => ({
+    p: p.status === "Završen" && !p.zavrsenDatum && zadnjaOtpremnica.has(p.id) ? { ...p, zavrsenDatum: zadnjaOtpremnica.get(p.id) } : p,
+    masa: masaProjektaKg(p, db),
+  }));
+  return mjeseci.map((mjesec) => {
+    const doDatuma = zadnjiDanMjeseca(mjesec);
+    const prijeDatuma = zadnjiDanMjeseca(prethodniMjesec(mjesec));
+    const sOtpremnicom = new Set((db.otpremnice || []).filter((o) => o.vrsta !== "kooperant" && (o.datum || "").slice(0, 7) === mjesec).map((o) => o.projektId));
+    const stavke = [];
+    // Otpremnica kupcu u mjesecu, a postotak isporuke se ne može izračunati (npr. narudžba bez cijena) —
+    // takva isporuka se ne zbraja dok se projekt ne završi (tada ulazi u mjesec završetka).
+    const bezPostotka = [];
+    projekti.forEach(({ p, masa }) => {
+      const sada = isporucenoProjekta(p, db, doDatuma);
+      const pomak = sada.posto - isporucenoProjekta(p, db, prijeDatuma).posto;
+      if (pomak <= 0.01) {
+        const razlog = sada.izvor === "po masi" ? "stavke otpremnice nisu povezane s rasporedom isporuka kupaonica"
+          : sada.izvor === "po vrijednosti" ? "stavke otpremnice nisu povezane sa stavkama narudžbe kupca" : sada.izvor;
+        if (sOtpremnicom.has(p.id) && sada.posto < 100) bezPostotka.push({ projektId: p.id, sifra: p.sifra || "", naziv: p.naziv || "", razlog });
+        return;
+      }
+      stavke.push({ projektId: p.id, sifra: p.sifra || "", naziv: p.naziv || "", pomak, masa, kg: masa.kg > 0 ? (masa.kg * pomak) / 100 : null });
+    });
+    stavke.sort((a, b) => (b.kg || 0) - (a.kg || 0) || usporediPrirodno(a.sifra, b.sifra));
+    bezPostotka.sort((a, b) => usporediPrirodno(a.sifra, b.sifra));
+    const kg = stavke.reduce((a, s) => a + (s.kg || 0), 0);
+    const sati = satiRadione.get(mjesec) || 0;
+    return { mjesec, kg, stavke, bezMase: stavke.filter((s) => s.kg == null), bezPostotka, sati, satiNalozi: satiNalozi.get(mjesec) || 0, kgh: kg > 0 && sati > 0 ? kg / sati : null };
+  });
+}
+
+const TD_DESNO = { textAlign: "right", whiteSpace: "nowrap" };
+
+function ProduktivnostView({ db, patchProjekt, showToast, mozeMijenjati }) {
+  const [prikaz, setPrikaz] = useState("projekti");
+  const [sMontazom, setSMontazom] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("svi");
+  const [trazi, setTrazi] = useState("");
+  const [detaljProjektId, setDetaljProjektId] = useState(null);
+  const [detaljMjesec, setDetaljMjesec] = useState(null);
+  const ovajMjesec = todayISO().slice(0, 7);
+
+  const sviRedovi = useMemo(() => produktivnostProjekata(db, sMontazom), [db, sMontazom]);
+  const upit = trazi.trim().toLowerCase();
+  const redovi = sviRedovi.filter((r) => (statusFilter === "svi" || (statusFilter === "zavrseni" ? r.zavrsen : !r.zavrsen))
+    && (!upit || `${r.sifra} ${r.naziv} ${r.kupac}`.toLowerCase().includes(upit)));
+  const mjesecniRedovi = useMemo(
+    () => (prikaz === "mjeseci" ? produktivnostPoMjesecima(db, mjeseciUnatrag(ovajMjesec, 12)).filter((r) => r.sati > 0 || r.stavke.length > 0 || r.bezPostotka.length > 0) : []),
+    [db, prikaz, ovajMjesec],
+  );
+
+  const zbroj = (lista, f) => lista.reduce((a, r) => a + (Number(f(r)) || 0), 0);
+  const zavrseniSPodacima = redovi.filter((r) => r.kghStvarno != null);
+  const kghStvarnoUk = zavrseniSPodacima.length ? zbroj(zavrseniSPodacima, (r) => r.masa.kg) / zbroj(zavrseniSPodacima, (r) => r.satiStvarno) : null;
+  const zavrseniSPlanom = zavrseniSPodacima.filter((r) => r.kghPlan != null);
+  const zaPlan = zavrseniSPlanom.length ? zavrseniSPlanom : redovi.filter((r) => r.kghPlan != null);
+  const kghPlanUk = zaPlan.length ? zbroj(zaPlan, (r) => r.masa.kg) / zbroj(zaPlan, (r) => r.satiPlan) : null;
+  const bezMase = redovi.filter((r) => !(r.masa.kg > 0)).length;
+  const kgMjeseci = zbroj(mjesecniRedovi, (r) => r.kg);
+  const satiMjeseci = zbroj(mjesecniRedovi, (r) => r.sati);
+
+  const spremiMasu = (r, polje) => {
+    const rucno = Number(r.projekt.masaKonstrukcijeKg) > 0 ? Number(r.projekt.masaKonstrukcijeKg) : null;
+    const v = procitajKg(polje.value);
+    if (Number.isNaN(v)) { polje.value = rucno != null ? String(rucno).replace(".", ",") : ""; showToast("Masu upiši kao broj kilograma, npr. 12500."); return; }
+    const novo = v > 0 ? Math.round(v * 10) / 10 : null;
+    if (novo === rucno) return;
+    patchProjekt(r.projekt.id, { masaKonstrukcijeKg: novo });
+    showToast(novo ? `Masa ${r.sifra} spremljena: ${fmtKg(novo)}.` : `Ručna masa ${r.sifra} uklonjena${r.autoMasa.kg > 0 ? ` — koristi se ${r.autoMasa.izvor} (${fmtKg(r.autoMasa.kg)})` : ""}.`);
+  };
+
+  const izvozCsv = () => {
+    const celija = (v) => (typeof v === "number" ? (Math.round(v * 10) / 10).toString().replace(".", ",") : `"${String(v ?? "").replace(/"/g, '""')}"`);
+    const [zaglavlja, linije, naziv] = prikaz === "projekti"
+      ? [["Šifra", "Naziv", "Kupac", "Status", "Masa kg", "Izvor mase", "Plan sati", "Plan kg/h", "Upisano sati", "Stvarno kg/h"],
+        redovi.map((r) => [r.sifra, r.naziv, r.kupac, r.status, r.masa.kg || "", r.masa.izvor, r.satiPlan || "", r.kghPlan ?? "", r.satiStvarno || "", r.kghStvarno ?? ""]),
+        "produktivnost-po-projektima"]
+      : [["Mjesec", "Isporučeno kg", "Projekti s isporukom bez mase", "Otpremnice bez postotka isporuke", "Sati radione (kiosk)", "kg/h", "Upisano na naloge (h)"],
+        mjesecniRedovi.map((r) => [nazivMjeseca(r.mjesec), r.kg, r.bezMase.map((s) => s.sifra).join(", "), r.bezPostotka.map((s) => s.sifra).join(", "), r.sati, r.kgh ?? "", r.satiNalozi]),
+        "produktivnost-po-mjesecima"];
+    const tekst = [zaglavlja.map((z) => `"${z}"`).join(";"), ...linije.map((l) => l.map(celija).join(";"))].join("\r\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob(["﻿" + tekst], { type: "text/csv;charset=utf-8" }));
+    a.download = `${naziv}-${todayISO()}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+  const izvozPdf = () => (prikaz === "projekti"
+    ? ispisiTablicuPdf({
+      naslov: "Produktivnost po projektima (kg/h)",
+      podnaslov: `${statusFilter === "zavrseni" ? "Završeni projekti" : statusFilter === "aktivni" ? "Projekti u tijeku" : "Svi projekti"} · ${sMontazom ? "s montažom na terenu" : "bez montaže na terenu"}${kghStvarnoUk != null ? ` · stvarno ${fmtKgH(kghStvarnoUk)} kg/h (završeni)` : ""}`,
+      zaglavlja: ["#Šifra", "Naziv", "Status", ">Masa", "Izvor mase", ">Plan sati", ">Plan kg/h", ">Upisano sati", ">Stvarno kg/h"],
+      redovi: redovi.map((r) => [r.sifra, r.naziv, r.status, r.masa.kg > 0 ? fmtKg(r.masa.kg) : "—", r.masa.izvor, r.satiPlan ? fmtSati(r.satiPlan) : "—", fmtKgH(r.kghPlan), r.satiStvarno ? fmtSati(r.satiStvarno) : "—", fmtKgH(r.kghStvarno)]),
+      podnozje: ["UKUPNO", "", "", fmtKg(zbroj(redovi, (r) => r.masa.kg)), "", fmtSati(zbroj(redovi, (r) => r.satiPlan)), "", fmtSati(zbroj(redovi, (r) => r.satiStvarno)), ""],
+      nazivTvrtke: db.postavkeTvrtke?.naziv, showToast,
+    })
+    : ispisiTablicuPdf({
+      naslov: "Produktivnost po mjesecima (kg/h)",
+      podnaslov: "Isporučena masa ÷ sati radione s kioska",
+      zaglavlja: ["Mjesec", ">Isporučeno", "Nije zbrojeno", ">Sati radione", ">kg/h", ">Upisano na naloge"],
+      redovi: mjesecniRedovi.map((r) => [nazivMjeseca(r.mjesec), fmtKg(r.kg), [r.bezMase.length ? `bez mase: ${r.bezMase.map((s) => s.sifra).join(", ")}` : "", r.bezPostotka.length ? `bez postotka: ${r.bezPostotka.map((s) => s.sifra).join(", ")}` : ""].filter(Boolean).join("; "), `${fmtSati0(r.sati)} h`, fmtKgH(r.kgh), r.satiNalozi ? `${fmtSati0(r.satiNalozi)} h` : "—"]),
+      podnozje: ["UKUPNO", fmtKg(kgMjeseci), "", `${fmtSati0(satiMjeseci)} h`, fmtKgH(kgMjeseci > 0 && satiMjeseci > 0 ? kgMjeseci / satiMjeseci : null), `${fmtSati0(zbroj(mjesecniRedovi, (r) => r.satiNalozi))} h`],
+      nazivTvrtke: db.postavkeTvrtke?.naziv, showToast,
+    }));
+
+  const detaljProjekt = detaljProjektId ? sviRedovi.find((r) => r.projekt.id === detaljProjektId) : null;
+  const detaljMjesecRed = detaljMjesec ? mjesecniRedovi.find((r) => r.mjesec === detaljMjesec) : null;
+  const MALO = { fontSize: 10.5, marginTop: 2 };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 14 }}>
+        <Field label="Prikaz">
+          <div style={{ display: "flex", gap: 6, minHeight: 36, alignItems: "center" }}>
+            <Btn size="sm" variant={prikaz === "projekti" ? "primary" : "ghost"} onClick={() => setPrikaz("projekti")}>Po projektima</Btn>
+            <Btn size="sm" variant={prikaz === "mjeseci" ? "primary" : "ghost"} onClick={() => setPrikaz("mjeseci")}>Po mjesecima</Btn>
+          </div>
+        </Field>
+        {prikaz === "projekti" && (
+          <>
+            <Field label="Projekti">
+              <select className="select" style={{ width: 150 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                <option value="svi">Svi</option>
+                <option value="zavrseni">Završeni</option>
+                <option value="aktivni">U tijeku</option>
+              </select>
+            </Field>
+            <Field label="Traži">
+              <input className="input" style={{ width: 200 }} placeholder="Šifra, naziv, kupac…" value={trazi} onChange={(e) => setTrazi(e.target.value)} />
+            </Field>
+            <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12.5, marginBottom: 14, minHeight: 36, cursor: "pointer" }}>
+              <input type="checkbox" checked={sMontazom} onChange={(e) => setSMontazom(e.target.checked)} /> Uključi montažu na terenu
+            </label>
+          </>
+        )}
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+          <Btn size="sm" icon={Printer} onClick={izvozPdf}>PDF</Btn>
+          <Btn size="sm" icon={Download} onClick={izvozCsv}>Excel (CSV)</Btn>
+        </div>
+      </div>
+
+      {prikaz === "projekti" && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12, marginBottom: 14 }}>
+            <div className="kpi-card beam-tick">
+              <div className="kpi-num">{kghStvarnoUk != null ? `${fmtKgH(kghStvarnoUk)} kg/h` : "—"}</div>
+              <div className="kpi-label">Stvarno · {zavrseniSPodacima.length} {brojOblik(zavrseniSPodacima.length, "završen projekt", "završena projekta", "završenih projekata")}</div>
+            </div>
+            <div className="kpi-card">
+              <div className="kpi-num">{kghPlanUk != null ? `${fmtKgH(kghPlanUk)} kg/h` : "—"}</div>
+              <div className="kpi-label">Plan · {zavrseniSPlanom.length ? "isti projekti" : "projekti s masom i planom"}</div>
+            </div>
+            <div className="kpi-card"><div className="kpi-num">{fmtSati0(zbroj(redovi, (r) => r.satiStvarno))} h</div><div className="kpi-label">Upisano sati na naloge</div></div>
+            <div className="kpi-card"><div className="kpi-num" style={{ color: bezMase ? "var(--rust)" : "var(--green)" }}>{bezMase}</div><div className="kpi-label">{brojOblik(bezMase, "Projekt", "Projekta", "Projekata")} bez mase</div></div>
+          </div>
+
+          {redovi.length === 0 ? <EmptyState text="Nema projekata s masom ili satima za ovaj odabir." /> : (
+            <div className="card" style={{ overflowX: "auto" }}>
+              <table className="erp-table">
+                <thead>
+                  <tr>
+                    <th>Projekt</th><th style={TD_DESNO}>Masa (kg)</th><th style={TD_DESNO}>Plan sati</th><th style={TD_DESNO}>Plan kg/h</th><th style={TD_DESNO}>Upisano sati</th><th style={TD_DESNO}>Stvarno kg/h</th><th style={TD_DESNO}>Razlika</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {redovi.map((r) => {
+                    const rucno = Number(r.projekt.masaKonstrukcijeKg) > 0 ? Number(r.projekt.masaKonstrukcijeKg) : null;
+                    const razlika = r.kghStvarno != null && r.kghPlan ? (r.kghStvarno / r.kghPlan - 1) * 100 : null;
+                    const opisMase = r.masa.kg > 0
+                      ? `${r.masa.upozorenje ? "⚠ " : ""}${r.masa.izvor}${rucno != null && r.autoMasa.kg > 0 ? ` · izračun ${fmtKg(r.autoMasa.kg)}` : ""}`
+                      : "nema mase";
+                    return (
+                      <tr key={r.projekt.id}>
+                        <td>
+                          <button type="button" onClick={() => setDetaljProjektId(r.projekt.id)} style={{ ...STIL_LINK_GUMBA, fontSize: 13, textAlign: "left" }}><span className="f-mono">{r.sifra}</span></button>
+                          <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{r.naziv}{r.kupac ? ` · ${r.kupac}` : ""}</div>
+                          <div style={{ ...MALO, color: "var(--ink-faint)" }}>{r.status}{r.zavrsen && r.projekt.zavrsenDatum ? ` ${fmtDate(r.projekt.zavrsenDatum)}` : ""}</div>
+                        </td>
+                        <td style={TD_DESNO}>
+                          {mozeMijenjati ? (
+                            <input
+                              key={`${r.projekt.id}-${rucno ?? ""}`}
+                              className="input f-mono" style={{ width: 110, textAlign: "right", padding: "4px 6px" }} inputMode="decimal"
+                              aria-label={`Masa projekta ${r.sifra} u kg`} placeholder={r.autoMasa.kg > 0 ? Math.round(r.autoMasa.kg).toLocaleString("hr-HR") : "upiši kg"}
+                              defaultValue={rucno != null ? String(rucno).replace(".", ",") : ""}
+                              onBlur={(e) => spremiMasu(r, e.target)}
+                              onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                            />
+                          ) : <span className="f-mono">{r.masa.kg > 0 ? fmtKg(r.masa.kg) : "—"}</span>}
+                          <div style={{ ...MALO, whiteSpace: "normal", color: r.masa.upozorenje || !(r.masa.kg > 0) ? "var(--rust)" : "var(--ink-faint)" }}>{opisMase}</div>
+                        </td>
+                        <td className="f-mono" style={TD_DESNO}>{r.satiPlan ? fmtSati(r.satiPlan) : "—"}</td>
+                        <td className="f-mono" style={TD_DESNO}>{fmtKgH(r.kghPlan)}</td>
+                        <td className="f-mono" style={TD_DESNO}>
+                          {r.satiStvarno ? fmtSati(r.satiStvarno) : "—"}
+                          {!r.zavrsen && r.satiPlan > 0 && r.satiStvarno > 0 && <div style={{ ...MALO, color: "var(--ink-faint)" }}>{Math.round((r.satiStvarno / r.satiPlan) * 100)} % plana</div>}
+                        </td>
+                        <td className="f-mono" style={{ ...TD_DESNO, fontWeight: 700 }}>
+                          {r.kghStvarno != null ? fmtKgH(r.kghStvarno) : (
+                            <span style={{ fontWeight: 400, fontSize: 11.5, color: "var(--ink-faint)" }}>
+                              {!r.zavrsen ? "u tijeku" : !(r.masa.kg > 0) ? "nema mase" : r.projekt.koristiNormativ ? "kupaonice: bez sati" : "nema sati"}
+                            </span>
+                          )}
+                        </td>
+                        <td className="f-mono" style={{ ...TD_DESNO, color: razlika == null ? "var(--ink-faint)" : razlika >= 0 ? "var(--green)" : "var(--rust)" }}>{razlika == null ? "—" : `${razlika >= 0 ? "+" : ""}${Math.round(razlika)} %`}</td>
+                      </tr>
+                    );
+                  })}
+                  <tr style={{ background: "var(--surface-alt)" }}>
+                    <td style={{ fontWeight: 700 }}>Ukupno ({redovi.length})</td>
+                    <td className="f-mono" style={{ ...TD_DESNO, fontWeight: 700 }}>{fmtKg(zbroj(redovi, (r) => r.masa.kg))}</td>
+                    <td className="f-mono" style={{ ...TD_DESNO, fontWeight: 700 }}>{fmtSati(zbroj(redovi, (r) => r.satiPlan))}</td>
+                    <td />
+                    <td className="f-mono" style={{ ...TD_DESNO, fontWeight: 700 }}>{fmtSati(zbroj(redovi, (r) => r.satiStvarno))}</td>
+                    <td /><td />
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 10 }}>
+            <strong>Masa</strong>: upiši masu konstrukcije gdje je nema ili nije točna; prazno polje koristi izračun (normativ kupaonica, narudžba kupca ili kalkulacija ponude — sivi broj u polju).
+            {" "}<strong>Upisano sati</strong>: zbroj sati na radnim nalozima projekta (Plan proizvodnje → Danas – unos, Sati po nalozima); stalni poslovi (utovar, prijevozi, popravak…) se ne računaju.
+            {" "}<strong>Plan</strong>: sati faza projekta (kupaonice: normativ). Stvarni kg/h računa se kad je projekt završen; razlika je stvarno u odnosu na plan (+ = brže od plana). Klik na šifru prikazuje kg/h po fazama.
+          </p>
+        </>
+      )}
+
+      {prikaz === "mjeseci" && (
+        <>
+          {mjesecniRedovi.length === 0 ? <EmptyState text="U zadnjih 12 mjeseci nema sati radione ni isporuka." /> : (
+            <div className="card" style={{ overflowX: "auto" }}>
+              <table className="erp-table">
+                <thead>
+                  <tr><th>Mjesec</th><th style={TD_DESNO}>Isporučeno</th><th style={TD_DESNO}>Sati radione (kiosk)</th><th style={TD_DESNO}>kg/h</th><th style={TD_DESNO}>Upisano na naloge</th></tr>
+                </thead>
+                <tbody>
+                  {mjesecniRedovi.map((r) => (
+                    <tr key={r.mjesec}>
+                      <td>
+                        <button type="button" onClick={() => setDetaljMjesec(r.mjesec)} style={{ ...STIL_LINK_GUMBA, fontSize: 13, textAlign: "left" }}>{nazivMjeseca(r.mjesec)}</button>
+                        {r.mjesec === ovajMjesec && <div style={{ ...MALO, color: "var(--ink-faint)" }}>tekući mjesec</div>}
+                      </td>
+                      <td className="f-mono" style={TD_DESNO}>
+                        {fmtKg(r.kg)}
+                        {r.bezMase.length > 0 && <div style={{ ...MALO, color: "var(--rust)" }}>⚠ {r.bezMase.length} {brojOblik(r.bezMase.length, "projekt", "projekta", "projekata")} bez mase</div>}
+                        {r.bezPostotka.length > 0 && <div style={{ ...MALO, color: "var(--rust)" }}>⚠ {r.bezPostotka.length} {brojOblik(r.bezPostotka.length, "projekt", "projekta", "projekata")} bez postotka isporuke</div>}
+                      </td>
+                      <td className="f-mono" style={TD_DESNO}>{fmtSati0(r.sati)} h</td>
+                      <td className="f-mono" style={{ ...TD_DESNO, fontWeight: 700 }}>{fmtKgH(r.kgh)}</td>
+                      <td className="f-mono" style={TD_DESNO}>
+                        {r.satiNalozi ? `${fmtSati0(r.satiNalozi)} h` : "—"}
+                        {r.satiNalozi > 0 && r.sati > 0 && <div style={{ ...MALO, color: "var(--ink-faint)" }}>{r.satiNalozi > r.sati ? "više od prisutnosti" : `${Math.round((r.satiNalozi / r.sati) * 100)} % prisutnosti`}</div>}
+                      </td>
+                    </tr>
+                  ))}
+                  <tr style={{ background: "var(--surface-alt)" }}>
+                    <td style={{ fontWeight: 700 }}>Ukupno</td>
+                    <td className="f-mono" style={{ ...TD_DESNO, fontWeight: 700 }}>{fmtKg(kgMjeseci)}</td>
+                    <td className="f-mono" style={{ ...TD_DESNO, fontWeight: 700 }}>{fmtSati0(satiMjeseci)} h</td>
+                    <td className="f-mono" style={{ ...TD_DESNO, fontWeight: 700 }}>{fmtKgH(kgMjeseci > 0 && satiMjeseci > 0 ? kgMjeseci / satiMjeseci : null)}</td>
+                    <td className="f-mono" style={{ ...TD_DESNO, fontWeight: 700 }}>{fmtSati0(zbroj(mjesecniRedovi, (r) => r.satiNalozi))} h</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 10 }}>
+            <strong>Isporučeno</strong>: masa projekta × dio projekta isporučen kupcu u tom mjesecu (postotak kao u Nedovršenoj proizvodnji: vrijednost otpremljenog / vrijednost narudžbe kupca, kupaonice po masi, završen projekt = 100 %). Projekti bez mase se ne zbrajaju, pa je kg/h tada prenizak — masu upiši u prikazu Po projektima.
+            {" "}<strong>Sati radione</strong>: obračunski sati s kioska (kao u plaćama) za voditelja proizvodnje, skladištare, zaposlenike, operatere na laseru, kooperante i praktikante; ured nije uključen.
+            {" "}<strong>Upisano na naloge</strong>: sati upisani na radne naloge i stalne poslove, za usporedbu s prisutnošću. Klik na mjesec prikazuje projekte.
+          </p>
+        </>
+      )}
+
+      {detaljProjekt && <ProduktivnostProjektModal red={detaljProjekt} onClose={() => setDetaljProjektId(null)} />}
+      {detaljMjesecRed && <ProduktivnostMjesecModal red={detaljMjesecRed} onClose={() => setDetaljMjesec(null)} />}
+    </div>
+  );
+}
+
+function ProduktivnostProjektModal({ red, onClose }) {
+  const kg = red.masa.kg;
+  return (
+    <Modal wide title={`Produktivnost po fazama — ${red.sifra} — ${red.naziv}`} onClose={onClose} footer={<Btn onClick={onClose}>Zatvori</Btn>}>
+      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 10 }}>
+        Masa projekta: <strong className="f-mono" style={{ color: kg > 0 ? "var(--ink)" : "var(--rust)" }}>{kg > 0 ? fmtKg(kg) : "nije upisana"}</strong>{kg > 0 ? ` (${red.masa.izvor})` : ""}. kg/h faze = masa projekta ÷ sati te faze.
+      </p>
+      {red.faze.length === 0 ? <EmptyState text="Projekt nema planiranih ni upisanih sati." /> : (
+        <table className="erp-table">
+          <thead><tr><th>Faza</th><th style={TD_DESNO}>Plan sati</th><th style={TD_DESNO}>Upisano sati</th><th style={TD_DESNO}>Plan kg/h</th><th style={TD_DESNO}>Stvarno kg/h</th></tr></thead>
+          <tbody>
+            {red.faze.map((f) => (
+              <tr key={f.faza}>
+                <td>{fazaOznaka(f.faza)}</td>
+                <td className="f-mono" style={TD_DESNO}>{f.plan ? fmtSati(f.plan) : "—"}</td>
+                <td className="f-mono" style={TD_DESNO}>{f.stvarno ? fmtSati(f.stvarno) : "—"}</td>
+                <td className="f-mono" style={TD_DESNO}>{kg > 0 && f.plan > 0 ? fmtKgH(kg / f.plan) : "—"}</td>
+                <td className="f-mono" style={{ ...TD_DESNO, fontWeight: 600 }}>{kg > 0 && f.stvarno > 0 ? fmtKgH(kg / f.stvarno) : "—"}</td>
+              </tr>
+            ))}
+            <tr style={{ background: "var(--surface-alt)", fontWeight: 700 }}>
+              <td>UKUPNO</td>
+              <td className="f-mono" style={TD_DESNO}>{fmtSati(red.satiPlan)}</td>
+              <td className="f-mono" style={TD_DESNO}>{fmtSati(red.satiStvarno)}</td>
+              <td className="f-mono" style={TD_DESNO}>{fmtKgH(red.kghPlan)}</td>
+              <td className="f-mono" style={TD_DESNO}>{kg > 0 && red.satiStvarno > 0 ? fmtKgH(kg / red.satiStvarno) : "—"}</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
+      {!red.zavrsen && <p style={{ fontSize: 12, color: "var(--ink-faint)", marginTop: 10 }}>Projekt još nije završen — upisani sati nisu konačni, pa je stvarni kg/h zasad previsok.</p>}
+    </Modal>
+  );
+}
+
+function ProduktivnostMjesecModal({ red, onClose }) {
+  return (
+    <Modal wide title={`Isporučena masa — ${nazivMjeseca(red.mjesec)}`} onClose={onClose} footer={<Btn onClick={onClose}>Zatvori</Btn>}>
+      {red.stavke.length === 0 ? <EmptyState text="U ovom mjesecu nema isporuka kupcima s izračunatim postotkom." /> : (
+        <table className="erp-table">
+          <thead><tr><th>Projekt</th><th style={TD_DESNO}>Isporučeno u mjesecu</th><th style={TD_DESNO}>Masa projekta</th><th style={TD_DESNO}>Isporučeno kg</th></tr></thead>
+          <tbody>
+            {red.stavke.map((s) => (
+              <tr key={s.projektId}>
+                <td><span className="f-mono">{s.sifra}</span><div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{s.naziv}</div></td>
+                <td className="f-mono" style={TD_DESNO}>{fmtPosto(s.pomak)}</td>
+                <td className="f-mono" style={TD_DESNO}>{s.masa.kg > 0 ? fmtKg(s.masa.kg) : <span style={{ color: "var(--rust)" }}>nema mase</span>}</td>
+                <td className="f-mono" style={{ ...TD_DESNO, fontWeight: 600 }}>{s.kg != null ? fmtKg(s.kg) : "—"}</td>
+              </tr>
+            ))}
+            <tr style={{ background: "var(--surface-alt)", fontWeight: 700 }}>
+              <td>UKUPNO</td><td /><td />
+              <td className="f-mono" style={TD_DESNO}>{fmtKg(red.kg)}</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
+      <p style={{ fontSize: 12, color: "var(--ink-faint)", marginTop: 10 }}>
+        Sati radione u mjesecu: <strong className="f-mono">{fmtSati0(red.sati)} h</strong> → <strong className="f-mono">{fmtKgH(red.kgh)} kg/h</strong>.
+        {red.bezMase.length > 0 ? ` Projekti bez mase (${red.bezMase.map((s) => s.sifra).join(", ")}) nisu zbrojeni — upiši im masu u prikazu Po projektima.` : ""}
+      </p>
+      {red.bezPostotka.length > 0 && (
+        <div className="card" style={{ padding: "8px 12px", marginTop: 10, background: "#FFF6DE", borderColor: "#F5D98A", fontSize: 12.5 }}>
+          <strong>Otpremnice kupcu bez izračunatog postotka isporuke</strong> — ne zbrajaju se u ovaj mjesec, nego u mjesec u kojem se projekt označi završenim. Postotak se računa kad narudžba kupca ima cijene (kupaonice: mase stavki).
+          <ul style={{ margin: "6px 0 0 18px" }}>{red.bezPostotka.map((s) => <li key={s.projektId}><span className="f-mono">{s.sifra}</span> {s.naziv} — {s.razlog}</li>)}</ul>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 // Jedna stranica za dva modula: "otpremnice" (Otpremnice i CMR) i "fakturiranje" (Financije:
-// fakture, podloge za fakturu, nedovršena proizvodnja, analiza projekata).
+// fakture, podloge za fakturu, nedovršena proizvodnja, analiza projekata, produktivnost).
 function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, showToast, mojaPozicija, mojId }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, modul);
   const [tab, setTab] = useState(dozvKartice[0]?.key || "");
@@ -11763,6 +12220,7 @@ function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, sh
   const mozePodloge = dozvolaZaKarticu(mojaPozicija, "fakturiranje", "podloge").izmjene;
   const mozeCmr = dozvolaZaKarticu(mojaPozicija, "otpremnice", "cmr").izmjene;
   const mozeNedovrsenu = dozvolaZaKarticu(mojaPozicija, "fakturiranje", "nedovrsena").izmjene;
+  const mozeProduktivnost = dozvolaZaKarticu(mojaPozicija, "fakturiranje", "produktivnost").izmjene;
   const [analiza, setAnaliza] = useState(null); // završeni projekt otvoren za analizu plan/stvarno
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
@@ -11795,6 +12253,7 @@ function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, sh
       {tab === "cmr" && <CmrTab db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeCmr} mojId={mojId} />}
       {tab === "podloge" && <PodlogeZaFakturuTab db={db} update={update} showToast={showToast} mozeMijenjati={mozePodloge} />}
       {tab === "nedovrsena" && <NedovrsenaProizvodnjaView db={db} update={update} showToast={showToast} mozeMijenjati={mozeNedovrsenu} mojId={mojId} />}
+      {tab === "produktivnost" && <ProduktivnostView db={db} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeProduktivnost} />}
       {tab === "analiza" && (
         <EntityPage
           title="" readOnly searchKeys={["sifra", "naziv"]}

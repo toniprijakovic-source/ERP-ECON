@@ -86,6 +86,9 @@ const KARTICE_MODULA = {
     podloge: { citanje: ["podlogeZaFakturu", "projekti", "materijali", "otpremnice", "narudzbe", "kupci"], pisanje: ["podlogeZaFakturu", "otpremnice"] },
     nedovrsena: { citanje: ["nedovrsenaProizvodnja", "projekti", "radniNalozi", "satiPoNalogu", "izdatnice", "materijali", "otpremnice", "narudzbe", "kupci", "dobavljaci", "narudzbeTransporta"], pisanje: ["nedovrsenaProizvodnja"] },
     analiza: { citanje: ["projekti", "radniNalozi", "ponude", "izdatnice", "materijali", "kupci", "cjenikRada", "katalogProfila", "kvaliteteMaterijala"], pisanje: [] },
+    // Produktivnost (kg/h): po projektima masa ÷ sati upisani na naloge, po mjesecima isporučena masa ÷ sati
+    // radione s kioska. Piše samo ručno upisanu masu projekta (projekt.masaKonstrukcijeKg).
+    produktivnost: { citanje: ["projekti", "radniNalozi", "satiPoNalogu", "narudzbe", "otpremnice", "normativi", "katalogProfila", "kvaliteteMaterijala", "kupci", "evidencijaRada", "postavkePlaca"], pisanje: ["projekti"] },
   },
   // Transporti (od 2026-10): upiti prijevoznicima, narudžbe za transport (+ CMR iz narudžbe).
   transporti: {
