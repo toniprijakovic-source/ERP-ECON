@@ -199,12 +199,31 @@ function zadrziNoveOznakeNaloga(dolazni, trenutni) {
     return rezultat;
   });
 }
+// Utrošeni sati na radnom nalogu su izvedeni: zbroj zapisa u satiPoNalogu za taj nalog. Preglednik ih
+// računa iz svoje kopije zapisa, koja može biti zastarjela (npr. ne zna za uvezene sate), pa ih poslužitelj
+// kod svakog spremanja naloga ili sati ponovno izračuna iz zapisa u bazi.
+const uskladiUtrosenoSati = (nalozi, sati) => {
+  const zbroj = new Map();
+  (sati || []).forEach((z) => zbroj.set(z.radniNalogId, (zbroj.get(z.radniNalogId) || 0) + (Number(z.sati) || 0)));
+  return nalozi.map((n) => (n && n.id ? { ...n, utrosenoSati: zbroj.get(n.id) || 0 } : n));
+};
+const ucitajSatiPoNalogu = async (client) => (await client.query("SELECT value FROM app_data WHERE key = 'satiPoNalogu'")).rows[0]?.value || [];
+// Nakon promjene sati: utrošeno na svim nalozima iz novih zapisa (piše se samo ako se nešto promijenilo).
+async function uskladiNalogeSaSatima(client, sati) {
+  const r = await client.query("SELECT value FROM app_data WHERE key = 'radniNalozi' FOR UPDATE");
+  const nalozi = r.rows[0]?.value || [];
+  const novi = uskladiUtrosenoSati(nalozi, sati);
+  if (JSON.stringify(novi) !== JSON.stringify(nalozi)) {
+    await client.query("UPDATE app_data SET value = $1, updated_at = now() WHERE key = 'radniNalozi'", [JSON.stringify(novi)]);
+  }
+}
+
 async function spremiRadneNaloge(dolazni) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const r = await client.query("SELECT value FROM app_data WHERE key = 'radniNalozi' FOR UPDATE");
-    const rezultat = zadrziNoveOznakeNaloga(dolazni, r.rows[0]?.value || []);
+    const rezultat = uskladiUtrosenoSati(zadrziNoveOznakeNaloga(dolazni, r.rows[0]?.value || []), await ucitajSatiPoNalogu(client));
     await client.query(
       `INSERT INTO app_data (key, value, updated_at) VALUES ('radniNalozi', $1, now())
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
@@ -821,7 +840,7 @@ app.put("/api/upiti/patch", autentikacija, async (req, res) => {
 // računao iz zastarjelog popisa). Zato server primjenjuje izmjenu na trenutni zaključani popis, a
 // novi dokument čiji je broj već zauzet dobiva sljedeći slobodan broj. prilagodiUpsert (neobavezno)
 // dobiva poslane zapise i trenutni popis prije spajanja (radni nalozi: zadrziNoveOznakeNaloga).
-const patchPoIdHandler = (kljuc, brojRegex, naziv, prilagodiUpsert = (upsert) => upsert, sirinaBroja = 0) => async (req, res) => {
+const patchPoIdHandler = (kljuc, brojRegex, naziv, prilagodiUpsert = (upsert) => upsert, sirinaBroja = 0, poSpremanju = null) => async (req, res) => {
   const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
   const { pisivo } = izracunajDozvoljeneKljuceve(pozicija);
   if (!pisivo.has(kljuc)) return res.status(403).json({ error: `Vaša pozicija nema ovlaštenje za mijenjanje: ${naziv}.` });
@@ -834,7 +853,7 @@ const patchPoIdHandler = (kljuc, brojRegex, naziv, prilagodiUpsert = (upsert) =>
     await client.query("BEGIN");
     const r = await client.query("SELECT value FROM app_data WHERE key = $1 FOR UPDATE", [kljuc]);
     const trenutno = r.rows[0]?.value || [];
-    const upsert = prilagodiUpsert(poslano, trenutno);
+    const upsert = await prilagodiUpsert(poslano, trenutno, client);
     const removeSet = new Set(remove);
     const upsertMap = new Map(upsert.map((u) => [u.id, u]));
     const postojeciIds = new Set(trenutno.map((u) => u.id));
@@ -860,6 +879,7 @@ const patchPoIdHandler = (kljuc, brojRegex, naziv, prilagodiUpsert = (upsert) =>
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
       [kljuc, JSON.stringify(rezultat)]
     );
+    if (poSpremanju) await poSpremanju(client, rezultat);
     await client.query("COMMIT");
     res.json({ ok: true, [kljuc]: rezultat, promijenjeniBrojevi });
   } catch (e) {
@@ -908,7 +928,11 @@ const dodijeliMaticneBrojeve = (poslano, trenutno) => {
   });
 };
 app.put("/api/maticnaKnjiga/patch", autentikacija, patchPoIdHandler("maticnaKnjiga", /^(?!)$/, "matične knjige", dodijeliMaticneBrojeve));
-app.put("/api/radniNalozi/patch", autentikacija, patchPoIdHandler("radniNalozi", /^(.*\/)(\d+)()$/, "radnih naloga", zadrziNoveOznakeNaloga));
+app.put("/api/radniNalozi/patch", autentikacija, patchPoIdHandler("radniNalozi", /^(.*\/)(\d+)()$/, "radnih naloga",
+  async (poslano, trenutno, client) => uskladiUtrosenoSati(zadrziNoveOznakeNaloga(poslano, trenutno), await ucitajSatiPoNalogu(client))));
+// Sati po nalozima (dnevni unos u Planu proizvodnje i Sati po nalozima, uvoz iz Excela): izmjena po id-u, pa
+// zastarjela kopija u pregledniku više ne briše tuđe zapise; nakon spremanja se preračuna utrošeno na nalozima.
+app.put("/api/satiPoNalogu/patch", autentikacija, patchPoIdHandler("satiPoNalogu", /^(?!)$/, "sati po nalozima", (upsert) => upsert, 0, uskladiNalogeSaSatima));
 
 // ---------- Ciljana izmjena projekata (upsert po id-u + remove) ----------
 // Isti oblik kao /api/evidencija/patch i /api/upiti/patch — dodavanje/uređivanje/brisanje CIJELOG
@@ -996,6 +1020,32 @@ app.put("/api/data/:key", autentikacija, async (req, res, next) => {
     } catch (e) {
       console.error("Greška kod spremanja radnih naloga:", e);
       return res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+    }
+    return res.json({ ok: true });
+  }
+  // Preglednik sa starom verzijom aplikacije šalje cijeli popis sati kakav je zapamtio — uvezeni zapisi
+  // (izvor "uvoz") kojih u njemu nema ostaju; utrošeno na nalozima se preračuna.
+  if (req.params.key === "satiPoNalogu") {
+    if (!Array.isArray(req.body)) return res.status(400).json({ error: "Neispravan popis sati." });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const r = await client.query("SELECT value FROM app_data WHERE key = 'satiPoNalogu' FOR UPDATE");
+      const poslaniIds = new Set(req.body.map((z) => z?.id));
+      const rezultat = [...req.body, ...(r.rows[0]?.value || []).filter((z) => z.izvor === "uvoz" && !poslaniIds.has(z.id))];
+      await client.query(
+        `INSERT INTO app_data (key, value, updated_at) VALUES ('satiPoNalogu', $1, now())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        [JSON.stringify(rezultat)]
+      );
+      await uskladiNalogeSaSatima(client, rezultat);
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      console.error("Greška kod spremanja sati po nalozima:", e);
+      return res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+    } finally {
+      client.release();
     }
     return res.json({ ok: true });
   }
