@@ -199,7 +199,8 @@ const izracunPonude = (ponuda, materijali, cjenikRada, katalog = [], kvalitete =
   (ponuda.pozicije || []).forEach((p) => {
     OPERACIJE.forEach((o) => { satiPoOperaciji[o.key] += Number(p.operacije?.[o.key] || 0); });
   });
-  const trosakRada = OPERACIJE.reduce((s, o) => s + satiPoOperaciji[o.key] * (Number(cjenikRada?.[o.key]) || 0), 0);
+  const trosakRada = OPERACIJE.reduce((s, o) => s + satiPoOperaciji[o.key] * (Number(cjenikRada?.[o.key]) || 0), 0)
+    + (ponuda.pozicije || []).reduce((s, p) => s + trosakDodatnihOperacija(p), 0);
   // Trošak materijala se zbraja iz TRI izvora, sve po poziciji: stavke iz kataloga (profili/limovi,
   // cijena upisana izravno na stavci), materijal iz skladišta (svoj popis po poziciji), i eventualni
   // ručni "Materijal iz kalkulacije" (zajednički, za ono što ne pripada nijednoj stavci).
@@ -212,7 +213,18 @@ const izracunPonude = (ponuda, materijali, cjenikRada, katalog = [], kvalitete =
     }, 0), 0) + (ponuda.sirovineStavke || []).reduce((s, st) => s + (Number(st.kolicina) || 0) * (Number(st.cijenaJed) || 0), 0);
   // Ostalo (transport, projektiranje…) vodi se po poziciji, isto kao materijal.
   const trosakOstalo = (ponuda.pozicije || []).reduce((s, p) => s + (p.ostaleStavke || []).reduce((s2, st) => s2 + (Number(st.kolicina) || 0) * (Number(st.cijenaJed) || 0), 0), 0);
-  const ukupnoSati = OPERACIJE.reduce((s, o) => s + satiPoOperaciji[o.key], 0);
+  const ukupnoSati = OPERACIJE.reduce((s, o) => s + satiPoOperaciji[o.key], 0) + (ponuda.pozicije || []).reduce((s, p) => s + satiDodatnihOperacija(p), 0);
+  // Dodatne operacije svih stavki zbrojene po fazi i nazivu — kad ponuda postane projekt, svaka je jedan radni nalog.
+  const dodatneOperacije = [];
+  (ponuda.pozicije || []).forEach((p) => (p.dodatneOperacije || []).forEach((o) => {
+    const sati = Number(o.sati) || 0;
+    if (sati <= 0) return;
+    const naziv = String(o.naziv || "").trim();
+    const faza = FAZE.includes(o.faza) ? o.faza : FAZA_DODATNE_OPERACIJE;
+    const trosak = sati * (Number(o.cijenaH) || 0);
+    const postoji = dodatneOperacije.find((x) => x.faza === faza && x.naziv.toLowerCase() === naziv.toLowerCase());
+    if (postoji) { postoji.sati += sati; postoji.trosak += trosak; } else dodatneOperacije.push({ naziv, faza, sati, trosak });
+  }));
 
   const satnicaMontaza = Number(ponuda.satnicaMontaza) || 0;
   const satiMontaze = (ponuda.pozicije || []).reduce((s, p) => s + (Number(p.brojMontera) || 0) * (Number(p.planiraniSatiMontaza) || 0) * (Number(p.kolicina) || 0), 0);
@@ -240,7 +252,7 @@ const izracunPonude = (ponuda, materijali, cjenikRada, katalog = [], kvalitete =
   const potrebanMaterijal = izracunPotrebnogMaterijala(ponuda.pozicije || [], katalog, ponuda.otpadLimPoTipu);
 
   return {
-    satiPoOperaciji, trosakRada, trosakMaterijala, trosakOstalo, ukupnoSati,
+    satiPoOperaciji, dodatneOperacije, trosakRada, trosakMaterijala, trosakOstalo, ukupnoSati,
     satiMontaze, trosakMontaze, ukupnaMasaKonstrukcije, iznosAKZ, akzPoTipu,
     ukupno, postotakMarze, iznosMarze, cijenaKonacna, potrebanMaterijal,
   };
@@ -2806,8 +2818,13 @@ const trosakMaterijalaIzKatalogaPozicije = (p, katalog, kvalitete) => (p.stavke 
 
 // Raščlamba troška jedne stavke (pozicije) ponude — dijeljeno između PozicijeEditor (uređivanje) i
 // PonudaPrintModal (PDF), da obje strane uvijek računaju po ISTOJ formuli.
-const satiPozicije = (p) => OPERACIJE.reduce((s, o) => s + (Number(p.operacije?.[o.key]) || 0), 0);
-const trosakRadaPozicije = (p, cjenikRada) => OPERACIJE.reduce((s, o) => s + (Number(p.operacije?.[o.key]) || 0) * (Number(cjenikRada?.[o.key]) || 0), 0);
+// Dodatne operacije stavke (izvan fiksnog popisa OPERACIJE): naziv, sati, vlastita cijena €/h i faza proizvodnje
+// u koju idu kad ponuda postane projekt (zadano "Ostalo"). Ulaze u sate i trošak rada stavke.
+const FAZA_DODATNE_OPERACIJE = "Ostalo";
+const satiDodatnihOperacija = (p) => (p.dodatneOperacije || []).reduce((s, o) => s + (Number(o.sati) || 0), 0);
+const trosakDodatnihOperacija = (p) => (p.dodatneOperacije || []).reduce((s, o) => s + (Number(o.sati) || 0) * (Number(o.cijenaH) || 0), 0);
+const satiPozicije = (p) => OPERACIJE.reduce((s, o) => s + (Number(p.operacije?.[o.key]) || 0), 0) + satiDodatnihOperacija(p);
+const trosakRadaPozicije = (p, cjenikRada) => OPERACIJE.reduce((s, o) => s + (Number(p.operacije?.[o.key]) || 0) * (Number(cjenikRada?.[o.key]) || 0), 0) + trosakDodatnihOperacija(p);
 const akzPozicije = (p, katalog, kvalitete) => {
   const masaUkupnaPoz = masaPozicije(p, katalog, kvalitete) * (Number(p.kolicina) || 0);
   return (p.stavkeAKZ || []).reduce((s, a) => s + masaUkupnaPoz * (Number(a.cijenaKg) || 0), 0);
@@ -4861,6 +4878,8 @@ const praznaFazaSati = () => Object.fromEntries(FAZE.map((f) => [f, 0]));
 // Slovne oznake faza prema "Popisu šifri" (slova G i Q ne postoje). Montaža (teren), Kontrola kvalitete i Ostalo dobile su W, X i Y.
 const FAZA_SLOVO = { "Pila": "B", "Laser za profile": "C", "Laser za limove": "D", "Kutno savijanje": "E", "Strojna obrada": "F", "Priprema pozicija za sklapanje": "H", "Sklapanje - konstrukcije": "I", "Sklapanje - kupaonice": "J", "Zavarivanje": "K", "Brušenje": "L", "Ravnanje": "M", "Bojanje": "N", "Montaža (teren)": "W", "Kontrola kvalitete": "X", "Ostalo": "Y" };
 const fazaOznaka = (f) => (FAZA_SLOVO[f] ? `${FAZA_SLOVO[f]} – ${f}` : f);
+// Faza radnog naloga uz naziv dodatne operacije iz ponude (npr. "Y – Ostalo · Pjeskarenje").
+const fazaNaloga = (n) => (n?.operacija ? `${fazaOznaka(n.faza)} · ${n.operacija}` : fazaOznaka(n?.faza));
 // Stalni poslovi — nisu vezani uz projekt ni radni nalog, uvijek su na popisu za upis sati (redak u satiPoNalogu
 // s radniNalogId = id posla). Za posao s oznakom projekt može se neobavezno upisati projekt na koji se sati odnose.
 const STALNI_POSLOVI = [
@@ -5027,7 +5046,7 @@ function izracunajPlanProizvodnje({ db, normativ, odsutnosti, danas, drugaSmjena
       poslovi.push({
         id: dio.id ? `${p.id}#${dio.id}` : p.id, tip: "projekt", projekt: dio.id ? { ...p, sifra: `${p.sifra} · ${dio.naziv}` } : p, rok, bezRoka: !dio.rokDijela, cilj: kal.minusRadnih(rok, post.rezervaProjektDana),
         hitno: p.planStatus === "hitno", zavrsna: zavrsnaObradaProjekta(p, db.radniNalozi),
-        nalozi: nd.map((n) => ({ id: n.id, broj: n.broj, faza: n.faza, plan: Number(n.planiranoSati) || 0, utroseno: Number(n.utrosenoSati) || 0, status: n.status })),
+        nalozi: nd.map((n) => ({ id: n.id, broj: n.broj, faza: n.faza, operacija: n.operacija, plan: Number(n.planiranoSati) || 0, utroseno: Number(n.utrosenoSati) || 0, status: n.status })),
       });
     });
   });
@@ -5165,7 +5184,7 @@ function izracunajPlanProizvodnje({ db, normativ, odsutnosti, danas, drugaSmjena
     const lista = poPoslu.get(po.id) || [];
     const faze = lista.map((s) => {
       const daniRada = Object.keys(s.dani).sort();
-      return { nalogId: s.n.id, broj: s.n.broj, faza: s.n.faza, plan: s.plan, utroseno: s.n.utroseno, status: s.n.status, od: daniRada[0] || null, do: s.kraj || daniRada[daniRada.length - 1] || null, dani: s.dani, neispunjeno: s.neispunjeno, nedovrseno: s.gotovo < s.plan - 0.01 };
+      return { nalogId: s.n.id, broj: s.n.broj, faza: s.n.faza, operacija: s.n.operacija, plan: s.plan, utroseno: s.n.utroseno, status: s.n.status, od: daniRada[0] || null, do: s.kraj || daniRada[daniRada.length - 1] || null, dani: s.dani, neispunjeno: s.neispunjeno, nedovrseno: s.gotovo < s.plan - 0.01 };
     });
     const nedovrseno = faze.some((f) => f.nedovrseno);
     const krajProizvodnje = faze.reduce((m, f) => (f.do && f.do > m ? f.do : m), "") || POCETAK;
@@ -5437,7 +5456,7 @@ function PlanPoProjektu({ plan, patchProjekt, mozeMijenjati, otvoriProjekt }) {
                       </div>
                       {otvoreni.has(r.k) && (
                         <div style={{ background: "#F7F8F9", borderTop: "1px dashed var(--line)" }}>
-                          {p.faze.map((f) => <RedakFaze key={f.nalogId} boja={PLAN_BOJA[f.faza] || "#6B737B"} naslov={f.faza} podnaslov={`${f.broj}${f.utroseno > 0 ? ` · utrošeno ${fmtSati(f.utroseno)} od ${fmtSati(f.plan)} h` : ` · ${fmtSati(f.plan)} h`}`} od={f.od} doD={f.do} tekst={`${fmtSati(Math.max(0, f.plan - f.utroseno))} h${f.status === "U tijeku" ? " · u tijeku" : ""}`} />)}
+                          {p.faze.map((f) => <RedakFaze key={f.nalogId} boja={PLAN_BOJA[f.faza] || "#6B737B"} naslov={f.operacija ? `${f.faza} · ${f.operacija}` : f.faza} podnaslov={`${f.broj}${f.utroseno > 0 ? ` · utrošeno ${fmtSati(f.utroseno)} od ${fmtSati(f.plan)} h` : ` · ${fmtSati(f.plan)} h`}`} od={f.od} doD={f.do} tekst={`${fmtSati(Math.max(0, f.plan - f.utroseno))} h${f.status === "U tijeku" ? " · u tijeku" : ""}`} />)}
                           {p.zavrsne.map((z) => <RedakFaze key={z.vrsta} boja={PLAN_BOJA[z.vrsta]} naslov={z.vrsta} podnaslov={`${z.dana} ${radnihDanaRijec(z.dana)} nakon proizvodnje`} od={z.od} doD={z.do} tekst={`${z.dana} d`} />)}
                           <AkcijeProjekta projekt={p.projekt} />
                         </div>
@@ -5824,7 +5843,7 @@ function PlanDanasUnos({ plan, db, update, patchProjekt, showToast, mozeMijenjat
                   <tr key={r.n.id}>
                     <td className="f-mono" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
                       <span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 2, background: PLAN_BOJA[r.n.faza] || "#6B737B", marginRight: 6 }} />{r.n.broj}
-                      <div style={{ fontFamily: "var(--font-body)", fontSize: 11, color: "var(--ink-soft)" }}>{fazaOznaka(r.n.faza)}{r.n.status === "U tijeku" ? " · u tijeku" : ""}</div>
+                      <div style={{ fontFamily: "var(--font-body)", fontSize: 11, color: "var(--ink-soft)" }}>{fazaNaloga(r.n)}{r.n.status === "U tijeku" ? " · u tijeku" : ""}</div>
                     </td>
                     <td><span className="f-mono" style={{ fontSize: 12, fontWeight: 600 }}>{r.projekt?.sifra}</span><div style={{ fontSize: 11.5, color: "var(--ink-soft)", maxWidth: 260, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.projekt?.naziv}</div></td>
                     <td className="f-mono" style={{ textAlign: "right" }}>{fmtSati(r.plan)} h</td>
@@ -7486,7 +7505,7 @@ function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija, mo
         columns={[
           { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
           { key: "projekt", label: "Projekt", render: (r) => projNaziv(r.projektId) },
-          { key: "faza", label: "Faza", render: (r) => fazaOznaka(r.faza) },
+          { key: "faza", label: "Faza", render: (r) => fazaNaloga(r) },
           { key: "zaduzenTim", label: "Tim" },
           { key: "sati", label: "Sati (utr./plan.)", render: (r) => <span className="f-mono">{r.utrosenoSati} / {r.planiranoSati}</span> },
           {
@@ -7661,7 +7680,7 @@ function StavkaPozicijeRedak({ stavka: s, katalog, grupe, kvalitete, onAzuriraj,
   );
 }
 
-function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], kvalitete = [], satnicaMontaza = 0, calc, azurirajOtpadLima, materijaliSkladiste, narudzbenice, napomenaNjemacki, setNapomenaNjemacki }) {
+function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], kvalitete = [], satnicaMontaza = 0, calc, azurirajOtpadLima, materijaliSkladiste, narudzbenice, napomenaNjemacki, setNapomenaNjemacki, poznateOperacije = [] }) {
   const [otvorene, setOtvorene] = useState(() => Object.fromEntries(pozicije.map((p) => [p.id, true])));
   const toggle = (id) => setOtvorene((o) => ({ ...o, [id]: !o[id] }));
   const grupe = katalogPoTipu(katalog);
@@ -7676,7 +7695,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
   const praznaAkzStavka = () => ({ id: uid("akz"), tip: AKZ_TIPOVI[0].key, cijenaKg: 0 });
   const addPoz = () => {
     const id = uid("poz");
-    setPozicije([...pozicije, { id, oznaka: `P${pozicije.length + 1}`, naziv: "", kolicina: 1, stavke: [praznaStavka()], operacije: praznaOperacijaSati(), brojMontera: 0, planiraniSatiMontaza: 0, stavkeAKZ: [], materijalStavke: [], ostaleStavke: [] }]);
+    setPozicije([...pozicije, { id, oznaka: `P${pozicije.length + 1}`, naziv: "", kolicina: 1, stavke: [praznaStavka()], operacije: praznaOperacijaSati(), dodatneOperacije: [], brojMontera: 0, planiraniSatiMontaza: 0, stavkeAKZ: [], materijalStavke: [], ostaleStavke: [] }]);
     setOtvorene((o) => ({ ...o, [id]: true }));
     setAktivnaKartica(id);
   };
@@ -7687,7 +7706,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
     if (!izvor) return;
     const kopija = JSON.parse(JSON.stringify(izvor));
     kopija.id = uid("poz");
-    ["stavke", "stavkeAKZ", "materijalStavke", "ostaleStavke"].forEach((k) => { if (Array.isArray(kopija[k])) kopija[k] = kopija[k].map((r) => ({ ...r, id: uid("k") })); });
+    ["stavke", "stavkeAKZ", "materijalStavke", "ostaleStavke", "dodatneOperacije"].forEach((k) => { if (Array.isArray(kopija[k])) kopija[k] = kopija[k].map((r) => ({ ...r, id: uid("k") })); });
     const zauzete = new Set(pozicije.map((p) => p.oznaka));
     const m = /^(.*?)(\d+)(\D*)$/.exec(izvor.oznaka || "");
     if (m) {
@@ -7731,6 +7750,28 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
     updatePoz(pozId, { stavkeAKZ: (poz.stavkeAKZ || []).filter((a) => a.id !== akzId) });
   };
 
+  // Dodatne operacije: naziv koji je već korišten (u ovoj ili ranijim ponudama) predlaže se iz popisa, a ako
+  // cijena još nije upisana, preuzima se zadnja cijena i faza te operacije.
+  const praznaDodatna = () => ({ id: uid("dop"), naziv: "", sati: 0, cijenaH: "", faza: FAZA_DODATNE_OPERACIJE });
+  const sveOperacije = (() => {
+    const m = new Map(poznateOperacije.map((o) => [o.naziv.toLowerCase(), o]));
+    pozicije.forEach((p) => (p.dodatneOperacije || []).forEach((o) => { const n = String(o.naziv || "").trim(); if (n && Number(o.cijenaH) > 0) m.set(n.toLowerCase(), { naziv: n, cijenaH: o.cijenaH, faza: o.faza || FAZA_DODATNE_OPERACIJE }); }));
+    return [...m.values()].sort((a, b) => a.naziv.localeCompare(b.naziv, "hr"));
+  })();
+  const addDodatna = (pozId) => updatePoz(pozId, { dodatneOperacije: [...((pozicije.find((p) => p.id === pozId) || {}).dodatneOperacije || []), praznaDodatna()] });
+  const updateDodatna = (pozId, opId, patch) => {
+    const poz = pozicije.find((p) => p.id === pozId);
+    updatePoz(pozId, { dodatneOperacije: (poz.dodatneOperacije || []).map((o) => (o.id === opId ? { ...o, ...patch } : o)) });
+  };
+  const removeDodatna = (pozId, opId) => {
+    const poz = pozicije.find((p) => p.id === pozId);
+    updatePoz(pozId, { dodatneOperacije: (poz.dodatneOperacije || []).filter((o) => o.id !== opId) });
+  };
+  const promijeniNazivOperacije = (pozId, op, naziv) => {
+    const poznata = sveOperacije.find((o) => o.naziv.toLowerCase() === naziv.trim().toLowerCase());
+    updateDodatna(pozId, op.id, poznata && !(Number(op.cijenaH) > 0) ? { naziv, cijenaH: poznata.cijenaH, faza: poznata.faza } : { naziv });
+  };
+
   // Formule su dijeljene na razini modula (koristi ih i PDF ispis ponude) — ovdje samo lokalni
   // wrapperi koji nadopune trenutni katalog/kvalitete/satnicaMontaza/materijaliSkladiste.
   const satiPoz = satiPozicije;
@@ -7759,6 +7800,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
         </div>
       </div>
 
+      <datalist id="dodatne-operacije-popis">{sveOperacije.map((o) => <option key={o.naziv} value={o.naziv} />)}</datalist>
       {pozicije.length === 0 && aktivnaKartica !== "materijal" && aktivnaKartica !== "rekap" && <div style={{ textAlign: "center", color: "var(--ink-faint)", padding: "16px 0", fontSize: 13 }}>Nema stavki. Dodajte prvu stavku konstrukcije.</div>}
 
       {aktivnaPozicija && (() => {
@@ -7803,6 +7845,35 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
                     </div>
                   ))}
                 </div>
+                <div className="label" style={{ marginTop: 14, marginBottom: 2 }}>Dodatne operacije (kojih nema na popisu)</div>
+                {(p.dodatneOperacije || []).map((o) => (
+                  <div key={o.id} style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap", padding: "6px 0", borderBottom: "1px dashed var(--line)" }}>
+                    <div style={{ flex: "2 1 200px" }}>
+                      <label className="label">Operacija</label>
+                      <input className="input" list="dodatne-operacije-popis" placeholder="npr. Pjeskarenje" aria-label="Naziv dodatne operacije" value={o.naziv} onChange={(e) => promijeniNazivOperacije(p.id, o, e.target.value)} />
+                    </div>
+                    <div style={{ width: 90 }}>
+                      <label className="label">Sati</label>
+                      <input className="input f-mono" type="number" min="0" step="0.5" aria-label="Sati dodatne operacije" value={o.sati} onChange={(e) => updateDodatna(p.id, o.id, { sati: e.target.value })} />
+                    </div>
+                    <div style={{ width: 100 }}>
+                      <label className="label">Cijena (€/h)</label>
+                      <input className="input f-mono" type="number" min="0" step="0.5" aria-label="Cijena dodatne operacije po satu" value={o.cijenaH} onChange={(e) => updateDodatna(p.id, o.id, { cijenaH: e.target.value })} />
+                    </div>
+                    <div style={{ flex: "1 1 190px" }}>
+                      <label className="label">Faza u proizvodnji</label>
+                      <select className="select" aria-label="Faza dodatne operacije" value={FAZE.includes(o.faza) ? o.faza : FAZA_DODATNE_OPERACIJE} onChange={(e) => updateDodatna(p.id, o.id, { faza: e.target.value })}>
+                        {FAZE.map((f) => <option key={f} value={f}>{fazaOznaka(f)}</option>)}
+                      </select>
+                    </div>
+                    <div style={{ width: 110 }}>
+                      <label className="label">Iznos</label>
+                      <div className="input f-mono" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>{fmtCurDec((Number(o.sati) || 0) * (Number(o.cijenaH) || 0))}</div>
+                    </div>
+                    <button className="btn btn-icon btn-ghost" aria-label="Obriši dodatnu operaciju" onClick={() => potvrdiBrisanje(() => removeDodatna(p.id, o.id), "ovu operaciju")}><Trash2 size={14} color="var(--rust)" /></button>
+                  </div>
+                ))}
+                <Btn variant="ghost" size="sm" icon={Plus} onClick={() => addDodatna(p.id)} style={{ marginTop: 8 }}>Dodaj operaciju</Btn>
               </div>
             )}
 
@@ -8281,7 +8352,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
     const upisano = zbrojSatiZaNalog(n.id, db.satiPoNalogu);
     if (upisano > 0) { showToast(`Nalog ${n.broj} ima upisanih ${upisano} h — nije ga moguće obrisati. Smanji plan ili ga označi završenim.`); return; }
     const ovisni = db.radniNalozi.filter((r) => r.ovisiONalogId === n.id);
-    if (!window.confirm(`Obrisati radni nalog ${n.broj} (${fazaOznaka(n.faza)}, ${n.planiranoSati} h)?${n.materijalIzdan ? " Materijal za njega je već izdan — izdatnica ostaje." : ""}${ovisni.length ? ` Ovisnost naloga ${ovisni.map((r) => r.broj).join(", ")} o njemu se uklanja.` : ""}`)) return;
+    if (!window.confirm(`Obrisati radni nalog ${n.broj} (${fazaNaloga(n)}, ${n.planiranoSati} h)?${n.materijalIzdan ? " Materijal za njega je već izdan — izdatnica ostaje." : ""}${ovisni.length ? ` Ovisnost naloga ${ovisni.map((r) => r.broj).join(", ")} o njemu se uklanja.` : ""}`)) return;
     update("radniNalozi", db.radniNalozi.filter((r) => r.id !== n.id).map((r) => (r.ovisiONalogId === n.id ? { ...r, ovisiONalogId: null } : r)));
     showToast("Radni nalog obrisan.");
   };
@@ -8594,7 +8665,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
             <tbody>
               {pozicije.map((p) => {
                 const masaJed = masaPozicije(p, db.katalogProfila, db.kvaliteteMaterijala);
-                const sati = OPERACIJE.reduce((s, o) => s + (Number(p.operacije?.[o.key]) || 0), 0);
+                const sati = satiPozicije(p);
                 return (
                   <tr key={p.id}>
                     <td className="f-mono">{p.oznaka}</td>
@@ -8645,7 +8716,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
               {nalozi.map((n) => (
                 <tr key={n.id}>
                   <td className="f-mono">{n.broj}{n.dodatakId && (projekt.dodaci || []).find((d) => d.id === n.dodatakId) && <div style={{ fontFamily: "var(--font-body)", fontSize: 10.5, color: "var(--ink-faint)" }}>{(projekt.dodaci || []).find((d) => d.id === n.dodatakId).naziv}</div>}</td>
-                  <td>{fazaOznaka(n.faza)}</td>
+                  <td>{fazaNaloga(n)}</td>
                   <td>{n.zaduzenTim || "—"}</td>
                   <td className="f-mono">{n.utrosenoSati} / {n.planiranoSati}</td>
                   <td><Badge status={n.status} /></td>
@@ -9220,6 +9291,14 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
   const mozePonude = dozvolaZaKarticu(mojaPozicija, "ponude", "ponude").izmjene;
   const mozePotvrde = dozvolaZaKarticu(mojaPozicija, "projekti", "potvrde").izmjene;
   const imaModulProjekti = (mojaPozicija?.moduli || []).includes("projekti");
+  const poznateOperacije = useMemo(() => {
+    const m = new Map();
+    (db.ponude || []).forEach((po) => (po.pozicije || []).forEach((p) => (p.dodatneOperacije || []).forEach((o) => {
+      const naziv = String(o.naziv || "").trim();
+      if (naziv && Number(o.cijenaH) > 0) m.set(naziv.toLowerCase(), { naziv, cijenaH: o.cijenaH, faza: o.faza || FAZA_DODATNE_OPERACIJE });
+    })));
+    return [...m.values()];
+  }, [db.ponude]);
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
 
@@ -9429,6 +9508,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
       voditeljId: "", zadaci: noviZadaciIzStandarda(),
       faze: { ...praznaFazaSati(), ...Object.fromEntries(OPERACIJE.map((o) => [o.label, calc.satiPoOperaciji[o.key]])), "Montaža (teren)": calc.satiMontaze },
     };
+    calc.dodatneOperacije.forEach((o) => { noviProjekt.faze[o.faza] = (Number(noviProjekt.faze[o.faza]) || 0) + o.sati; });
     let rnBrojac = parseInt(sljedeciBrojRadnogNaloga(db.radniNalozi, noviProjekt.sifra).split("/").pop(), 10);
     const sljedeciRnBroj = () => `${noviProjekt.sifra}/${rnBrojac++}`;
     let noviNalozi = OPERACIJE.filter((o) => calc.satiPoOperaciji[o.key] > 0).map((o) => ({
@@ -9455,6 +9535,15 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
         stavke: [], materijalIzdan: false,
       }];
     }
+    // Dodatne operacije iz ponude: svaka (po fazi i nazivu) svoj radni nalog, naziv operacije uz fazu naloga.
+    calc.dodatneOperacije.forEach((o) => {
+      noviNalozi = [...noviNalozi, {
+        id: uid("rn"), broj: sljedeciRnBroj(), projektId: noviProjekt.id,
+        naziv: noviProjekt.naziv, faza: o.faza, ...(o.naziv ? { operacija: o.naziv } : {}), zaduzenTim: "", status: "Planiran",
+        planiranoSati: o.sati, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: addDays(todayISO(), 14),
+        stavke: [], materijalIzdan: false,
+      }];
+    });
     patchProjekti([noviProjekt], []);
     update("radniNalozi", [...db.radniNalozi, ...noviNalozi]);
     update("ponude", db.ponude.map((p) => (p.id === ponuda.id ? { ...p, projektId: noviProjekt.id } : p)));
@@ -9819,7 +9908,8 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
               <PozicijeEditor pozicije={ponForm.pozicije} setPozicije={(rows) => setPonForm({ ...ponForm, pozicije: rows })} cjenikRada={db.cjenikRada} katalog={db.katalogProfila} kvalitete={db.kvaliteteMaterijala} satnicaMontaza={ponForm.satnicaMontaza} calc={calc}
                 azurirajOtpadLima={azurirajOtpadLima}
                 materijaliSkladiste={db.materijali} narudzbenice={db.narudzbenice}
-                napomenaNjemacki={ponForm.napomenaNjemacki} setNapomenaNjemacki={(v) => setPonForm({ ...ponForm, napomenaNjemacki: v })} />
+                napomenaNjemacki={ponForm.napomenaNjemacki} setNapomenaNjemacki={(v) => setPonForm({ ...ponForm, napomenaNjemacki: v })}
+                poznateOperacije={poznateOperacije} />
             </div>
 
             <Field label="Napomena"><textarea className="textarea" rows={2} value={ponForm.napomena} onChange={(e) => setPonForm({ ...ponForm, napomena: e.target.value })} /></Field>
@@ -9990,7 +10080,7 @@ function ZavrsenProjektAnalizaModal({ projekt, db, onClose }) {
             {[...nalozi].sort((a, b) => usporediPrirodno(a.broj, b.broj)).map((n) => (
               <tr key={n.id}>
                 <td className="f-mono">{n.broj}</td>
-                <td>{fazaOznaka(n.faza)}</td>
+                <td>{fazaNaloga(n)}</td>
                 <td className="f-mono">{Number(n.planiranoSati || 0).toFixed(1)} h</td>
                 <td className="f-mono">{Number(n.utrosenoSati || 0).toFixed(1)} h</td>
               </tr>
@@ -11724,7 +11814,7 @@ function NedovrsenaDetaljModal({ red, db, mjesec, trosakSata, zakljucan, onClose
       {satiPoNalogu.length === 0 ? <p style={{ fontSize: 12.5, color: "var(--ink-faint)" }}>Nema upisanih sati na nalozima do kraja mjeseca.</p> : (
         <table className="erp-table" style={{ marginBottom: 14 }}>
           <thead><tr><th>Radni nalog</th><th>Faza</th><th style={{ textAlign: "right" }}>Sati</th></tr></thead>
-          <tbody>{satiPoNalogu.map(({ n, sati }) => <tr key={n.id}><td className="f-mono">{n.broj}</td><td>{fazaOznaka(n.faza)}</td><td className="f-mono" style={{ textAlign: "right" }}>{fmtSati(sati)}</td></tr>)}</tbody>
+          <tbody>{satiPoNalogu.map(({ n, sati }) => <tr key={n.id}><td className="f-mono">{n.broj}</td><td>{fazaNaloga(n)}</td><td className="f-mono" style={{ textAlign: "right" }}>{fmtSati(sati)}</td></tr>)}</tbody>
         </table>
       )}
       <div className="label">Vanjski troškovi ({fmtCurDec(red.vanjski)})</div>
@@ -13927,7 +14017,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
                       </optgroup>
                       <optgroup label="Radni nalozi">
                         {naloziZaOdabir(trenutniRadnik.zaposlenik).map((n) => (
-                          <option key={n.id} value={n.id}>{(trenutniRadnik.zaposlenik.kompetencije || []).includes(n.faza) ? "★ " : ""}{n.broj} — {n.naziv} ({fazaOznaka(n.faza)})</option>
+                          <option key={n.id} value={n.id}>{(trenutniRadnik.zaposlenik.kompetencije || []).includes(n.faza) ? "★ " : ""}{n.broj} — {n.naziv} ({fazaNaloga(n)})</option>
                         ))}
                       </optgroup>
                     </select>
