@@ -2268,7 +2268,12 @@ export default function App() {
 
   // Početna stranica (bez prijave) je kiosk zaslon za evidenciju radnog vremena — gumb "Prijava"
   // u kutu prebacuje na stvarni login (?prijava=1), da uređaj na ulazu ne mora biti posebno adresiran.
-  const zeliPrijavu = urlParametri.get("prijava") === "1" || !!urlParametri.get("mb"); // skenirana naljepnica (?mb=) traži prijavu, ne kiosk
+  // Skenirana naljepnica (?mb=) bez prijave prikazuje karticu matičnog broja bez prijave; ?prijava=1&mb= (gumb Prijava
+  // na toj kartici) vodi na prijavu, nakon koje se ista kartica otvara u aplikaciji.
+  if (urlParametri.get("mb") && urlParametri.get("prijava") !== "1" && (potrebnaPrijava || !prijavljenId)) {
+    return <JavnaKarticaMaticnog broj={urlParametri.get("mb")} />;
+  }
+  const zeliPrijavu = urlParametri.get("prijava") === "1" || !!urlParametri.get("mb");
   if ((potrebnaPrijava || !prijavljenId) && !zeliPrijavu) {
     return <KioskView onPrijava={() => { window.location.href = `${window.location.pathname}?prijava=1`; }} />;
   }
@@ -3017,11 +3022,11 @@ async function ispisiNaljepniceMaterijala(popis, nazivTvrtke) {
 }
 
 // Kartica matičnog broja: otvara se skeniranjem QR koda s naljepnice (?mb=3700) — materijal, šarža, atest,
-// stanje i na koje je projekte izdano. Prikazuje samo ono što prijavljena pozicija smije vidjeti.
+// stanje i na koje je projekte izdano. Prijavljenom korisniku iz podataka aplikacije (koliko njegova pozicija
+// vidi), a bez prijave s javne rute /api/javno/maticni/:broj (isti podaci, bez cijena) — vidi JavnaKarticaMaticnog.
 function MaticniBrojKarticaModal({ broj, db, onClose }) {
   const z = (db.maticnaKnjiga || []).find((x) => String(x.broj) === String(broj).trim());
   const potrosnja = useMemo(() => potrosnjaPoMaticnim(db.izdatnice), [db.izdatnice]);
-  const dobavljac = z ? (db.dobavljaci || []).find((d) => d.id === z.dobavljacId)?.naziv || "" : "";
   const izdano = useMemo(() => {
     if (!z) return [];
     const r = [];
@@ -3031,12 +3036,23 @@ function MaticniBrojKarticaModal({ broj, db, onClose }) {
     })));
     return r.sort((a, b) => String(a.datum).localeCompare(String(b.datum)));
   }, [z, db.izdatnice, db.projekti]);
-  const Red = ({ k, v }) => (v ? <tr><td style={{ color: "var(--ink-soft)", width: 150, paddingRight: 12 }}>{k}</td><td style={{ fontWeight: 600 }}>{v}</td></tr> : null);
+  const podaci = z && {
+    ...z, dobavljac: (db.dobavljaci || []).find((d) => d.id === z.dobavljacId)?.naziv || "",
+    iskoristeno: zaokruziKolicinu(potrosnja.get(z.id) || 0), preostalo: preostaloMaticnog(z, potrosnja), izdano,
+  };
   return (
     <Modal title={`Matični broj ${broj}`} onClose={onClose} footer={<Btn onClick={onClose}>Zatvori</Btn>}>
       {!z ? (
         <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>Matični broj {broj} nije pronađen, ili tvoja pozicija nema pristup matičnoj knjizi.</p>
-      ) : (
+      ) : <MaticniBrojPodaci z={podaci} />}
+    </Modal>
+  );
+}
+
+// Sadržaj kartice matičnog broja (zajedničko za karticu u aplikaciji i javnu stranicu bez prijave).
+function MaticniBrojPodaci({ z }) {
+  const Red = ({ k, v }) => (v ? <tr><td style={{ color: "var(--ink-soft)", width: 150, paddingRight: 12 }}>{k}</td><td style={{ fontWeight: 600 }}>{v}</td></tr> : null);
+  return (
         <>
           <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 2 }}>{z.naziv}</div>
           <div className="f-mono" style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 12 }}>{formatSifre(z.sifra)}</div>
@@ -3046,25 +3062,61 @@ function MaticniBrojKarticaModal({ broj, db, onClose }) {
               <Red k="Šarža" v={z.sarza} />
               <Red k="Atest" v={z.atestBroj ? `${z.atestVrsta ? `${z.atestVrsta} · ` : ""}${z.atestBroj}` : ""} />
               {(!z.atestBroj || !z.atestVrsta) && <tr><td style={{ color: "var(--ink-soft)" }}>Atest</td><td style={{ color: "var(--rust)", fontWeight: 600 }}>nedostaje</td></tr>}
-              <Red k="Dobavljač" v={dobavljac} />
+              <Red k="Dobavljač" v={z.dobavljac} />
               <Red k="Narudžbenica" v={z.narudzbenicaBroj} />
               <Red k="Datum primitka" v={z.datum ? fmtDate(z.datum) : ""} />
               <Red k="Primljeno" v={`${z.kolicinaPrimljeno} ${z.jm || ""}`} />
-              <Red k="Iskorišteno" v={`${zaokruziKolicinu(potrosnja.get(z.id) || 0)} ${z.jm || ""}`} />
-              <Red k="Preostalo" v={`${preostaloMaticnog(z, potrosnja)} ${z.jm || ""}`} />
+              <Red k="Iskorišteno" v={`${z.iskoristeno} ${z.jm || ""}`} />
+              <Red k="Preostalo" v={`${z.preostalo} ${z.jm || ""}`} />
               <Red k="Napomena" v={z.napomena} />
             </tbody>
           </table>
           <div className="label" style={{ marginBottom: 6 }}>Izdano na projekte</div>
-          {izdano.length === 0 ? <EmptyState text="Ništa od ovog matičnog broja još nije izdano." /> : (
-            <table className="erp-table">
-              <thead><tr><th>Izdatnica</th><th>Datum</th><th>Projekt</th><th style={{ width: 90 }}>Količina</th></tr></thead>
-              <tbody>{izdano.map((r) => <tr key={r.id}><td className="f-mono">{r.izdatnica}</td><td>{r.datum ? fmtDate(r.datum) : ""}</td><td style={{ fontSize: 12.5 }}>{r.projekt}</td><td className="f-mono">{r.kolicina} {r.jm}</td></tr>)}</tbody>
-            </table>
+          {z.izdano.length === 0 ? <EmptyState text="Ništa od ovog matičnog broja još nije izdano." /> : (
+            <div style={{ border: "1px solid var(--line)", borderRadius: 3 }}>
+              {z.izdano.map((r, i) => (
+                <div key={r.id} style={{ padding: "8px 10px", borderTop: i ? "1px solid var(--line)" : "none", fontSize: 13 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                    <span><span className="f-mono">{r.izdatnica}</span><span style={{ color: "var(--ink-soft)" }}> · {r.datum ? fmtDate(r.datum) : ""}</span></span>
+                    <strong className="f-mono">{r.kolicina} {r.jm}</strong>
+                  </div>
+                  <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>{r.projekt}</div>
+                </div>
+              ))}
+            </div>
           )}
         </>
-      )}
-    </Modal>
+  );
+}
+
+// Kartica matičnog broja bez prijave: skeniranje QR koda s naljepnice (npr. mobitelom u skladištu ili na gradilištu)
+// ne traži prijavu — podaci dolaze s javne rute. Gumb "Prijava" vodi u aplikaciju i otvara istu karticu.
+function JavnaKarticaMaticnog({ broj }) {
+  const [stanje, setStanje] = useState({ ucitava: true });
+  useEffect(() => {
+    fetch(`${API_URL}/api/javno/maticni/${encodeURIComponent(broj)}`)
+      .then(async (r) => { const d = await r.json().catch(() => ({})); setStanje(r.ok ? { podaci: d } : { greska: d.error || "Greška pri učitavanju." }); })
+      .catch(() => setStanje({ greska: "Nema veze s poslužiteljem — provjeri internetsku vezu." }));
+  }, [broj]);
+  return (
+    <div className="erp-root" style={{ minHeight: "100vh", background: "var(--sidebar)", padding: "16px 12px", boxSizing: "border-box" }}>
+      <GlobalStyle />
+      <div className="card" style={{ maxWidth: 640, margin: "0 auto", padding: 18, background: "var(--surface)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+          <div style={{ width: 34, height: 34, background: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 3, flexShrink: 0 }}>
+            <Package size={18} color="var(--accent-ink)" />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="f-mono" style={{ fontSize: 10, letterSpacing: "0.08em", color: "var(--ink-faint)", textTransform: "uppercase" }}>ECON D.O.O. · kartica materijala</div>
+            <div className="f-display" style={{ fontSize: 18, fontWeight: 600 }}>Matični broj {broj}</div>
+          </div>
+          <a className="btn btn-ghost btn-sm" href={`${window.location.pathname}?prijava=1&mb=${encodeURIComponent(broj)}`}>Prijava</a>
+        </div>
+        {stanje.ucitava ? <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>Učitavanje…</div>
+          : stanje.greska ? <div style={{ fontSize: 13, color: "var(--rust)" }}>{stanje.greska}</div>
+          : <MaticniBrojPodaci z={stanje.podaci} />}
+      </div>
+    </div>
   );
 }
 
