@@ -447,6 +447,56 @@ app.get("/api/kiosk/ping", (req, res) => res.json({ ok: true }));
 // verzija = commit koji trenutno radi na Renderu (za provjeru je li nova verzija objavljena).
 app.get("/api/vrijeme", (req, res) => res.json({ sada: new Date().toISOString(), verzija: process.env.RENDER_GIT_COMMIT?.slice(0, 7) || null }));
 
+// ---------- Javna kartica matičnog broja (QR kod s naljepnice materijala, bez prijave) ----------
+// Isti podaci kao kartica u aplikaciji (materijal, šarža, atest, dobavljač, narudžbenica, količine, izdavanja na
+// projekte) — bez cijena. Matični brojevi idu redom, pa je broj upita po IP adresi ograničen da se cijela knjiga
+// ne može brzo pokupiti; skeniranje naljepnica u skladištu (i inventura) ostaje unutar ograničenja.
+const JAVNO_UPITA = 120, JAVNO_PROZOR_MS = 10 * 60 * 1000;
+const javniUpiti = new Map(); // ip -> [vremena upita]
+setInterval(() => { const sada = Date.now(); javniUpiti.forEach((t, ip) => { const ostaju = t.filter((x) => sada - x < JAVNO_PROZOR_MS); if (ostaju.length) javniUpiti.set(ip, ostaju); else javniUpiti.delete(ip); }); }, JAVNO_PROZOR_MS);
+const zaokruziKolicinu = (v) => Math.round((Number(v) || 0) * 1000) / 1000;
+// Isto kao netoPoMaticnim u App.jsx: povrat se oduzima od zadnje dodijeljenih matičnih brojeva stavke izdatnice.
+const netoPoMaticnim = (st) => {
+  const alok = (st.matBrojevi || []).map((a) => ({ ...a }));
+  let vraceno = Number(st.kolicinaVraceno) || 0;
+  for (let i = alok.length - 1; i >= 0 && vraceno > 0; i--) {
+    const v = Math.min(alok[i].kolicina, vraceno);
+    alok[i].kolicina = zaokruziKolicinu(alok[i].kolicina - v);
+    vraceno -= v;
+  }
+  return alok.filter((a) => a.kolicina > 0.0005);
+};
+app.get("/api/javno/maticni/:broj", async (req, res) => {
+  const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim();
+  const sada = Date.now();
+  const nedavni = (javniUpiti.get(ip) || []).filter((t) => sada - t < JAVNO_PROZOR_MS);
+  if (nedavni.length >= JAVNO_UPITA) return res.status(429).json({ error: "Previše upita s ovog uređaja — pokušaj ponovno za nekoliko minuta." });
+  nedavni.push(sada);
+  javniUpiti.set(ip, nedavni);
+  try {
+    const [knjiga, dobavljaci, izdatnice, projekti] = await Promise.all(["maticnaKnjiga", "dobavljaci", "izdatnice", "projekti"].map(ucitajKljuc));
+    const z = (knjiga || []).find((x) => String(x.broj) === String(req.params.broj).trim());
+    if (!z) return res.status(404).json({ error: `Matični broj ${String(req.params.broj).slice(0, 20)} nije pronađen.` });
+    let iskoristeno = 0;
+    const izdano = [];
+    (izdatnice || []).forEach((i) => (i.stavke || []).forEach((st) => netoPoMaticnim(st).filter((a) => a.maticniId === z.id).forEach((a) => {
+      iskoristeno += a.kolicina;
+      const p = (projekti || []).find((x) => x.id === i.projektId);
+      izdano.push({ id: `${i.id}-${st.id}`, izdatnica: i.broj, datum: i.datum, projekt: p ? `${p.sifra} — ${p.naziv}` : "—", kolicina: a.kolicina, jm: st.jm || z.jm });
+    })));
+    izdano.sort((a, b) => String(a.datum).localeCompare(String(b.datum)));
+    res.json({
+      broj: z.broj, naziv: z.naziv, sifra: z.sifra, kvaliteta: z.kvaliteta, sarza: z.sarza, atestBroj: z.atestBroj, atestVrsta: z.atestVrsta,
+      dobavljac: (dobavljaci || []).find((d) => d.id === z.dobavljacId)?.naziv || "", narudzbenicaBroj: z.narudzbenicaBroj, datum: z.datum,
+      kolicinaPrimljeno: z.kolicinaPrimljeno, iskoristeno: zaokruziKolicinu(iskoristeno), preostalo: zaokruziKolicinu((Number(z.kolicinaPrimljeno) || 0) - iskoristeno),
+      jm: z.jm, napomena: z.napomena, izdano,
+    });
+  } catch (e) {
+    console.error("Greška kod javne kartice matičnog broja:", e);
+    res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+  }
+});
+
 // ---------- Ciljana izmjena evidencijaRada (Evidencija rada u glavnoj aplikaciji) ----------
 // Obična PUT /api/data/evidencijaRada šalje CIJELI popis kakav ga je preglednik zadnji put
 // dohvatio — ako je u međuvremenu (dok je taj preglednik otvoren) netko prijavio/odjavio
