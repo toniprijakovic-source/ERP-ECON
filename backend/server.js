@@ -207,6 +207,19 @@ const uskladiUtrosenoSati = (nalozi, sati) => {
   (sati || []).forEach((z) => zbroj.set(z.radniNalogId, (zbroj.get(z.radniNalogId) || 0) + (Number(z.sati) || 0)));
   return nalozi.map((n) => (n && n.id ? { ...n, utrosenoSati: zbroj.get(n.id) || 0 } : n));
 };
+// Uvoz sati iz Excela nalozima otvorenim s preostalim satima povećao je plan za uvezene sate (planUvecanZaUvoz).
+// Preglednik učitan prije uvoza šalje nalog bez tog polja i sa starim planom — tada ostaje plan s poslužitelja,
+// inače bi plan proizvodnje mislio da je faza već gotova.
+function zadrziUvozniPlan(dolazni, trenutni) {
+  const poId = new Map(trenutni.map((n) => [n.id, n]));
+  return dolazni.map((n) => {
+    const t = n && poId.get(n.id);
+    if (!t || t.planUvecanZaUvoz == null || n.planUvecanZaUvoz != null) return n;
+    const stariPlan = (Number(t.planiranoSati) || 0) - Number(t.planUvecanZaUvoz);
+    if (Math.abs((Number(n.planiranoSati) || 0) - stariPlan) < 0.01) return { ...n, planiranoSati: t.planiranoSati, planUvecanZaUvoz: t.planUvecanZaUvoz };
+    return { ...n, planUvecanZaUvoz: t.planUvecanZaUvoz };
+  });
+}
 const ucitajSatiPoNalogu = async (client) => (await client.query("SELECT value FROM app_data WHERE key = 'satiPoNalogu'")).rows[0]?.value || [];
 // Nakon promjene sati: utrošeno na svim nalozima iz novih zapisa (piše se samo ako se nešto promijenilo).
 async function uskladiNalogeSaSatima(client, sati) {
@@ -223,7 +236,8 @@ async function spremiRadneNaloge(dolazni) {
   try {
     await client.query("BEGIN");
     const r = await client.query("SELECT value FROM app_data WHERE key = 'radniNalozi' FOR UPDATE");
-    const rezultat = uskladiUtrosenoSati(zadrziNoveOznakeNaloga(dolazni, r.rows[0]?.value || []), await ucitajSatiPoNalogu(client));
+    const trenutni = r.rows[0]?.value || [];
+    const rezultat = uskladiUtrosenoSati(zadrziUvozniPlan(zadrziNoveOznakeNaloga(dolazni, trenutni), trenutni), await ucitajSatiPoNalogu(client));
     await client.query(
       `INSERT INTO app_data (key, value, updated_at) VALUES ('radniNalozi', $1, now())
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
@@ -929,7 +943,7 @@ const dodijeliMaticneBrojeve = (poslano, trenutno) => {
 };
 app.put("/api/maticnaKnjiga/patch", autentikacija, patchPoIdHandler("maticnaKnjiga", /^(?!)$/, "matične knjige", dodijeliMaticneBrojeve));
 app.put("/api/radniNalozi/patch", autentikacija, patchPoIdHandler("radniNalozi", /^(.*\/)(\d+)()$/, "radnih naloga",
-  async (poslano, trenutno, client) => uskladiUtrosenoSati(zadrziNoveOznakeNaloga(poslano, trenutno), await ucitajSatiPoNalogu(client))));
+  async (poslano, trenutno, client) => uskladiUtrosenoSati(zadrziUvozniPlan(zadrziNoveOznakeNaloga(poslano, trenutno), trenutno), await ucitajSatiPoNalogu(client))));
 // Sati po nalozima (dnevni unos u Planu proizvodnje i Sati po nalozima, uvoz iz Excela): izmjena po id-u, pa
 // zastarjela kopija u pregledniku više ne briše tuđe zapise; nakon spremanja se preračuna utrošeno na nalozima.
 app.put("/api/satiPoNalogu/patch", autentikacija, patchPoIdHandler("satiPoNalogu", /^(?!)$/, "sati po nalozima", (upsert) => upsert, 0, uskladiNalogeSaSatima));
