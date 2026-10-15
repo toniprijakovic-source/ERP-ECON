@@ -89,6 +89,10 @@ const KARTICE_MODULA = {
     // Produktivnost (kg/h): po projektima masa ÷ sati upisani na naloge, po mjesecima isporučena masa ÷ sati
     // radione s kioska. Piše samo ručno upisanu masu projekta (projekt.masaKonstrukcijeKg).
     produktivnost: { citanje: ["projekti", "radniNalozi", "satiPoNalogu", "narudzbe", "otpremnice", "normativi", "katalogProfila", "kvaliteteMaterijala", "kupci", "evidencijaRada", "postavkePlaca"], pisanje: ["projekti"] },
+    // Projekcija prihoda i troškova: narudžbe kupca, otpremnice, projekti (rokovi, dodaci, kupaonice), plan proizvodnje
+    // (nalozi, praznici, kapaciteti, postavke, normativ, odsutnosti iz evidencije), narudžbenice i ponude (materijal),
+    // transport. Piše samo postavke projekcije (trošak sata, % materijala, fiksni troškovi, ručni raspored) u nedovrsenaProizvodnja.
+    projekcija: { citanje: ["nedovrsenaProizvodnja", "projekti", "narudzbe", "otpremnice", "kupci", "normativi", "radniNalozi", "satiPoNalogu", "planProizvodnje", "praznici", "kapacitetiDana", "evidencijaRada", "postavkePlaca", "narudzbenice", "materijali", "ponude", "cjenikRada", "katalogProfila", "kvaliteteMaterijala", "narudzbeTransporta", "postavkeTvrtke"], pisanje: ["nedovrsenaProizvodnja"] },
   },
   // Transporti (od 2026-10): upiti prijevoznicima, narudžbe za transport (+ CMR iz narudžbe).
   transporti: {
