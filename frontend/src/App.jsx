@@ -2487,6 +2487,14 @@ const STIL_LINK_GUMBA = { background: "none", border: "none", padding: 0, cursor
 const izvuciPutanjuMape = (tekst) => { const m = String(tekst || "").match(/([A-Za-z]:\\[^)\n]+|\\\\[^\s)\\]+\\[^)\n]+)/); return m ? m[1].trim() : ""; };
 const urlOtvoriMapu = (putanja) => `econ-mapa:${encodeURIComponent(putanja).replace(/'/g, "%27")}`;
 const URL_POMOCNIKA = "/econ-pomocnik-instalacija.cmd";
+// Mapa projekta: ručno upisana putanja (polje "Mapa projekta") ili automatski econ-projekt:<šifra> — pomoćnik otvara
+// mapu u Z:\ECON_2026\ECON_2026\Econ_2026_Projekti čije ime počinje šifrom (npr. "RN 01-33_Regal za limove").
+const urlMapeProjekta = (p) => (p?.mapa ? urlOtvoriMapu(p.mapa) : p?.sifra ? `econ-projekt:${encodeURIComponent(String(p.sifra).trim()).replace(/'/g, "%27")}` : "");
+function SifraProjektaLink({ p }) {
+  const url = urlMapeProjekta(p);
+  if (!url) return <span className="f-mono">{p?.sifra}</span>;
+  return <a className="f-mono" href={url} title={p.mapa ? `Otvori mapu projekta: ${p.mapa}` : "Otvori mapu projekta na disku Z: (treba pomoćnik na računalu)"} style={{ color: "var(--steel)", fontWeight: 600, textDecoration: "underline" }} onClick={(e) => e.stopPropagation()} draggable={false}>{p.sifra}</a>;
+}
 // Atesti materijala (PDF) su na disku Z: u mapi "Atesti materijala ERP", imenovani po matičnom broju (3706.pdf, dodatne
 // stranice 3706.1.pdf). Otvara ih isti pomoćnik: econ-atest:<broj atesta>,<matični broj> otvara prvi pronađeni, a
 // econ-atesti:<projekt>/<matični~atest>,… slaže ZIP svih atesta u Preuzimanja. Oznake smiju imati samo slova, brojke, - i _.
@@ -2525,6 +2533,7 @@ function MapaZadatka({ z }) {
     <>
       {izTeksta && <MapaGumbi putanja={izTeksta} />}
       {z.projektMapa && z.projektMapa !== izTeksta && <MapaGumbi putanja={z.projektMapa} oznaka="Mapa projekta" />}
+      {!z.projektMapa && !izTeksta && z.projektSifra && <a href={urlMapeProjekta({ sifra: z.projektSifra })} onClick={(e) => e.stopPropagation()} style={{ ...STIL_LINK_GUMBA, textDecoration: "none", marginLeft: 8, whiteSpace: "nowrap" }}>Mapa projekta</a>}
     </>
   );
 }
@@ -8650,7 +8659,8 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
         <div>
           <div style={{ fontSize: 17, fontWeight: 600 }} className="f-display">{projekt.naziv}</div>
           <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>{kupac?.naziv || "—"} · Rok: {fmtDate(projekt.rokPocetka)} – {fmtDate(projekt.rokZavrsetka)}</div>
-          {projekt.mapa && <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2, wordBreak: "break-all" }}>Mapa projekta: <span className="f-mono" style={{ fontSize: 11.5 }}>{projekt.mapa}</span><MapaGumbi putanja={projekt.mapa} /></div>}
+          {projekt.mapa ? <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2, wordBreak: "break-all" }}>Mapa projekta: <span className="f-mono" style={{ fontSize: 11.5 }}>{projekt.mapa}</span><MapaGumbi putanja={projekt.mapa} /></div>
+            : <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>Mapa projekta: <a href={urlMapeProjekta(projekt)} style={{ ...STIL_LINK_GUMBA, textDecoration: "none" }}>Otvori mapu</a> <span style={{ fontSize: 11, color: "var(--ink-faint)" }}>(Econ_2026_Projekti\{projekt.sifra}_…)</span></div>}
           <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2, display: "flex", alignItems: "center", gap: 8 }}>
             Voditelj projekta: <strong style={{ color: "var(--ink)" }}>{voditelj ? `${voditelj.prezime} ${voditelj.ime}` : "nije dodijeljen"}</strong>
             {voditelj && <Btn variant="ghost" size="sm" onClick={() => { const ok = posaljiObavijestVoditelju(projekt, voditelj); showToast && showToast(ok ? "Otvoren e-mail za slanje obavijesti." : "Voditelj nema unesen e-mail."); }}>Pošalji obavijest</Btn>}
@@ -9893,7 +9903,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
           onDelete={(r) => setDel({ type: "proj", row: r })}
           addLabel="Novi projekt" searchKeys={["sifra", "naziv"]} readOnly={!mozeProjekti}
           columns={[
-            { key: "sifra", label: "Šifra", render: (r) => <span className="f-mono">{r.sifra}</span> },
+            { key: "sifra", label: "Šifra", render: (r) => <SifraProjektaLink p={r} /> },
             { key: "naziv", label: "Naziv" },
             { key: "voditelj", label: "Voditelj", render: (r) => { const v = db.zaposlenici.find((z) => z.id === r.voditeljId); return v ? `${v.prezime} ${v.ime}` : <span style={{ color: "var(--ink-faint)" }}>—</span>; } },
             { key: "kupac", label: "Kupac", render: (r) => kupacNaziv(r.kupacId) },
@@ -10023,7 +10033,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
           </div>
           <Field label="Opis"><textarea className="textarea" rows={3} value={projForm.opis} onChange={(e) => setProjForm({ ...projForm, opis: e.target.value })} /></Field>
           <Field label="Mapa projekta na serveru">
-            <input className="input f-mono" placeholder="npr. Z:\ECON_2026\ECON_2026\Econ_2026_Projekti\RN 170-307_…" value={projForm.mapa || ""} onChange={(e) => setProjForm({ ...projForm, mapa: e.target.value })} />
+            <input className="input f-mono" placeholder="prazno = automatski: mapa u Econ_2026_Projekti koja počinje šifrom projekta" value={projForm.mapa || ""} onChange={(e) => setProjForm({ ...projForm, mapa: e.target.value })} />
             <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 4 }}>Prikazuje se uz zadatke projekta i u popisu projekata s gumbima "Otvori mapu" i "Kopiraj". Da "Otvori mapu" radi jednim klikom, na svakom računalu jednom pokreni <a href={URL_POMOCNIKA} download style={{ color: "var(--steel)", fontWeight: 600 }}>pomoćnika</a> (otvara samo mape pod Z:\ECON_2026 i ateste materijala).</div>
           </Field>
           <div className="label" style={{ marginTop: 6 }}>{(projForm.dodaci || []).length ? "Osnovna narudžba — faze izrade (planirani sati)" : "Faze izrade (planirani sati)"}</div>

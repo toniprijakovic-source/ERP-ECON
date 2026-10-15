@@ -16,7 +16,7 @@ try {
   [IO.File]::WriteAllText($skripta, $t.Substring($t.IndexOf('#' + '#POMOCNIK')), (New-Object System.Text.UTF8Encoding $true))
   # Poveznica se skripti predaje kao argument (-File), nikad kao naredba, pa iz nje se ne moze nista pokrenuti.
   $naredba = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $skripta + '" "%1"'
-  foreach ($p in @('econ-mapa', 'econ-atest', 'econ-atesti')) {
+  foreach ($p in @('econ-mapa', 'econ-projekt', 'econ-atest', 'econ-atesti')) {
     $k = 'HKCU:\Software\Classes\' + $p
     New-Item -Path ($k + '\shell\open\command') -Force | Out-Null
     Set-Item -Path $k -Value ('URL:ECON ERP ' + $p)
@@ -25,7 +25,8 @@ try {
   }
   Write-Host ''
   Write-Host 'ECON ERP pomocnik je instaliran.'
-  Write-Host 'U aplikaciji sada rade: Otvori mapu, klik na broj atesta (PDF) i ZIP atesta ugradenog materijala.'
+  Write-Host 'U aplikaciji sada rade: Otvori mapu, klik na sifru projekta (mapa projekta), klik na broj atesta (PDF)'
+  Write-Host 'i ZIP atesta ugradenog materijala.'
   Write-Host 'Kod prvog klika preglednik pita smije li otvoriti poveznicu - oznaci "Uvijek dopusti" i potvrdi.'
   Write-Host ''
 } catch {
@@ -43,6 +44,8 @@ param([string]$Poveznica = '', [switch]$Proba)
 
 # Mape s atestima, redom prednosti: nova (po maticnom broju: 3706.pdf, dodatne stranice 3706.1.pdf), pa stara (1719-1.pdf).
 $KorijenMapa = 'Z:\ECON_2026'
+# Mape projekata: ime pocinje sifrom projekta, npr. "RN 01-33_Regal za limove" (i "..._ZAVRŠEN").
+$MapaProjekata = 'Z:\ECON_2026\ECON_2026\Econ_2026_Projekti'
 $MapeAtesta = @(
   'Z:\ECON_2026\ECON_2026\Econ_2026_Kontrola kvalitete\Atesti materijala ERP',
   'Z:\ECON_2026\ECON_2026\Econ_2026_Kontrola kvalitete\Atesti materijala'
@@ -91,6 +94,17 @@ if ($u -match '^econ-mapa:(.+)$') {
     if (Test-Path -LiteralPath $p -PathType Container) { Otvori $p }
     else { Poruka ("Mapa nije pronađena (je li spojen disk Z:?):`n" + $p) }
   }
+}
+elseif ($u -match '^econ-projekt:(.+)$') {
+  $sifra = [uri]::UnescapeDataString($Matches[1]).Trim()
+  if ($sifra -notmatch '^[\p{L}\p{Nd} ._-]{1,40}$') { exit }
+  if (-not (Test-Path -LiteralPath $MapaProjekata -PathType Container)) { Poruka ("Mapa projekata nije dostupna (je li spojen disk Z:?):`n" + $MapaProjekata); exit }
+  # Ime mape je sifra ili sifra pa "_" / razmak (RN 170-28 ne smije pogoditi RN 170-282_...); od vise mapa otvara se zadnja mijenjana.
+  $mape = @(Get-ChildItem -LiteralPath $MapaProjekata -Directory -ErrorAction SilentlyContinue | Where-Object {
+    $_.Name -eq $sifra -or $_.Name.StartsWith($sifra + '_', [StringComparison]::OrdinalIgnoreCase) -or $_.Name.StartsWith($sifra + ' ', [StringComparison]::OrdinalIgnoreCase)
+  } | Sort-Object LastWriteTime -Descending)
+  if ($mape.Count -gt 0) { Otvori $mape[0].FullName }
+  else { Poruka ("Mapa projekta " + $sifra + " nije pronađena u`n" + $MapaProjekata + "`n`nIme mape mora počinjati šifrom projekta, npr. " + $sifra + "_Naziv.") }
 }
 elseif ($u -match '^econ-atest:(.+)$') {
   $oznake = Oznake ([uri]::UnescapeDataString($Matches[1])) ','
