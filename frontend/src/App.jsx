@@ -2954,14 +2954,14 @@ const rasporediFifo = (knjiga, potrosnja, materijalId, kolicina) => {
   if (ostalo > 0.0005) rez.push({ maticniId: null, broj: null, kolicina: zaokruziKolicinu(ostalo) });
   return rez;
 };
-const noviZapisMaticneKnjige = ({ mat, kolicina, sarza, kvaliteta, narudzbenica, knjiga, otpremnica = "" }) => {
+const noviZapisMaticneKnjige = ({ mat, kolicina, sarza, kvaliteta, narudzbenica, knjiga, otpremnica = "", dimenzije = "" }) => {
   const k = kvaliteta || mat.kvaliteta || "";
   // Ista šarža i kvaliteta već imaju atest — prenosi se, da se ne upisuje dvaput.
   const slican = sarza ? (knjiga || []).find((z) => z.sarza === sarza && (z.kvaliteta || "") === k && z.atestBroj) : null;
   return {
     id: uid("mb"), materijalId: mat.id, sifra: mat.sifra || "", naziv: mat.naziv || "", kvaliteta: k, sarza: sarza || "",
     atestBroj: slican?.atestBroj || "", atestVrsta: slican?.atestVrsta || "", datum: todayISO(),
-    dobavljacId: narudzbenica?.dobavljacId || "", narudzbenicaId: narudzbenica?.id || "", narudzbenicaBroj: narudzbenica?.broj || "", otpremnicaDobavljaca: otpremnica || "",
+    dobavljacId: narudzbenica?.dobavljacId || "", narudzbenicaId: narudzbenica?.id || "", narudzbenicaBroj: narudzbenica?.broj || "", otpremnicaDobavljaca: otpremnica || "", dimenzije: dimenzije || "",
     kolicinaPrimljeno: zaokruziKolicinu(kolicina), jm: mat.jm || "", napomena: "", izvor: narudzbenica ? "zaprimanje" : "rucno",
   };
 };
@@ -2993,8 +2993,8 @@ const upozorenjeUgradnje = (r) => {
   return "";
 };
 
-// Podaci s naljepnice: naziv materijala, kvaliteta, šarža i matični broj (sve iz matične knjige).
-const podaciNaljepnice = (zapis) => ({ naziv: zapis.naziv || "", sifra: zapis.sifra ? formatSifre(zapis.sifra) : "", kvaliteta: zapis.kvaliteta || "", sarza: zapis.sarza || "", maticniBroj: String(zapis.broj ?? "") });
+// Podaci s naljepnice: naziv materijala, kvaliteta, šarža i matični broj (iz matične knjige) te dimenzije s narudžbenice.
+const podaciNaljepnice = (zapis, db) => ({ naziv: zapis.naziv || "", sifra: zapis.sifra ? formatSifre(zapis.sifra) : "", dimenzije: dimenzijeMaticnog(zapis, db), kvaliteta: zapis.kvaliteta || "", sarza: zapis.sarza || "", maticniBroj: String(zapis.broj ?? "") });
 // Ispis naljepnica 70×48 mm: svaka naljepnica je jedna stranica te veličine; svi podaci su iste veličine slova (12 pt) kao matični broj.
 // Radi preko skrivenog okvira (bez skočnog prozora), pa smije biti pozvan i nakon asinkronog dijela.
 async function ispisiNaljepniceMaterijala(popis, nazivTvrtke) {
@@ -3002,11 +3002,12 @@ async function ispisiNaljepniceMaterijala(popis, nazivTvrtke) {
   const qr = {};
   // QR kôd sadrži poveznicu na aplikaciju (…/?mb=3700): skeniranje mobitelom otvara karticu tog matičnog broja.
   for (const n of popis) if (!qr[n.maticniBroj]) qr[n.maticniBroj] = await QRCode.toDataURL(`${window.location.origin}/?mb=${encodeURIComponent(n.maticniBroj || "")}`, { margin: 0, scale: 8, errorCorrectionLevel: "M" });
-  const css = "@page{size:70mm 48mm;margin:0}html,body{margin:0;padding:0}.n{width:70mm;height:48mm;box-sizing:border-box;padding:2mm;display:flex;gap:2mm;page-break-after:always;overflow:hidden;font-family:Arial,Helvetica,sans-serif;color:#000}.n:last-child{page-break-after:auto}.q{width:23mm;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:space-between}.q img{width:23mm;height:23mm;image-rendering:pixelated}.q .f{font-size:5pt;color:#333;text-align:center;line-height:1.1}.t{flex:1;min-width:0;display:flex;flex-direction:column;font-size:12pt;line-height:1.15;overflow-wrap:anywhere}.t .sif,.t .mb{font-weight:700}.t .naziv{font-weight:700;margin:1mm 0;max-height:3.45em;overflow:hidden}.t .r b{font-weight:700}";
-  // redoslijed na naljepnici: šifra, matični broj, pa naziv, kvaliteta i šarža
+  const css = "@page{size:70mm 48mm;margin:0}html,body{margin:0;padding:0}.n{width:70mm;height:48mm;box-sizing:border-box;padding:2mm;display:flex;gap:2mm;page-break-after:always;overflow:hidden;font-family:Arial,Helvetica,sans-serif;color:#000}.n:last-child{page-break-after:auto}.q{width:23mm;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:space-between}.q img{width:23mm;height:23mm;image-rendering:pixelated}.q .f{font-size:5pt;color:#333;text-align:center;line-height:1.1}.t{flex:1;min-width:0;display:flex;flex-direction:column;font-size:12pt;line-height:1.15;overflow-wrap:anywhere}.t .sif,.t .mb{font-weight:700}.t .bl{margin:1mm 0}.t .naziv{font-weight:700;max-height:3.45em;overflow:hidden}.t .dim{font-weight:700;max-height:2.3em;overflow:hidden}.t .r b{font-weight:700}";
+  // redoslijed na naljepnici: šifra, matični broj, pa naziv i dimenzije s narudžbenice, kvaliteta i šarža
   const tijelo = popis.map((n) => `<div class="n"><div class="q"><img src="${qr[n.maticniBroj]}" alt=""></div><div class="t">`
     + (n.sifra ? `<div class="sif">Šifra: ${escHtml(n.sifra)}</div>` : "")
-    + `<div class="mb">Matični broj: ${escHtml(n.maticniBroj)}</div><div class="naziv">${escHtml(n.naziv)}</div>`
+    + `<div class="mb">Matični broj: ${escHtml(n.maticniBroj)}</div><div class="bl"><div class="naziv">${escHtml(n.naziv)}</div>`
+    + (n.dimenzije ? `<div class="dim">${escHtml(n.dimenzije)}</div>` : "") + `</div>`
     + [["Kvaliteta", n.kvaliteta], ["Šarža", n.sarza]].filter(([, v]) => v).map(([k, v]) => `<div class="r"><b>${k}:</b> ${escHtml(v)}</div>`).join("")
     + `</div></div>`).join("");
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Naljepnice materijala</title><style>${css}</style></head><body>${tijelo}</body></html>`;
@@ -3128,7 +3129,7 @@ function NaljepnicaMaterijalaModal({ materijal, db, onClose, showToast }) {
   const [odabran, setOdabran] = useState(() => (lotovi.find((z) => preostaloMaticnog(z, potrosnja) > 0) || lotovi[0])?.id || "");
   const [kopija, setKopija] = useState(1);
   const zapis = lotovi.find((z) => z.id === odabran);
-  const podaci = zapis ? podaciNaljepnice(zapis) : null;
+  const podaci = zapis ? podaciNaljepnice(zapis, db) : null;
   const ispisi = () => {
     if (!podaci) return;
     const n = Math.max(1, Math.min(200, Math.round(Number(kopija) || 1)));
@@ -3157,7 +3158,10 @@ function NaljepnicaMaterijalaModal({ materijal, db, onClose, showToast }) {
             <div style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column" }}>
               {podaci.sifra && <div style={{ fontWeight: 700 }}>Šifra: {podaci.sifra}</div>}
               <div style={{ fontWeight: 700 }}>Matični broj: {podaci.maticniBroj}</div>
-              <div style={{ fontWeight: 700, margin: "4px 0", maxHeight: "3.45em", overflow: "hidden" }}>{podaci.naziv}</div>
+              <div style={{ margin: "4px 0" }}>
+                <div style={{ fontWeight: 700, maxHeight: "3.45em", overflow: "hidden" }}>{podaci.naziv}</div>
+                {podaci.dimenzije && <div style={{ fontWeight: 700, maxHeight: "2.3em", overflow: "hidden" }}>{podaci.dimenzije}</div>}
+              </div>
               {[["Kvaliteta", podaci.kvaliteta], ["Šarža", podaci.sarza]].filter(([, v]) => v).map(([k, v]) => (
                 <div key={k}><b>{k}:</b> {v}</div>
               ))}
@@ -3241,6 +3245,18 @@ const dimenzijeStavkeNarudzbenice = (n, s, i, db) => {
   if (s.nacinUnosa === "duzina" && Number(s.duzinaM) > 0) return `${mm(s.duzinaM)} mm`;
   if (s.nacinUnosa === "lim" && Number(s.duzinaM) > 0) return `${mm(s.duzinaM)} × ${mm(s.sirinaM)} mm`;
   return db.materijali.find((x) => x.id === s.materijalId)?.dimenzije || "";
+};
+// Dimenzije matičnog broja s narudžbenice. Novi zapisi ih dobiju kod zaprimanja; za starije se traže na narudžbenici —
+// kad je isti materijal na njoj u više formata, k-ti matični broj (po broju) pripada k-toj takvoj stavci.
+const dimenzijeMaticnog = (z, db) => {
+  if (z.dimenzije) return z.dimenzije;
+  const n = z.narudzbenicaId ? (db.narudzbenice || []).find((x) => x.id === z.narudzbenicaId) : null;
+  if (!n) return "";
+  const kand = (n.stavke || []).map((s, i) => ({ s, i })).filter(({ s }) => s.materijalId === z.materijalId);
+  const dim = kand.map(({ s, i }) => dimenzijeStavkeNarudzbenice(n, s, i, db));
+  if (dim.length && dim.every((d) => d === dim[0])) return dim[0];
+  const lotovi = (db.maticnaKnjiga || []).filter((x) => x.narudzbenicaId === n.id && x.materijalId === z.materijalId && x.izvor === "zaprimanje").sort((a, b) => (Number(a.broj) || 0) - (Number(b.broj) || 0));
+  return lotovi.length === kand.length ? dim[lotovi.findIndex((x) => x.id === z.id)] || "" : "";
 };
 
 // Zaprimanje narudžbenice: broj otpremnice dobavljača, po stavci dimenzije iz narudžbenice, šarža i broj naljepnica.
@@ -4730,7 +4746,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
         const matZ = materijali.find((m) => m.id === materijalId);
         let maticniId = null;
         if (matZ && kolicina > 0) {
-          const zapis = noviZapisMaticneKnjige({ mat: matZ, kolicina, sarza, kvaliteta: s.kvaliteta, narudzbenica: row, knjiga: [...(db.maticnaKnjiga || []), ...maticni], otpremnica: opcije.otpremnica });
+          const zapis = noviZapisMaticneKnjige({ mat: matZ, kolicina, sarza, kvaliteta: s.kvaliteta, narudzbenica: row, knjiga: [...(db.maticnaKnjiga || []), ...maticni], otpremnica: opcije.otpremnica, dimenzije: dimenzijeStavkeNarudzbenice(row, s, idx, db) });
           maticni.push(zapis);
           maticniId = zapis.id;
         }
@@ -4788,7 +4804,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
       if (!opcije.ispis || zaNaljepnice.length === 0) return;
       const popis = zaNaljepnice.flatMap((z) => {
         const zapis = zapisi.find((x) => x.id === z.maticniId);
-        return zapis ? Array.from({ length: z.kopija }, () => podaciNaljepnice(zapis)) : [];
+        return zapis ? Array.from({ length: z.kopija }, () => podaciNaljepnice(zapis, db)) : [];
       });
       if (popis.length === 0) { showToast("Naljepnice nisu ispisane — matični brojevi nisu spremljeni."); return; }
       ispisiNaljepniceMaterijala(popis, db.postavkeTvrtke?.naziv).catch(() => showToast("Greška pri pripremi naljepnica."));
