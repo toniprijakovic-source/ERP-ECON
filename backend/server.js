@@ -487,7 +487,7 @@ app.get("/api/javno/maticni/:broj", async (req, res) => {
     izdano.sort((a, b) => String(a.datum).localeCompare(String(b.datum)));
     res.json({
       broj: z.broj, naziv: z.naziv, sifra: z.sifra, kvaliteta: z.kvaliteta, sarza: z.sarza, atestBroj: z.atestBroj, atestVrsta: z.atestVrsta,
-      dobavljac: (dobavljaci || []).find((d) => d.id === z.dobavljacId)?.naziv || "", narudzbenicaBroj: z.narudzbenicaBroj, datum: z.datum,
+      dobavljac: (dobavljaci || []).find((d) => d.id === z.dobavljacId)?.naziv || "", narudzbenicaBroj: z.narudzbenicaBroj, otpremnicaDobavljaca: z.otpremnicaDobavljaca || "", datum: z.datum,
       kolicinaPrimljeno: z.kolicinaPrimljeno, iskoristeno: zaokruziKolicinu(iskoristeno), preostalo: zaokruziKolicinu((Number(z.kolicinaPrimljeno) || 0) - iskoristeno),
       jm: z.jm, napomena: z.napomena, izdano,
     });
