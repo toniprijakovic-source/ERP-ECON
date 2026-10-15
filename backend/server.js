@@ -470,6 +470,28 @@ const netoPoMaticnim = (st) => {
   }
   return alok.filter((a) => a.kolicina > 0.0005);
 };
+// Dimenzije matičnog broja s narudžbenice (isto kao dimenzijeStavkeNarudzbenice / dimenzijeMaticnog u aplikaciji): novi
+// zapisi ih dobiju kod zaprimanja; za starije se traže na narudžbenici — kad je isti materijal na njoj u više formata,
+// k-ti matični broj (po broju) pripada k-toj takvoj stavci.
+const dimenzijeStavkeNarudzbenice = (n, s, i, materijali) => {
+  const su = n.stavkeUpita && n.stavkeUpita.length === (n.stavke || []).length ? n.stavkeUpita[i] : null;
+  const t = (v) => String(v ?? "").trim();
+  if (su) return su.vrstaStavke === "lim" && t(su.sirinaMM) ? `${t(su.dimenzijaMM)} × ${t(su.sirinaMM)} mm` : t(su.dimenzijaMM) ? `${t(su.dimenzijaMM)} mm` : "";
+  const mm = (v) => Math.round((Number(v) || 0) * 1000);
+  if (s.nacinUnosa === "duzina" && Number(s.duzinaM) > 0) return `${mm(s.duzinaM)} mm`;
+  if (s.nacinUnosa === "lim" && Number(s.duzinaM) > 0) return `${mm(s.duzinaM)} × ${mm(s.sirinaM)} mm`;
+  return (materijali || []).find((x) => x.id === s.materijalId)?.dimenzije || "";
+};
+const dimenzijeMaticnog = (z, knjiga, narudzbenice, materijali) => {
+  if (z.dimenzije) return z.dimenzije;
+  const n = z.narudzbenicaId ? (narudzbenice || []).find((x) => x.id === z.narudzbenicaId) : null;
+  if (!n) return "";
+  const kand = (n.stavke || []).map((s, i) => ({ s, i })).filter(({ s }) => s.materijalId === z.materijalId);
+  const dim = kand.map(({ s, i }) => dimenzijeStavkeNarudzbenice(n, s, i, materijali));
+  if (dim.length && dim.every((d) => d === dim[0])) return dim[0];
+  const lotovi = (knjiga || []).filter((x) => x.narudzbenicaId === n.id && x.materijalId === z.materijalId && x.izvor === "zaprimanje").sort((a, b) => (Number(a.broj) || 0) - (Number(b.broj) || 0));
+  return lotovi.length === kand.length ? dim[lotovi.findIndex((x) => x.id === z.id)] || "" : "";
+};
 app.get("/api/javno/maticni/:broj", async (req, res) => {
   const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim();
   const sada = Date.now();
@@ -478,7 +500,7 @@ app.get("/api/javno/maticni/:broj", async (req, res) => {
   nedavni.push(sada);
   javniUpiti.set(ip, nedavni);
   try {
-    const [knjiga, dobavljaci, izdatnice, projekti] = await Promise.all(["maticnaKnjiga", "dobavljaci", "izdatnice", "projekti"].map(ucitajKljuc));
+    const [knjiga, dobavljaci, izdatnice, projekti, narudzbenice, materijali] = await Promise.all(["maticnaKnjiga", "dobavljaci", "izdatnice", "projekti", "narudzbenice", "materijali"].map(ucitajKljuc));
     const z = (knjiga || []).find((x) => String(x.broj) === String(req.params.broj).trim());
     if (!z) return res.status(404).json({ error: `Matični broj ${String(req.params.broj).slice(0, 20)} nije pronađen.` });
     let iskoristeno = 0;
@@ -490,7 +512,7 @@ app.get("/api/javno/maticni/:broj", async (req, res) => {
     })));
     izdano.sort((a, b) => String(a.datum).localeCompare(String(b.datum)));
     res.json({
-      broj: z.broj, naziv: z.naziv, sifra: z.sifra, kvaliteta: z.kvaliteta, sarza: z.sarza, atestBroj: z.atestBroj, atestVrsta: z.atestVrsta,
+      broj: z.broj, naziv: z.naziv, sifra: z.sifra, dimenzije: dimenzijeMaticnog(z, knjiga, narudzbenice, materijali), kvaliteta: z.kvaliteta, sarza: z.sarza, atestBroj: z.atestBroj, atestVrsta: z.atestVrsta,
       dobavljac: (dobavljaci || []).find((d) => d.id === z.dobavljacId)?.naziv || "", narudzbenicaBroj: z.narudzbenicaBroj, otpremnicaDobavljaca: z.otpremnicaDobavljaca || "", datum: z.datum,
       kolicinaPrimljeno: z.kolicinaPrimljeno, iskoristeno: zaokruziKolicinu(iskoristeno), preostalo: zaokruziKolicinu((Number(z.kolicinaPrimljeno) || 0) - iskoristeno),
       jm: z.jm, napomena: z.napomena, izdano,
