@@ -1551,7 +1551,7 @@ const KARTICE_MODULA = {
   projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "potvrde", naziv: "Potvrde narudžbe" }, { key: "zavrseni", naziv: "Završeni projekti" }] },
   ponude: { kartice: [{ key: "ponude", naziv: "Ponude" }, { key: "laser", naziv: "Ponude - Laser" }] },
   otpremnice: { kartice: [{ key: "otpremnice", naziv: "Otpremnice" }, { key: "cmr", naziv: "CMR" }] },
-  fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "podloge", naziv: "Podloge za fakturu" }, { key: "nedovrsena", naziv: "Nedovršena proizvodnja" }, { key: "analiza", naziv: "Analiza projekata" }, { key: "produktivnost", naziv: "Produktivnost (kg/h)" }] },
+  fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "podloge", naziv: "Podloge za fakturu" }, { key: "nedovrsena", naziv: "Nedovršena proizvodnja" }, { key: "analiza", naziv: "Analiza projekata" }, { key: "produktivnost", naziv: "Produktivnost (kg/h)" }, { key: "projekcija", naziv: "Projekcija" }] },
   partneri: { kartice: [{ key: "kupci", naziv: "Kupci" }, { key: "dobavljaci", naziv: "Dobavljači" }] },
   zaposlenici: { kartice: [{ key: "zaposlenici", naziv: "Zaposlenici" }, { key: "pozicije", naziv: "Pozicije" }, { key: "evidencija", naziv: "Evidencija rada" }, { key: "obracun", naziv: "Obračun plaća" }, { key: "satinalozi", naziv: "Sati po nalozima" }] },
 };
@@ -12108,14 +12108,7 @@ function produktivnostProjekata(db, sMontazom) {
 // radione, kooperanti i praktikanti — ured ne) i sati upisani na naloge (za usporedbu s prisutnošću).
 function produktivnostPoMjesecima(db, mjeseci) {
   const zaposlenikPoId = new Map((db.zaposlenici || []).map((z) => [z.id, z]));
-  const satiRadione = new Map();
-  (db.evidencijaRada || []).forEach((e) => {
-    if ((e.vrsta || "rad") !== "rad" || !e.vrijemeDolaska || !e.vrijemeOdlaska) return;
-    if (grupaEvidencije(zaposlenikPoId.get(e.zaposlenikId), db.pozicijeZaposlenika) === "ostalo") return;
-    const mj = e.vrijemeDolaska.slice(0, 7);
-    const h = obracunskiSati(e.vrijemeDolaska, e.vrijemeOdlaska, odrediSmjenu(e.vrijemeDolaska, db.postavkePlaca), db.postavkePlaca);
-    satiRadione.set(mj, (satiRadione.get(mj) || 0) + h);
-  });
+  const satiRadione = satiRadionePoMjesecu(db);
   const satiNalozi = new Map();
   (db.satiPoNalogu || []).forEach((s) => { const mj = (s.datum || "").slice(0, 7); satiNalozi.set(mj, (satiNalozi.get(mj) || 0) + (Number(s.sati) || 0)); });
   // Završen projekt bez datuma završetka bio bi 100 % isporučen u svakom mjesecu pa se nikad ne bi zbrojio —
@@ -12473,6 +12466,448 @@ function ProduktivnostMjesecModal({ red, onClose }) {
   );
 }
 
+/* ============================== PROJEKCIJA PRIHODA I TROŠKOVA ==============================
+   Prihod po projektu: ugovoreno (narudžbe kupca; bez narudžbe vrijednost projekta; kupaonice masa × €/kg iz normativa)
+   minus isporučeno kupcu (otpremnice). Preostalo ide na rok: projekt, odnosno dodatna narudžba po udjelu njezinih
+   planiranih sati, a kupaonice po rasporedu isporuka. Može se i ručno rasporediti po mjesecima (postotci, pamte se).
+   Ako je rok prošao, iznos ide u tekući mjesec i projekt je označen da kasni. Ostvareno su otpremnice kupcu po datumu.
+   Troškovi: rad = sati × trošak sata. Prošli mjeseci uzimaju prisutnost radione s kioska, a budući raspored iz plana
+   proizvodnje. Materijal = projicirani prihod projekta × udio materijala iz kalkulacije ponude (projekt bez ponude:
+   upisani postotak); za prošle mjesece zaprimljene narudžbenice. K tome transport (narudžbe za transport) i vanjski
+   troškovi projekta po datumu, te fiksni mjesečni trošak. Postavke se čuvaju u nedovrsenaProizvodnja (trosakSata je
+   zajednički s Nedovršenom proizvodnjom, ostalo u .projekcija). */
+const sljedeciMjesec = (m) => { const [g, mm] = m.split("-").map(Number); return mm === 12 ? `${g + 1}-01` : `${g}-${String(mm + 1).padStart(2, "0")}`; };
+const mjeseciIzmedu = (od, doM) => { const lista = []; let m = od; while (m <= doM && lista.length < 36) { lista.push(m); m = sljedeciMjesec(m); } return lista; };
+const KRATKI_MJESECI_HR = ["sij", "velj", "ožu", "tra", "svi", "lip", "srp", "kol", "ruj", "lis", "stu", "pro"];
+const kratkiMjesec = (m) => KRATKI_MJESECI_HR[Number(m.slice(5, 7)) - 1] || m;
+const nazivRazdoblja = (od, doM) => (od === doM ? nazivMjeseca(od) : od.slice(0, 4) === doM.slice(0, 4)
+  ? `${NAZIVI_MJESECI_HR[Number(od.slice(5, 7)) - 1]} – ${nazivMjeseca(doM)}` : `${nazivMjeseca(od)} – ${nazivMjeseca(doM)}`);
+
+// Obračunski sati prisutnosti radione s kioska po mjesecu (pozicije radione, kooperanti, praktikanti — ured ne).
+function satiRadionePoMjesecu(db) {
+  const zaposlenikPoId = new Map((db.zaposlenici || []).map((z) => [z.id, z]));
+  const sati = new Map();
+  (db.evidencijaRada || []).forEach((e) => {
+    if ((e.vrsta || "rad") !== "rad" || !e.vrijemeDolaska || !e.vrijemeOdlaska) return;
+    if (grupaEvidencije(zaposlenikPoId.get(e.zaposlenikId), db.pozicijeZaposlenika) === "ostalo") return;
+    const mj = e.vrijemeDolaska.slice(0, 7);
+    sati.set(mj, (sati.get(mj) || 0) + obracunskiSati(e.vrijemeDolaska, e.vrijemeOdlaska, odrediSmjenu(e.vrijemeDolaska, db.postavkePlaca), db.postavkePlaca));
+  });
+  return sati;
+}
+
+const cijenaKgNormativa = (db, grupa) => Number((db.normativi?.grupe || []).find((g) => g.kljuc === grupa)?.cijenaKg) || 0;
+// Vrijednost otpremnice kupcu: kupaonice po masi × €/kg normativa (preko rasporeda isporuka), ostalo po cijenama iz narudžbe kupca.
+function vrijednostOtpremniceKupcu(o, db) {
+  const p = (db.projekti || []).find((x) => x.id === o.projektId);
+  if (p?.koristiNormativ) {
+    const stavke = new Map([...(p.stavkePod || []).map((s) => [s.id, { s, g: "pod" }]), ...(p.stavkeKomplet || []).map((s) => [s.id, { s, g: "komplet" }])]);
+    const isporuke = new Map((p.isporuke || []).map((i) => [i.id, i]));
+    return (o.stavke || []).reduce((a, st) => {
+      const isp = (st.isporukaIds || []).map((id) => isporuke.get(id)).find(Boolean);
+      const x = isp && stavke.get(isp.stavkaId);
+      return a + (x ? (Number(st.kolicina) || 0) * (Number(x.s.masaJed) || 0) * cijenaKgNormativa(db, x.g) : 0);
+    }, 0);
+  }
+  const narudzbe = (db.narudzbe || []).filter((n) => n.projektId === o.projektId);
+  const n = narudzbe.find((x) => x.id === o.narudzbaId) || narudzbe[0];
+  return (o.stavke || []).reduce((a, st) => {
+    const nst = n?.stavke?.find((x) => x.id === st.narudzbaStavkaId) || n?.stavke?.find((x) => x.naziv === st.naziv);
+    return a + (Number(st.kolicina) || 0) * (Number(nst?.cijena) || 0);
+  }, 0);
+}
+// Odsutnosti za plan proizvodnje (isto kao /api/plan/podaci): neradni zapisi evidencije od jučer nadalje.
+const odsutnostiZaPlan = (evidencija, danas) => {
+  const odDatuma = new Date(new Date(danas).getTime() - 86400000).toISOString().slice(0, 10);
+  const vidjeno = new Set();
+  return (evidencija || []).flatMap((e) => {
+    const datum = (e.vrijemeDolaska || "").slice(0, 10);
+    const kljuc = `${e.zaposlenikId}|${datum}`;
+    if ((e.vrsta || "rad") === "rad" || !datum || datum < odDatuma || vidjeno.has(kljuc)) return [];
+    vidjeno.add(kljuc);
+    return [{ zaposlenikId: e.zaposlenikId, datum }];
+  });
+};
+// Sati iz plana proizvodnje po mjesecu (svi poslovi) i po projektu.
+const satiPlanaPoMjesecu = (plan) => {
+  const ukupno = new Map();
+  (plan?.poslovi || []).forEach((po) => (po.faze || []).forEach((f) => Object.entries(f.dani || {}).forEach(([datum, v]) => {
+    const m = datum.slice(0, 7);
+    ukupno.set(m, (ukupno.get(m) || 0) + (Number(v?.sati) || 0));
+  })));
+  return ukupno;
+};
+
+function izracunProjekcije(db, { od, doMjeseca, danas, trosakSata, materijalPostotak, fiksniMjesecno, raspored = {}, satiPlana }) {
+  const mjeseci = mjeseciIzmedu(od, doMjeseca);
+  const tekuci = danas.slice(0, 7);
+  const poMj = Object.fromEntries(mjeseci.map((m) => [m, { prihodOstvareno: 0, prihodProjekcija: 0, satiOstvareno: 0, satiPlan: 0, materijalOstvareno: 0, materijalProjekcija: 0, transport: 0, vanjski: 0 }]));
+  const kupacPoId = new Map((db.kupci || []).map((k) => [k.id, k.naziv]));
+  const ponudaPoId = new Map((db.ponude || []).map((p) => [p.id, p]));
+  const sata = Number(trosakSata) || 0;
+  const izracunPon = (pon) => izracunPonude(pon, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala);
+  const udioMaterijala = (p) => {
+    const pon = p.izvorPonudaId && ponudaPoId.get(p.izvorPonudaId);
+    if (pon) { const c = izracunPon(pon); if (c.cijenaKonacna > 0) return { udio: c.trosakMaterijala / c.cijenaKonacna, izvorMaterijala: `ponuda ${pon.broj}` }; }
+    return { udio: (Number(materijalPostotak) || 0) / 100, izvorMaterijala: "postotak" };
+  };
+
+  // Ostvareno: otpremnice kupcu (vrijednost) i zaprimljene narudžbenice (materijal) po mjesecu.
+  const isporuceno = new Map();
+  const isporukeUOtpremnicama = new Set();
+  (db.otpremnice || []).filter((o) => o.vrsta !== "kooperant").forEach((o) => {
+    (o.stavke || []).forEach((st) => (st.isporukaIds || []).forEach((id) => isporukeUOtpremnicama.add(id)));
+    const v = vrijednostOtpremniceKupcu(o, db);
+    isporuceno.set(o.projektId, (isporuceno.get(o.projektId) || 0) + v);
+    const m = (o.datum || "").slice(0, 7);
+    if (poMj[m]) poMj[m].prihodOstvareno += v;
+  });
+  const cijenaMat = new Map((db.materijali || []).map((m) => [m.id, Number(m.cijena) || 0]));
+  (db.narudzbenice || []).filter((n) => n.status === "Primljeno" && n.zaprimljeno).forEach((n) => {
+    const m = n.zaprimljeno.slice(0, 7);
+    if (!poMj[m]) return;
+    poMj[m].materijalOstvareno += (n.stavke || []).reduce((a, s) => a + efektivnaKolicinaMaterijala(s, (db.materijali || []).find((x) => x.id === s.materijalId)) * (s.cijenaPoJed != null ? Number(s.cijenaPoJed) || 0 : cijenaMat.get(s.materijalId) || 0), 0);
+  });
+  const radiona = satiRadionePoMjesecu(db);
+  mjeseci.forEach((m) => {
+    if (m <= tekuci) poMj[m].satiOstvareno = radiona.get(m) || 0;
+    if (m >= tekuci) poMj[m].satiPlan = satiPlana?.get(m) || 0;
+  });
+
+  // Projekcija po projektu
+  const projekti = [];
+  const bezVrijednosti = [];
+  (db.projekti || []).filter((p) => !["Završen", "Otkazan"].includes(p.status)).forEach((p) => {
+    const narudzbe = (db.narudzbe || []).filter((n) => n.projektId === p.id);
+    let ugovoreno, izvor;
+    if (p.koristiNormativ) {
+      ugovoreno = [...(p.stavkePod || []).map((s) => [s, "pod"]), ...(p.stavkeKomplet || []).map((s) => [s, "komplet"])].reduce((a, [s, g]) => a + (Number(s.komada) || 0) * (Number(s.masaJed) || 0) * cijenaKgNormativa(db, g), 0);
+      izvor = "normativ (masa × €/kg)";
+    } else {
+      ugovoreno = narudzbe.flatMap((n) => n.stavke || []).reduce((a, s) => a + (Number(s.kolicina) || 0) * (Number(s.cijena) || 0), 0);
+      izvor = "narudžba kupca";
+      if (!(ugovoreno > 0)) { ugovoreno = Number(p.vrijednost) || 0; izvor = "vrijednost projekta"; }
+    }
+    if (!(ugovoreno > 0)) bezVrijednosti.push({ sifra: p.sifra, naziv: p.naziv });
+    const isporucenoP = isporuceno.get(p.id) || 0;
+    const imaOtpremnice = (db.otpremnice || []).some((o) => o.projektId === p.id && o.vrsta !== "kooperant");
+    const rucno = raspored[p.id] || null;
+    const izracunatoPreostalo = Math.max(0, ugovoreno - isporucenoP);
+    const preostalo = rucno?.preostalo != null && rucno.preostalo !== "" ? Math.max(0, Number(rucno.preostalo) || 0) : izracunatoPreostalo;
+    const r = {
+      projekt: p, sifra: p.sifra || "", naziv: p.naziv || "", kupac: kupacPoId.get(p.kupacId) || "", rok: p.rokZavrsetka || "",
+      ugovoreno, izvor, isporuceno: isporucenoP, izracunatoPreostalo, preostalo, poMjesecima: {}, izvanRazdoblja: 0, kasni: false, rokKasni: "", iznosKasni: 0,
+      rucno: !!rucno, bezCijeneIsporuka: izvor === "vrijednost projekta" && imaOtpremnice, ...udioMaterijala(p),
+    };
+    const dodaj = (datum, iznos) => {
+      if (!(iznos > 0)) return;
+      let m = String(datum || "").slice(0, 7);
+      if (!datum || datum < danas) {
+        if (datum) { r.kasni = true; r.iznosKasni += iznos; if (!r.rokKasni || datum < r.rokKasni) r.rokKasni = datum; }
+        m = tekuci;
+      }
+      r.poMjesecima[m] = (r.poMjesecima[m] || 0) + iznos;
+    };
+    const postotci = Object.entries(rucno?.mjeseci || {}).filter(([, v]) => Number(v) > 0);
+    if (postotci.length) {
+      let rasporedeno = 0;
+      postotci.forEach(([m, v]) => { const pct = Math.min(100, Number(v)); rasporedeno += pct; dodaj(m <= tekuci ? danas : `${m}-01`, (preostalo * pct) / 100); });
+      if (rasporedeno < 100) dodaj(r.rok, (preostalo * (100 - rasporedeno)) / 100);
+    } else if (p.koristiNormativ && !(rucno?.preostalo != null && rucno.preostalo !== "")) {
+      const stavke = new Map([...(p.stavkePod || []).map((s) => [s.id, { s, g: "pod" }]), ...(p.stavkeKomplet || []).map((s) => [s.id, { s, g: "komplet" }])]);
+      let zakazano = 0;
+      (p.isporuke || []).filter((i) => !isporukeUOtpremnicama.has(i.id)).forEach((i) => {
+        const x = stavke.get(i.stavkaId);
+        const v = x ? (Number(i.komada) || 0) * (Number(x.s.masaJed) || 0) * cijenaKgNormativa(db, x.g) : 0;
+        zakazano += v;
+        dodaj(i.datum || r.rok, v);
+      });
+      dodaj(r.rok, Math.max(0, preostalo - zakazano));
+    } else {
+      const dodaci = p.dodaci || [];
+      const satiDijela = (faze) => Object.values(faze || {}).reduce((a, v) => a + (Number(v) || 0), 0);
+      const satiDodataka = dodaci.reduce((a, d) => a + satiDijela(d.faze), 0);
+      const dijelovi = [{ rok: r.rok, sati: Math.max(0, satiDijela(p.faze) - satiDodataka) }, ...dodaci.map((d) => ({ rok: d.rok || r.rok, sati: satiDijela(d.faze) }))].filter((d) => d.sati > 0);
+      const ukupnoSati = dijelovi.reduce((a, d) => a + d.sati, 0);
+      if (dodaci.length && ukupnoSati > 0) dijelovi.forEach((d) => dodaj(d.rok, (preostalo * d.sati) / ukupnoSati));
+      else dodaj(r.rok, preostalo);
+    }
+    Object.entries(r.poMjesecima).forEach(([m, v]) => {
+      if (poMj[m]) { poMj[m].prihodProjekcija += v; poMj[m].materijalProjekcija += v * r.udio; } else r.izvanRazdoblja += v;
+    });
+    r.uRazdoblju = mjeseci.reduce((a, m) => a + (r.poMjesecima[m] || 0), 0);
+    if (r.preostalo > 0.5 || r.uRazdoblju > 0.5) projekti.push(r);
+  });
+
+  // Transport i vanjski troškovi po datumu
+  (db.narudzbeTransporta || []).filter((t) => !/otkaz/i.test(t.status || "")).forEach((t) => {
+    const m = String(t.utovarDatum || t.datum || "").slice(0, 7);
+    if (poMj[m]) poMj[m].transport += Number(t.cijena) || 0;
+  });
+  (db.projekti || []).forEach((p) => (p.vanjskiTroskovi || []).forEach((v) => {
+    const m = String(v.datum || "").slice(0, 7);
+    if (poMj[m]) poMj[m].vanjski += Number(v.iznos) || 0;
+  }));
+
+  const fiksni = Number(fiksniMjesecno) || 0;
+  const redovi = mjeseci.map((m) => {
+    const x = poMj[m];
+    const prihod = x.prihodOstvareno + x.prihodProjekcija;
+    const sati = x.satiOstvareno + x.satiPlan;
+    const rad = sati * sata;
+    const materijal = x.materijalOstvareno + x.materijalProjekcija;
+    const ostalo = x.transport + x.vanjski;
+    const troskovi = rad + materijal + ostalo + fiksni;
+    return { mjesec: m, vrsta: m < tekuci ? "ostvareno" : m === tekuci ? "tekući" : "projekcija", ...x, prihod, sati, rad, materijal, ostalo, fiksni, troskovi, rezultat: prihod - troskovi, marza: prihod > 0 ? ((prihod - troskovi) / prihod) * 100 : null };
+  });
+  const zbroj = (k) => redovi.reduce((a, r) => a + (Number(r[k]) || 0), 0);
+  const ukupno = { prihod: zbroj("prihod"), prihodOstvareno: zbroj("prihodOstvareno"), prihodProjekcija: zbroj("prihodProjekcija"), sati: zbroj("sati"), rad: zbroj("rad"), materijal: zbroj("materijal"), ostalo: zbroj("ostalo"), fiksni: zbroj("fiksni"), troskovi: zbroj("troskovi") };
+  ukupno.rezultat = ukupno.prihod - ukupno.troskovi;
+  ukupno.marza = ukupno.prihod > 0 ? (ukupno.rezultat / ukupno.prihod) * 100 : null;
+
+  // Kupci: projicirani prihod u razdoblju + ostvareno u razdoblju po kupcu projekta
+  const poKupcu = new Map();
+  projekti.forEach((r) => poKupcu.set(r.kupac || "—", (poKupcu.get(r.kupac || "—") || 0) + r.uRazdoblju));
+  (db.otpremnice || []).filter((o) => o.vrsta !== "kooperant" && mjeseci.includes((o.datum || "").slice(0, 7))).forEach((o) => {
+    const p = (db.projekti || []).find((x) => x.id === o.projektId);
+    const k = kupacPoId.get(p?.kupacId) || "—";
+    poKupcu.set(k, (poKupcu.get(k) || 0) + vrijednostOtpremniceKupcu(o, db));
+  });
+  const kupci = [...poKupcu.entries()].map(([naziv, iznos]) => ({ naziv, iznos })).filter((k) => k.iznos > 0.5).sort((a, b) => b.iznos - a.iznos);
+
+  const ponude = (db.ponude || []).filter((p) => p.status === "Poslana").map((p) => ({ broj: p.broj, naziv: p.naziv, kupac: kupacPoId.get(p.kupacId) || "", datum: p.datum, iznos: izracunPon(p).cijenaKonacna })).sort((a, b) => b.iznos - a.iznos);
+  const upozorenja = {
+    kasni: projekti.filter((r) => r.kasni).map((r) => ({ sifra: r.sifra, naziv: r.naziv, rok: r.rokKasni, iznos: r.iznosKasni, dio: r.rokKasni !== r.rok })),
+    bezVrijednosti,
+    bezCijeneIsporuka: projekti.filter((r) => r.bezCijeneIsporuka && !r.rucno).map((r) => ({ sifra: r.sifra, naziv: r.naziv })),
+    bezTroskaSata: !(sata > 0),
+  };
+  return { mjeseci, redovi, ukupno, projekti: projekti.sort((a, b) => b.uRazdoblju - a.uRazdoblju || usporediPrirodno(a.sifra, b.sifra)), kupci, ponude, upozorenja, tekuci };
+}
+
+function ProjekcijaView({ db, update, showToast, mozeMijenjati, mojId }) {
+  const np = db.nedovrsenaProizvodnja && !Array.isArray(db.nedovrsenaProizvodnja) ? db.nedovrsenaProizvodnja : {};
+  const post = np.projekcija || {};
+  const danas = todayISO();
+  const tekuci = danas.slice(0, 7);
+  const ponudeniMjeseci = useMemo(() => { let m = tekuci; for (let i = 0; i < 12; i++) m = prethodniMjesec(m); return mjeseciIzmedu(m, (() => { let x = tekuci; for (let i = 0; i < 18; i++) x = sljedeciMjesec(x); return x; })()); }, [tekuci]);
+  const [od, setOd] = useState(tekuci);
+  const [doM, setDoM] = useState(() => sljedeciMjesec(sljedeciMjesec(tekuci)));
+  const [unos, setUnos] = useState(null); // { polje, vrijednost }
+  const [rasporedZa, setRasporedZa] = useState(null); // red projekta
+  const [izrada, setIzrada] = useState(false);
+  const spremi = (promjena) => update("nedovrsenaProizvodnja", { ...np, ...promjena });
+  const spremiPost = (promjena) => spremi({ projekcija: { ...post, ...promjena } });
+
+  const satiPlana = useMemo(() => {
+    try {
+      const normativ = { naziv: db.normativi?.naziv || "", grupe: (db.normativi?.grupe || []).map((g) => ({ kljuc: g.kljuc, naziv: g.naziv, ucinakKgH: Number(g.ucinakKgH) || 0, raspodjela: g.raspodjela || {} })) };
+      return satiPlanaPoMjesecu(izracunajPlanProizvodnje({ db, normativ, odsutnosti: odsutnostiZaPlan(db.evidencijaRada, danas), danas }));
+    } catch (e) { console.error("Plan proizvodnje za projekciju:", e); return null; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [db.radniNalozi, db.projekti, db.zaposlenici, db.praznici, db.kapacitetiDana, db.planProizvodnje, db.normativi, db.evidencijaRada, danas]);
+  const odM = od <= doM ? od : doM, doMj = od <= doM ? doM : od;
+  const rez = useMemo(() => izracunProjekcije(db, {
+    od: odM, doMjeseca: doMj, danas, trosakSata: np.trosakSata, materijalPostotak: post.materijalPostotak ?? 35, fiksniMjesecno: post.fiksniMjesecno, raspored: post.raspored || {}, satiPlana,
+  }), [db, odM, doMj, danas, np.trosakSata, post.materijalPostotak, post.fiksniMjesecno, post.raspored, satiPlana]);
+
+  const polja = [
+    { k: "trosakSata", naziv: "Trošak sata rada", jed: "€/h", vrijednost: np.trosakSata, spremi: (v) => spremi({ trosakSata: v }) },
+    { k: "materijalPostotak", naziv: "Materijal bez ponude", jed: "% prihoda", vrijednost: post.materijalPostotak ?? 35, spremi: (v) => spremiPost({ materijalPostotak: v }) },
+    { k: "fiksniMjesecno", naziv: "Fiksni troškovi", jed: "€/mj", vrijednost: post.fiksniMjesecno || 0, spremi: (v) => spremiPost({ fiksniMjesecno: v }) },
+  ];
+  const spremiUnos = () => {
+    const p = polja.find((x) => x.k === unos.polje);
+    const v = Number(String(unos.vrijednost).replace(",", "."));
+    if (!(v >= 0)) { showToast("Upiši broj."); return; }
+    p.spremi(v);
+    setUnos(null);
+  };
+  const spremiRaspored = (projektId, zapis) => {
+    const raspored = { ...(post.raspored || {}) };
+    if (zapis) raspored[projektId] = zapis; else delete raspored[projektId];
+    spremiPost({ raspored });
+    setRasporedZa(null);
+    showToast(zapis ? "Raspored projekta spremljen." : "Vraćen automatski raspored (na rok).");
+  };
+
+  const izradiPdf = async () => {
+    setIzrada(true);
+    try {
+      const [{ napraviPdfProjekcije }, logo] = await Promise.all([
+        import("./pdfProjekcija.js"),
+        fetch(logoEcon).then((r) => r.blob()).then((b) => new Promise((res) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(b); })).catch(() => null),
+      ]);
+      const izradio = (db.zaposlenici || []).find((z) => z.id === mojId);
+      const bajtovi = await napraviPdfProjekcije({
+        rez, logo, tvrtka: db.postavkeTvrtke || {}, razdoblje: nazivRazdoblja(odM, doMj), danas,
+        izradio: izradio ? `${izradio.ime} ${izradio.prezime}` : "", trosakSata: Number(np.trosakSata) || 0,
+        materijalPostotak: Number(post.materijalPostotak ?? 35) || 0, fiksniMjesecno: Number(post.fiksniMjesecno) || 0,
+        nazivMjeseca, kratkiMjesec, fmtDate,
+      });
+      const { preuzmiDatoteku } = await import("./pdfNabave.js");
+      preuzmiDatoteku(new Blob([bajtovi], { type: "application/pdf" }), `Projekcija prihoda i troskova ${odM}${odM !== doMj ? `_${doMj}` : ""}.pdf`);
+    } catch (e) {
+      console.error(e);
+      showToast("Greška pri izradi PDF-a.");
+    } finally {
+      setIzrada(false);
+    }
+  };
+
+  const TD = TD_DESNO;
+  const eur = (v) => fmtCur(v);
+  const u = rez.upozorenja;
+  const brojUpozorenja = u.kasni.length + u.bezVrijednosti.length + u.bezCijeneIsporuka.length + (u.bezTroskaSata ? 1 : 0);
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 14 }}>
+        <Field label="Od">
+          <select className="select" style={{ width: 170 }} value={od} onChange={(e) => setOd(e.target.value)}>{ponudeniMjeseci.map((m) => <option key={m} value={m}>{nazivMjeseca(m)}</option>)}</select>
+        </Field>
+        <Field label="Do">
+          <select className="select" style={{ width: 170 }} value={doM} onChange={(e) => setDoM(e.target.value)}>{ponudeniMjeseci.map((m) => <option key={m} value={m}>{nazivMjeseca(m)}</option>)}</select>
+        </Field>
+        {polja.map((p) => (
+          <Field key={p.k} label={`${p.naziv} (${p.jed})`}>
+            {unos?.polje === p.k ? (
+              <div style={{ display: "flex", gap: 6 }}>
+                <input className="input f-mono" style={{ width: 90 }} inputMode="decimal" autoFocus aria-label={p.naziv} value={unos.vrijednost} onChange={(e) => setUnos({ ...unos, vrijednost: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") spremiUnos(); if (e.key === "Escape") setUnos(null); }} />
+                <Btn size="sm" variant="primary" onClick={spremiUnos}>OK</Btn>
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 6, alignItems: "center", minHeight: 36 }}>
+                <strong className="f-mono" style={{ color: p.k === "trosakSata" && !(Number(p.vrijednost) > 0) ? "var(--rust)" : "var(--ink)" }}>{Number(p.vrijednost) > 0 || p.k !== "trosakSata" ? (Number(p.vrijednost) || 0).toLocaleString("hr-HR") : "nije upisan"}</strong>
+                {mozeMijenjati && <Btn size="sm" icon={Pencil} aria-label={`Promijeni ${p.naziv}`} onClick={() => setUnos({ polje: p.k, vrijednost: String(p.vrijednost ?? "") })} />}
+              </div>
+            )}
+          </Field>
+        ))}
+        <div style={{ marginLeft: "auto", marginBottom: 14 }}>
+          <Btn variant="primary" icon={FileText} onClick={izradiPdf} disabled={izrada}>{izrada ? "Izrađujem PDF…" : "PDF za upravu"}</Btn>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12, marginBottom: 14 }}>
+        <div className="kpi-card beam-tick"><div className="kpi-num">{eur(rez.ukupno.prihod)}</div><div className="kpi-label">Prihod · ostvareno {eur(rez.ukupno.prihodOstvareno)}</div></div>
+        <div className="kpi-card"><div className="kpi-num">{eur(rez.ukupno.troskovi)}</div><div className="kpi-label">Troškovi</div></div>
+        <div className="kpi-card"><div className="kpi-num" style={{ color: rez.ukupno.rezultat >= 0 ? "var(--green)" : "var(--rust)" }}>{eur(rez.ukupno.rezultat)}</div><div className="kpi-label">Rezultat</div></div>
+        <div className="kpi-card"><div className="kpi-num">{rez.ukupno.marza == null ? "—" : `${Math.round(rez.ukupno.marza)} %`}</div><div className="kpi-label">Marža · {fmtSati0(rez.ukupno.sati)} h rada</div></div>
+      </div>
+
+      {brojUpozorenja > 0 && (
+        <div className="card" style={{ padding: "10px 14px", marginBottom: 14, background: "#FFF6DE", borderColor: "#F5D98A", fontSize: 12.5 }}>
+          <strong>Provjeri prije izrade PDF-a</strong>
+          <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
+            {u.bezTroskaSata && <li>Trošak sata rada nije upisan — rad se računa kao 0 €.</li>}
+            {u.kasni.length > 0 && <li>Kasni s isporukom ({u.kasni.length}): {u.kasni.map((k) => `${k.sifra} (rok ${fmtDate(k.rok)})`).join(", ")} — preostali iznos je u tekućem mjesecu.</li>}
+            {u.bezVrijednosti.length > 0 && <li>Aktivni projekti bez vrijednosti ({u.bezVrijednosti.length}): {u.bezVrijednosti.map((k) => k.sifra).join(", ")} — upiši vrijednost projekta ili narudžbu kupca s cijenama.</li>}
+            {u.bezCijeneIsporuka.length > 0 && <li>Isporuke bez cijena ({u.bezCijeneIsporuka.length}): {u.bezCijeneIsporuka.map((k) => k.sifra).join(", ")} — nema narudžbe s cijenama pa se isporučeno ne zna; preostalo je cijela vrijednost projekta. Ispravi preko „Raspored“ (preostali iznos).</li>}
+          </ul>
+        </div>
+      )}
+
+      <div className="card" style={{ overflowX: "auto", marginBottom: 16 }}>
+        <table className="erp-table">
+          <thead><tr><th>Mjesec</th><th style={TD}>Prihod</th><th style={TD}>Rad</th><th style={TD}>Materijal</th><th style={TD}>Transport i vanjski</th><th style={TD}>Fiksni</th><th style={TD}>Troškovi</th><th style={TD}>Rezultat</th><th style={TD}>Marža</th></tr></thead>
+          <tbody>
+            {rez.redovi.map((r) => (
+              <tr key={r.mjesec}>
+                <td><strong>{nazivMjeseca(r.mjesec)}</strong><div style={{ fontSize: 10.5, color: r.vrsta === "projekcija" ? "var(--steel)" : "var(--ink-faint)" }}>{r.vrsta}</div></td>
+                <td className="f-mono" style={TD}>{eur(r.prihod)}{r.vrsta === "tekući" && <div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>ostv. {eur(r.prihodOstvareno)}</div>}</td>
+                <td className="f-mono" style={TD}>{eur(r.rad)}<div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{fmtSati0(r.sati)} h</div></td>
+                <td className="f-mono" style={TD}>{eur(r.materijal)}</td>
+                <td className="f-mono" style={TD}>{eur(r.ostalo)}</td>
+                <td className="f-mono" style={TD}>{eur(r.fiksni)}</td>
+                <td className="f-mono" style={{ ...TD, fontWeight: 600 }}>{eur(r.troskovi)}</td>
+                <td className="f-mono" style={{ ...TD, fontWeight: 700, color: r.rezultat >= 0 ? "var(--green)" : "var(--rust)" }}>{eur(r.rezultat)}</td>
+                <td className="f-mono" style={TD}>{r.marza == null ? "—" : `${Math.round(r.marza)} %`}</td>
+              </tr>
+            ))}
+            <tr style={{ background: "var(--surface-alt)", fontWeight: 700 }}>
+              <td>Ukupno</td>
+              <td className="f-mono" style={TD}>{eur(rez.ukupno.prihod)}</td><td className="f-mono" style={TD}>{eur(rez.ukupno.rad)}</td><td className="f-mono" style={TD}>{eur(rez.ukupno.materijal)}</td>
+              <td className="f-mono" style={TD}>{eur(rez.ukupno.ostalo)}</td><td className="f-mono" style={TD}>{eur(rez.ukupno.fiksni)}</td><td className="f-mono" style={TD}>{eur(rez.ukupno.troskovi)}</td>
+              <td className="f-mono" style={{ ...TD, color: rez.ukupno.rezultat >= 0 ? "var(--green)" : "var(--rust)" }}>{eur(rez.ukupno.rezultat)}</td><td className="f-mono" style={TD}>{rez.ukupno.marza == null ? "—" : `${Math.round(rez.ukupno.marza)} %`}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div className="label" style={{ marginBottom: 6 }}>Prihod po projektima</div>
+      <div className="card" style={{ overflowX: "auto", marginBottom: 12 }}>
+        <table className="erp-table">
+          <thead><tr><th>Projekt</th><th style={TD}>Ugovoreno</th><th style={TD}>Isporučeno</th><th style={TD}>Preostalo</th>{rez.mjeseci.map((m) => <th key={m} style={TD}>{kratkiMjesec(m)}</th>)}<th style={TD}>Kasnije</th><th>Rok</th><th /></tr></thead>
+          <tbody>
+            {rez.projekti.map((r) => (
+              <tr key={r.projekt.id}>
+                <td><span className="f-mono">{r.sifra}</span><div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{r.naziv}{r.kupac ? ` · ${r.kupac}` : ""}</div><div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{r.izvor} · materijal {Math.round(r.udio * 100)} % ({r.izvorMaterijala})</div></td>
+                <td className="f-mono" style={TD}>{eur(r.ugovoreno)}</td>
+                <td className="f-mono" style={TD}>{eur(r.isporuceno)}</td>
+                <td className="f-mono" style={{ ...TD, fontWeight: 600 }}>{eur(r.preostalo)}{r.rucno && <div style={{ fontSize: 10.5, color: "var(--steel)" }}>ručni raspored</div>}</td>
+                {rez.mjeseci.map((m) => <td key={m} className="f-mono" style={{ ...TD, color: r.poMjesecima[m] ? "var(--ink)" : "var(--ink-faint)" }}>{r.poMjesecima[m] ? eur(r.poMjesecima[m]) : "—"}</td>)}
+                <td className="f-mono" style={{ ...TD, color: r.izvanRazdoblja ? "var(--ink-soft)" : "var(--ink-faint)" }}>{r.izvanRazdoblja ? eur(r.izvanRazdoblja) : "—"}</td>
+                <td style={{ whiteSpace: "nowrap", color: r.kasni ? "var(--rust)" : "inherit", fontWeight: r.kasni ? 600 : 400 }}>{r.rok ? fmtDate(r.rok) : "—"}{r.kasni && <div style={{ fontSize: 10.5 }}>{r.rokKasni !== r.rok ? `dio kasni (rok ${fmtDate(r.rokKasni)})` : "kasni"}</div>}</td>
+                <td>{mozeMijenjati && <Btn size="sm" onClick={() => setRasporedZa(r)}>Raspored</Btn>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {rez.ponude.length > 0 && (
+        <p style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 6 }}>
+          Poslane ponude (nisu u projekciji, u PDF-u kao potencijal): {rez.ponude.map((p) => `${p.broj} ${eur(p.iznos)}`).join(" · ")}
+        </p>
+      )}
+      <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 6 }}>
+        <strong>Prihod</strong>: ugovoreno (narudžbe kupca, bez narudžbe vrijednost projekta, kupaonice masa × €/kg normativa) minus isporučeno kupcu; preostalo na rok projekta, dodatne narudžbe po udjelu sati, kupaonice po rasporedu isporuka, ili po ručnom rasporedu. Prošli mjeseci: isporučeno (otpremnice kupcu).
+        {" "}<strong>Rad</strong>: sati × trošak sata — prošli dani prisutnost radione s kioska, dalje raspored iz plana proizvodnje.
+        {" "}<strong>Materijal</strong>: projicirani prihod × udio materijala iz kalkulacije ponude (bez ponude: upisani postotak); prošli mjeseci zaprimljene narudžbenice.
+        {" "}<strong>Transport i vanjski</strong>: narudžbe za transport i vanjski troškovi projekta po datumu.
+      </p>
+      {rasporedZa && <ProjekcijaRasporedModal red={rasporedZa} zapis={(post.raspored || {})[rasporedZa.projekt.id]} danas={danas} onSpremi={spremiRaspored} onClose={() => setRasporedZa(null)} />}
+    </div>
+  );
+}
+
+// Ručni raspored preostalog prihoda projekta po mjesecima (postotci) i, po potrebi, ručni preostali iznos.
+function ProjekcijaRasporedModal({ red, zapis, danas, onSpremi, onClose }) {
+  const tekuci = danas.slice(0, 7);
+  const mjeseci = useMemo(() => { let m = tekuci; const l = []; for (let i = 0; i < 12; i++) { l.push(m); m = sljedeciMjesec(m); } return l; }, [tekuci]);
+  const [preostalo, setPreostalo] = useState(zapis?.preostalo != null && zapis.preostalo !== "" ? String(zapis.preostalo) : "");
+  const [pct, setPct] = useState(() => Object.fromEntries(mjeseci.map((m) => [m, zapis?.mjeseci?.[m] ? String(zapis.mjeseci[m]) : ""])));
+  const zbroj = mjeseci.reduce((a, m) => a + (Number(String(pct[m]).replace(",", ".")) || 0), 0);
+  const iznos = preostalo !== "" ? Number(String(preostalo).replace(",", ".")) || 0 : red.izracunatoPreostalo;
+  const spremi = () => {
+    if (zbroj > 100.001) return;
+    const mj = Object.fromEntries(mjeseci.map((m) => [m, Number(String(pct[m]).replace(",", ".")) || 0]).filter(([, v]) => v > 0));
+    const p = preostalo.trim() === "" ? null : Math.max(0, Number(preostalo.replace(",", ".")) || 0);
+    onSpremi(red.projekt.id, Object.keys(mj).length || p != null ? { mjeseci: mj, preostalo: p } : null);
+  };
+  return (
+    <Modal title={`Raspored prihoda — ${red.sifra}`} onClose={onClose} footer={<><Btn onClick={() => onSpremi(red.projekt.id, null)}>Vrati automatski</Btn><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi} disabled={zbroj > 100.001}>Spremi</Btn></>}>
+      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 10 }}>{red.naziv}{red.kupac ? ` · ${red.kupac}` : ""} · rok {red.rok ? fmtDate(red.rok) : "—"}. Ugovoreno {fmtCur(red.ugovoreno)}, isporučeno {fmtCur(red.isporuceno)}, izračunato preostalo {fmtCur(red.izracunatoPreostalo)}.</p>
+      <Field label="Preostalo za isporuku (€) — prazno = izračunato">
+        <input className="input f-mono" style={{ width: 180 }} inputMode="decimal" placeholder={String(Math.round(red.izracunatoPreostalo))} value={preostalo} onChange={(e) => setPreostalo(e.target.value)} />
+      </Field>
+      <div className="label" style={{ marginBottom: 6 }}>Udio po mjesecima (%) — ostatak do 100 % ide na rok</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8 }}>
+        {mjeseci.map((m) => {
+          const v = Number(String(pct[m]).replace(",", ".")) || 0;
+          return (
+            <div key={m} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 12, width: 64 }}>{kratkiMjesec(m)} {m.slice(0, 4)}</span>
+              <input className="input f-mono" style={{ width: 60, padding: "4px 6px", textAlign: "right" }} inputMode="decimal" aria-label={`Postotak za ${nazivMjeseca(m)}`} value={pct[m]} onChange={(e) => setPct({ ...pct, [m]: e.target.value })} />
+              <span className="f-mono" style={{ fontSize: 11, color: "var(--ink-faint)" }}>{v ? fmtCur((iznos * v) / 100) : ""}</span>
+            </div>
+          );
+        })}
+      </div>
+      <p style={{ fontSize: 12, marginTop: 10, color: zbroj > 100.001 ? "var(--rust)" : "var(--ink-soft)" }}>Raspoređeno {Math.round(zbroj * 10) / 10} %{zbroj < 100 ? ` · ${Math.round((100 - zbroj) * 10) / 10} % ide na rok` : ""}{zbroj > 100.001 ? " — zbroj ne smije prijeći 100 %" : ""}</p>
+    </Modal>
+  );
+}
+
 // Jedna stranica za dva modula: "otpremnice" (Otpremnice i CMR) i "fakturiranje" (Financije:
 // fakture, podloge za fakturu, nedovršena proizvodnja, analiza projekata, produktivnost).
 function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, showToast, mojaPozicija, mojId }) {
@@ -12485,6 +12920,7 @@ function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, sh
   const mozeCmr = dozvolaZaKarticu(mojaPozicija, "otpremnice", "cmr").izmjene;
   const mozeNedovrsenu = dozvolaZaKarticu(mojaPozicija, "fakturiranje", "nedovrsena").izmjene;
   const mozeProduktivnost = dozvolaZaKarticu(mojaPozicija, "fakturiranje", "produktivnost").izmjene;
+  const mozeProjekciju = dozvolaZaKarticu(mojaPozicija, "fakturiranje", "projekcija").izmjene;
   const [analiza, setAnaliza] = useState(null); // završeni projekt otvoren za analizu plan/stvarno
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
@@ -12518,6 +12954,7 @@ function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, sh
       {tab === "podloge" && <PodlogeZaFakturuTab db={db} update={update} showToast={showToast} mozeMijenjati={mozePodloge} />}
       {tab === "nedovrsena" && <NedovrsenaProizvodnjaView db={db} update={update} showToast={showToast} mozeMijenjati={mozeNedovrsenu} mojId={mojId} />}
       {tab === "produktivnost" && <ProduktivnostView db={db} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeProduktivnost} />}
+      {tab === "projekcija" && <ProjekcijaView db={db} update={update} showToast={showToast} mozeMijenjati={mozeProjekciju} mojId={mojId} />}
       {tab === "analiza" && (
         <EntityPage
           title="" readOnly searchKeys={["sifra", "naziv"]}
