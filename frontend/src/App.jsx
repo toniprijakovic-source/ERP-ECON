@@ -2980,6 +2980,28 @@ const rasporediFifo = (knjiga, potrosnja, materijalId, kolicina) => {
   if (ostalo > 0.0005) rez.push({ maticniId: null, broj: null, kolicina: zaokruziKolicinu(ostalo) });
   return rez;
 };
+// Ključ formata za usporedbu: "6000" ili "3000x1500" — kod lima veća mjera prva, jer se isti format piše i 1500×3000.
+const kljucFormata = (duzina, sirina) => {
+  const d = Number(String(duzina ?? "").replace(",", ".")) || 0, s = Number(String(sirina ?? "").replace(",", ".")) || 0;
+  return s ? `${Math.max(d, s)}x${Math.min(d, s)}` : d ? `${d}` : "";
+};
+const kljucFormataIzTeksta = (tekst) => { const m = String(tekst || "").match(/(\d+(?:[.,]\d+)?)(?:\s*[×x]\s*(\d+(?:[.,]\d+)?))?\s*mm/i); return m ? kljucFormata(m[1], m[2]) : ""; };
+// Izdavanje po formatima (dužina profila / format lima): matični brojevi se prvo uzimaju od onih iste dimenzije s
+// narudžbenice (FIFO unutar formata), a tek ostatak redom FIFO — da šarža i atest na izdatnici odgovaraju izdanom formatu.
+const rasporediPoFormatima = (db, potrosnja, materijalId, izdaniRedovi, ukupno) => {
+  const lotovi = (db.maticnaKnjiga || []).filter((z) => z.materijalId === materijalId);
+  const rez = [];
+  let ostalo = Number(ukupno) || 0;
+  izdaniRedovi.filter((r) => Number(r.izdano) > 0).forEach((r) => {
+    const k = kljucFormata(r.duzinaMM, r.sirinaMM);
+    const isti = lotovi.filter((z) => k && kljucFormataIzTeksta(dimenzijeMaticnog(z, db)) === k);
+    rasporediFifo(isti, potrosnja, materijalId, Math.min(Number(r.izdano), ostalo)).filter((a) => a.maticniId).forEach((a) => { rez.push(a); ostalo -= a.kolicina; });
+  });
+  if (ostalo > 0.0005) rez.push(...rasporediFifo(lotovi, potrosnja, materijalId, ostalo));
+  const spojeno = new Map();
+  rez.forEach((a) => { const key = a.maticniId || "bez"; const x = spojeno.get(key); spojeno.set(key, x ? { ...x, kolicina: zaokruziKolicinu(x.kolicina + a.kolicina) } : a); });
+  return [...spojeno.values()];
+};
 const noviZapisMaticneKnjige = ({ mat, kolicina, sarza, kvaliteta, narudzbenica, knjiga, otpremnica = "", dimenzije = "" }) => {
   const k = kvaliteta || mat.kvaliteta || "";
   // Ista šarža i kvaliteta već imaju atest — prenosi se, da se ne upisuje dvaput.
@@ -3265,13 +3287,15 @@ function RezervacijeMaterijalaModal({ materijal, db, update, showToast, mozeMije
 // Dimenzije stavke kako stoje na narudžbenici (i u njezinom PDF-u): kod narudžbenice iz upita iz retka upita (lim
 // dužina × širina) — isti materijal može biti naručen u više formata, a šifra materijala ne sadrži dimenziju;
 // inače iz načina unosa stavke ili s materijala.
-const dimenzijeStavkeNarudzbenice = (n, s, i, db) => {
+// samoNarudzbenica: bez zamjene dimenzijama s materijala (za dopisivanje formata na materijal kod zaprimanja).
+const dimenzijeStavkeNarudzbenice = (n, s, i, db, samoNarudzbenica = false) => {
   const su = n.stavkeUpita && n.stavkeUpita.length === (n.stavke || []).length ? n.stavkeUpita[i] : null;
   const t = (v) => String(v ?? "").trim();
   if (su) return su.vrstaStavke === "lim" && t(su.sirinaMM) ? `${t(su.dimenzijaMM)} × ${t(su.sirinaMM)} mm` : t(su.dimenzijaMM) ? `${t(su.dimenzijaMM)} mm` : "";
   const mm = (v) => Math.round((Number(v) || 0) * 1000);
   if (s.nacinUnosa === "duzina" && Number(s.duzinaM) > 0) return `${mm(s.duzinaM)} mm`;
   if (s.nacinUnosa === "lim" && Number(s.duzinaM) > 0) return `${mm(s.duzinaM)} × ${mm(s.sirinaM)} mm`;
+  if (samoNarudzbenica) return "";
   return db.materijali.find((x) => x.id === s.materijalId)?.dimenzije || "";
 };
 // Dimenzije matičnog broja s narudžbenice. Novi zapisi ih dobiju kod zaprimanja; za starije se traže na narudžbenici —
@@ -3518,6 +3542,32 @@ function UgradeniMaterijalTab({ db, showToast, pocetniProjektId }) {
 // Dimenzije artikla su tekst "3115 mm × 14; 3050 mm × 1" (za lim "3000×1500 mm × 5"). Vraća retke za uređivanje
 // ({ duzinaMM, sirinaMM, komada }) ili null ako se tekst ne može pročitati. Dužina bez broja komada (npr. "6000 mm"
 // uz druge dužine) dobiva ostatak do trenutnog stanja.
+// Dodaje primljene komade jednog formata u tekst dimenzija materijala koji se vodi u komadima, npr. "3000×1500 mm" (100 kom)
+// + 100 kom 2500 × 1250 mm → "3000×1500 mm × 100; 2500×1250 mm × 100". Isti format (i okrenut, 1500×3000) se zbraja.
+// Kad se postojeći tekst ne može pročitati, ostaje kakav je (ručno upisan).
+// Materijal u komadima koji se vodi po dužinama / formatima: iz kataloga profila i limova (kg/m, kg/m²) ili izvan kataloga
+// s dimenzijom u mm (npr. pocinčani lim "3000×1500 mm"). Vraća { jeLim } ili null; primjer = dimenzija s narudžbenice
+// kad materijal još nema svoju.
+const formatiMaterijala = (m, db, primjer = "") => {
+  if (!m || m.jm !== "kom") return null;
+  const kat = (db.katalogProfila || []).find((k) => k.id === m.katalogId);
+  if (kat) return kat.jedinica === "kg/kom" ? null : { jeLim: kat.jedinica === "kg/m2" };
+  const t = /\d/.test(m.dimenzije || "") ? m.dimenzije : primjer;
+  if (!/\d\s*mm/.test(t || "")) return null;
+  return { jeLim: /\d\s*[×x]\s*\d+(?:[.,]\d+)?\s*mm/.test(t) };
+};
+const dodajFormatUDimenzije = (dimenzije, kolicinaPrije, jeLim, dimNove, komada) => {
+  const novi = redoviIzDimenzija(dimNove, komada, jeLim);
+  if (!novi || novi.length !== 1 || !(komada > 0)) return dimenzije;
+  const postojeci = Number(kolicinaPrije) > 0.0005 ? redoviIzDimenzija(dimenzije, kolicinaPrije, jeLim) : [];
+  if (!postojeci) return dimenzije;
+  const r = novi[0];
+  const i = postojeci.findIndex((x) => kljucFormata(x.duzinaMM, x.sirinaMM) === kljucFormata(r.duzinaMM, r.sirinaMM));
+  const redovi = i >= 0
+    ? postojeci.map((x, j) => (j === i ? { ...x, komada: String(Math.round(((Number(x.komada) || 0) + komada) * 1000) / 1000) } : x))
+    : [...postojeci, { ...r, komada: String(komada) }];
+  return redovi.map((x) => `${jeLim ? `${x.duzinaMM}×${x.sirinaMM}` : x.duzinaMM} mm${redovi.length > 1 ? ` × ${x.komada}` : ""}`).join("; ");
+};
 const redoviIzDimenzija = (dimenzije, kolicina, jeLim) => {
   const dijelovi = String(dimenzije || "").split(";").map((x) => x.trim()).filter(Boolean);
   if (!dijelovi.length) return null;
@@ -3932,12 +3982,11 @@ function IzdatnicaModal({ db, update, showToast, initialMaterijalId, onClose, on
   const [saljem, setSaljem] = useState(false);
 
   // Materijal s više dužina (npr. "3115 mm × 14; 3050 mm × 1"): umjesto jedne količine bira se koliko komada koje dužine se izdaje.
-  const jeLimMat = (mat) => db.katalogProfila.find((k) => k.id === mat?.katalogId)?.jedinica === "kg/m2";
+  const jeLimMat = (mat) => !!formatiMaterijala(mat, db)?.jeLim;
   const redoviZa = (mat) => {
-    if (!mat || mat.jm !== "kom") return null;
-    const kat = db.katalogProfila.find((k) => k.id === mat.katalogId);
-    if (!kat || kat.jedinica === "kg/kom") return null;
-    const redovi = redoviIzDimenzija(mat.dimenzije, mat.kolicina, kat.jedinica === "kg/m2");
+    const f = formatiMaterijala(mat, db);
+    if (!f) return null;
+    const redovi = redoviIzDimenzija(mat.dimenzije, mat.kolicina, f.jeLim);
     return redovi && redovi.length > 1 ? redovi : null;
   };
   const opisDuzine = (r, jeLim) => `${jeLim ? `${r.duzinaMM}×${r.sirinaMM}` : r.duzinaMM} mm`;
@@ -3998,7 +4047,7 @@ function IzdatnicaModal({ db, update, showToast, initialMaterijalId, onClose, on
         const izdanoRedovi = izd ? izd.map((r) => ({ duzinaMM: Number(r.duzinaMM), sirinaMM: r.sirinaMM ? Number(r.sirinaMM) : null, komada: r.izdano })) : null;
         // cijena: cijena na skladištu u trenutku izdavanja — da vrijednost izdanog materijala (npr.
         // u izvještaju nedovršene proizvodnje) ostane ista i kad se cijena na skladištu kasnije promijeni.
-        return { id: uid("izds"), materijalId: s.materijalId, sifra: mat.sifra, naziv: mat.naziv, jm: mat.jm, dimenzije: izd ? izd.map((r) => `${opisDuzine(r, jeLim)} × ${r.izdano}`).join("; ") : (mat.dimenzije || ""), ...(izdanoRedovi ? { izdanoRedovi } : {}), kolicinaIzdano: Number(s.kolicina), kolicinaVraceno: null, cijena: Number(mat.cijena) || 0, matBrojevi: rasporediFifo(db.maticnaKnjiga || [], potrosnja, s.materijalId, Number(s.kolicina)) };
+        return { id: uid("izds"), materijalId: s.materijalId, sifra: mat.sifra, naziv: mat.naziv, jm: mat.jm, dimenzije: izd ? izd.map((r) => `${opisDuzine(r, jeLim)} × ${r.izdano}`).join("; ") : (mat.dimenzije || ""), ...(izdanoRedovi ? { izdanoRedovi } : {}), kolicinaIzdano: Number(s.kolicina), kolicinaVraceno: null, cijena: Number(mat.cijena) || 0, matBrojevi: izd ? rasporediPoFormatima(db, potrosnja, s.materijalId, izd, Number(s.kolicina)) : rasporediFifo(db.maticnaKnjiga || [], potrosnja, s.materijalId, Number(s.kolicina)) };
       }),
     };
     update("materijali", noviMaterijali);
@@ -4156,7 +4205,7 @@ function IzdatnicaPrintModal({ izdatnica, projekt, izdao, postavkeTvrtke, onClos
 const brojIzUnosa = (v) => Number(String(v ?? "").replace(",", ".")) || 0;
 const opisRetkaPovrata = (r, jeLim) => (r.duzinaMM ? `${jeLim && r.sirinaMM ? `${r.duzinaMM}×${r.sirinaMM}` : r.duzinaMM} mm` : "");
 function ZaprimiPovratModal({ izdatnica, db, update, showToast, onClose }) {
-  const jeLimMat = (mat) => db.katalogProfila.find((k) => k.id === mat?.katalogId)?.jedinica === "kg/m2";
+  const jeLimMat = (mat) => !!formatiMaterijala(mat, db)?.jeLim;
   const prazanRed = () => ({ duzina: "", sirina: "", komada: "" });
   const [redovi, setRedovi] = useState(() => Object.fromEntries(izdatnica.stavke.map((st) => [st.id, [prazanRed()]])));
   const [saljem, setSaljem] = useState(false);
@@ -4775,6 +4824,13 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
     const noveStavke = row.stavke.map((s, idx) => {
       const sarza = String(opcije.sarze?.[idx] ?? s.sarza ?? "").trim();
       const komadnaStavka = ["duzina", "lim", "komadi"].includes(s.nacinUnosa);
+      // Format s narudžbenice (dužina / format lima) dopisuje se na materijal koji se vodi u komadima, da popis dužina
+      // na skladištu (i izbor dužine kod izdavanja) odgovara onome što je stvarno zaprimljeno.
+      const dimStavke = dimenzijeStavkeNarudzbenice(row, s, idx, db, true);
+      const formatNaMaterijal = (m, kom) => {
+        const f = dimStavke ? formatiMaterijala(m, db, dimStavke) : null;
+        return f ? dodajFormatUDimenzije(m.dimenzije, m.kolicina, f.jeLim, dimStavke, kom) : m.dimenzije;
+      };
       const evidentiraj = (materijalId, kolicina) => {
         if (s.projektId && kolicina > 0) rezervacije.push({ id: uid("rez"), materijalId, projektId: s.projektId, kolicina: zaokruziKolicinu(kolicina), datum: todayISO(), izvor: "narudzbenica", narudzbenicaId: row.id, napomena: `Narudžbenica ${row.broj}` });
         const matZ = materijali.find((m) => m.id === materijalId);
@@ -4791,7 +4847,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
         const mat = materijali.find((m) => m.id === s.materijalId);
         let kolicina = efektivnaKolicinaMaterijala(s, mat);
         if (mat?.jm === "kom" && komadnaStavka) kolicina = Number(s.komada) || 0; // stanje materijala je u komadima
-        materijali = materijali.map((m) => (m.id === s.materijalId ? { ...m, kolicina: m.kolicina + kolicina } : m));
+        materijali = materijali.map((m) => (m.id === s.materijalId ? { ...m, kolicina: m.kolicina + kolicina, dimenzije: formatNaMaterijal(m, kolicina) } : m));
         evidentiraj(s.materijalId, kolicina);
         return { ...s, sarza };
       }
@@ -4805,7 +4861,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
       const postojeci = materijali.find((m) => m.sifra === sifra);
       if (postojeci) {
         const dodaj = postojeci.jm === "kom" && komadnaStavka ? (Number(s.komada) || 0) : kolicinaPrimljeno;
-        materijali = materijali.map((m) => (m.id === postojeci.id ? { ...m, kolicina: m.kolicina + dodaj, katalogId: m.katalogId || entry.id } : m));
+        materijali = materijali.map((m) => (m.id === postojeci.id ? { ...m, kolicina: m.kolicina + dodaj, katalogId: m.katalogId || entry.id, dimenzije: formatNaMaterijal({ ...m, katalogId: m.katalogId || entry.id }, dodaj) } : m));
         evidentiraj(postojeci.id, dodaj);
         return { ...s, materijalId: postojeci.id, katalogId: "", sarza };
       }
@@ -4815,7 +4871,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
       const uKomadima = komadnaStavka && komada > 0;
       const cijenaKg = s.cijenaPoJed != null ? Number(s.cijenaPoJed) : (entry.jedinica === "kg/m2" ? 1.25 : 1.15);
       const mm = (v) => Math.round((Number(v) || 0) * 1000);
-      const dimenzijeTekst = s.nacinUnosa === "duzina" ? `${mm(s.duzinaM)} mm` : s.nacinUnosa === "lim" ? `${mm(s.duzinaM)}×${mm(s.sirinaM)} mm` : "";
+      const dimenzijeTekst = s.nacinUnosa === "duzina" ? `${mm(s.duzinaM)} mm` : s.nacinUnosa === "lim" ? `${mm(s.duzinaM)}×${mm(s.sirinaM)} mm` : dimStavke.replace(/\s*×\s*/g, "×");
       materijali = [...materijali, {
         id: noviId, sifra, katalogId: entry.id, naziv: katalogOznakaPuna(entry), tip: entry.tip,
         dimenzije: dimenzijeTekst, jm: uKomadima ? "kom" : "kg",
