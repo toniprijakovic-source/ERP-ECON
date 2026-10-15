@@ -2954,14 +2954,14 @@ const rasporediFifo = (knjiga, potrosnja, materijalId, kolicina) => {
   if (ostalo > 0.0005) rez.push({ maticniId: null, broj: null, kolicina: zaokruziKolicinu(ostalo) });
   return rez;
 };
-const noviZapisMaticneKnjige = ({ mat, kolicina, sarza, kvaliteta, narudzbenica, knjiga }) => {
+const noviZapisMaticneKnjige = ({ mat, kolicina, sarza, kvaliteta, narudzbenica, knjiga, otpremnica = "" }) => {
   const k = kvaliteta || mat.kvaliteta || "";
   // Ista šarža i kvaliteta već imaju atest — prenosi se, da se ne upisuje dvaput.
   const slican = sarza ? (knjiga || []).find((z) => z.sarza === sarza && (z.kvaliteta || "") === k && z.atestBroj) : null;
   return {
     id: uid("mb"), materijalId: mat.id, sifra: mat.sifra || "", naziv: mat.naziv || "", kvaliteta: k, sarza: sarza || "",
     atestBroj: slican?.atestBroj || "", atestVrsta: slican?.atestVrsta || "", datum: todayISO(),
-    dobavljacId: narudzbenica?.dobavljacId || "", narudzbenicaId: narudzbenica?.id || "", narudzbenicaBroj: narudzbenica?.broj || "",
+    dobavljacId: narudzbenica?.dobavljacId || "", narudzbenicaId: narudzbenica?.id || "", narudzbenicaBroj: narudzbenica?.broj || "", otpremnicaDobavljaca: otpremnica || "",
     kolicinaPrimljeno: zaokruziKolicinu(kolicina), jm: mat.jm || "", napomena: "", izvor: narudzbenica ? "zaprimanje" : "rucno",
   };
 };
@@ -3064,6 +3064,7 @@ function MaticniBrojPodaci({ z }) {
               {(!z.atestBroj || !z.atestVrsta) && <tr><td style={{ color: "var(--ink-soft)" }}>Atest</td><td style={{ color: "var(--rust)", fontWeight: 600 }}>nedostaje</td></tr>}
               <Red k="Dobavljač" v={z.dobavljac} />
               <Red k="Narudžbenica" v={z.narudzbenicaBroj} />
+              <Red k="Otpremnica dobavljača" v={z.otpremnicaDobavljaca} />
               <Red k="Datum primitka" v={z.datum ? fmtDate(z.datum) : ""} />
               <Red k="Primljeno" v={`${z.kolicinaPrimljeno} ${z.jm || ""}`} />
               <Red k="Iskorišteno" v={`${z.iskoristeno} ${z.jm || ""}`} />
@@ -3229,7 +3230,20 @@ function RezervacijeMaterijalaModal({ materijal, db, update, showToast, mozeMije
   );
 }
 
-// Zaprimanje narudžbenice: po stavci šarža/atest i broj naljepnica koje će se ispisati.
+// Dimenzije stavke kako stoje na narudžbenici (i u njezinom PDF-u): kod narudžbenice iz upita iz retka upita (lim
+// dužina × širina) — isti materijal može biti naručen u više formata, a šifra materijala ne sadrži dimenziju;
+// inače iz načina unosa stavke ili s materijala.
+const dimenzijeStavkeNarudzbenice = (n, s, i, db) => {
+  const su = n.stavkeUpita && n.stavkeUpita.length === (n.stavke || []).length ? n.stavkeUpita[i] : null;
+  const t = (v) => String(v ?? "").trim();
+  if (su) return su.vrstaStavke === "lim" && t(su.sirinaMM) ? `${t(su.dimenzijaMM)} × ${t(su.sirinaMM)} mm` : t(su.dimenzijaMM) ? `${t(su.dimenzijaMM)} mm` : "";
+  const mm = (v) => Math.round((Number(v) || 0) * 1000);
+  if (s.nacinUnosa === "duzina" && Number(s.duzinaM) > 0) return `${mm(s.duzinaM)} mm`;
+  if (s.nacinUnosa === "lim" && Number(s.duzinaM) > 0) return `${mm(s.duzinaM)} × ${mm(s.sirinaM)} mm`;
+  return db.materijali.find((x) => x.id === s.materijalId)?.dimenzije || "";
+};
+
+// Zaprimanje narudžbenice: broj otpremnice dobavljača, po stavci dimenzije iz narudžbenice, šarža i broj naljepnica.
 function ZaprimanjeModal({ narudzbenica, db, onPotvrdi, onClose }) {
   const nazivStavke = (s) => {
     const m = db.materijali.find((x) => x.id === s.materijalId);
@@ -3240,14 +3254,26 @@ function ZaprimanjeModal({ narudzbenica, db, onPotvrdi, onClose }) {
   const [sarze, setSarze] = useState(() => Object.fromEntries(narudzbenica.stavke.map((s, i) => [i, s.sarza || ""])));
   const [naljepnice, setNaljepnice] = useState(() => Object.fromEntries(narudzbenica.stavke.map((s, i) => [i, brojKomada(s)])));
   const [ispis, setIspis] = useState(true);
+  const [otpremnica, setOtpremnica] = useState(narudzbenica.otpremnicaDobavljaca || "");
+  const kolicinaStavke = (s) => {
+    if (Number(s.komada) > 0 && ["duzina", "lim", "komadi"].includes(s.nacinUnosa)) return `${s.komada} kom`;
+    const m = db.materijali.find((x) => x.id === s.materijalId);
+    return `${zaokruziKolicinu(s.kolicina)} ${m?.jm || ""}`.trim();
+  };
   return (
-    <Modal wide title={`Zaprimanje — ${narudzbenica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={PackageCheck} onClick={() => onPotvrdi({ sarze, naljepnice, ispis })}>Zaprimi robu</Btn></>}>
+    <Modal wide title={`Zaprimanje — ${narudzbenica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={PackageCheck} onClick={() => onPotvrdi({ sarze, naljepnice, ispis, otpremnica: otpremnica.trim() })}>Zaprimi robu</Btn></>}>
+      <div style={{ maxWidth: 320 }}>
+        <Field label="Broj otpremnice dobavljača">
+          <input className="input f-mono" autoFocus aria-label="Broj otpremnice dobavljača" placeholder="npr. 2026-004517" value={otpremnica} onChange={(e) => setOtpremnica(e.target.value)} />
+        </Field>
+      </div>
       <table className="erp-table">
-        <thead><tr><th>Materijal</th><th>Projekt</th><th style={{ width: 170 }}>Šarža</th><th style={{ width: 110 }}>Naljepnica</th></tr></thead>
+        <thead><tr><th>Materijal</th><th>Dimenzije</th><th>Projekt</th><th style={{ width: 170 }}>Šarža</th><th style={{ width: 110 }}>Naljepnica</th></tr></thead>
         <tbody>
           {narudzbenica.stavke.map((s, i) => (
             <tr key={i}>
               <td>{nazivStavke(s)}{s.kvaliteta ? <span style={{ color: "var(--ink-soft)" }}> · {s.kvaliteta}</span> : null}</td>
+              <td style={{ whiteSpace: "nowrap" }}><span className="f-mono">{dimenzijeStavkeNarudzbenice(narudzbenica, s, i, db) || "—"}</span><div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{kolicinaStavke(s)}</div></td>
               <td style={{ fontSize: 12 }}>{s.projektId ? (db.projekti.find((p) => p.id === s.projektId)?.sifra || "—") : <span style={{ color: "var(--ink-faint)" }}>zaliha</span>}</td>
               <td><input className="input" aria-label={`Šarža stavke ${i + 1}`} value={sarze[i]} onChange={(e) => setSarze({ ...sarze, [i]: e.target.value })} /></td>
               <td><input className="input f-mono" type="number" min="0" max="200" aria-label={`Broj naljepnica stavke ${i + 1}`} value={naljepnice[i]} onChange={(e) => setNaljepnice({ ...naljepnice, [i]: e.target.value })} /></td>
@@ -3258,7 +3284,7 @@ function ZaprimanjeModal({ narudzbenica, db, onPotvrdi, onClose }) {
       <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, fontSize: 13, cursor: "pointer" }}>
         <input type="checkbox" checked={ispis} onChange={(e) => setIspis(e.target.checked)} /> Nakon zaprimanja ispiši naljepnice (70 × 48 mm)
       </label>
-      <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>Stavke s odabranim projektom automatski se rezerviraju za taj projekt. Svaka zaprimljena stavka dobiva matični broj u Kontroli kvalitete (Matična knjiga), a atest se tamo upisuje kad stigne. Šarža i matični broj ispisuju se na naljepnici.</p>
+      <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>Stavke s odabranim projektom automatski se rezerviraju za taj projekt. Svaka zaprimljena stavka dobiva matični broj u Kontroli kvalitete (Matična knjiga), s brojem otpremnice dobavljača; atest se tamo upisuje kad stigne. Šarža i matični broj ispisuju se na naljepnici.</p>
     </Modal>
   );
 }
@@ -3295,8 +3321,8 @@ function MaticnaKnjigaTab({ db, update, showToast, mozeMijenjati }) {
     .map((z) => ({ ...z, preostalo: preostaloMaticnog(z, potrosnja), iskoristeno: potrosnja.get(z.id) || 0, bezAtesta: !z.atestBroj || !z.atestVrsta }))
     .filter((z) => (filtar === "bezAtesta" ? z.bezAtesta : filtar === "naStanju" ? z.preostalo > 0.0005 : true)), [knjiga, potrosnja, filtar]);
   const bezAtesta = knjiga.filter((z) => !z.atestBroj || !z.atestVrsta).length;
-  const prazno = () => ({ id: null, materijalId: "", kvaliteta: "", sarza: "", atestBroj: "", atestVrsta: "", datum: todayISO(), kolicinaPrimljeno: "", napomena: "" });
-  const uredi = (z) => setForma({ ...z, kolicinaPrimljeno: String(z.kolicinaPrimljeno ?? ""), napomena: z.napomena || "" });
+  const prazno = () => ({ id: null, materijalId: "", kvaliteta: "", sarza: "", atestBroj: "", atestVrsta: "", datum: todayISO(), kolicinaPrimljeno: "", otpremnicaDobavljaca: "", napomena: "" });
+  const uredi = (z) => setForma({ ...z, kolicinaPrimljeno: String(z.kolicinaPrimljeno ?? ""), otpremnicaDobavljaca: z.otpremnicaDobavljaca || "", napomena: z.napomena || "" });
   const postavi = (patch) => setForma((f) => ({ ...f, ...patch }));
   const odaberiMaterijal = (id) => { const m = db.materijali.find((x) => x.id === id); postavi({ materijalId: id, kvaliteta: m?.kvaliteta || "" }); };
   const sarzaGotova = () => {
@@ -3310,7 +3336,7 @@ function MaticnaKnjigaTab({ db, update, showToast, mozeMijenjati }) {
     if (!forma.id && !forma.materijalId) { showToast("Odaberi materijal."); return; }
     if (!(kol > 0)) { showToast("Upiši primljenu količinu."); return; }
     if (forma.id && kol < (potrosnja.get(forma.id) || 0) - 0.0005) { showToast(`Primljena količina ne može biti manja od već izdane (${zaokruziKolicinu(potrosnja.get(forma.id))}).`); return; }
-    const polja = { kvaliteta: forma.kvaliteta || "", sarza: forma.sarza.trim(), atestBroj: forma.atestBroj.trim(), atestVrsta: forma.atestVrsta || "", datum: forma.datum || todayISO(), napomena: forma.napomena || "", kolicinaPrimljeno: zaokruziKolicinu(kol) };
+    const polja = { kvaliteta: forma.kvaliteta || "", sarza: forma.sarza.trim(), atestBroj: forma.atestBroj.trim(), atestVrsta: forma.atestVrsta || "", datum: forma.datum || todayISO(), otpremnicaDobavljaca: (forma.otpremnicaDobavljaca || "").trim(), napomena: forma.napomena || "", kolicinaPrimljeno: zaokruziKolicinu(kol) };
     if (forma.id) {
       update("maticnaKnjiga", knjiga.map((z) => (z.id === forma.id ? { ...z, ...polja } : z)));
       showToast("Matični broj spremljen.");
@@ -3338,7 +3364,7 @@ function MaticnaKnjigaTab({ db, update, showToast, mozeMijenjati }) {
       </div>
       <EntityPage
         title="" data={redovi} onAdd={() => setForma(prazno())} onEdit={uredi} onDelete={brisi}
-        addLabel="Novi zapis" searchKeys={["broj", "naziv", "sifra", "kvaliteta", "sarza", "atestBroj", "narudzbenicaBroj"]} readOnly={!mozeMijenjati}
+        addLabel="Novi zapis" searchKeys={["broj", "naziv", "sifra", "kvaliteta", "sarza", "atestBroj", "narudzbenicaBroj", "otpremnicaDobavljaca"]} readOnly={!mozeMijenjati}
         rowClass={(r) => (r.bezAtesta ? "row-warn" : "")}
         columns={[
           { key: "broj", label: "Matični broj", render: (r) => <span className="f-mono" style={{ fontWeight: 700 }}>{r.broj}</span> },
@@ -3347,7 +3373,7 @@ function MaticnaKnjigaTab({ db, update, showToast, mozeMijenjati }) {
           { key: "sarza", label: "Šarža", render: (r) => r.sarza || <span style={{ color: "var(--ink-faint)" }}>—</span> },
           { key: "atest", label: "Atest", render: (r) => (r.bezAtesta ? <span style={{ color: "var(--rust)", fontWeight: 600 }}>nedostaje{r.atestBroj ? ` (${r.atestBroj})` : ""}</span> : <span><span className="f-mono">{r.atestBroj}</span> · {r.atestVrsta}</span>) },
           { key: "kolicina", label: "Primljeno / na stanju", render: (r) => <span className="f-mono">{zaokruziKolicinu(r.kolicinaPrimljeno)} / {r.preostalo} {r.jm}</span> },
-          { key: "datum", label: "Zaprimljeno", render: (r) => <div>{fmtDate(r.datum)}<div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{[dobavljacNaziv(r.dobavljacId), r.narudzbenicaBroj].filter(Boolean).join(" · ") || (r.izvor === "migracija" ? "zaliha iz prije" : "ručni unos")}</div></div> },
+          { key: "datum", label: "Zaprimljeno", render: (r) => <div>{fmtDate(r.datum)}<div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{[dobavljacNaziv(r.dobavljacId), r.narudzbenicaBroj, r.otpremnicaDobavljaca ? `otp. ${r.otpremnicaDobavljaca}` : ""].filter(Boolean).join(" · ") || (r.izvor === "migracija" ? "zaliha iz prije" : "ručni unos")}</div></div> },
           { key: "naljepnica", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Printer} onClick={() => setNaljepnicaZa(r)}>Naljepnica</Btn> },
         ]}
       />
@@ -3375,6 +3401,7 @@ function MaticnaKnjigaTab({ db, update, showToast, mozeMijenjati }) {
             </Field>
             <Field label={`Primljena količina${(forma.jm || materijal?.jm) ? ` (${forma.jm || materijal?.jm})` : ""}`}><input className="input f-mono" inputMode="decimal" value={forma.kolicinaPrimljeno} onChange={(e) => postavi({ kolicinaPrimljeno: e.target.value })} /></Field>
             <Field label="Datum zaprimanja"><input className="input" type="date" value={forma.datum || ""} onChange={(e) => postavi({ datum: e.target.value })} /></Field>
+            <Field label="Otpremnica dobavljača (broj)"><input className="input f-mono" value={forma.otpremnicaDobavljaca || ""} onChange={(e) => postavi({ otpremnicaDobavljaca: e.target.value })} /></Field>
           </div>
           {zahtijevanaVrstaAtesta(forma.kvaliteta) && <p style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 8 }}>Za kvalitetu {forma.kvaliteta} traži se atest {zahtijevanaVrstaAtesta(forma.kvaliteta)}{zahtijevanaVrstaAtesta(forma.kvaliteta) === "2.2" ? " ili viši" : ""}.</p>}
           <Field label="Napomena"><textarea className="textarea" rows={2} value={forma.napomena} onChange={(e) => postavi({ napomena: e.target.value })} /></Field>
@@ -4703,7 +4730,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
         const matZ = materijali.find((m) => m.id === materijalId);
         let maticniId = null;
         if (matZ && kolicina > 0) {
-          const zapis = noviZapisMaticneKnjige({ mat: matZ, kolicina, sarza, kvaliteta: s.kvaliteta, narudzbenica: row, knjiga: [...(db.maticnaKnjiga || []), ...maticni] });
+          const zapis = noviZapisMaticneKnjige({ mat: matZ, kolicina, sarza, kvaliteta: s.kvaliteta, narudzbenica: row, knjiga: [...(db.maticnaKnjiga || []), ...maticni], otpremnica: opcije.otpremnica });
           maticni.push(zapis);
           maticniId = zapis.id;
         }
@@ -4753,7 +4780,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
     });
     update("materijali", materijali);
     if (rezervacije.length !== (db.rezervacije || []).length) update("rezervacije", rezervacije);
-    update("narudzbenice", db.narudzbenice.map((n) => (n.id === row.id ? { ...n, stavke: noveStavke, status: "Primljeno", zaprimljeno: todayISO() } : n)));
+    update("narudzbenice", db.narudzbenice.map((n) => (n.id === row.id ? { ...n, stavke: noveStavke, status: "Primljeno", zaprimljeno: todayISO(), ...(opcije.otpremnica ? { otpremnicaDobavljaca: opcije.otpremnica } : {}) } : n)));
     const spremljeni = maticni.length ? dodajMaticne(maticni) : Promise.resolve([]);
     showToast("Roba zaprimljena, stanje skladišta ažurirano.");
     spremljeni.then((zapisi) => {
@@ -4824,7 +4851,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
             { key: "datum", label: "Datum", render: (r) => fmtDate(r.datum) },
             { key: "rokIsporuke", label: "Rok isporuke", render: (r) => fmtDate(r.rokIsporuke) },
             { key: "iznos", label: "Iznos", render: (r) => <span className="f-mono">{fmtCurDec(iznos(r))}</span> },
-            { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
+            { key: "status", label: "Status", render: (r) => <div><Badge status={r.status} />{r.otpremnicaDobavljaca && <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 2 }}>otp. {r.otpremnicaDobavljaca}</div>}</div> },
             { key: "print", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => otvoriPrintNarudzba(r)}>PDF</Btn> },
             { key: "primi", label: "", render: (r) => r.status !== "Primljeno" && r.stavke.length > 0 ? <Btn size="sm" icon={PackageCheck} onClick={() => setZaprimanjeZa(r)}>Primi robu</Btn> : null },
           ]}
