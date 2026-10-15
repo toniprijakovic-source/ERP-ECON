@@ -2482,10 +2482,27 @@ function ObavijestiPanel({ obavijesti, zaposlenici, onPotvrdi, onOtvoriProjekt, 
 const STIL_LINK_GUMBA = { background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit", fontSize: 11.5, fontWeight: 600, color: "var(--steel)" };
 
 // Mape na serveru: putanja iz teksta zadatka ili polje "Mapa projekta". Poveznica econ-mapa:<putanja> otvara Explorer
-// na računalima na kojima je jednom pokrenuta datoteka econ-mapa-instalacija.reg (frontend/public); inače preglednik
+// na računalima na kojima je jednom pokrenut pomoćnik econ-pomocnik-instalacija.cmd (frontend/public); inače preglednik
 // ne smije otvarati mape, pa uz svaku putanju stoji i gumb "Kopiraj".
 const izvuciPutanjuMape = (tekst) => { const m = String(tekst || "").match(/([A-Za-z]:\\[^)\n]+|\\\\[^\s)\\]+\\[^)\n]+)/); return m ? m[1].trim() : ""; };
 const urlOtvoriMapu = (putanja) => `econ-mapa:${encodeURIComponent(putanja).replace(/'/g, "%27")}`;
+const URL_POMOCNIKA = "/econ-pomocnik-instalacija.cmd";
+// Atesti materijala (PDF) su na disku Z: u mapi "Atesti materijala ERP", imenovani po matičnom broju (3706.pdf, dodatne
+// stranice 3706.1.pdf). Otvara ih isti pomoćnik: econ-atest:<broj atesta>,<matični broj> otvara prvi pronađeni, a
+// econ-atesti:<projekt>/<matični~atest>,… slaže ZIP svih atesta u Preuzimanja. Oznake smiju imati samo slova, brojke, - i _.
+const OZNAKA_ATESTA = /^[A-Za-z0-9_-]{1,40}$/;
+const oznakeAtesta = (z) => [...new Set([String(z.atestBroj ?? "").trim(), String(z.broj ?? "").trim()].filter((x) => OZNAKA_ATESTA.test(x)))];
+const urlAtesta = (z) => { const o = oznakeAtesta(z); return o.length ? `econ-atest:${o.join(",")}` : ""; };
+const urlZipAtesta = (naziv, zapisi) => {
+  const skupine = new Map();
+  zapisi.filter((z) => z.broj).forEach((z) => { const o = [...new Set([String(z.broj).trim(), String(z.atestBroj ?? "").trim()].filter((x) => OZNAKA_ATESTA.test(x)))]; if (o.length) skupine.set(o[0], o.join("~")); });
+  return skupine.size ? `econ-atesti:${encodeURIComponent(naziv || "projekt").replace(/'/g, "%27")}/${[...skupine.values()].join(",")}` : "";
+};
+function AtestLink({ z, children }) {
+  const url = urlAtesta(z);
+  if (!url) return children;
+  return <a href={url} title="Otvori PDF atesta s diska Z: (treba pomoćnik na računalu)" style={{ color: "var(--steel)", fontWeight: 600, textDecoration: "underline" }} onClick={(e) => e.stopPropagation()}>{children}</a>;
+}
 function MapaGumbi({ putanja, oznaka = "Otvori mapu" }) {
   const [kopirano, setKopirano] = useState(false);
   const kopiraj = (e) => {
@@ -3045,13 +3062,14 @@ function MaticniBrojKarticaModal({ broj, db, onClose }) {
     <Modal title={`Matični broj ${broj}`} onClose={onClose} footer={<Btn onClick={onClose}>Zatvori</Btn>}>
       {!z ? (
         <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>Matični broj {broj} nije pronađen, ili tvoja pozicija nema pristup matičnoj knjizi.</p>
-      ) : <MaticniBrojPodaci z={podaci} />}
+      ) : <MaticniBrojPodaci z={podaci} sAtestom />}
     </Modal>
   );
 }
 
 // Sadržaj kartice matičnog broja (zajedničko za karticu u aplikaciji i javnu stranicu bez prijave).
-function MaticniBrojPodaci({ z }) {
+// sAtestom: broj atesta je poveznica na PDF s diska Z: (samo u aplikaciji — javna kartica se otvara na mobitelu).
+function MaticniBrojPodaci({ z, sAtestom = false }) {
   const Red = ({ k, v }) => (v ? <tr><td style={{ color: "var(--ink-soft)", width: 150, paddingRight: 12 }}>{k}</td><td style={{ fontWeight: 600 }}>{v}</td></tr> : null);
   return (
         <>
@@ -3062,7 +3080,7 @@ function MaticniBrojPodaci({ z }) {
               <Red k="Dimenzije" v={z.dimenzije} />
               <Red k="Kvaliteta" v={z.kvaliteta} />
               <Red k="Šarža" v={z.sarza} />
-              <Red k="Atest" v={z.atestBroj ? `${z.atestVrsta ? `${z.atestVrsta} · ` : ""}${z.atestBroj}` : ""} />
+              <Red k="Atest" v={z.atestBroj ? <>{z.atestVrsta ? `${z.atestVrsta} · ` : ""}{sAtestom ? <AtestLink z={z}>{z.atestBroj}</AtestLink> : z.atestBroj}</> : ""} />
               {(!z.atestBroj || !z.atestVrsta) && <tr><td style={{ color: "var(--ink-soft)" }}>Atest</td><td style={{ color: "var(--rust)", fontWeight: 600 }}>nedostaje</td></tr>}
               <Red k="Dobavljač" v={z.dobavljac} />
               <Red k="Narudžbenica" v={z.narudzbenicaBroj} />
@@ -3390,7 +3408,7 @@ function MaticnaKnjigaTab({ db, update, showToast, mozeMijenjati }) {
           { key: "dimenzije", label: "Dimenzije", render: (r) => (r.dimenzije ? <span className="f-mono" style={{ whiteSpace: "nowrap" }}>{r.dimenzije}</span> : <span style={{ color: "var(--ink-faint)" }}>—</span>) },
           { key: "kvaliteta", label: "Kvaliteta" },
           { key: "sarza", label: "Šarža", render: (r) => r.sarza || <span style={{ color: "var(--ink-faint)" }}>—</span> },
-          { key: "atest", label: "Atest", render: (r) => (r.bezAtesta ? <span style={{ color: "var(--rust)", fontWeight: 600 }}>nedostaje{r.atestBroj ? ` (${r.atestBroj})` : ""}</span> : <span><span className="f-mono">{r.atestBroj}</span> · {r.atestVrsta}</span>) },
+          { key: "atest", label: "Atest", render: (r) => (r.bezAtesta ? <span style={{ color: "var(--rust)", fontWeight: 600 }}>nedostaje{r.atestBroj ? <> (<AtestLink z={r}>{r.atestBroj}</AtestLink>)</> : ""}</span> : <span><AtestLink z={r}><span className="f-mono">{r.atestBroj}</span></AtestLink> · {r.atestVrsta}</span>) },
           { key: "kolicina", label: "Primljeno / na stanju", render: (r) => <span className="f-mono">{zaokruziKolicinu(r.kolicinaPrimljeno)} / {r.preostalo} {r.jm}</span> },
           { key: "datum", label: "Zaprimljeno", render: (r) => <div>{fmtDate(r.datum)}<div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{[dobavljacNaziv(r.dobavljacId), r.narudzbenicaBroj, r.otpremnicaDobavljaca ? `otp. ${r.otpremnicaDobavljaca}` : ""].filter(Boolean).join(" · ") || (r.izvor === "migracija" ? "zaliha iz prije" : "ručni unos")}</div></div> },
           { key: "naljepnica", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Printer} onClick={() => setNaljepnicaZa(r)}>Naljepnica</Btn> },
@@ -3424,6 +3442,7 @@ function MaticnaKnjigaTab({ db, update, showToast, mozeMijenjati }) {
             <Field label="Dimenzije (s narudžbenice)"><input className="input f-mono" placeholder="npr. 6000 mm ili 3000 × 1500 mm" value={forma.dimenzije || ""} onChange={(e) => postavi({ dimenzije: e.target.value })} /></Field>
           </div>
           {zahtijevanaVrstaAtesta(forma.kvaliteta) && <p style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 8 }}>Za kvalitetu {forma.kvaliteta} traži se atest {zahtijevanaVrstaAtesta(forma.kvaliteta)}{zahtijevanaVrstaAtesta(forma.kvaliteta) === "2.2" ? " ili viši" : ""}.</p>}
+          <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 8 }}>PDF atesta spremi na Z: u mapu Econ_2026_Kontrola kvalitete\Atesti materijala ERP pod imenom {forma.broj ? `${forma.broj}.pdf` : "matičnog broja (npr. 3706.pdf)"}, dodatne stranice {forma.broj ? `${forma.broj}.1.pdf` : "3706.1.pdf"}. Kad je atest spremljen pod drugim matičnim brojem (ista šarža), u broj atesta upiši taj broj.</p>
           <Field label="Napomena"><textarea className="textarea" rows={2} value={forma.napomena} onChange={(e) => postavi({ napomena: e.target.value })} /></Field>
           {!forma.id && <p style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Matični broj dodjeljuje se kod spremanja. Zapis ne mijenja stanje skladišta — služi za zalihu koja je već na skladištu. Roba zaprimljena preko narudžbenice dobiva matični broj sama.</p>}
         </Modal>
@@ -3460,6 +3479,7 @@ function UgradeniMaterijalTab({ db, showToast, pocetniProjektId }) {
           {projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}{brojIzdatnica.get(p.id) ? ` (izdatnica: ${brojIzdatnica.get(p.id)})` : ""}</option>)}
         </select>
         <Btn icon={Printer} onClick={ispisi} disabled={redovi.length === 0}>Ispis / PDF</Btn>
+        {projekt && urlZipAtesta(projekt.sifra, redovi) && <a className="btn btn-ghost" href={urlZipAtesta(projekt.sifra, redovi)} title="Svi atesti ugrađenog materijala s diska Z: u jedan ZIP (sprema se u Preuzimanja)"><Download size={14} />ZIP atesta</a>}
         {redovi.length > 0 && <span style={{ fontSize: 12.5, color: upozorenja ? "var(--rust)" : "var(--green)" }}>{upozorenja ? `${upozorenja} od ${redovi.length} redaka traži pažnju` : `Svih ${redovi.length} redaka ima matični broj i atest`}</span>}
       </div>
       {redovi.length === 0 ? <EmptyState text="Na ovaj projekt još nije izdan materijal (izdatnice)." /> : (
@@ -3471,7 +3491,7 @@ function UgradeniMaterijalTab({ db, showToast, pocetniProjektId }) {
             { key: "naziv", label: "Materijal" },
             { key: "kvaliteta", label: "Kvaliteta" },
             { key: "sarza", label: "Šarža", render: (r) => r.sarza || "—" },
-            { key: "atestBroj", label: "Broj atesta", render: (r) => r.atestBroj || "—" },
+            { key: "atestBroj", label: "Broj atesta", render: (r) => (r.atestBroj ? <AtestLink z={r}>{r.atestBroj}</AtestLink> : "—") },
             { key: "atestVrsta", label: "Vrsta atesta", render: (r) => r.atestVrsta || "—" },
             { key: "kolicina", label: "Količina", render: (r) => <span className="f-mono">{r.kolicina} {r.jm}</span> },
             { key: "datum", label: "Izdano", render: (r) => fmtDate(r.datum) },
@@ -3481,6 +3501,7 @@ function UgradeniMaterijalTab({ db, showToast, pocetniProjektId }) {
         />
       )}
       <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 10 }}>Popis se sastavlja iz izdatnica (uključujući izdavanje s radnih naloga), s odbijenim povratima. Materijal se izdaje s najstarijeg matičnog broja koji ima zalihu. Starije izdatnice, nastale prije matične knjige, nemaju matični broj.</p>
+      <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 4 }}>Atesti (PDF) se traže na disku Z: u mapi Econ_2026_Kontrola kvalitete\Atesti materijala ERP pod matičnim brojem (npr. 3706.pdf, dodatne stranice 3706.1.pdf), a zatim u staroj mapi Atesti materijala. Klik na broj atesta otvara PDF, a „ZIP atesta“ sprema sve ateste projekta u Preuzimanja. Na svakom računalu jednom pokreni <a href={URL_POMOCNIKA} download style={{ color: "var(--steel)", fontWeight: 600 }}>pomoćnika</a>.</p>
     </div>
   );
 }
@@ -10003,7 +10024,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
           <Field label="Opis"><textarea className="textarea" rows={3} value={projForm.opis} onChange={(e) => setProjForm({ ...projForm, opis: e.target.value })} /></Field>
           <Field label="Mapa projekta na serveru">
             <input className="input f-mono" placeholder="npr. Z:\ECON_2026\ECON_2026\Econ_2026_Projekti\RN 170-307_…" value={projForm.mapa || ""} onChange={(e) => setProjForm({ ...projForm, mapa: e.target.value })} />
-            <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 4 }}>Prikazuje se uz zadatke projekta i u popisu projekata s gumbima "Otvori mapu" i "Kopiraj". Da "Otvori mapu" radi jednim klikom, na svakom računalu jednom pokreni <a href="/econ-mapa-instalacija.reg" download style={{ color: "var(--steel)", fontWeight: 600 }}>ovu datoteku</a> (otvara samo mape pod Z:\ECON_2026).</div>
+            <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 4 }}>Prikazuje se uz zadatke projekta i u popisu projekata s gumbima "Otvori mapu" i "Kopiraj". Da "Otvori mapu" radi jednim klikom, na svakom računalu jednom pokreni <a href={URL_POMOCNIKA} download style={{ color: "var(--steel)", fontWeight: 600 }}>pomoćnika</a> (otvara samo mape pod Z:\ECON_2026 i ateste materijala).</div>
           </Field>
           <div className="label" style={{ marginTop: 6 }}>{(projForm.dodaci || []).length ? "Osnovna narudžba — faze izrade (planirani sati)" : "Faze izrade (planirani sati)"}</div>
           <div style={{ fontSize: 11, color: "var(--ink-faint)", marginBottom: 8 }}>Sati po fazi koriste se kao predložak kad se za ovaj projekt kasnije kreira radni nalog — nisu obavezni za faze koje se ne planiraju.</div>
