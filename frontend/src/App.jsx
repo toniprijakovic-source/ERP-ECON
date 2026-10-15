@@ -3038,7 +3038,7 @@ function MaticniBrojKarticaModal({ broj, db, onClose }) {
     return r.sort((a, b) => String(a.datum).localeCompare(String(b.datum)));
   }, [z, db.izdatnice, db.projekti]);
   const podaci = z && {
-    ...z, dobavljac: (db.dobavljaci || []).find((d) => d.id === z.dobavljacId)?.naziv || "",
+    ...z, dobavljac: (db.dobavljaci || []).find((d) => d.id === z.dobavljacId)?.naziv || "", dimenzije: dimenzijeMaticnog(z, db),
     iskoristeno: zaokruziKolicinu(potrosnja.get(z.id) || 0), preostalo: preostaloMaticnog(z, potrosnja), izdano,
   };
   return (
@@ -3059,6 +3059,7 @@ function MaticniBrojPodaci({ z }) {
           <div className="f-mono" style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 12 }}>{formatSifre(z.sifra)}</div>
           <table style={{ fontSize: 13, borderCollapse: "collapse", marginBottom: 14 }}>
             <tbody>
+              <Red k="Dimenzije" v={z.dimenzije} />
               <Red k="Kvaliteta" v={z.kvaliteta} />
               <Red k="Šarža" v={z.sarza} />
               <Red k="Atest" v={z.atestBroj ? `${z.atestVrsta ? `${z.atestVrsta} · ` : ""}${z.atestBroj}` : ""} />
@@ -3334,11 +3335,12 @@ function MaticnaKnjigaTab({ db, update, showToast, mozeMijenjati }) {
   const dobavljacNaziv = (id) => (db.dobavljaci || []).find((d) => d.id === id)?.naziv || "";
   const redovi = useMemo(() => [...knjiga]
     .sort((a, b) => (Number(b.broj) || 0) - (Number(a.broj) || 0))
-    .map((z) => ({ ...z, preostalo: preostaloMaticnog(z, potrosnja), iskoristeno: potrosnja.get(z.id) || 0, bezAtesta: !z.atestBroj || !z.atestVrsta }))
-    .filter((z) => (filtar === "bezAtesta" ? z.bezAtesta : filtar === "naStanju" ? z.preostalo > 0.0005 : true)), [knjiga, potrosnja, filtar]);
+    .map((z) => ({ ...z, dimenzije: dimenzijeMaticnog(z, db), preostalo: preostaloMaticnog(z, potrosnja), iskoristeno: potrosnja.get(z.id) || 0, bezAtesta: !z.atestBroj || !z.atestVrsta }))
+    .filter((z) => (filtar === "bezAtesta" ? z.bezAtesta : filtar === "naStanju" ? z.preostalo > 0.0005 : true)), [knjiga, potrosnja, filtar, db.narudzbenice, db.materijali]);
   const bezAtesta = knjiga.filter((z) => !z.atestBroj || !z.atestVrsta).length;
-  const prazno = () => ({ id: null, materijalId: "", kvaliteta: "", sarza: "", atestBroj: "", atestVrsta: "", datum: todayISO(), kolicinaPrimljeno: "", otpremnicaDobavljaca: "", napomena: "" });
-  const uredi = (z) => setForma({ ...z, kolicinaPrimljeno: String(z.kolicinaPrimljeno ?? ""), otpremnicaDobavljaca: z.otpremnicaDobavljaca || "", napomena: z.napomena || "" });
+  const prazno = () => ({ id: null, materijalId: "", kvaliteta: "", sarza: "", atestBroj: "", atestVrsta: "", datum: todayISO(), kolicinaPrimljeno: "", otpremnicaDobavljaca: "", dimenzije: "", napomena: "" });
+  // redak popisa već nosi dimenzije (spremljene ili pronađene na narudžbenici) — kod spremanja se upisuju na zapis
+  const uredi = (z) => setForma({ ...z, kolicinaPrimljeno: String(z.kolicinaPrimljeno ?? ""), otpremnicaDobavljaca: z.otpremnicaDobavljaca || "", dimenzije: z.dimenzije || "", napomena: z.napomena || "" });
   const postavi = (patch) => setForma((f) => ({ ...f, ...patch }));
   const odaberiMaterijal = (id) => { const m = db.materijali.find((x) => x.id === id); postavi({ materijalId: id, kvaliteta: m?.kvaliteta || "" }); };
   const sarzaGotova = () => {
@@ -3352,7 +3354,7 @@ function MaticnaKnjigaTab({ db, update, showToast, mozeMijenjati }) {
     if (!forma.id && !forma.materijalId) { showToast("Odaberi materijal."); return; }
     if (!(kol > 0)) { showToast("Upiši primljenu količinu."); return; }
     if (forma.id && kol < (potrosnja.get(forma.id) || 0) - 0.0005) { showToast(`Primljena količina ne može biti manja od već izdane (${zaokruziKolicinu(potrosnja.get(forma.id))}).`); return; }
-    const polja = { kvaliteta: forma.kvaliteta || "", sarza: forma.sarza.trim(), atestBroj: forma.atestBroj.trim(), atestVrsta: forma.atestVrsta || "", datum: forma.datum || todayISO(), otpremnicaDobavljaca: (forma.otpremnicaDobavljaca || "").trim(), napomena: forma.napomena || "", kolicinaPrimljeno: zaokruziKolicinu(kol) };
+    const polja = { kvaliteta: forma.kvaliteta || "", sarza: forma.sarza.trim(), atestBroj: forma.atestBroj.trim(), atestVrsta: forma.atestVrsta || "", datum: forma.datum || todayISO(), otpremnicaDobavljaca: (forma.otpremnicaDobavljaca || "").trim(), dimenzije: (forma.dimenzije || "").trim(), napomena: forma.napomena || "", kolicinaPrimljeno: zaokruziKolicinu(kol) };
     if (forma.id) {
       update("maticnaKnjiga", knjiga.map((z) => (z.id === forma.id ? { ...z, ...polja } : z)));
       showToast("Matični broj spremljen.");
@@ -3380,11 +3382,12 @@ function MaticnaKnjigaTab({ db, update, showToast, mozeMijenjati }) {
       </div>
       <EntityPage
         title="" data={redovi} onAdd={() => setForma(prazno())} onEdit={uredi} onDelete={brisi}
-        addLabel="Novi zapis" searchKeys={["broj", "naziv", "sifra", "kvaliteta", "sarza", "atestBroj", "narudzbenicaBroj", "otpremnicaDobavljaca"]} readOnly={!mozeMijenjati}
+        addLabel="Novi zapis" searchKeys={["broj", "naziv", "sifra", "dimenzije", "kvaliteta", "sarza", "atestBroj", "narudzbenicaBroj", "otpremnicaDobavljaca"]} readOnly={!mozeMijenjati}
         rowClass={(r) => (r.bezAtesta ? "row-warn" : "")}
         columns={[
           { key: "broj", label: "Matični broj", render: (r) => <span className="f-mono" style={{ fontWeight: 700 }}>{r.broj}</span> },
           { key: "naziv", label: "Materijal", render: (r) => <div>{r.naziv}<div className="f-mono" style={{ fontSize: 11, color: "var(--ink-faint)" }}>{formatSifre(r.sifra)}</div></div> },
+          { key: "dimenzije", label: "Dimenzije", render: (r) => (r.dimenzije ? <span className="f-mono" style={{ whiteSpace: "nowrap" }}>{r.dimenzije}</span> : <span style={{ color: "var(--ink-faint)" }}>—</span>) },
           { key: "kvaliteta", label: "Kvaliteta" },
           { key: "sarza", label: "Šarža", render: (r) => r.sarza || <span style={{ color: "var(--ink-faint)" }}>—</span> },
           { key: "atest", label: "Atest", render: (r) => (r.bezAtesta ? <span style={{ color: "var(--rust)", fontWeight: 600 }}>nedostaje{r.atestBroj ? ` (${r.atestBroj})` : ""}</span> : <span><span className="f-mono">{r.atestBroj}</span> · {r.atestVrsta}</span>) },
@@ -3418,6 +3421,7 @@ function MaticnaKnjigaTab({ db, update, showToast, mozeMijenjati }) {
             <Field label={`Primljena količina${(forma.jm || materijal?.jm) ? ` (${forma.jm || materijal?.jm})` : ""}`}><input className="input f-mono" inputMode="decimal" value={forma.kolicinaPrimljeno} onChange={(e) => postavi({ kolicinaPrimljeno: e.target.value })} /></Field>
             <Field label="Datum zaprimanja"><input className="input" type="date" value={forma.datum || ""} onChange={(e) => postavi({ datum: e.target.value })} /></Field>
             <Field label="Otpremnica dobavljača (broj)"><input className="input f-mono" value={forma.otpremnicaDobavljaca || ""} onChange={(e) => postavi({ otpremnicaDobavljaca: e.target.value })} /></Field>
+            <Field label="Dimenzije (s narudžbenice)"><input className="input f-mono" placeholder="npr. 6000 mm ili 3000 × 1500 mm" value={forma.dimenzije || ""} onChange={(e) => postavi({ dimenzije: e.target.value })} /></Field>
           </div>
           {zahtijevanaVrstaAtesta(forma.kvaliteta) && <p style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 8 }}>Za kvalitetu {forma.kvaliteta} traži se atest {zahtijevanaVrstaAtesta(forma.kvaliteta)}{zahtijevanaVrstaAtesta(forma.kvaliteta) === "2.2" ? " ili viši" : ""}.</p>}
           <Field label="Napomena"><textarea className="textarea" rows={2} value={forma.napomena} onChange={(e) => postavi({ napomena: e.target.value })} /></Field>
