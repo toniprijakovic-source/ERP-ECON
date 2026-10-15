@@ -8495,10 +8495,21 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
   // Kreira po jedan radni nalog za svaku fazu koja na projektu ima planiranih, a još
   // nerasporedenih sati (preostaloSatiFaze) — ne diraju se faze bez planiranih sati ili one
   // za koje je već sve raspoređeno. Ručno pokrenuto gumbom, nikad automatski.
+  // Kupaonice (normativ): po jedan nalog za svaku operaciju sa satima iz normativa (svi komadi projekta) umanjenima za
+  // sate već otvorenih naloga te faze. Nalozi služe za upis sati po radnicima (Sati po nalozima); plan proizvodnje
+  // kupaonice i dalje računa iz normativa i rasporeda isporuka, pa ih ne broji dvaput.
+  const satiNormativa = projekt.koristiNormativ ? izracunTipskogProjekta(projekt, db.normativi).ukupno.satiPoOperaciji : null;
   const kreirajRadneNaloge = () => {
     let brojac = parseInt(sljedeciBrojRadnogNaloga(db.radniNalozi, projekt.sifra).split("/").pop(), 10);
-    const noviNalozi = [{ id: "" }, ...(projekt.dodaci || [])]
-      .flatMap((dio) => FAZE.map((faza) => ({ faza, dio, preostalo: preostaloSatiFaze(projekt, faza, db.radniNalozi, null, dio.id) })))
+    const dijelovi = satiNormativa
+      ? OPERACIJE.map((o) => {
+        const rasporedeno = nalozi.filter((r) => r.faza === o.label).reduce((s, r) => s + (Number(r.planiranoSati) || 0), 0);
+        return { faza: o.label, dio: { id: "" }, preostalo: Math.round(((satiNormativa[o.key] || 0) - rasporedeno) * 10) / 10 };
+      })
+      : [{ id: "" }, ...(projekt.dodaci || [])].flatMap((dio) => FAZE.map((faza) => ({ faza, dio, preostalo: preostaloSatiFaze(projekt, faza, db.radniNalozi, null, dio.id) })));
+    if (satiNormativa && !OPERACIJE.some((o) => satiNormativa[o.key] > 0)) { showToast("Normativ za ovaj projekt ne daje sate — provjeri stavke (pod, komplet) i učinak kg/h u Normativu."); return; }
+    if (!satiNormativa && !FAZE.some((f) => satiDijelaFaze(projekt, f, "") > 0 || (projekt.dodaci || []).some((d) => satiDijelaFaze(projekt, f, d.id) > 0))) { showToast("Projekt nema upisanih planiranih sati po fazama — upiši ih u „Uredi projekt“."); return; }
+    const noviNalozi = dijelovi
       .filter(({ preostalo }) => preostalo > 0)
       .map(({ faza, dio, preostalo }) => ({
         id: uid("rn"), dodatakId: dio.id, broj: `${projekt.sifra}/${brojac++}`, projektId: projekt.id,
@@ -8506,7 +8517,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
         planiranoSati: preostalo, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: todayISO(),
         stavke: [], materijalIzdan: false, ovisiONalogId: null, ovisnostTip: "zavrsetak", ovisnostSati: 8,
       }));
-    if (noviNalozi.length === 0) { showToast("Sve planirane faze već imaju radne naloge."); return; }
+    if (noviNalozi.length === 0) { showToast(satiNormativa ? "Sve operacije iz normativa već imaju radne naloge." : "Sve planirane faze već imaju radne naloge."); return; }
     update("radniNalozi", [...db.radniNalozi, ...noviNalozi]);
     showToast(`Kreirano ${noviNalozi.length} radnih naloga.`);
   };
@@ -8871,8 +8882,9 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <div className="label">Radni nalozi</div>
-          <Btn variant="ghost" size="sm" icon={Plus} onClick={kreirajRadneNaloge}>Kreiraj radne naloge</Btn>
+          <Btn variant="ghost" size="sm" icon={Plus} onClick={kreirajRadneNaloge}>{satiNormativa ? "Kreiraj radne naloge iz normativa" : "Kreiraj radne naloge"}</Btn>
         </div>
+        {satiNormativa && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 6 }}>Kupaonice: nalozi dobivaju sate po operaciji iz normativa i služe za upis sati po radnicima (Zaposlenici → Sati po nalozima). Plan proizvodnje kupaonice i dalje računa iz normativa i rasporeda isporuka.</div>}
         {nalozi.length === 0 ? <EmptyState text="Nema radnih naloga za ovaj projekt." /> : (
           <table className="erp-table">
             <thead><tr><th>Broj</th><th>Faza</th><th>Tim</th><th>Sati (utr./plan.)</th><th>Status</th><th style={{ width: 40 }} /></tr></thead>
