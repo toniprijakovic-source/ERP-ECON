@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS app_data (
                 'postavkeTvrtke','upitiNabave','radniCentri','evidencijaRada',
                 'narudzbe','otpremnice','podlogeZaFakturu','normativi',
                 'postavkePlaca','praznici','kvaliteteMaterijala','ponudeLasera','doplaciPlaca',
-                'satiPoNalogu','izdatnice','cmr','slobodniZadaci','planProizvodnje','nedovrsenaProizvodnja','rezervacije','maticnaKnjiga','upitiTransporta','narudzbeTransporta'
+                'satiPoNalogu','izdatnice','cmr','slobodniZadaci','planProizvodnje','nedovrsenaProizvodnja','rezervacije','maticnaKnjiga','upitiTransporta','narudzbeTransporta','godisnjiOdmor'
               )),
   value       JSONB NOT NULL,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()

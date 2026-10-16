@@ -31,7 +31,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada",
   "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
   "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca",
-  "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije", "maticnaKnjiga", "upitiTransporta", "narudzbeTransporta",
+  "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije", "maticnaKnjiga", "upitiTransporta", "narudzbeTransporta", "godisnjiOdmor",
 ];
 
 // Svaki modul (isti "moduli" popis kao u pozicijeZaposlenika) dijeli se na kartice — iste
@@ -114,6 +114,9 @@ const KARTICE_MODULA = {
     evidencija: { citanje: ["evidencijaRada", "postavkePlaca", "praznici"], pisanje: ["evidencijaRada"] },
     obracun: { citanje: ["evidencijaRada", "postavkePlaca", "praznici", "zaposlenici", "doplaciPlaca", "postavkeTvrtke"], pisanje: ["postavkePlaca", "praznici", "doplaciPlaca"] },
     satinalozi: { citanje: ["evidencijaRada", "postavkePlaca", "radniNalozi", "zaposlenici", "satiPoNalogu"], pisanje: ["satiPoNalogu", "radniNalozi"] },
+    // Godišnji odmor: pravo na dane (staž izvan Econa, složenost, preneseno, korekcija — upis u godisnjiOdmor) i iskorišteni
+    // dani iz evidencije rada (godišnji i detašman - godišnji), uz praznike i pozicije za skupine radiona / režija.
+    godisnji: { citanje: ["godisnjiOdmor", "evidencijaRada", "praznici", "zaposlenici", "pozicijeZaposlenika", "postavkeTvrtke"], pisanje: ["godisnjiOdmor"] },
   },
 };
 
@@ -130,7 +133,7 @@ const filtrirajSlobodneZadatke = (zadaci, pozicija, zaposlenikId) => (Array.isAr
 const UVIJEK_CITLJIVO = ["zaposlenici", "pozicijeZaposlenika", "postavkeTvrtke"];
 
 // Ključevi čija je vrijednost objekt (ne niz) — koristi se za ispravan "prazan" placeholder.
-const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi", "postavkePlaca", "planProizvodnje", "nedovrsenaProizvodnja"]);
+const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi", "postavkePlaca", "planProizvodnje", "nedovrsenaProizvodnja", "godisnjiOdmor"]);
 
 async function ucitajPozicijuZaposlenika(zaposlenikId) {
   const [zaposlenici, pozicije] = await Promise.all([ucitajKljuc("zaposlenici"), ucitajKljuc("pozicijeZaposlenika")]);
