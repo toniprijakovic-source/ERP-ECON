@@ -3318,41 +3318,96 @@ function ZaprimanjeModal({ narudzbenica, db, onPotvrdi, onClose }) {
     const k = (db.katalogProfila || []).find((x) => x.id === s.katalogId);
     return m ? m.naziv : k ? katalogOznakaPuna(k) : "—";
   };
-  const brojKomada = (s) => (["duzina", "lim", "komadi"].includes(s.nacinUnosa) ? Math.max(1, Math.round(Number(s.komada) || 1)) : 1);
-  const [sarze, setSarze] = useState(() => Object.fromEntries(narudzbenica.stavke.map((s, i) => [i, s.sarza || ""])));
-  const [naljepnice, setNaljepnice] = useState(() => Object.fromEntries(narudzbenica.stavke.map((s, i) => [i, brojKomada(s)])));
+  const komadna = (s) => ["duzina", "lim", "komadi"].includes(s.nacinUnosa) && Number(s.komada) > 0;
+  const brojKomada = (s) => (komadna(s) ? Math.max(1, Math.round(Number(s.komada) || 1)) : 1);
+  // Ukupna količina stavke u jedinici prikaza (komadi ili jedinica materijala) — dijelovi po šaržama se upisuju u njoj.
+  const ukupnoStavke = (s) => (komadna(s) ? Number(s.komada) : Number(s.kolicina) || 0);
+  const jedinicaStavke = (s) => (komadna(s) ? "kom" : db.materijali.find((x) => x.id === s.materijalId)?.jm || "");
+  // Po stavci popis dijelova { kolicina, sarza, naljepnice, rucno }: jedan dio = cijela stavka (dosadašnje ponašanje).
+  const [dijelovi, setDijelovi] = useState(() => Object.fromEntries(narudzbenica.stavke.map((s, i) => [i, [{ kolicina: "", sarza: s.sarza || "", naljepnice: brojKomada(s), rucno: false }]])));
+  const [greska, setGreska] = useState("");
   const [ispis, setIspis] = useState(true);
   const [otpremnica, setOtpremnica] = useState(narudzbenica.otpremnicaDobavljaca || "");
-  const kolicinaStavke = (s) => {
-    if (Number(s.komada) > 0 && ["duzina", "lim", "komadi"].includes(s.nacinUnosa)) return `${s.komada} kom`;
-    const m = db.materijali.find((x) => x.id === s.materijalId);
-    return `${zaokruziKolicinu(s.kolicina)} ${m?.jm || ""}`.trim();
+  const kolicinaStavke = (s) => `${zaokruziKolicinu(ukupnoStavke(s))} ${jedinicaStavke(s)}`.trim();
+  const brojUnosa = (v) => Number(String(v ?? "").replace(",", "."));
+  const postaviDio = (i, k, patch) => setDijelovi((d) => ({ ...d, [i]: d[i].map((x, j) => (j === k ? { ...x, ...patch } : x)) }));
+  const podijeli = (i) => setDijelovi((d) => ({ ...d, [i]: [...d[i], { kolicina: "", sarza: "", naljepnice: 1, rucno: false }] }));
+  const ukloniDio = (i, k) => setDijelovi((d) => ({ ...d, [i]: d[i].filter((_, j) => j !== k) }));
+  // Preostala količina za dio bez upisane količine (najviše jedan takav dio po stavci).
+  const ostatak = (i) => {
+    const s = narudzbenica.stavke[i];
+    return zaokruziKolicinu(ukupnoStavke(s) - dijelovi[i].reduce((a, x) => a + (brojUnosa(x.kolicina) > 0 ? brojUnosa(x.kolicina) : 0), 0));
+  };
+  // Komadna stavka: naljepnica po komadu dijela (dio bez količine = ostatak), dok broj korisnik sam ne promijeni.
+  const naljepniceDijela = (i, x) => {
+    const s = narudzbenica.stavke[i];
+    if (x.rucno || !komadna(s)) return x.naljepnice;
+    const kom = String(x.kolicina).trim() === "" ? ostatak(i) : brojUnosa(x.kolicina);
+    return Math.max(0, Math.min(200, Math.round(kom) || 0));
+  };
+  const potvrdi = () => {
+    const izlaz = {};
+    for (let i = 0; i < narudzbenica.stavke.length; i++) {
+      const s = narudzbenica.stavke[i];
+      const dd = dijelovi[i];
+      const ukupno = ukupnoStavke(s);
+      if (dd.length === 1) { izlaz[i] = [{ sarza: dd[0].sarza, udio: 1, naljepnice: dd[0].rucno || !komadna(s) ? dd[0].naljepnice : brojKomada(s) }]; continue; }
+      const prazni = dd.filter((x) => String(x.kolicina).trim() === "");
+      if (dd.some((x) => String(x.kolicina).trim() !== "" && !(brojUnosa(x.kolicina) > 0))) { setGreska(`${nazivStavke(s)}: količina dijela mora biti broj veći od 0.`); return; }
+      if (prazni.length > 1) { setGreska(`${nazivStavke(s)}: upiši količinu za sve dijelove osim jednog (on dobiva ostatak).`); return; }
+      const zbroj = dd.reduce((a, x) => a + (brojUnosa(x.kolicina) > 0 ? brojUnosa(x.kolicina) : 0), 0);
+      if (prazni.length === 0 ? Math.abs(zbroj - ukupno) > 0.0005 : zbroj >= ukupno - 0.0005) { setGreska(`${nazivStavke(s)}: zbroj dijelova (${zaokruziKolicinu(zbroj)}) mora biti ${prazni.length ? "manji od" : "jednak"} zaprimljenoj količini ${kolicinaStavke(s)}.`); return; }
+      // udio svakog dijela u stavci; dio bez količine (ostatak) ide zadnji
+      const poredani = [...dd.filter((x) => String(x.kolicina).trim() !== ""), ...prazni];
+      izlaz[i] = poredani.map((x) => ({ sarza: x.sarza, naljepnice: naljepniceDijela(i, x), udio: String(x.kolicina).trim() === "" ? null : brojUnosa(x.kolicina) / (ukupno || 1) }));
+    }
+    onPotvrdi({ dijelovi: izlaz, ispis, otpremnica: otpremnica.trim() });
   };
   return (
-    <Modal wide title={`Zaprimanje — ${narudzbenica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={PackageCheck} onClick={() => onPotvrdi({ sarze, naljepnice, ispis, otpremnica: otpremnica.trim() })}>Zaprimi robu</Btn></>}>
+    <Modal wide title={`Zaprimanje — ${narudzbenica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={PackageCheck} onClick={potvrdi}>Zaprimi robu</Btn></>}>
       <div style={{ maxWidth: 320 }}>
         <Field label="Broj otpremnice dobavljača">
           <input className="input f-mono" autoFocus aria-label="Broj otpremnice dobavljača" placeholder="npr. 2026-004517" value={otpremnica} onChange={(e) => setOtpremnica(e.target.value)} />
         </Field>
       </div>
       <table className="erp-table">
-        <thead><tr><th>Materijal</th><th>Dimenzije</th><th>Projekt</th><th style={{ width: 170 }}>Šarža</th><th style={{ width: 110 }}>Naljepnica</th></tr></thead>
+        <thead><tr><th>Materijal</th><th>Dimenzije</th><th>Projekt</th><th style={{ width: 330 }}>Šarža (količina po šarži)</th><th style={{ width: 90 }}>Naljepnica</th></tr></thead>
         <tbody>
-          {narudzbenica.stavke.map((s, i) => (
-            <tr key={i}>
-              <td>{nazivStavke(s)}{s.kvaliteta ? <span style={{ color: "var(--ink-soft)" }}> · {s.kvaliteta}</span> : null}</td>
-              <td style={{ whiteSpace: "nowrap" }}><span className="f-mono">{dimenzijeStavkeNarudzbenice(narudzbenica, s, i, db) || "—"}</span><div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{kolicinaStavke(s)}</div></td>
-              <td style={{ fontSize: 12 }}>{s.projektId ? (db.projekti.find((p) => p.id === s.projektId)?.sifra || "—") : <span style={{ color: "var(--ink-faint)" }}>zaliha</span>}</td>
-              <td><input className="input" aria-label={`Šarža stavke ${i + 1}`} value={sarze[i]} onChange={(e) => setSarze({ ...sarze, [i]: e.target.value })} /></td>
-              <td><input className="input f-mono" type="number" min="0" max="200" aria-label={`Broj naljepnica stavke ${i + 1}`} value={naljepnice[i]} onChange={(e) => setNaljepnice({ ...naljepnice, [i]: e.target.value })} /></td>
-            </tr>
-          ))}
+          {narudzbenica.stavke.map((s, i) => {
+            const dd = dijelovi[i];
+            const vise = dd.length > 1;
+            return (
+              <tr key={i}>
+                <td>{nazivStavke(s)}{s.kvaliteta ? <span style={{ color: "var(--ink-soft)" }}> · {s.kvaliteta}</span> : null}</td>
+                <td style={{ whiteSpace: "nowrap" }}><span className="f-mono">{dimenzijeStavkeNarudzbenice(narudzbenica, s, i, db) || "—"}</span><div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{kolicinaStavke(s)}</div></td>
+                <td style={{ fontSize: 12 }}>{s.projektId ? (db.projekti.find((p) => p.id === s.projektId)?.sifra || "—") : <span style={{ color: "var(--ink-faint)" }}>zaliha</span>}</td>
+                <td>
+                  {dd.map((x, k) => (
+                    <div key={k} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: vise ? 6 : 0 }}>
+                      {vise && <input className="input f-mono" style={{ width: 86, textAlign: "right" }} inputMode="decimal" aria-label={`Količina ${k + 1}. šarže stavke ${i + 1}`} placeholder={`ost. ${ostatak(i)}`} value={x.kolicina} onChange={(e) => postaviDio(i, k, { kolicina: e.target.value })} />}
+                      {vise && <span style={{ fontSize: 11.5, color: "var(--ink-soft)", minWidth: 22 }}>{jedinicaStavke(s)}</span>}
+                      <input className="input" style={{ flex: 1, minWidth: 0 }} aria-label={`Šarža${vise ? ` ${k + 1}.` : ""} stavke ${i + 1}`} placeholder="šarža" value={x.sarza} onChange={(e) => postaviDio(i, k, { sarza: e.target.value })} />
+                      {vise && <button type="button" className="btn btn-icon btn-ghost" aria-label={`Ukloni ${k + 1}. šaržu`} onClick={() => ukloniDio(i, k)}><X size={14} /></button>}
+                    </div>
+                  ))}
+                  <button type="button" onClick={() => podijeli(i)} style={{ ...STIL_LINK_GUMBA, marginTop: 4 }}>+ {vise ? "još jedna šarža" : "podijeli na više šarži"}</button>
+                  {vise && <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 2 }}>Šarža bez upisane količine dobiva ostatak.</div>}
+                </td>
+                <td>
+                  {dd.map((x, k) => (
+                    <input key={k} className="input f-mono" style={{ marginBottom: vise ? 6 : 0 }} type="number" min="0" max="200" aria-label={`Broj naljepnica${vise ? ` ${k + 1}. šarže` : ""} stavke ${i + 1}`} value={naljepniceDijela(i, x)} onChange={(e) => postaviDio(i, k, { naljepnice: e.target.value, rucno: true })} />
+                  ))}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
+      {greska && <div style={{ marginTop: 10, padding: "8px 12px", background: "#FBEAE6", border: "1px solid #F0C2B5", borderRadius: 3, fontSize: 12.5, color: "var(--rust)" }}>{greska}</div>}
       <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, fontSize: 13, cursor: "pointer" }}>
         <input type="checkbox" checked={ispis} onChange={(e) => setIspis(e.target.checked)} /> Nakon zaprimanja ispiši naljepnice (70 × 48 mm)
       </label>
-      <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>Stavke s odabranim projektom automatski se rezerviraju za taj projekt. Svaka zaprimljena stavka dobiva matični broj u Kontroli kvalitete (Matična knjiga), s brojem otpremnice dobavljača; atest se tamo upisuje kad stigne. Šarža i matični broj ispisuju se na naljepnici.</p>
+      <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>Stavke s odabranim projektom automatski se rezerviraju za taj projekt. Svaka zaprimljena stavka dobiva matični broj u Kontroli kvalitete (Matična knjiga), s brojem otpremnice dobavljača — stavka podijeljena na više šarži dobiva po jedan matični broj za svaku šaržu; atest se tamo upisuje kad stigne. Šarža i matični broj ispisuju se na naljepnici.</p>
     </Modal>
   );
 }
@@ -4822,7 +4877,10 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
     const zaNaljepnice = []; // { maticniId, kopija }
     const maticni = []; // novi zapisi matične knjige — po jedan za svaku zaprimljenu stavku
     const noveStavke = row.stavke.map((s, idx) => {
-      const sarza = String(opcije.sarze?.[idx] ?? s.sarza ?? "").trim();
+      // Dijelovi stavke po šaržama (udio = dio zaprimljene količine): svaki dobiva svoj matični broj i naljepnice.
+      const dijelovi = (opcije.dijelovi?.[idx] || [{ sarza: opcije.sarze?.[idx] ?? s.sarza ?? "", udio: 1, naljepnice: opcije.naljepnice?.[idx] ?? 0 }])
+        .map((d) => ({ ...d, sarza: String(d.sarza ?? "").trim() }));
+      const sarza = [...new Set(dijelovi.map((d) => d.sarza).filter(Boolean))].join(", ");
       const komadnaStavka = ["duzina", "lim", "komadi"].includes(s.nacinUnosa);
       // Format s narudžbenice (dužina / format lima) dopisuje se na materijal koji se vodi u komadima, da popis dužina
       // na skladištu (i izbor dužine kod izdavanja) odgovara onome što je stvarno zaprimljeno.
@@ -4834,14 +4892,17 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
       const evidentiraj = (materijalId, kolicina) => {
         if (s.projektId && kolicina > 0) rezervacije.push({ id: uid("rez"), materijalId, projektId: s.projektId, kolicina: zaokruziKolicinu(kolicina), datum: todayISO(), izvor: "narudzbenica", narudzbenicaId: row.id, napomena: `Narudžbenica ${row.broj}` });
         const matZ = materijali.find((m) => m.id === materijalId);
-        let maticniId = null;
-        if (matZ && kolicina > 0) {
-          const zapis = noviZapisMaticneKnjige({ mat: matZ, kolicina, sarza, kvaliteta: s.kvaliteta, narudzbenica: row, knjiga: [...(db.maticnaKnjiga || []), ...maticni], otpremnica: opcije.otpremnica, dimenzije: dimenzijeStavkeNarudzbenice(row, s, idx, db) });
+        if (!matZ || !(kolicina > 0)) return;
+        let rasporedeno = 0;
+        dijelovi.forEach((d, k) => {
+          const kolDijela = k === dijelovi.length - 1 ? zaokruziKolicinu(kolicina - rasporedeno) : zaokruziKolicinu(kolicina * (Number(d.udio) || 0));
+          rasporedeno += kolDijela;
+          if (!(kolDijela > 0)) return;
+          const zapis = noviZapisMaticneKnjige({ mat: matZ, kolicina: kolDijela, sarza: d.sarza, kvaliteta: s.kvaliteta, narudzbenica: row, knjiga: [...(db.maticnaKnjiga || []), ...maticni], otpremnica: opcije.otpremnica, dimenzije: dimenzijeStavkeNarudzbenice(row, s, idx, db) });
           maticni.push(zapis);
-          maticniId = zapis.id;
-        }
-        const kopija = Math.max(0, Math.min(200, Math.round(Number(opcije.naljepnice?.[idx] ?? 0) || 0)));
-        if (kopija > 0 && maticniId) zaNaljepnice.push({ maticniId, kopija });
+          const kopija = Math.max(0, Math.min(200, Math.round(Number(d.naljepnice ?? 0) || 0)));
+          if (kopija > 0) zaNaljepnice.push({ maticniId: zapis.id, kopija });
+        });
       };
       if (s.materijalId) {
         const mat = materijali.find((m) => m.id === s.materijalId);
