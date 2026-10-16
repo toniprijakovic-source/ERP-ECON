@@ -1065,7 +1065,7 @@ const generirajRfidKod = (ime, prezime, postojeciKodovi) => {
   return kod;
 };
 
-const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi", "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca", "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije", "maticnaKnjiga", "upitiTransporta", "narudzbeTransporta"];
+const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi", "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca", "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije", "maticnaKnjiga", "upitiTransporta", "narudzbeTransporta", "godisnjiOdmor"];
 
 /* ============================== SMALL UI PRIMITIVES ============================== */
 const Btn = ({ variant = "ghost", size, icon: Icon, children, className = "", ...rest }) => (
@@ -1558,7 +1558,7 @@ const KARTICE_MODULA = {
   otpremnice: { kartice: [{ key: "otpremnice", naziv: "Otpremnice" }, { key: "cmr", naziv: "CMR" }] },
   fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "podloge", naziv: "Podloge za fakturu" }, { key: "nedovrsena", naziv: "Nedovršena proizvodnja" }, { key: "analiza", naziv: "Analiza projekata" }, { key: "produktivnost", naziv: "Produktivnost (kg/h)" }, { key: "projekcija", naziv: "Projekcija" }] },
   partneri: { kartice: [{ key: "kupci", naziv: "Kupci" }, { key: "dobavljaci", naziv: "Dobavljači" }] },
-  zaposlenici: { kartice: [{ key: "zaposlenici", naziv: "Zaposlenici" }, { key: "pozicije", naziv: "Pozicije" }, { key: "evidencija", naziv: "Evidencija rada" }, { key: "obracun", naziv: "Obračun plaća" }, { key: "satinalozi", naziv: "Sati po nalozima" }] },
+  zaposlenici: { kartice: [{ key: "zaposlenici", naziv: "Zaposlenici" }, { key: "pozicije", naziv: "Pozicije" }, { key: "evidencija", naziv: "Evidencija rada" }, { key: "obracun", naziv: "Obračun plaća" }, { key: "satinalozi", naziv: "Sati po nalozima" }, { key: "godisnji", naziv: "Godišnji odmor" }] },
 };
 
 // Dozvola za jednu karticu — po zadanom TRUE (naslijeđeno od dodjele modula), osim ako je
@@ -14863,6 +14863,233 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
   );
 }
 
+/* ---------- Godišnji odmor (Zaposlenici) ---------- */
+// Pravo na godišnji po zaposleniku i godini (kao dosadašnja Excel tablica GO): osnova (razmjerno punim mjesecima rada u
+// godini zaposlenja, ili ručno) + dodatni dani za ukupni staž + dani za složenost posla. Preneseno iz prošle godine,
+// staž izvan Econa i korekcija upisuju se ručno (staž izvan Econa NIJE "dodatni staž" zaposlenika, koji ulazi u plaću).
+// Iskorišteno: mjeseci prije "evidencija od" upisuju se ručno (uvoz iz Excela), a od tada se broje dani "Godišnji odmor"
+// i "Detašman - Godišnji" iz evidencije rada (pon–pet, bez praznika, jednom po datumu).
+// Spremište godisnjiOdmor: { godine: { "2026": { osnovniDani, evidencijaOd, zaposlenici: { [id]: { stazIzvan, slozenost,
+// preneseno, korekcija, napomena, osnovaRucno, rucnoPoMjesecima: { "01": 3, … } } } } } }
+const VRSTE_GODISNJEG = ["godisnji", "detasmanGodisnji"];
+const MJESECI_GO = ["sij", "velj", "ožu", "tra", "svi", "lip", "srp", "kol", "ruj", "lis", "stu", "pro"];
+const dodatniDaniZaStaz = (staz) => (staz < 5 ? 0 : staz < 15 ? 1 : staz < 25 ? 2 : 3);
+const osnovaGodisnjeg = (zaposlenik, godina, osnovniDani) => {
+  const dz = zaposlenik?.datumZaposlenja || "";
+  const g = Number(dz.slice(0, 4));
+  if (!dz || g < godina) return osnovniDani;
+  if (g > godina) return 0;
+  const mjeseci = 12 - Number(dz.slice(5, 7)) + (Number(dz.slice(8, 10)) === 1 ? 1 : 0); // puni mjeseci rada do kraja godine
+  return Math.round((osnovniDani * mjeseci) / 12);
+};
+const postavkeGodisnjeg = (db, godina) => {
+  const go = db.godisnjiOdmor && !Array.isArray(db.godisnjiOdmor) ? db.godisnjiOdmor : {};
+  const pg = go.godine?.[godina] || {};
+  return { go, pg, osnovniDani: Number(pg.osnovniDani) > 0 ? Number(pg.osnovniDani) : 20, evidencijaOd: pg.evidencijaOd || (godina === 2026 ? "2026-09" : `${godina}-01`) };
+};
+const brojGO = (v) => { const n = Number(String(v ?? "").replace(",", ".")); return Number.isFinite(n) ? n : 0; };
+const izracunGodisnjeg = (db, godina) => {
+  const { pg, osnovniDani, evidencijaOd } = postavkeGodisnjeg(db, godina);
+  const zapisi = pg.zaposlenici || {};
+  // dani godišnjeg iz evidencije: jednom po datumu, samo radni dani bez praznika
+  const datumi = new Map();
+  (db.evidencijaRada || []).forEach((e) => {
+    if (!VRSTE_GODISNJEG.includes(e.vrsta)) return;
+    const d = String(e.vrijemeDolaska || "").slice(0, 10);
+    if (d.slice(0, 4) !== String(godina) || d.slice(0, 7) < evidencijaOd) return;
+    const dow = new Date(`${d}T12:00:00`).getDay();
+    if (dow === 0 || dow === 6 || jePraznik(d, db.praznici)) return;
+    if (!datumi.has(e.zaposlenikId)) datumi.set(e.zaposlenikId, new Map());
+    datumi.get(e.zaposlenikId).set(d, e.vrsta);
+  });
+  const redovi = (db.zaposlenici || []).filter((z) => {
+    const grupa = grupaEvidencije(z, db.pozicijeZaposlenika);
+    if (grupa !== "radiona" && grupa !== "ostalo") return false;
+    if (Number(String(z.datumZaposlenja || "").slice(0, 4)) > godina) return false;
+    return z.status === "Aktivan" || zapisi[z.id] || datumi.has(z.id);
+  }).map((z) => {
+    const r = zapisi[z.id] || {};
+    const stazEcon = z.datumZaposlenja ? godineStaza(z.datumZaposlenja, `${godina}-12-31`) : 0;
+    const stazIzvan = brojGO(r.stazIzvan);
+    const staz = stazEcon + stazIzvan;
+    const dodatni = dodatniDaniZaStaz(staz);
+    const slozenost = r.slozenost != null && r.slozenost !== "" ? brojGO(r.slozenost) : 1;
+    const osnovaAuto = osnovaGodisnjeg(z, godina, osnovniDani);
+    const osnova = r.osnovaRucno != null && r.osnovaRucno !== "" ? brojGO(r.osnovaRucno) : osnovaAuto;
+    const ukupno = osnova + dodatni + slozenost;
+    const preneseno = brojGO(r.preneseno);
+    const korekcija = brojGO(r.korekcija);
+    const dani = [...(datumi.get(z.id) || new Map()).entries()].sort();
+    const poMjesecima = MJESECI_GO.map((_, i) => {
+      const mm = String(i + 1).padStart(2, "0");
+      const rucni = `${godina}-${mm}` < evidencijaOd;
+      return rucni ? { rucni, dani: brojGO(r.rucnoPoMjesecima?.[mm]), datumi: [] } : { rucni, datumi: dani.filter(([d]) => d.slice(5, 7) === mm), dani: dani.filter(([d]) => d.slice(5, 7) === mm).length };
+    });
+    const iskoristeno = poMjesecima.reduce((a, m) => a + m.dani, 0);
+    const stanjeProsle = preneseno - iskoristeno;
+    return {
+      z, grupa: grupaEvidencije(z, db.pozicijeZaposlenika) === "radiona" ? "radiona" : "rezija", ime: `${z.prezime} ${z.ime}`,
+      stazEcon, stazIzvan, staz, dodatni, slozenost, osnova, osnovaAuto, osnovaRucno: r.osnovaRucno != null && r.osnovaRucno !== "", ukupno,
+      preneseno, korekcija, napomena: r.napomena || "", poMjesecima, iskoristeno, stanjeProsle,
+      stanjeTekuce: ukupno + Math.min(0, stanjeProsle) + korekcija, preostalo: ukupno + preneseno - iskoristeno + korekcija,
+    };
+  }).sort((a, b) => a.ime.localeCompare(b.ime, "hr"));
+  return { osnovniDani, evidencijaOd, redovi };
+};
+
+// Ručni unos broja u tablici godišnjeg (plavo polje): sprema se kad polje izgubi fokus ili na Enter; prazno = nije upisano.
+function UnosGO({ vrijednost, placeholder, onSpremi, sirina = 46, mozeMijenjati }) {
+  const procitaj = (v) => (String(v).trim() === "" ? null : brojGO(v));
+  return (
+    <input key={`${vrijednost ?? ""}`} className="input f-mono" inputMode="decimal" disabled={!mozeMijenjati} defaultValue={vrijednost ?? ""} placeholder={placeholder}
+      style={{ width: sirina, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#EEF4FB" }}
+      onBlur={(e) => { const novo = procitaj(e.target.value); if (novo !== (vrijednost === "" || vrijednost == null ? null : brojGO(vrijednost))) onSpremi(novo); }}
+      onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} />
+  );
+}
+
+function GodisnjiOdmorTab({ db, update, showToast, mozeMijenjati }) {
+  const tekucaGodina = Number(todayISO().slice(0, 4));
+  const [godina, setGodina] = useState(tekucaGodina);
+  const [detalj, setDetalj] = useState(null); // { id, mjesec } — datumi godišnjeg u mjesecu ili ručni podaci zaposlenika
+  const rez = useMemo(() => izracunGodisnjeg(db, godina), [db, godina]);
+  const { go, pg } = postavkeGodisnjeg(db, godina);
+  const godine = [...new Set([tekucaGodina - 1, tekucaGodina, tekucaGodina + 1, ...Object.keys(go.godine || {}).map(Number)])].sort();
+  const spremiGodinu = (patch) => update("godisnjiOdmor", { ...go, godine: { ...(go.godine || {}), [godina]: { ...pg, ...patch } } });
+  const spremiZapis = (zapId, patch) => spremiGodinu({ zaposlenici: { ...(pg.zaposlenici || {}), [zapId]: { ...(pg.zaposlenici?.[zapId] || {}), ...patch } } });
+  const boja = (v) => (v > 0.001 ? { background: "#EAF6EF", color: "var(--green)" } : v < -0.001 ? { background: "#FBEAE6", color: "var(--rust)" } : { background: "#FDF6E3", color: "#8A6100" });
+  const fmt = (v) => (Math.round(v * 10) / 10).toLocaleString("hr-HR");
+  const skupine = [["radiona", "Radiona"], ["rezija", "Režija"]].map(([k, naziv]) => ({ k, naziv, redovi: rez.redovi.filter((r) => r.grupa === k) })).filter((s) => s.redovi.length);
+  const zbroj = (rr, f) => rr.reduce((a, r) => a + f(r), 0);
+  const zaglavlja = ["Ime i prezime", ">Staž", ">Dodatni", ">Složenost", ">Osnova", `>Ukupno ${godina}`, `>Preneseno ${godina - 1}`, ">Iskorišteno", ...MJESECI_GO.map((m) => `>${m}`), `>Stanje ${godina - 1}`, `>Stanje ${godina}`, ">Preostalo"];
+  const redakIspisa = (r) => [r.ime + (r.korekcija ? ` (korekcija ${r.korekcija > 0 ? "+" : ""}${fmt(r.korekcija)})` : ""), fmt(r.staz), String(r.dodatni), fmt(r.slozenost), fmt(r.osnova), fmt(r.ukupno), fmt(r.preneseno), fmt(r.iskoristeno), ...r.poMjesecima.map((m) => (m.dani ? fmt(m.dani) : "")), fmt(r.stanjeProsle), fmt(r.stanjeTekuce), fmt(r.preostalo)];
+  const ispisi = () => ispisiTablicuPdf({
+    naslov: `Godišnji odmor ${godina}`, podnaslov: `Iskorišteno do ${MJESECI_GO[Number(rez.evidencijaOd.slice(5, 7)) - 2] || "—"} ručni upis, od ${rez.evidencijaOd.slice(5, 7)}/${godina} iz evidencije rada`,
+    zaglavlja, redovi: skupine.flatMap((s) => [[`— ${s.naziv.toUpperCase()} —`, ...zaglavlja.slice(1).map(() => "")], ...s.redovi.map(redakIspisa)]),
+    nazivTvrtke: db.postavkeTvrtke?.naziv, showToast,
+  });
+  const izvozCsv = () => {
+    const polje = (v) => { const t = String(v ?? ""); return /[;"\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+    const red = (r, s) => [s, r.ime, r.stazEcon, r.stazIzvan, r.staz, r.dodatni, r.slozenost, r.osnova, r.ukupno, r.preneseno, r.iskoristeno, ...r.poMjesecima.map((m) => m.dani), r.stanjeProsle, r.stanjeTekuce, r.preostalo, r.korekcija, r.napomena];
+    const zag = ["Skupina", "Ime i prezime", "Staž Econ", "Staž ostalo", "Staž ukupno", "Dodatni dani", "Složenost", "Osnova", `Ukupno ${godina}`, `Preneseno ${godina - 1}`, "Iskorišteno", ...MJESECI_GO, `Stanje ${godina - 1}`, `Stanje ${godina}`, "Preostalo", "Korekcija", "Napomena"];
+    const tekst = [zag, ...skupine.flatMap((s) => s.redovi.map((r) => red(r, s.naziv)))].map((r) => r.map((v) => polje(typeof v === "number" ? String(v).replace(".", ",") : v)).join(";")).join("\r\n");
+    preuzmiDatoteku(new Blob(["﻿" + tekst], { type: "text/csv;charset=utf-8" }), `Godisnji_odmor_${godina}.csv`);
+  };
+  const det = detalj && rez.redovi.find((r) => r.z.id === detalj.id);
+  const thS = { fontSize: 10.5, padding: "6px 5px", textAlign: "right", whiteSpace: "nowrap" };
+  const tdS = { padding: "4px 5px", textAlign: "right", whiteSpace: "nowrap", fontSize: 12.5 };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 12 }}>
+        <Field label="Godina"><select className="select" style={{ width: 110 }} value={godina} onChange={(e) => setGodina(Number(e.target.value))}>{godine.map((g) => <option key={g} value={g}>{g}</option>)}</select></Field>
+        <Field label="Osnovni broj dana"><input key={`osn-${godina}-${rez.osnovniDani}`} className="input f-mono" style={{ width: 90 }} disabled={!mozeMijenjati} defaultValue={rez.osnovniDani} onBlur={(e) => { const v = brojGO(e.target.value); if (v > 0 && v !== rez.osnovniDani) spremiGodinu({ osnovniDani: v }); }} /></Field>
+        <Field label="Iz evidencije rada od"><input key={`od-${godina}-${rez.evidencijaOd}`} className="input f-mono" type="month" style={{ width: 150 }} disabled={!mozeMijenjati} min={`${godina}-01`} max={`${godina}-12`} defaultValue={rez.evidencijaOd} onBlur={(e) => { if (e.target.value && e.target.value !== rez.evidencijaOd) spremiGodinu({ evidencijaOd: e.target.value }); }} /></Field>
+        <div style={{ flex: 1 }} />
+        <Btn icon={Printer} onClick={ispisi} disabled={!rez.redovi.length}>Ispis / PDF</Btn>
+        <Btn icon={Download} onClick={izvozCsv} disabled={!rez.redovi.length}>Izvoz (Excel)</Btn>
+      </div>
+      <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+        <table className="erp-table" style={{ minWidth: 1500 }}>
+          <thead>
+            <tr>
+              <th style={{ ...thS, textAlign: "left", position: "sticky", left: 0, background: "var(--surface-alt)", zIndex: 1, minWidth: 170 }}>Ime i prezime</th>
+              <th style={thS} title="Staž u Econu (iz datuma zaposlenja) + staž izvan Econa, na 31. 12.">Staž</th>
+              <th style={thS}>Staž izvan Econa</th>
+              <th style={thS} title="5–15 god. = 1 dan, 15–25 = 2, 25 i više = 3">Dodatni</th>
+              <th style={thS}>Složenost</th>
+              <th style={thS} title="Osnovni broj dana; u godini zaposlenja razmjerno punim mjesecima rada">Osnova</th>
+              <th style={thS}>Ukupno {godina}</th>
+              <th style={thS}>Preneseno {godina - 1}</th>
+              <th style={thS}>Iskorišteno</th>
+              {MJESECI_GO.map((m, i) => <th key={m} style={{ ...thS, color: `${godina}-${String(i + 1).padStart(2, "0")}` < rez.evidencijaOd ? "var(--steel)" : undefined }}>{m}</th>)}
+              <th style={thS}>Stanje {godina - 1}</th>
+              <th style={thS}>Stanje {godina}</th>
+              <th style={thS}>Preostalo</th>
+              <th style={thS} title="Ručna korekcija (+/−) s napomenom">Korekcija</th>
+            </tr>
+          </thead>
+          <tbody>
+            {skupine.map((s) => (
+              <React.Fragment key={s.k}>
+                <tr><td colSpan={25} style={{ background: "var(--surface-alt)", fontWeight: 700, fontSize: 12, letterSpacing: "0.04em", textTransform: "uppercase", position: "sticky", left: 0 }}>{s.naziv} ({s.redovi.length})</td></tr>
+                {s.redovi.map((r) => (
+                  <tr key={r.z.id}>
+                    <td style={{ position: "sticky", left: 0, background: "var(--surface)", zIndex: 1, whiteSpace: "nowrap" }}>
+                      <button type="button" style={{ ...STIL_LINK_GUMBA, fontSize: 13, color: "var(--ink)", fontWeight: 600 }} onClick={() => setDetalj({ id: r.z.id })}>{r.ime}</button>
+                      {r.z.status !== "Aktivan" && <span style={{ fontSize: 10.5, color: "var(--ink-faint)" }}> · neaktivan</span>}
+                    </td>
+                    <td style={tdS} title={`Econ ${fmt(r.stazEcon)} + izvan ${fmt(r.stazIzvan)}`}>{fmt(r.staz)}</td>
+                    <td style={tdS}><UnosGO mozeMijenjati={mozeMijenjati} vrijednost={pg.zaposlenici?.[r.z.id]?.stazIzvan} placeholder="0" onSpremi={(v) => spremiZapis(r.z.id, { stazIzvan: v })} /></td>
+                    <td style={tdS}>{r.dodatni}</td>
+                    <td style={tdS}><UnosGO mozeMijenjati={mozeMijenjati} vrijednost={pg.zaposlenici?.[r.z.id]?.slozenost} placeholder="1" sirina={40} onSpremi={(v) => spremiZapis(r.z.id, { slozenost: v })} /></td>
+                    <td style={tdS}><UnosGO mozeMijenjati={mozeMijenjati} vrijednost={pg.zaposlenici?.[r.z.id]?.osnovaRucno} placeholder={String(r.osnovaAuto)} sirina={42} onSpremi={(v) => spremiZapis(r.z.id, { osnovaRucno: v })} /></td>
+                    <td style={{ ...tdS, fontWeight: 700 }}>{fmt(r.ukupno)}</td>
+                    <td style={tdS}><UnosGO mozeMijenjati={mozeMijenjati} vrijednost={pg.zaposlenici?.[r.z.id]?.preneseno} placeholder="0" onSpremi={(v) => spremiZapis(r.z.id, { preneseno: v })} /></td>
+                    <td style={{ ...tdS, fontWeight: 700 }}>{fmt(r.iskoristeno)}</td>
+                    {r.poMjesecima.map((m, i) => {
+                      const mm = String(i + 1).padStart(2, "0");
+                      return (
+                        <td key={mm} style={{ ...tdS, padding: "4px 3px" }}>
+                          {m.rucni
+                            ? <UnosGO mozeMijenjati={mozeMijenjati} vrijednost={pg.zaposlenici?.[r.z.id]?.rucnoPoMjesecima?.[mm]} placeholder="" sirina={34} onSpremi={(v) => spremiZapis(r.z.id, { rucnoPoMjesecima: { ...(pg.zaposlenici?.[r.z.id]?.rucnoPoMjesecima || {}), [mm]: v } })} />
+                            : m.dani ? <button type="button" style={{ ...STIL_LINK_GUMBA, fontSize: 12.5 }} title="Prikaži datume" onClick={() => setDetalj({ id: r.z.id, mjesec: i })}>{m.dani}</button> : <span style={{ color: "var(--ink-faint)" }}>·</span>}
+                        </td>
+                      );
+                    })}
+                    <td style={{ ...tdS, ...boja(r.stanjeProsle) }}>{fmt(r.stanjeProsle)}</td>
+                    <td style={{ ...tdS, ...boja(r.stanjeTekuce) }}>{fmt(r.stanjeTekuce)}</td>
+                    <td style={{ ...tdS, ...boja(r.preostalo), fontWeight: 700 }}>{fmt(r.preostalo)}</td>
+                    <td style={tdS} title={r.napomena}><UnosGO mozeMijenjati={mozeMijenjati} vrijednost={pg.zaposlenici?.[r.z.id]?.korekcija} placeholder="0" sirina={40} onSpremi={(v) => spremiZapis(r.z.id, { korekcija: v })} />{r.napomena && <span style={{ color: "var(--steel)", marginLeft: 3 }}>*</span>}</td>
+                  </tr>
+                ))}
+                <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
+                  <td style={{ position: "sticky", left: 0, background: "var(--surface-alt)" }}>Ukupno {s.naziv.toLowerCase()}</td>
+                  <td colSpan={5} />
+                  <td style={tdS}>{fmt(zbroj(s.redovi, (r) => r.ukupno))}</td>
+                  <td style={tdS}>{fmt(zbroj(s.redovi, (r) => r.preneseno))}</td>
+                  <td style={tdS}>{fmt(zbroj(s.redovi, (r) => r.iskoristeno))}</td>
+                  {MJESECI_GO.map((m, i) => <td key={m} style={tdS}>{fmt(zbroj(s.redovi, (r) => r.poMjesecima[i].dani))}</td>)}
+                  <td style={tdS}>{fmt(zbroj(s.redovi, (r) => r.stanjeProsle))}</td>
+                  <td style={tdS}>{fmt(zbroj(s.redovi, (r) => r.stanjeTekuce))}</td>
+                  <td style={tdS}>{fmt(zbroj(s.redovi, (r) => r.preostalo))}</td>
+                  <td />
+                </tr>
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8, lineHeight: 1.5 }}>
+        Plava polja upisuju se ručno; ostalo se računa samo. Ukupno = osnova + dodatni dani za staž (5–15 god. = 1, 15–25 = 2, 25 i više = 3) + složenost posla; osnova je {rez.osnovniDani} dana, a u godini zaposlenja razmjerno punim mjesecima rada (može se upisati ručno).
+        Mjeseci prije {rez.evidencijaOd.slice(5, 7)}/{godina} upisuju se ručno; od tada se broje dani „Godišnji odmor“ i „Detašman - Godišnji“ iz evidencije rada (pon–pet, bez praznika) — klik na broj prikazuje datume.
+        Stanje {godina - 1} = preneseno − iskorišteno (preneseni dani troše se prvi); Stanje {godina} = ukupno + manjak prenesenih + korekcija; Preostalo = ukupno + preneseno − iskorišteno + korekcija. Staž izvan Econa vrijedi samo za godišnji — ne mijenja dodatak na staž u plaći.
+      </p>
+      {det && (
+        <Modal title={`${det.ime} — godišnji odmor ${godina}`} onClose={() => setDetalj(null)} footer={<Btn onClick={() => setDetalj(null)}>Zatvori</Btn>}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px", fontSize: 13, marginBottom: 12 }}>
+            <span style={{ color: "var(--ink-soft)" }}>Zaposlen od</span><span>{det.z.datumZaposlenja ? fmtDate(det.z.datumZaposlenja) : "—"}</span>
+            <span style={{ color: "var(--ink-soft)" }}>Staž (Econ + izvan)</span><span className="f-mono">{fmt(det.stazEcon)} + {fmt(det.stazIzvan)} = {fmt(det.staz)} god.</span>
+            <span style={{ color: "var(--ink-soft)" }}>Pravo {godina}</span><span className="f-mono">{fmt(det.osnova)} + {det.dodatni} + {fmt(det.slozenost)} = {fmt(det.ukupno)} dana</span>
+            <span style={{ color: "var(--ink-soft)" }}>Preostalo</span><span className="f-mono" style={{ fontWeight: 700 }}>{fmt(det.preostalo)} dana</span>
+          </div>
+          <Field label="Napomena (npr. razlog korekcije)">
+            <input key={`nap-${det.napomena}`} className="input" disabled={!mozeMijenjati} defaultValue={det.napomena} onBlur={(e) => { if (e.target.value !== det.napomena) spremiZapis(det.z.id, { napomena: e.target.value }); }} />
+          </Field>
+          <div className="label" style={{ marginTop: 6 }}>Dani iz evidencije rada{detalj.mjesec != null ? ` — ${MJESECI_GO[detalj.mjesec]}` : ""}</div>
+          {(() => {
+            const dani = det.poMjesecima.flatMap((m, i) => (detalj.mjesec == null || detalj.mjesec === i ? m.datumi : []));
+            return dani.length === 0 ? <EmptyState text="Nema dana godišnjeg u evidenciji rada za odabrano razdoblje." /> : (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {dani.map(([d, v]) => <span key={d} className="f-mono" style={{ fontSize: 12, padding: "2px 7px", borderRadius: 3, background: OZNAKA_VRSTE_DANA[v]?.bg, color: OZNAKA_VRSTE_DANA[v]?.boja }}>{fmtDate(d)}{v === "detasmanGodisnji" ? " · DG" : ""}</span>)}
+              </div>
+            );
+          })()}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija, mojaPozicija }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "zaposlenici");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "zaposlenici");
@@ -14925,6 +15152,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
         {dozvKartice.some((k) => k.key === "evidencija") && <div className={`nav-tab ${tab === "evidencija" ? "active" : ""}`} onClick={() => setTab("evidencija")}>Evidencija rada</div>}
         {dozvKartice.some((k) => k.key === "obracun") && <div className={`nav-tab ${tab === "obracun" ? "active" : ""}`} onClick={() => setTab("obracun")}>Obračun plaća</div>}
         {dozvKartice.some((k) => k.key === "satinalozi") && <div className={`nav-tab ${tab === "satinalozi" ? "active" : ""}`} onClick={() => setTab("satinalozi")}>Sati po nalozima</div>}
+        {dozvKartice.some((k) => k.key === "godisnji") && <div className={`nav-tab ${tab === "godisnji" ? "active" : ""}`} onClick={() => setTab("godisnji")}>Godišnji odmor</div>}
       </div>
 
       {tab === "zaposlenici" && (
@@ -14997,6 +15225,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
 
       {tab === "obracun" && <ObracunPlacaTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "obracun").izmjene} />}
       {tab === "satinalozi" && <SatiPoNalozimaTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "satinalozi").izmjene} />}
+      {tab === "godisnji" && <GodisnjiOdmorTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "godisnji").izmjene} />}
 
       {modal === "zap" && (
         <Modal title={zapForm.id ? "Uredi zaposlenika" : "Novi zaposlenik"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={saveZap}>Spremi</Btn></>}>
