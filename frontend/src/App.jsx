@@ -5141,6 +5141,8 @@ const FAZA_SLOVO = { "Pila": "B", "Laser za profile": "C", "Laser za limove": "D
 const fazaOznaka = (f) => (FAZA_SLOVO[f] ? `${FAZA_SLOVO[f]} – ${f}` : f);
 // Faza radnog naloga uz naziv dodatne operacije iz ponude (npr. "Y – Ostalo · Pjeskarenje").
 const fazaNaloga = (n) => (n?.operacija ? `${fazaOznaka(n.faza)} · ${n.operacija}` : fazaOznaka(n?.faza));
+// Naziv dodatne narudžbe projekta na koju glasi nalog (prazno za osnovnu narudžbu).
+const dodatakNaloga = (n, projekti) => (n?.dodatakId ? (projekti || []).find((p) => p.id === n.projektId)?.dodaci?.find((d) => d.id === n.dodatakId)?.naziv || "" : "");
 // Stalni poslovi — nisu vezani uz projekt ni radni nalog, uvijek su na popisu za upis sati (redak u satiPoNalogu
 // s radniNalogId = id posla). Za posao s oznakom projekt može se neobavezno upisati projekt na koji se sati odnose.
 const STALNI_POSLOVI = [
@@ -6106,6 +6108,7 @@ function PlanDanasUnos({ plan, db, update, patchProjekt, showToast, mozeMijenjat
                     <td className="f-mono" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
                       <span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 2, background: PLAN_BOJA[r.n.faza] || "#6B737B", marginRight: 6 }} />{r.n.broj}
                       <div style={{ fontFamily: "var(--font-body)", fontSize: 11, color: "var(--ink-soft)" }}>{fazaNaloga(r.n)}{r.n.status === "U tijeku" ? " · u tijeku" : ""}</div>
+                      {dodatakNaloga(r.n, db.projekti) && <div style={{ fontFamily: "var(--font-body)", fontSize: 11, color: "var(--steel)", fontWeight: 600 }}>Dodatak: {dodatakNaloga(r.n, db.projekti)}</div>}
                     </td>
                     <td><span className="f-mono" style={{ fontSize: 12, fontWeight: 600 }}>{r.projekt?.sifra}</span><div style={{ fontSize: 11.5, color: "var(--ink-soft)", maxWidth: 260, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.projekt?.naziv}</div></td>
                     <td className="f-mono" style={{ textAlign: "right" }}>{fmtSati(r.plan)} h</td>
@@ -6137,7 +6140,7 @@ function PlanDanasUnos({ plan, db, update, patchProjekt, showToast, mozeMijenjat
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "12px 16px", borderTop: "1px solid var(--line)" }}>
             <select className="select" style={{ maxWidth: 420 }} value={odabir} onChange={(e) => setOdabir(e.target.value)}>
               <option value="">Dodaj drugu fazu…</option>
-              {ponudaZaDodati.map((n) => <option key={n.id} value={n.id}>{n.broj} — {projektPoId.get(n.projektId)?.sifra} · {n.faza}</option>)}
+              {ponudaZaDodati.map((n) => <option key={n.id} value={n.id}>{n.broj} — {projektPoId.get(n.projektId)?.sifra}{dodatakNaloga(n, db.projekti) ? ` · dodatak: ${dodatakNaloga(n, db.projekti)}` : ""} · {n.faza}</option>)}
             </select>
             <Btn size="sm" icon={Plus} onClick={() => { if (odabir) { setDodani([...dodani, odabir]); setOdabir(""); } }}>Dodaj</Btn>
           </div>
@@ -14742,7 +14745,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
                   <thead>
                     <tr>
                       <th style={{ position: "sticky", left: 0, background: "var(--surface-alt)", zIndex: 1 }}>Operacija</th>
-                      {nalozi.map((r) => <th key={r.nalog.id} style={{ minWidth: 90 }} title={`${r.nalog.broj} — ${r.nalog.naziv}`}>{r.nalog.broj}</th>)}
+                      {nalozi.map((r) => <th key={r.nalog.id} style={{ minWidth: 90 }} title={`${r.nalog.broj} — ${r.nalog.naziv}${dodatakNaloga(r.nalog, db.projekti) ? ` · dodatak: ${dodatakNaloga(r.nalog, db.projekti)}` : ""}`}>{r.nalog.broj}{dodatakNaloga(r.nalog, db.projekti) && <div style={{ fontSize: 9.5, fontWeight: 600, color: "var(--steel)", textTransform: "none", whiteSpace: "normal" }}>{dodatakNaloga(r.nalog, db.projekti)}</div>}</th>)}
                       <th style={{ minWidth: 90, background: "var(--surface-alt)" }}>Ukupno</th>
                     </tr>
                   </thead>
@@ -14827,7 +14830,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
                       </optgroup>
                       <optgroup label="Radni nalozi">
                         {naloziZaOdabir(trenutniRadnik.zaposlenik).map((n) => (
-                          <option key={n.id} value={n.id}>{(trenutniRadnik.zaposlenik.kompetencije || []).includes(n.faza) ? "★ " : ""}{n.broj} — {n.naziv} ({fazaNaloga(n)})</option>
+                          <option key={n.id} value={n.id}>{(trenutniRadnik.zaposlenik.kompetencije || []).includes(n.faza) ? "★ " : ""}{n.broj}{dodatakNaloga(n, db.projekti) ? ` · dodatak: ${dodatakNaloga(n, db.projekti)}` : ""} — {n.naziv} ({fazaNaloga(n)})</option>
                         ))}
                       </optgroup>
                     </select>
