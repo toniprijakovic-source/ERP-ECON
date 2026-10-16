@@ -4481,7 +4481,7 @@ function UpitStavkeEditor({ stavke, setStavke, katalogProfila, upitiNabave, kval
   return (
     <div>
       <table className="erp-table" style={{ marginBottom: 8 }}>
-        <thead><tr><th style={{ width: 110 }}>Kom</th><th style={{ width: 80 }}>Profil/Lim</th><th style={{ width: 224 }}>Dimenzije [mm]</th><th>Vrsta materijala</th><th style={{ width: 110 }}>Kvaliteta</th><th style={{ width: 110 }}>Norma isporuke</th><th>Dodatni zahtjevi</th><th style={{ width: 32 }}></th></tr></thead>
+        <thead><tr><th style={{ width: 110 }}>Kom</th><th style={{ width: 80 }}>Profil/Lim</th><th style={{ width: 224 }}>Dimenzije [mm]</th><th style={{ width: 320 }}>Vrsta materijala</th><th style={{ width: 110 }}>Kvaliteta</th><th style={{ width: 110 }}>Norma isporuke</th><th style={{ minWidth: 120 }}>Dodatni zahtjevi</th><th style={{ width: 32 }}></th></tr></thead>
         <tbody>
           {stavke.length === 0 && <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--ink-faint)", padding: 14 }}>Nema stavki. Dodaj potreban materijal.</td></tr>}
           {stavke.map((s, i) => {
@@ -4507,8 +4507,11 @@ function UpitStavkeEditor({ stavke, setStavke, katalogProfila, upitiNabave, kval
               </td>
               <td>
                 <div style={{ position: "relative" }}>
-                  <input className="input" style={{ paddingRight: 24 }} list={`vrste-materijala-${s.id}`} placeholder="npr. Cijev 40x20x2 / HEA 100" value={s.vrstaMaterijala} onChange={(e) => update(i, { vrstaMaterijala: e.target.value })} />
-                  <ChevronDown size={13} style={{ position: "absolute", right: 7, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "var(--ink-faint)" }} />
+                  <input className="input" style={{ paddingRight: 34 }} list={`vrste-materijala-${s.id}`} placeholder="npr. Cijev 40x20x2 / HEA 100" value={s.vrstaMaterijala} onChange={(e) => update(i, { vrstaMaterijala: e.target.value })} />
+                  {/* jasno vidljiva strelica: popis prijedloga otvara se klikom u polje ili strelicom dolje */}
+                  <span style={{ position: "absolute", right: 1, top: 1, bottom: 1, width: 28, display: "flex", alignItems: "center", justifyContent: "center", borderLeft: "1px solid var(--line-strong)", background: "var(--surface-alt)", borderRadius: "0 2px 2px 0", pointerEvents: "none" }}>
+                    <ChevronDown size={17} strokeWidth={2.5} color="var(--ink)" />
+                  </span>
                 </div>
                 <datalist id={`vrste-materijala-${s.id}`}>{prijedloziVrsteMaterijala.map((v) => <option key={v} value={v} />)}</datalist>
               </td>
