@@ -360,6 +360,7 @@ const VRSTE_DANA = [
   { key: "ocinski", label: "Očinski" },
   { key: "roditeljski", label: "Roditeljski" },
   { key: "detasman", label: "Detašman" },
+  { key: "detasmanGodisnji", label: "Detašman - Godišnji" },
   { key: "placeniDopust", label: "Plaćeni dopust" },
   { key: "sluzbeniPut", label: "Službeni put" },
 ];
@@ -370,6 +371,7 @@ const OZNAKA_VRSTE_DANA = {
   ocinski: { kratica: "OČ", boja: "#9A4A1B", bg: "#FBEEE4", naziv: "Očinski" },
   roditeljski: { kratica: "RD", boja: "#8A2E63", bg: "#F8E8F1", naziv: "Roditeljski" },
   detasman: { kratica: "DE", boja: "#4A6A21", bg: "#EEF3E6", naziv: "Detašman" },
+  detasmanGodisnji: { kratica: "DG", boja: "#2F5D50", bg: "#E4F0EC", naziv: "Detašman - godišnji" },
   placeniDopust: { kratica: "PD", boja: "#6B3FA0", bg: "#F1EAF7", naziv: "Plaćeni dopust" },
   sluzbeniPut: { kratica: "SP", boja: "#1B6B78", bg: "#E5F2F3", naziv: "Službeni put" },
 };
@@ -484,6 +486,9 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
   } else if (vrsta === "roditeljski") {
     placeniNerad = 0; // kao bolovanje: evidentira se, ne ulazi u obračun
     roditeljskiSati = norma;
+  } else if (vrsta === "detasmanGodisnji") {
+    // godišnji odmor za vrijeme detašmana: samo se evidentira (za evidenciju godišnjeg), ne ulazi u obračun plaće
+
   } else if (danUTjednu === 6 || danUTjednu === 0) {
     prekovremeni = odradjeniSati; // subota je cijela prekovremena; nedjelja se ne radi
   } else {
@@ -495,7 +500,7 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
   // godišnji, detašman, plaćeni dopust, službeni put) — NE za bolovanje, očinski i roditeljski,
   // i samo od ponedjeljka do petka (radne subote se ne računaju).
   // Odluka se donosi po DATUMU (ne po zapisu) u obracunMjeseca, jer dan može imati više zapisa.
-  const placenIzostanak = praznik || (vrsta !== "rad" && !["bolovanje", "ocinski", "roditeljski"].includes(vrsta));
+  const placenIzostanak = praznik || (vrsta !== "rad" && !["bolovanje", "ocinski", "roditeljski", "detasmanGodisnji"].includes(vrsta));
   const satiZaStaz = vrsta === "rad" && !praznik ? odradjeniSati : 0;
 
   // Zaposlenici na pola radnog vremena dobivaju putni trošak i topli obrok prepolovljene.
@@ -5147,6 +5152,7 @@ const STALNI_POSLOVI = [
   { id: "stalni-T", slovo: "T", naziv: "Održavanje" },
   { id: "stalni-U", slovo: "U", naziv: "Prijevozi (interno, externo)", projekt: true },
   { id: "stalni-V", slovo: "V", naziv: "Popravak (konstrukcije, zavara)", projekt: true },
+  { id: "stalni-Z", slovo: "Z", naziv: "Liječnički pregled" },
 ];
 const stalniPosao = (id) => STALNI_POSLOVI.find((p) => p.id === id);
 const nazivStalnogPosla = (p) => `${p.slovo} – ${p.naziv}`;
@@ -14350,6 +14356,7 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
   const ocinski = useMemo(() => rasponiVrsteDana(db.evidencijaRada, db.zaposlenici, mjesec, uSkupini, "ocinski"), [db.evidencijaRada, db.zaposlenici, mjesec, uSkupini]);
   const roditeljski = useMemo(() => rasponiVrsteDana(db.evidencijaRada, db.zaposlenici, mjesec, uSkupini, "roditeljski"), [db.evidencijaRada, db.zaposlenici, mjesec, uSkupini]);
   const detasmani = useMemo(() => rasponiVrsteDana(db.evidencijaRada, db.zaposlenici, mjesec, uSkupini, "detasman"), [db.evidencijaRada, db.zaposlenici, mjesec, uSkupini]);
+  const detasmaniGodisnji = useMemo(() => rasponiVrsteDana(db.evidencijaRada, db.zaposlenici, mjesec, uSkupini, "detasmanGodisnji"), [db.evidencijaRada, db.zaposlenici, mjesec, uSkupini]);
 
   const tdS = { padding: "3px 4px", fontSize: 9, whiteSpace: "nowrap" };
   const thS = { ...tdS, fontWeight: 700, background: "#f0f0f0" };
@@ -14463,6 +14470,15 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
             <div style={{ fontWeight: 700, textDecoration: "underline", marginBottom: 4 }}>Detašmani:</div>
             {detasmani.map((d, i) => (
               <div key={i}><strong>{d.ime}:</strong> detašman od {fmtDate(d.od)} do {fmtDate(d.do)}</div>
+            ))}
+          </div>
+        )}
+
+        {detasmaniGodisnji.length > 0 && (
+          <div style={{ marginTop: 18, fontSize: 10.5 }}>
+            <div style={{ fontWeight: 700, textDecoration: "underline", marginBottom: 4 }}>Detašman - godišnji (ne ulazi u obračun):</div>
+            {detasmaniGodisnji.map((d, i) => (
+              <div key={i}><strong>{d.ime}:</strong> godišnji na detašmanu od {fmtDate(d.od)} do {fmtDate(d.do)}</div>
             ))}
           </div>
         )}
