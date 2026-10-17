@@ -12730,7 +12730,9 @@ const satiPlanaPoMjesecu = (plan) => {
   return ukupno;
 };
 
-function izracunProjekcije(db, { od, doMjeseca, danas, trosakSata, materijalPostotak, fiksniMjesecno, raspored = {}, satiPlana }) {
+// stope: podizvođači (% prihoda) te mjesečni prosjeci iz zadnjeg izvještaja knjigovodstva (trošak razdoblja, rad DE,
+// transport kad za mjesec nema narudžbe transporta, OTP troškovi i OTP prihod) — struktura kao račun dobiti i gubitka (A–N).
+function izracunProjekcije(db, { od, doMjeseca, danas, trosakSata, materijalPostotak, fiksniMjesecno, raspored = {}, satiPlana, stope = {} }) {
   const mjeseci = mjeseciIzmedu(od, doMjeseca);
   const tekuci = danas.slice(0, 7);
   const poMj = Object.fromEntries(mjeseci.map((m) => [m, { prihodOstvareno: 0, prihodProjekcija: 0, satiOstvareno: 0, satiPlan: 0, materijalOstvareno: 0, materijalProjekcija: 0, transport: 0, vanjski: 0 }]));
@@ -12841,21 +12843,35 @@ function izracunProjekcije(db, { od, doMjeseca, danas, trosakSata, materijalPost
     if (poMj[m]) poMj[m].vanjski += Number(v.iznos) || 0;
   }));
 
-  const fiksni = Number(fiksniMjesecno) || 0;
+  const fiksni = Number(fiksniMjesecno) || 0; // J — OTP troškovi mjesečno
+  const n = (v) => Number(v) || 0;
+  const podizvodaciUdio = n(stope.podizvodaciPostotak) / 100;
   const redovi = mjeseci.map((m) => {
     const x = poMj[m];
-    const prihod = x.prihodOstvareno + x.prihodProjekcija;
+    const prihod = x.prihodOstvareno + x.prihodProjekcija;                      // A
+    const materijal = x.materijalOstvareno + x.materijalProjekcija;             // B
+    const podizvodaci = prihod * podizvodaciUdio + x.vanjski;                   // C (vanjski troškovi projekata su usluge)
+    const trosakRazdoblja = n(stope.trosakRazdobljaMj);                         // D
     const sati = x.satiOstvareno + x.satiPlan;
-    const rad = sati * sata;
-    const materijal = x.materijalOstvareno + x.materijalProjekcija;
-    const ostalo = x.transport + x.vanjski;
-    const troskovi = rad + materijal + ostalo + fiksni;
-    return { mjesec: m, vrsta: m < tekuci ? "ostvareno" : m === tekuci ? "tekući" : "projekcija", ...x, prihod, sati, rad, materijal, ostalo, fiksni, troskovi, rezultat: prihod - troskovi, marza: prihod > 0 ? ((prihod - troskovi) / prihod) * 100 : null };
+    const rad = sati * sata;                                                     // E — direktni rad
+    const radDE = n(stope.radDEMj);                                              // E — rad DE
+    const transportProcjena = !(x.transport > 0) && n(stope.transportMj) > 0;
+    const transport = x.transport > 0 ? x.transport : n(stope.transportMj);      // H
+    const rezultat1 = prihod - materijal - podizvodaci - trosakRazdoblja - rad - radDE - transport; // I
+    const otpPrihod = n(stope.otpPrihodMj);                                      // K
+    const rezultat2 = rezultat1 - fiksni + otpPrihod;                            // N
+    const troskovi = materijal + podizvodaci + trosakRazdoblja + rad + radDE + transport + fiksni;
+    return {
+      mjesec: m, vrsta: m < tekuci ? "ostvareno" : m === tekuci ? "tekući" : "projekcija", ...x, prihod, sati, rad, radDE, materijal, podizvodaci, trosakRazdoblja,
+      transport, transportProcjena, ostalo: transport, fiksni, otpPrihod, troskovi, rezultat1, rezultat2, rezultat: rezultat2,
+      marza1: prihod > 0 ? (rezultat1 / prihod) * 100 : null, marza: prihod > 0 ? (rezultat2 / prihod) * 100 : null,
+    };
   });
   const zbroj = (k) => redovi.reduce((a, r) => a + (Number(r[k]) || 0), 0);
-  const ukupno = { prihod: zbroj("prihod"), prihodOstvareno: zbroj("prihodOstvareno"), prihodProjekcija: zbroj("prihodProjekcija"), sati: zbroj("sati"), rad: zbroj("rad"), materijal: zbroj("materijal"), ostalo: zbroj("ostalo"), fiksni: zbroj("fiksni"), troskovi: zbroj("troskovi") };
-  ukupno.rezultat = ukupno.prihod - ukupno.troskovi;
-  ukupno.marza = ukupno.prihod > 0 ? (ukupno.rezultat / ukupno.prihod) * 100 : null;
+  const ukupno = Object.fromEntries(["prihod", "prihodOstvareno", "prihodProjekcija", "sati", "rad", "radDE", "materijal", "podizvodaci", "trosakRazdoblja", "transport", "ostalo", "fiksni", "otpPrihod", "troskovi", "rezultat1", "rezultat2"].map((k) => [k, zbroj(k)]));
+  ukupno.rezultat = ukupno.rezultat2;
+  ukupno.marza1 = ukupno.prihod > 0 ? (ukupno.rezultat1 / ukupno.prihod) * 100 : null;
+  ukupno.marza = ukupno.prihod > 0 ? (ukupno.rezultat2 / ukupno.prihod) * 100 : null;
 
   // Kupci: projicirani prihod u razdoblju + ostvareno u razdoblju po kupcu projekta
   const poKupcu = new Map();
@@ -12876,6 +12892,20 @@ function izracunProjekcije(db, { od, doMjeseca, danas, trosakSata, materijalPost
   };
   return { mjeseci, redovi, ukupno, projekti: projekti.sort((a, b) => b.uRazdoblju - a.uRazdoblju || usporediPrirodno(a.sifra, b.sifra)), kupci, ponude, upozorenja, tekuci };
 }
+
+// Stope projekcije iz izvještaja knjigovodstva: postotci prihoda (materijal, podizvođači), mjesečni prosjeci (trošak
+// razdoblja, rad DE, transport, OTP troškovi i prihod) i direktni rad po satu iz satnice proizvodnje.
+const stopeIzKnjigovodstva = (kb) => {
+  const s = kb?.stavke;
+  if (!s?.prihod) return kb?.satnica?.direktnoPoSatu ? { trosakSataDirektni: Math.round(kb.satnica.direktnoPoSatu * 100) / 100 } : null;
+  const mj = Number(kb.mjeseci) || 1, r1 = (v) => Math.round(v * 10) / 10, r0 = (v) => Math.round(v);
+  return {
+    materijalPostotak: r1(((s.materijal || 0) / s.prihod) * 100), podizvodaciPostotak: r1(((s.podizvodaci || 0) / s.prihod) * 100),
+    trosakRazdobljaMj: r0((s.trosakRazdoblja || 0) / mj), radDEMj: r0((s.radDE || 0) / mj), transportMj: r0((s.transport || 0) / mj),
+    fiksniMjesecno: r0((s.otpTroskovi || 0) / mj), otpPrihodMj: r0((s.otpPrihod || 0) / mj),
+    ...(kb.satnica?.direktnoPoSatu ? { trosakSataDirektni: Math.round(kb.satnica.direktnoPoSatu * 100) / 100 } : {}),
+  };
+};
 
 function ProjekcijaView({ db, update, showToast, mozeMijenjati, mojId }) {
   const np = db.nedovrsenaProizvodnja && !Array.isArray(db.nedovrsenaProizvodnja) ? db.nedovrsenaProizvodnja : {};
@@ -12899,21 +12929,57 @@ function ProjekcijaView({ db, update, showToast, mozeMijenjati, mojId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [db.radniNalozi, db.projekti, db.zaposlenici, db.praznici, db.kapacitetiDana, db.planProizvodnje, db.normativi, db.evidencijaRada, danas]);
   const odM = od <= doM ? od : doM, doMj = od <= doM ? doM : od;
+  // Zadnji izvještaj knjigovodstva (račun dobiti i gubitka A–N + satnica proizvodnje) — iz njega se postavljaju stope;
+  // svaka stopa se može i ručno promijeniti.
+  const kb = post.knjigovodstvo || null;
+  const izKnjigovodstva = useMemo(() => stopeIzKnjigovodstva(kb), [kb]);
+  const stope = {
+    trosakSataDirektni: post.trosakSataDirektni ?? np.trosakSata, materijalPostotak: post.materijalPostotak ?? 35,
+    podizvodaciPostotak: post.podizvodaciPostotak ?? 0, trosakRazdobljaMj: post.trosakRazdobljaMj ?? 0, radDEMj: post.radDEMj ?? 0,
+    transportMj: post.transportMj ?? 0, fiksniMjesecno: post.fiksniMjesecno ?? 0, otpPrihodMj: post.otpPrihodMj ?? 0,
+  };
   const rez = useMemo(() => izracunProjekcije(db, {
-    od: odM, doMjeseca: doMj, danas, trosakSata: np.trosakSata, materijalPostotak: post.materijalPostotak ?? 35, fiksniMjesecno: post.fiksniMjesecno, raspored: post.raspored || {}, satiPlana,
-  }), [db, odM, doMj, danas, np.trosakSata, post.materijalPostotak, post.fiksniMjesecno, post.raspored, satiPlana]);
+    od: odM, doMjeseca: doMj, danas, trosakSata: stope.trosakSataDirektni, materijalPostotak: stope.materijalPostotak, fiksniMjesecno: stope.fiksniMjesecno, raspored: post.raspored || {}, satiPlana, stope,
+  }), [db, odM, doMj, danas, satiPlana, post, np.trosakSata]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const polja = [
-    { k: "trosakSata", naziv: "Trošak sata rada", jed: "€/h", vrijednost: np.trosakSata, spremi: (v) => spremi({ trosakSata: v }) },
-    { k: "materijalPostotak", naziv: "Materijal bez ponude", jed: "% prihoda", vrijednost: post.materijalPostotak ?? 35, spremi: (v) => spremiPost({ materijalPostotak: v }) },
-    { k: "fiksniMjesecno", naziv: "Fiksni troškovi", jed: "€/mj", vrijednost: post.fiksniMjesecno || 0, spremi: (v) => spremiPost({ fiksniMjesecno: v }) },
+    { k: "trosakSataDirektni", naziv: "Direktni rad", jed: "€/h", oznaka: "E" },
+    { k: "materijalPostotak", naziv: "Materijal bez ponude", jed: "% prihoda", oznaka: "B" },
+    { k: "podizvodaciPostotak", naziv: "Usluge podizvođača", jed: "% prihoda", oznaka: "C" },
+    { k: "trosakRazdobljaMj", naziv: "Trošak razdoblja", jed: "€/mj", oznaka: "D" },
+    { k: "radDEMj", naziv: "Rad DE", jed: "€/mj", oznaka: "E" },
+    { k: "transportMj", naziv: "Transport bez narudžbe", jed: "€/mj", oznaka: "H" },
+    { k: "fiksniMjesecno", naziv: "OTP troškovi", jed: "€/mj", oznaka: "J" },
+    { k: "otpPrihodMj", naziv: "OTP prihod", jed: "€/mj", oznaka: "K" },
   ];
   const spremiUnos = () => {
-    const p = polja.find((x) => x.k === unos.polje);
     const v = Number(String(unos.vrijednost).replace(",", "."));
     if (!(v >= 0)) { showToast("Upiši broj."); return; }
-    p.spremi(v);
+    spremiPost({ [unos.polje]: v });
     setUnos(null);
+  };
+  const ulazIzvjestaja = useRef(null);
+  const [citanje, setCitanje] = useState(false);
+  const ucitajIzvjestaj = async (datoteke) => {
+    if (!datoteke?.length) return;
+    setCitanje(true);
+    try {
+      const { procitajIzvjestajeKnjigovodstva } = await import("./izvjestajKnjigovodstva.js");
+      const r = await procitajIzvjestajeKnjigovodstva([...datoteke]);
+      if (!r.izvjestaj && !r.satnica) { showToast(r.greske[0] || "Izvještaj nije prepoznat."); return; }
+      const novi = r.izvjestaj ? { ...r.izvjestaj, satnica: r.satnica || kb?.satnica || null } : { ...kb, satnica: r.satnica };
+      if (!novi.stavke) { showToast("Satnica je učitana, ali nedostaje račun dobiti i gubitka — odaberi i izvještaj (.xls)."); }
+      novi.ucitano = danas;
+      // stope iz izvještaja upisuju se odmah (zamjenjuju dosadašnje), a poslije se mogu ručno mijenjati
+      spremiPost({ knjigovodstvo: novi, ...(stopeIzKnjigovodstva(novi) || {}) });
+      showToast(`Učitano: ${r.datoteke.join(", ")}${r.greske.length ? ` — ${r.greske.join(" ")}` : ""}`);
+    } catch (e) {
+      console.error(e);
+      showToast("Izvještaj se ne može pročitati.");
+    } finally {
+      setCitanje(false);
+      if (ulazIzvjestaja.current) ulazIzvjestaja.current.value = "";
+    }
   };
   const spremiRaspored = (projektId, zapis) => {
     const raspored = { ...(post.raspored || {}) };
@@ -12933,8 +12999,8 @@ function ProjekcijaView({ db, update, showToast, mozeMijenjati, mojId }) {
       const izradio = (db.zaposlenici || []).find((z) => z.id === mojId);
       const bajtovi = await napraviPdfProjekcije({
         rez, logo, tvrtka: db.postavkeTvrtke || {}, razdoblje: nazivRazdoblja(odM, doMj), danas,
-        izradio: izradio ? `${izradio.ime} ${izradio.prezime}` : "", trosakSata: Number(np.trosakSata) || 0,
-        materijalPostotak: Number(post.materijalPostotak ?? 35) || 0, fiksniMjesecno: Number(post.fiksniMjesecno) || 0,
+        izradio: izradio ? `${izradio.ime} ${izradio.prezime}` : "", trosakSata: Number(stope.trosakSataDirektni) || 0,
+        materijalPostotak: Number(stope.materijalPostotak) || 0, fiksniMjesecno: Number(stope.fiksniMjesecno) || 0, stope, knjigovodstvo: kb,
         nazivMjeseca, kratkiMjesec, fmtDate,
       });
       const { preuzmiDatoteku } = await import("./pdfNabave.js");
@@ -12949,8 +13015,11 @@ function ProjekcijaView({ db, update, showToast, mozeMijenjati, mojId }) {
 
   const TD = TD_DESNO;
   const eur = (v) => fmtCur(v);
+  const pctTxt = (v) => (v == null ? "—" : `${Math.round(v)} %`);
   const u = rez.upozorenja;
-  const brojUpozorenja = u.kasni.length + u.bezVrijednosti.length + u.bezCijeneIsporuka.length + (u.bezTroskaSata ? 1 : 0);
+  const brojUpozorenja = u.kasni.length + u.bezVrijednosti.length + u.bezCijeneIsporuka.length + (u.bezTroskaSata ? 1 : 0) + (kb ? 0 : 1);
+  const bojaRez = (v) => (v >= 0 ? "var(--green)" : "var(--rust)");
+  const fmtStopa = (p, v) => (p.jed.startsWith("%") ? `${(Number(v) || 0).toLocaleString("hr-HR")} %` : p.jed === "€/h" ? `${(Number(v) || 0).toLocaleString("hr-HR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €/h` : eur(v));
   return (
     <div>
       <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 14 }}>
@@ -12960,38 +13029,74 @@ function ProjekcijaView({ db, update, showToast, mozeMijenjati, mojId }) {
         <Field label="Do">
           <select className="select" style={{ width: 170 }} value={doM} onChange={(e) => setDoM(e.target.value)}>{ponudeniMjeseci.map((m) => <option key={m} value={m}>{nazivMjeseca(m)}</option>)}</select>
         </Field>
-        {polja.map((p) => (
-          <Field key={p.k} label={`${p.naziv} (${p.jed})`}>
-            {unos?.polje === p.k ? (
-              <div style={{ display: "flex", gap: 6 }}>
-                <input className="input f-mono" style={{ width: 90 }} inputMode="decimal" autoFocus aria-label={p.naziv} value={unos.vrijednost} onChange={(e) => setUnos({ ...unos, vrijednost: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") spremiUnos(); if (e.key === "Escape") setUnos(null); }} />
-                <Btn size="sm" variant="primary" onClick={spremiUnos}>OK</Btn>
-              </div>
-            ) : (
-              <div style={{ display: "flex", gap: 6, alignItems: "center", minHeight: 36 }}>
-                <strong className="f-mono" style={{ color: p.k === "trosakSata" && !(Number(p.vrijednost) > 0) ? "var(--rust)" : "var(--ink)" }}>{Number(p.vrijednost) > 0 || p.k !== "trosakSata" ? (Number(p.vrijednost) || 0).toLocaleString("hr-HR") : "nije upisan"}</strong>
-                {mozeMijenjati && <Btn size="sm" icon={Pencil} aria-label={`Promijeni ${p.naziv}`} onClick={() => setUnos({ polje: p.k, vrijednost: String(p.vrijednost ?? "") })} />}
-              </div>
-            )}
-          </Field>
-        ))}
         <div style={{ marginLeft: "auto", marginBottom: 14 }}>
           <Btn variant="primary" icon={FileText} onClick={izradiPdf} disabled={izrada}>{izrada ? "Izrađujem PDF…" : "PDF za upravu"}</Btn>
         </div>
       </div>
 
+      <div className="card" style={{ padding: "12px 14px", marginBottom: 14, display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 260 }}>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>Zadnji izvještaj knjigovodstva</div>
+          {kb ? (
+            <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 2, lineHeight: 1.5 }}>
+              {fmtDate(kb.od)} – {fmtDate(kb.do)} ({kb.mjeseci} mj) · prihod {eur(kb.stavke?.prihod)} · rezultat I {eur(kb.stavke?.rezultat1)} · rezultat II {eur(kb.stavke?.rezultat2)}
+              {kb.satnica && <> · satnica proizvodnje {(kb.satnica.punaSatnica || 0).toLocaleString("hr-HR", { maximumFractionDigits: 2 })} €/h (direktni rad {(kb.satnica.direktnoPoSatu || 0).toLocaleString("hr-HR", { maximumFractionDigits: 2 })} €/h, {fmtSati0(kb.satnica.sati)} h)</>}
+              <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{kb.datoteka}{kb.satnica?.datoteka ? ` + ${kb.satnica.datoteka}` : ""} · učitano {fmtDate(kb.ucitano)}</div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 2 }}>Učitaj izvještaj (.xls s računom dobiti i gubitka) i po želji „Satnicu proizvodnje“ — aplikacija iz njih postavi stope materijala, podizvođača i direktnog rada te mjesečne prosjeke troška razdoblja, rada DE, transporta i OTP-a.</div>
+          )}
+        </div>
+        {mozeMijenjati && (
+          <>
+            <input ref={ulazIzvjestaja} type="file" accept=".xls,.xlsx" multiple style={{ display: "none" }} onChange={(e) => ucitajIzvjestaj(e.target.files)} />
+            <Btn icon={Upload} disabled={citanje} onClick={() => ulazIzvjestaja.current?.click()}>{citanje ? "Čitam…" : kb ? "Učitaj novi izvještaj" : "Učitaj izvještaj (.xls)"}</Btn>
+          </>
+        )}
+      </div>
+
+      <div className="card" style={{ padding: "10px 14px", marginBottom: 14 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Stope i mjesečni prosjeci <span style={{ fontWeight: 400, color: "var(--ink-faint)" }}>(slova kao u računu dobiti i gubitka knjigovodstva)</span></div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: "10px 16px" }}>
+          {polja.map((p) => {
+            const v = stope[p.k];
+            const izv = izKnjigovodstva?.[p.k];
+            return (
+              <div key={p.k}>
+                <div className="label" style={{ marginBottom: 2 }}>{p.oznaka} · {p.naziv}</div>
+                {unos?.polje === p.k ? (
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input className="input f-mono" style={{ width: 100 }} inputMode="decimal" autoFocus aria-label={p.naziv} value={unos.vrijednost} onChange={(e) => setUnos({ ...unos, vrijednost: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") spremiUnos(); if (e.key === "Escape") setUnos(null); }} />
+                    <Btn size="sm" variant="primary" onClick={spremiUnos}>OK</Btn>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", minHeight: 30 }}>
+                    <strong className="f-mono" style={{ color: p.k === "trosakSataDirektni" && !(Number(v) > 0) ? "var(--rust)" : "var(--ink)" }}>{p.k === "trosakSataDirektni" && !(Number(v) > 0) ? "nije upisan" : fmtStopa(p, v)}</strong>
+                    {mozeMijenjati && <Btn size="sm" icon={Pencil} aria-label={`Promijeni ${p.naziv}`} onClick={() => setUnos({ polje: p.k, vrijednost: String(v ?? "") })} />}
+                  </div>
+                )}
+                <div style={{ fontSize: 10.5, color: izv != null && Math.abs((Number(v) || 0) - izv) > 0.001 ? "var(--steel)" : "var(--ink-faint)" }}>
+                  {izv != null ? (Math.abs((Number(v) || 0) - izv) > 0.001 ? `ručno · izvještaj ${fmtStopa(p, izv)}` : "iz izvještaja") : p.k === "trosakSataDirektni" ? (post.trosakSataDirektni == null ? "trošak sata iz Nedovršene proizvodnje" : "ručno") : "ručno"}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12, marginBottom: 14 }}>
         <div className="kpi-card beam-tick"><div className="kpi-num">{eur(rez.ukupno.prihod)}</div><div className="kpi-label">Prihod · ostvareno {eur(rez.ukupno.prihodOstvareno)}</div></div>
-        <div className="kpi-card"><div className="kpi-num">{eur(rez.ukupno.troskovi)}</div><div className="kpi-label">Troškovi</div></div>
-        <div className="kpi-card"><div className="kpi-num" style={{ color: rez.ukupno.rezultat >= 0 ? "var(--green)" : "var(--rust)" }}>{eur(rez.ukupno.rezultat)}</div><div className="kpi-label">Rezultat</div></div>
-        <div className="kpi-card"><div className="kpi-num">{rez.ukupno.marza == null ? "—" : `${Math.round(rez.ukupno.marza)} %`}</div><div className="kpi-label">Marža · {fmtSati0(rez.ukupno.sati)} h rada</div></div>
+        <div className="kpi-card"><div className="kpi-num" style={{ color: bojaRez(rez.ukupno.rezultat1) }}>{eur(rez.ukupno.rezultat1)}</div><div className="kpi-label">Rezultat I (pokriće) · {pctTxt(rez.ukupno.marza1)}</div></div>
+        <div className="kpi-card"><div className="kpi-num" style={{ color: bojaRez(rez.ukupno.rezultat2) }}>{eur(rez.ukupno.rezultat2)}</div><div className="kpi-label">Rezultat II (nakon OTP-a) · {pctTxt(rez.ukupno.marza)}</div></div>
+        <div className="kpi-card"><div className="kpi-num">{fmtSati0(rez.ukupno.sati)} h</div><div className="kpi-label">Sati rada · direktni rad {eur(rez.ukupno.rad)}</div></div>
       </div>
 
       {brojUpozorenja > 0 && (
         <div className="card" style={{ padding: "10px 14px", marginBottom: 14, background: "#FFF6DE", borderColor: "#F5D98A", fontSize: 12.5 }}>
           <strong>Provjeri prije izrade PDF-a</strong>
           <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
-            {u.bezTroskaSata && <li>Trošak sata rada nije upisan — rad se računa kao 0 €.</li>}
+            {!kb && <li>Izvještaj knjigovodstva nije učitan — podizvođači, trošak razdoblja, rad DE i OTP su 0 dok ih ne učitaš ili upišeš.</li>}
+            {u.bezTroskaSata && <li>Trošak direktnog rada nije upisan — rad se računa kao 0 €.</li>}
             {u.kasni.length > 0 && <li>Kasni s isporukom ({u.kasni.length}): {u.kasni.map((k) => `${k.sifra} (rok ${fmtDate(k.rok)})`).join(", ")} — preostali iznos je u tekućem mjesecu.</li>}
             {u.bezVrijednosti.length > 0 && <li>Aktivni projekti bez vrijednosti ({u.bezVrijednosti.length}): {u.bezVrijednosti.map((k) => k.sifra).join(", ")} — upiši vrijednost projekta ili narudžbu kupca s cijenama.</li>}
             {u.bezCijeneIsporuka.length > 0 && <li>Isporuke bez cijena ({u.bezCijeneIsporuka.length}): {u.bezCijeneIsporuka.map((k) => k.sifra).join(", ")} — nema narudžbe s cijenama pa se isporučeno ne zna; preostalo je cijela vrijednost projekta. Ispravi preko „Raspored“ (preostali iznos).</li>}
@@ -13000,27 +13105,32 @@ function ProjekcijaView({ db, update, showToast, mozeMijenjati, mojId }) {
       )}
 
       <div className="card" style={{ overflowX: "auto", marginBottom: 16 }}>
-        <table className="erp-table">
-          <thead><tr><th>Mjesec</th><th style={TD}>Prihod</th><th style={TD}>Rad</th><th style={TD}>Materijal</th><th style={TD}>Transport i vanjski</th><th style={TD}>Fiksni</th><th style={TD}>Troškovi</th><th style={TD}>Rezultat</th><th style={TD}>Marža</th></tr></thead>
+        <table className="erp-table" style={{ minWidth: 1180 }}>
+          <thead><tr><th>Mjesec</th><th style={TD}>A · Prihod</th><th style={TD}>B · Materijal</th><th style={TD}>C · Podizvođači</th><th style={TD}>D · Trošak razd.</th><th style={TD}>E · Direktni rad</th><th style={TD}>E · Rad DE</th><th style={TD}>H · Transport</th><th style={TD}>I · Rezultat I</th><th style={TD}>J−K · OTP</th><th style={TD}>N · Rezultat II</th><th style={TD}>Marža</th></tr></thead>
           <tbody>
             {rez.redovi.map((r) => (
               <tr key={r.mjesec}>
                 <td><strong>{nazivMjeseca(r.mjesec)}</strong><div style={{ fontSize: 10.5, color: r.vrsta === "projekcija" ? "var(--steel)" : "var(--ink-faint)" }}>{r.vrsta}</div></td>
                 <td className="f-mono" style={TD}>{eur(r.prihod)}{r.vrsta === "tekući" && <div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>ostv. {eur(r.prihodOstvareno)}</div>}</td>
-                <td className="f-mono" style={TD}>{eur(r.rad)}<div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{fmtSati0(r.sati)} h</div></td>
                 <td className="f-mono" style={TD}>{eur(r.materijal)}</td>
-                <td className="f-mono" style={TD}>{eur(r.ostalo)}</td>
-                <td className="f-mono" style={TD}>{eur(r.fiksni)}</td>
-                <td className="f-mono" style={{ ...TD, fontWeight: 600 }}>{eur(r.troskovi)}</td>
-                <td className="f-mono" style={{ ...TD, fontWeight: 700, color: r.rezultat >= 0 ? "var(--green)" : "var(--rust)" }}>{eur(r.rezultat)}</td>
-                <td className="f-mono" style={TD}>{r.marza == null ? "—" : `${Math.round(r.marza)} %`}</td>
+                <td className="f-mono" style={TD}>{eur(r.podizvodaci)}</td>
+                <td className="f-mono" style={TD}>{eur(r.trosakRazdoblja)}</td>
+                <td className="f-mono" style={TD}>{eur(r.rad)}<div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{fmtSati0(r.sati)} h</div></td>
+                <td className="f-mono" style={TD}>{eur(r.radDE)}</td>
+                <td className="f-mono" style={TD}>{eur(r.transport)}{r.transportProcjena && <div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>prosjek</div>}</td>
+                <td className="f-mono" style={{ ...TD, fontWeight: 700, color: bojaRez(r.rezultat1) }}>{eur(r.rezultat1)}</td>
+                <td className="f-mono" style={TD}>{eur(r.fiksni - r.otpPrihod)}</td>
+                <td className="f-mono" style={{ ...TD, fontWeight: 700, color: bojaRez(r.rezultat2) }}>{eur(r.rezultat2)}</td>
+                <td className="f-mono" style={TD}>{pctTxt(r.marza)}</td>
               </tr>
             ))}
             <tr style={{ background: "var(--surface-alt)", fontWeight: 700 }}>
               <td>Ukupno</td>
-              <td className="f-mono" style={TD}>{eur(rez.ukupno.prihod)}</td><td className="f-mono" style={TD}>{eur(rez.ukupno.rad)}</td><td className="f-mono" style={TD}>{eur(rez.ukupno.materijal)}</td>
-              <td className="f-mono" style={TD}>{eur(rez.ukupno.ostalo)}</td><td className="f-mono" style={TD}>{eur(rez.ukupno.fiksni)}</td><td className="f-mono" style={TD}>{eur(rez.ukupno.troskovi)}</td>
-              <td className="f-mono" style={{ ...TD, color: rez.ukupno.rezultat >= 0 ? "var(--green)" : "var(--rust)" }}>{eur(rez.ukupno.rezultat)}</td><td className="f-mono" style={TD}>{rez.ukupno.marza == null ? "—" : `${Math.round(rez.ukupno.marza)} %`}</td>
+              {[rez.ukupno.prihod, rez.ukupno.materijal, rez.ukupno.podizvodaci, rez.ukupno.trosakRazdoblja, rez.ukupno.rad, rez.ukupno.radDE, rez.ukupno.transport].map((v, i) => <td key={i} className="f-mono" style={TD}>{eur(v)}</td>)}
+              <td className="f-mono" style={{ ...TD, color: bojaRez(rez.ukupno.rezultat1) }}>{eur(rez.ukupno.rezultat1)}<div style={{ fontSize: 10.5, fontWeight: 400 }}>{pctTxt(rez.ukupno.marza1)}</div></td>
+              <td className="f-mono" style={TD}>{eur(rez.ukupno.fiksni - rez.ukupno.otpPrihod)}</td>
+              <td className="f-mono" style={{ ...TD, color: bojaRez(rez.ukupno.rezultat2) }}>{eur(rez.ukupno.rezultat2)}</td>
+              <td className="f-mono" style={TD}>{pctTxt(rez.ukupno.marza)}</td>
             </tr>
           </tbody>
         </table>
@@ -13053,9 +13163,11 @@ function ProjekcijaView({ db, update, showToast, mozeMijenjati, mojId }) {
       )}
       <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 6 }}>
         <strong>Prihod</strong>: ugovoreno (narudžbe kupca, bez narudžbe vrijednost projekta, kupaonice masa × €/kg normativa) minus isporučeno kupcu; preostalo na rok projekta, dodatne narudžbe po udjelu sati, kupaonice po rasporedu isporuka, ili po ručnom rasporedu. Prošli mjeseci: isporučeno (otpremnice kupcu).
-        {" "}<strong>Rad</strong>: sati × trošak sata — prošli dani prisutnost radione s kioska, dalje raspored iz plana proizvodnje.
-        {" "}<strong>Materijal</strong>: projicirani prihod × udio materijala iz kalkulacije ponude (bez ponude: upisani postotak); prošli mjeseci zaprimljene narudžbenice.
-        {" "}<strong>Transport i vanjski</strong>: narudžbe za transport i vanjski troškovi projekta po datumu.
+        {" "}<strong>B · Materijal</strong>: projicirani prihod × udio materijala iz kalkulacije ponude (bez ponude: postotak); prošli mjeseci zaprimljene narudžbenice.
+        {" "}<strong>C · Podizvođači</strong>: postotak prihoda + vanjski troškovi projekta. <strong>D · Trošak razdoblja</strong>, <strong>Rad DE</strong>, <strong>J · OTP troškovi</strong> i <strong>K · OTP prihod</strong>: mjesečni prosjek iz zadnjeg izvještaja knjigovodstva.
+        {" "}<strong>E · Direktni rad</strong>: sati × trošak direktnog rada po satu (satnica proizvodnje) — prošli dani prisutnost radione s kioska, dalje plan proizvodnje.
+        {" "}<strong>H · Transport</strong>: narudžbe za transport po datumu utovara; mjesec bez narudžbe dobiva prosjek iz izvještaja.
+        {" "}<strong>Rezultat I</strong> = A − B − C − D − E − H; <strong>Rezultat II</strong> = Rezultat I − J + K.
       </p>
       {rasporedZa && <ProjekcijaRasporedModal red={rasporedZa} zapis={(post.raspored || {})[rasporedZa.projekt.id]} danas={danas} onSpremi={spremiRaspored} onClose={() => setRasporedZa(null)} />}
     </div>

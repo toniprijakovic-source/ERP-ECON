@@ -107,7 +107,7 @@ const tablicaLayout = (ukupnoRed = false) => ({
 const zag = (tekst, desno = false) => ({ text: tekst, bold: true, fontSize: 8, color: "#FFFFFF", alignment: desno ? "right" : "left" });
 const br = (v, opcije = {}) => ({ text: typeof v === "string" ? v : eur(v), alignment: "right", fontSize: opcije.fs || 8.5, bold: !!opcije.bold, color: opcije.boja || C.ink, noWrap: true });
 
-export async function napraviPdfProjekcije({ rez, logo, tvrtka, razdoblje, danas, izradio, trosakSata, materijalPostotak, fiksniMjesecno, nazivMjeseca, kratkiMjesec, fmtDate }) {
+export async function napraviPdfProjekcije({ rez, logo, tvrtka, razdoblje, danas, izradio, trosakSata, materijalPostotak, fiksniMjesecno, stope = {}, knjigovodstvo = null, nazivMjeseca, kratkiMjesec, fmtDate }) {
   const pdfMake = await ucitajPdfMake();
   const u = rez.ukupno;
   const imeTvrtke = tvrtka?.naziv || "ECON d.o.o.";
@@ -122,7 +122,8 @@ export async function napraviPdfProjekcije({ rez, logo, tvrtka, razdoblje, danas
   const ponudeIznos = rez.ponude.reduce((a, p) => a + p.iznos, 0);
   const zakljucci = [
     `Prihod u razdoblju: ${eur(u.prihod)}${u.prihodOstvareno > 0 ? ` — ${eur(u.prihodOstvareno)} već je isporučeno, ${eur(u.prihodProjekcija)} je projekcija prema rokovima isporuke.` : " prema rokovima isporuke."}`,
-    `Procijenjeni troškovi ${eur(u.troskovi)} daju rezultat ${eur(u.rezultat)}${u.marza != null ? ` (marža ${pct(u.marza)})` : ""}.`,
+    `Rezultat I (pokriće) ${eur(u.rezultat1)}${u.marza1 != null ? ` (${pct(u.marza1)} prihoda)` : ""}; nakon općih troškova poslovanja (OTP) rezultat II ${eur(u.rezultat2)}${u.marza != null ? ` (${pct(u.marza)})` : ""}.`,
+    ...(knjigovodstvo?.stavke?.prihod > 0 ? [`Za usporedbu, knjigovodstvo ${fmtDate(knjigovodstvo.od)} – ${fmtDate(knjigovodstvo.do)}: rezultat I ${pct((knjigovodstvo.stavke.rezultat1 / knjigovodstvo.stavke.prihod) * 100)}, rezultat II ${pct((knjigovodstvo.stavke.rezultat2 / knjigovodstvo.stavke.prihod) * 100)} prihoda.`] : []),
     ...(najjaci && najjaci.prihod > 0 && rez.redovi.length > 1 ? [`Najjači mjesec je ${nazivMjeseca(najjaci.mjesec)} s prihodom od ${eur(najjaci.prihod)}.`] : []),
     ...(top3.length ? [`${top3.length === 1 ? "Najveći kupac" : `${top3.length} najveća kupca`} (${top3.map((k) => k.naziv).join(", ")}) ${top3.length === 1 ? "čini" : "čine"} ${pct(udioTop3)} prihoda razdoblja.`] : []),
     `Plan proizvodnje predviđa ${Math.round(u.sati).toLocaleString("hr-HR")} sati rada u razdoblju.`,
@@ -141,13 +142,13 @@ export async function napraviPdfProjekcije({ rez, logo, tvrtka, razdoblje, danas
       absolutePosition: { x: 40, y: 595.28 - 160 },
       columns: [
         ["Prihod u razdoblju", eur(u.prihod), u.prihodOstvareno > 0 ? `ostvareno ${eur(u.prihodOstvareno)}` : "projekcija"],
-        ["Troškovi", eur(u.troskovi), `rad ${eur(u.rad)} · materijal ${eur(u.materijal)}`],
-        ["Rezultat", eur(u.rezultat), u.marza != null ? `marža ${pct(u.marza)}` : ""],
+        ["Rezultat I — pokriće", eur(u.rezultat1), u.marza1 != null ? `${pct(u.marza1)} prihoda` : ""],
+        ["Rezultat II — nakon OTP-a", eur(u.rezultat2), u.marza != null ? `${pct(u.marza)} prihoda` : ""],
       ].map(([oznaka, vrijednost, ispod], i) => ({
         width: 240,
         stack: [
           { text: oznaka.toUpperCase(), fontSize: 8.5, color: "#AEB6BD", characterSpacing: 0.8 },
-          { text: vrijednost, fontSize: 26, bold: true, color: i === 2 ? (u.rezultat >= 0 ? "#7FD3A0" : "#F2A08F") : "#FFFFFF", margin: [0, 4, 0, 2] },
+          { text: vrijednost, fontSize: 26, bold: true, color: i === 0 ? "#FFFFFF" : ((i === 1 ? u.rezultat1 : u.rezultat2) >= 0 ? "#7FD3A0" : "#F2A08F"), margin: [0, 4, 0, 2] },
           { text: ispod, fontSize: 8.5, color: "#AEB6BD" },
         ],
       })),
@@ -180,9 +181,9 @@ export async function napraviPdfProjekcije({ rez, logo, tvrtka, razdoblje, danas
         widths: ["*", "*", "*", "*"],
         body: [[
           plocica("Prihod", eur(u.prihod), u.prihodOstvareno > 0 ? `ostvareno ${eur(u.prihodOstvareno)} · projekcija ${eur(u.prihodProjekcija)}` : "projekcija prema rokovima isporuke"),
-          plocica("Troškovi", eur(u.troskovi), `rad ${eur(u.rad)} · materijal ${eur(u.materijal)}`),
-          plocica("Rezultat", eur(u.rezultat), u.fiksni > 0 ? `uključeni fiksni troškovi ${eur(u.fiksni)}` : "prije fiksnih troškova", u.rezultat >= 0 ? C.green : C.rust),
-          plocica("Marža", pct(u.marza), `${Math.round(u.sati).toLocaleString("hr-HR")} sati rada u razdoblju`),
+          plocica("Troškovi", eur(u.troskovi), `materijal ${eur(u.materijal)} · rad ${eur(u.rad + u.radDE)} · OTP ${eur(u.fiksni)}`),
+          plocica("Rezultat I — pokriće", eur(u.rezultat1), `${pct(u.marza1)} prihoda · prije općih troškova`, u.rezultat1 >= 0 ? C.green : C.rust),
+          plocica("Rezultat II", eur(u.rezultat2), `${pct(u.marza)} prihoda · nakon OTP-a`, u.rezultat2 >= 0 ? C.green : C.rust),
         ]],
       },
       layout: { hLineWidth: () => 0, vLineWidth: (i) => (i === 0 || i === 4 ? 0 : 8), vLineColor: () => "#FFFFFF", paddingLeft: () => 0, paddingRight: () => 0, paddingTop: () => 0, paddingBottom: () => 0 },
@@ -195,7 +196,7 @@ export async function napraviPdfProjekcije({ rez, logo, tvrtka, razdoblje, danas
           stack: [
             { text: "Prihod i troškovi po mjesecima", fontSize: 11, bold: true, color: C.ink, margin: [0, 0, 0, 6] },
             { svg: grafMjeseci(rez.redovi, kratko, 480, 250), width: 480 },
-            legenda([[C.steel, "Prihod — ostvareno"], [C.steelLight, "Prihod — projekcija"], [C.cost, "Troškovi"], [C.green, "Kumulativni rezultat", "linija"]]),
+            legenda([[C.steel, "Prihod — ostvareno"], [C.steelLight, "Prihod — projekcija"], [C.cost, "Troškovi"], [C.green, "Kumulativni rez. II", "linija"]]),
           ],
         },
         {
@@ -210,38 +211,45 @@ export async function napraviPdfProjekcije({ rez, logo, tvrtka, razdoblje, danas
     },
   ];
 
-  // ---------- 3. po mjesecima ----------
+  // ---------- 3. po mjesecima (struktura kao račun dobiti i gubitka knjigovodstva, A–N) ----------
   const mjesecniRedovi = rez.redovi.map((r, i) => {
-    kum += r.rezultat;
+    kum += r.rezultat2;
     const pozadina = i % 2 ? "#FAFBFC" : null;
-    const status = { text: r.vrsta, fontSize: 7.5, color: r.vrsta === "projekcija" ? C.steel : C.soft, bold: r.vrsta === "projekcija" };
     return [
-      { text: nazivMjeseca(r.mjesec), fontSize: 8.5, bold: true, color: C.ink }, status,
-      br(r.prihod, { bold: true }), br(`${Math.round(r.sati).toLocaleString("hr-HR")} h`), br(r.rad), br(r.materijal), br(r.ostalo), br(r.fiksni), br(r.troskovi),
-      br(r.rezultat, { bold: true, boja: r.rezultat >= 0 ? C.green : C.rust }), br(pct(r.marza)), br(kum, { boja: kum >= 0 ? C.ink : C.rust }),
+      { stack: [{ text: nazivMjeseca(r.mjesec), fontSize: 8.5, bold: true, color: C.ink }, { text: r.vrsta, fontSize: 7, color: r.vrsta === "projekcija" ? C.steel : C.soft, bold: r.vrsta === "projekcija" }] },
+      br(r.prihod, { bold: true, fs: 8 }), br(r.materijal, { fs: 8 }), br(r.podizvodaci, { fs: 8 }), br(r.trosakRazdoblja, { fs: 8 }),
+      { stack: [br(r.rad, { fs: 8 }), { text: `${Math.round(r.sati).toLocaleString("hr-HR")} h`, alignment: "right", fontSize: 6.5, color: C.faint }] },
+      br(r.radDE, { fs: 8 }), br(r.transport, { fs: 8, boja: r.transportProcjena ? C.soft : C.ink }),
+      br(r.rezultat1, { bold: true, fs: 8, boja: r.rezultat1 >= 0 ? C.green : C.rust }), br(r.fiksni - r.otpPrihod, { fs: 8 }),
+      br(r.rezultat2, { bold: true, fs: 8, boja: r.rezultat2 >= 0 ? C.green : C.rust }), br(pct(r.marza), { fs: 8 }), br(kum, { fs: 8, boja: kum >= 0 ? C.ink : C.rust }),
     ].map((c) => ({ ...c, fillColor: pozadina }));
   });
   const strukturaTroskova = [
-    { naziv: "Rad", iznos: u.rad, boja: C.steel },
-    { naziv: "Materijal", iznos: u.materijal, boja: C.steelLight },
-    { naziv: "Transport i vanjski", iznos: u.ostalo, boja: C.costDark },
-    { naziv: "Fiksni troškovi", iznos: u.fiksni, boja: C.cost },
+    { naziv: "Materijal (B)", iznos: u.materijal, boja: C.steelLight },
+    { naziv: "Podizvođači (C)", iznos: u.podizvodaci, boja: "#6F93A8" },
+    { naziv: "Trošak razdoblja (D)", iznos: u.trosakRazdoblja, boja: "#D9C27A" },
+    { naziv: "Rad i rad DE (E)", iznos: u.rad + u.radDE, boja: C.steel },
+    { naziv: "Transport (H)", iznos: u.transport, boja: C.costDark },
+    { naziv: "OTP troškovi (J)", iznos: u.fiksni, boja: C.cost },
   ].filter((d) => d.iznos > 0.5);
   const poMjesecima = [
-    naslov("Pregled po mjesecima", "Ostvareno = isporučeno kupcu do danas; projekcija = preostalo prema rokovima isporuke"),
+    naslov("Pregled po mjesecima", "Struktura kao račun dobiti i gubitka knjigovodstva · ostvareno = isporučeno kupcu do danas, projekcija = preostalo prema rokovima"),
     {
       table: {
         headerRows: 1,
-        widths: [70, 52, "*", 50, "*", "*", "*", "*", "*", "*", 40, "*"],
+        widths: [64, "*", "*", "*", "*", "*", "*", "*", "*", "*", "*", 34, "*"],
         body: [
-          [zag("Mjesec"), zag("Status"), zag("Prihod", true), zag("Sati", true), zag("Rad", true), zag("Materijal", true), zag("Transport i vanjski", true), zag("Fiksni", true), zag("Troškovi", true), zag("Rezultat", true), zag("Marža", true), zag("Kumulativno", true)],
+          [zag("Mjesec"), zag("A Prihod", true), zag("B Materijal", true), zag("C Podizvođači", true), zag("D Trošak razd.", true), zag("E Direktni rad", true), zag("E Rad DE", true), zag("H Transport", true), zag("I Rezultat I", true), zag("J−K OTP", true), zag("N Rezultat II", true), zag("Marža", true), zag("Kumulativno", true)],
           ...mjesecniRedovi,
-          [{ text: "Ukupno", bold: true, fontSize: 8.5 }, { text: "" }, br(u.prihod, { bold: true }), br(`${Math.round(u.sati).toLocaleString("hr-HR")} h`, { bold: true }), br(u.rad, { bold: true }), br(u.materijal, { bold: true }), br(u.ostalo, { bold: true }), br(u.fiksni, { bold: true }), br(u.troskovi, { bold: true }), br(u.rezultat, { bold: true, boja: u.rezultat >= 0 ? C.green : C.rust }), br(pct(u.marza), { bold: true }), br("")],
+          [{ text: "Ukupno", bold: true, fontSize: 8.5 }, br(u.prihod, { bold: true, fs: 8 }), br(u.materijal, { bold: true, fs: 8 }), br(u.podizvodaci, { bold: true, fs: 8 }), br(u.trosakRazdoblja, { bold: true, fs: 8 }),
+            { stack: [br(u.rad, { bold: true, fs: 8 }), { text: `${Math.round(u.sati).toLocaleString("hr-HR")} h`, alignment: "right", fontSize: 6.5, color: C.faint }] }, br(u.radDE, { bold: true, fs: 8 }), br(u.transport, { bold: true, fs: 8 }),
+            br(u.rezultat1, { bold: true, fs: 8, boja: u.rezultat1 >= 0 ? C.green : C.rust }), br(u.fiksni - u.otpPrihod, { bold: true, fs: 8 }), br(u.rezultat2, { bold: true, fs: 8, boja: u.rezultat2 >= 0 ? C.green : C.rust }), br(pct(u.marza), { bold: true, fs: 8 }), br("")],
         ],
       },
-      layout: tablicaLayout(true),
-      margin: [0, 0, 0, 22],
+      layout: { ...tablicaLayout(true), paddingLeft: () => 4, paddingRight: () => 4 },
+      margin: [0, 0, 0, 8],
     },
+    { text: `Rezultat I = A − B − C − D − E − H (pokriće prije općih troškova); Rezultat II = Rezultat I − J (OTP troškovi) + K (OTP prihod). Transport sivo = mjesečni prosjek iz izvještaja (nema narudžbe transporta).`, fontSize: 7.5, color: C.faint, margin: [0, 0, 0, 18] },
     ...(strukturaTroskova.length ? [
       { text: "Struktura troškova u razdoblju", fontSize: 11, bold: true, color: C.ink, margin: [0, 0, 0, 8] },
       { svg: trakaUdjela(strukturaTroskova, SIRINA, 16), width: SIRINA },
@@ -249,12 +257,70 @@ export async function napraviPdfProjekcije({ rez, logo, tvrtka, razdoblje, danas
         columns: strukturaTroskova.map((d) => ({
           width: "auto",
           columns: [kvadratic(d.boja), { stack: [{ text: d.naziv, fontSize: 8.5, color: C.ink, bold: true }, { text: `${eur(d.iznos)} · ${pct((d.iznos / (u.troskovi || 1)) * 100)}`, fontSize: 8, color: C.soft }], width: "auto" }],
-          columnGap: 3, margin: [0, 0, 26, 0],
+          columnGap: 3, margin: [0, 0, 18, 0],
         })),
         margin: [0, 8, 0, 0],
       },
     ] : []),
   ];
+
+  // ---------- 3b. usporedba sa zadnjim izvještajem knjigovodstva ----------
+  const ks = knjigovodstvo?.stavke;
+  const usporedba = ks?.prihod > 0 ? (() => {
+    const kmj = Number(knjigovodstvo.mjeseci) || 1, pmj = rez.mjeseci.length || 1;
+    const rasporedK = (ks.rasporedDirektni || 0) + (ks.rasporedUsluga || 0);
+    const rasporedK2 = (ks.rasporedIndirektni || 0) + (ks.rasporedOpci || 0);
+    // [oznaka, naziv, knjigovodstvo, projekcija, istaknuto, prihod?]
+    const stavke = [
+      ["A", "Prihod", ks.prihod, u.prihod, true, true],
+      ["B", "Direktni materijal", ks.materijal, u.materijal],
+      ["C", "Usluge podizvođača", ks.podizvodaci, u.podizvodaci],
+      ["D", "Trošak razdoblja", ks.trosakRazdoblja, u.trosakRazdoblja],
+      ["E", "Direktni rad", ks.direktniRad, u.rad],
+      ["E", "Rad DE", ks.radDE, u.radDE],
+      ["F+G", "Raspored direktnih troškova", rasporedK, null],
+      ["H", "Transport i dostava", ks.transport, u.transport],
+      ["I", "Rezultat I", ks.rezultat1, u.rezultat1, true],
+      ["J", "OTP troškovi", ks.otpTroskovi, u.fiksni],
+      ["K", "OTP prihod", ks.otpPrihod, u.otpPrihod],
+      ["L+M", "Raspored indirektnih troškova", rasporedK2, null],
+      ["N", "Rezultat II", ks.rezultat2, u.rezultat2, true],
+    ];
+    const udio = (v, p) => (p > 0 && v != null ? (v / p) * 100 : null);
+    const pp = (a, b) => (a == null || b == null ? "—" : `${b - a >= 0 ? "+" : "−"}${Math.abs(b - a).toLocaleString("hr-HR", { maximumFractionDigits: 1 })} p.b.`);
+    const redovi = stavke.map(([oz, naziv, k, p, ist, jePrihod], i) => {
+      const uk = jePrihod ? null : udio(k, ks.prihod), up = jePrihod ? null : udio(p, u.prihod);
+      const boja = (v) => (ist && !jePrihod && v != null ? (v >= 0 ? C.green : C.rust) : C.ink);
+      return [
+        { text: oz, fontSize: 8, color: C.soft, bold: ist }, { text: naziv, fontSize: 8.5, bold: ist, color: C.ink },
+        br(k, { fs: 8.5, bold: ist, boja: boja(k) }), br(jePrihod ? "100 %" : pct(uk), { fs: 8, boja: C.soft }), br(eur(k / kmj), { fs: 8, boja: C.soft }),
+        br(p == null ? "—" : eur(p), { fs: 8.5, bold: ist, boja: p == null ? C.faint : boja(p) }), br(jePrihod ? "100 %" : pct(up), { fs: 8, boja: C.soft }), br(p == null ? "—" : eur(p / pmj), { fs: 8, boja: C.soft }),
+        br(jePrihod ? "" : pp(uk, up), { fs: 8, boja: C.soft }),
+      ].map((c) => ({ ...c, fillColor: ist ? C.surface : i % 2 ? "#FAFBFC" : null }));
+    });
+    const sat = knjigovodstvo.satnica;
+    return [
+      naslov("Usporedba sa zadnjim izvještajem knjigovodstva", `Knjigovodstvo ${fmtDate(knjigovodstvo.od)} – ${fmtDate(knjigovodstvo.do)} (${kmj} mj) · projekcija ${razdoblje} (${pmj} mj)`),
+      {
+        table: {
+          headerRows: 1,
+          widths: [26, "*", 78, 46, 70, 78, 46, 70, 58],
+          body: [
+            [zag(""), zag("Stavka"), zag("Knjigovodstvo", true), zag("% prihoda", true), zag("prosjek / mj", true), zag("Projekcija", true), zag("% prihoda", true), zag("prosjek / mj", true), zag("razlika", true)],
+            ...redovi,
+          ],
+        },
+        layout: { ...tablicaLayout(false), fillColor: (i) => (i === 0 ? C.dark : null) },
+        margin: [0, 0, 0, 12],
+      },
+      ({ ul: [
+        `Stope projekcije postavljene su iz ovog izvještaja: materijal bez ponude ${(stope.materijalPostotak ?? 0).toLocaleString("hr-HR")} % i podizvođači ${(stope.podizvodaciPostotak ?? 0).toLocaleString("hr-HR")} % prihoda; trošak razdoblja ${eur(stope.trosakRazdobljaMj)}, rad DE ${eur(stope.radDEMj)}, OTP troškovi ${eur(stope.fiksniMjesecno)} i OTP prihod ${eur(stope.otpPrihodMj)} mjesečno (ako nisu ručno promijenjene).`,
+        ...(sat ? [`Satnica proizvodnje ${(sat.punaSatnica || 0).toLocaleString("hr-HR", { maximumFractionDigits: 2 })} €/h na ${Math.round(sat.sati || 0).toLocaleString("hr-HR")} h; u projekciji se kao direktni rad koristi ${(sat.direktnoPoSatu || 0).toLocaleString("hr-HR", { maximumFractionDigits: 2 })} €/h, a ostatak satnice (indirektni rad, administracija, OTP) je u stavci J.`] : []),
+        "Razlika = promjena udjela u prihodu u postotnim bodovima (projekcija − knjigovodstvo). Raspored troškova (F+G, L+M) knjiženje je u nedovršenu proizvodnju i u projekciji se ne procjenjuje.",
+        "Projekcija polazi od narudžbi, rokova i plana proizvodnje u aplikaciji; knjigovodstvo su knjiženi podaci — razlike u materijalu i radu pokazuju gdje stope treba provjeriti.",
+      ].map((t) => ({ text: t, fontSize: 8.5, color: C.soft, margin: [0, 0, 0, 3] })), markerColor: C.accent }),
+    ];
+  })() : null;
 
   // ---------- 4. po projektima ----------
   const prikazMjeseci = rez.mjeseci.length <= 6;
@@ -342,9 +408,9 @@ export async function napraviPdfProjekcije({ rez, logo, tvrtka, razdoblje, danas
       { text: "Pretpostavke", fontSize: 11, bold: true, color: C.ink, margin: [0, 0, 0, 6] },
       lista([
         `Prihod se priznaje isporukom kupcu; ostvareno su otpremnice do ${fmtDate(danas)}, a projekcija preostalo prema rokovima isporuke.`,
-        `Trošak rada: ${trosakSata ? `${trosakSata.toLocaleString("hr-HR")} €/h` : "nije upisan (0 €)"} × sati; prošli dani prema prisutnosti radione, budući prema planu proizvodnje.`,
+        `Direktni rad: ${trosakSata ? `${trosakSata.toLocaleString("hr-HR", { maximumFractionDigits: 2 })} €/h` : "nije upisan (0 €)"} × sati; prošli dani prema prisutnosti radione, budući prema planu proizvodnje.`,
         `Materijal: udio iz kalkulacije ponude projekta; projekti bez ponude ${materijalPostotak.toLocaleString("hr-HR")} % prihoda. Prošli mjeseci prema zaprimljenim narudžbenicama.`,
-        ...(fiksniMjesecno ? [`Fiksni troškovi: ${eur(fiksniMjesecno)} mjesečno.`] : ["Fiksni troškovi (režije, uprava) nisu uključeni."]),
+        `Podizvođači ${(stope.podizvodaciPostotak ?? 0).toLocaleString("hr-HR")} % prihoda; trošak razdoblja ${eur(stope.trosakRazdobljaMj)}, rad DE ${eur(stope.radDEMj)}, OTP ${eur(fiksniMjesecno)} i OTP prihod ${eur(stope.otpPrihodMj)} mjesečno${knjigovodstvo?.do ? ` — prosjek iz izvještaja knjigovodstva do ${fmtDate(knjigovodstvo.do)}` : ""}.`,
         "Iznosi su bez PDV-a.",
       ], C.soft),
     ],
@@ -358,6 +424,7 @@ export async function napraviPdfProjekcije({ rez, logo, tvrtka, razdoblje, danas
     { text: "", pageBreak: "after" },
     ...poMjesecima,
     { text: "", pageBreak: "after" },
+    ...(usporedba ? [...usporedba, { text: "", pageBreak: "after" }] : []),
     ...poProjektima,
     { text: "", pageBreak: "after" },
     ...zadnja,
