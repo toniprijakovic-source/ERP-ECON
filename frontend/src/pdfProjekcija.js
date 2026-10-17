@@ -126,7 +126,7 @@ export async function napraviPdfProjekcije({ rez, logo, tvrtka, razdoblje, danas
     ...(knjigovodstvo?.stavke?.prihod > 0 ? [`Za usporedbu, knjigovodstvo ${fmtDate(knjigovodstvo.od)} – ${fmtDate(knjigovodstvo.do)}: rezultat I ${pct((knjigovodstvo.stavke.rezultat1 / knjigovodstvo.stavke.prihod) * 100)}, rezultat II ${pct((knjigovodstvo.stavke.rezultat2 / knjigovodstvo.stavke.prihod) * 100)} prihoda.`] : []),
     ...(najjaci && najjaci.prihod > 0 && rez.redovi.length > 1 ? [`Najjači mjesec je ${nazivMjeseca(najjaci.mjesec)} s prihodom od ${eur(najjaci.prihod)}.`] : []),
     ...(top3.length ? [`${top3.length === 1 ? "Najveći kupac" : `${top3.length} najveća kupca`} (${top3.map((k) => k.naziv).join(", ")}) ${top3.length === 1 ? "čini" : "čine"} ${pct(udioTop3)} prihoda razdoblja.`] : []),
-    `Plan proizvodnje predviđa ${Math.round(u.sati).toLocaleString("hr-HR")} sati rada u razdoblju.`,
+    `Direktni rad: ${Math.round(u.sati).toLocaleString("hr-HR")} sati u razdoblju — ${rez.ljudi} ljudi u proizvodnji × radni dani × ${rez.satiDnevno} h (prošli dani prema kiosku).`,
     ...(rez.upozorenja.kasni.length ? [`${rez.upozorenja.kasni.length === 1 ? "Jedan projekt kasni" : `${rez.upozorenja.kasni.length} projekta kasne`} s isporukom (${eur(kasniIznos)} u tekućem mjesecu).`] : []),
     ...(rez.ponude.length ? [`Poslane ponude (${eur(ponudeIznos)}) nisu uključene u projekciju — prikazane su kao potencijal.`] : []),
   ];
@@ -408,7 +408,7 @@ export async function napraviPdfProjekcije({ rez, logo, tvrtka, razdoblje, danas
       { text: "Pretpostavke", fontSize: 11, bold: true, color: C.ink, margin: [0, 0, 0, 6] },
       lista([
         `Prihod se priznaje isporukom kupcu; ostvareno su otpremnice do ${fmtDate(danas)}, a projekcija preostalo prema rokovima isporuke.`,
-        `Direktni rad: ${trosakSata ? `${trosakSata.toLocaleString("hr-HR", { maximumFractionDigits: 2 })} €/h` : "nije upisan (0 €)"} × sati; prošli dani prema prisutnosti radione, budući prema planu proizvodnje.`,
+        `Direktni rad: ${trosakSata ? `${trosakSata.toLocaleString("hr-HR", { maximumFractionDigits: 2 })} €/h` : "nije upisan (0 €)"} × sati; prošli dani prema prisutnosti radione (kiosk), od sutra ${rez.ljudi} ljudi u proizvodnji × radni dani (pon–pet, bez praznika) × ${rez.satiDnevno} h.`,
         `Materijal: udio iz kalkulacije ponude projekta; projekti bez ponude ${materijalPostotak.toLocaleString("hr-HR")} % prihoda. Prošli mjeseci prema zaprimljenim narudžbenicama.`,
         `Podizvođači ${(stope.podizvodaciPostotak ?? 0).toLocaleString("hr-HR")} % prihoda; trošak razdoblja ${eur(stope.trosakRazdobljaMj)}, rad DE ${eur(stope.radDEMj)}, OTP ${eur(fiksniMjesecno)} i OTP prihod ${eur(stope.otpPrihodMj)} mjesečno${knjigovodstvo?.do ? ` — prosjek iz izvještaja knjigovodstva do ${fmtDate(knjigovodstvo.do)}` : ""}.`,
         "Iznosi su bez PDV-a.",

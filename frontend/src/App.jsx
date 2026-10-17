@@ -12708,31 +12708,24 @@ function vrijednostOtpremniceKupcu(o, db) {
     return a + (Number(st.kolicina) || 0) * (Number(nst?.cijena) || 0);
   }, 0);
 }
-// Odsutnosti za plan proizvodnje (isto kao /api/plan/podaci): neradni zapisi evidencije od jučer nadalje.
-const odsutnostiZaPlan = (evidencija, danas) => {
-  const odDatuma = new Date(new Date(danas).getTime() - 86400000).toISOString().slice(0, 10);
-  const vidjeno = new Set();
-  return (evidencija || []).flatMap((e) => {
-    const datum = (e.vrijemeDolaska || "").slice(0, 10);
-    const kljuc = `${e.zaposlenikId}|${datum}`;
-    if ((e.vrsta || "rad") === "rad" || !datum || datum < odDatuma || vidjeno.has(kljuc)) return [];
-    vidjeno.add(kljuc);
-    return [{ zaposlenikId: e.zaposlenikId, datum }];
-  });
-};
-// Sati iz plana proizvodnje po mjesecu (svi poslovi) i po projektu.
-const satiPlanaPoMjesecu = (plan) => {
-  const ukupno = new Map();
-  (plan?.poslovi || []).forEach((po) => (po.faze || []).forEach((f) => Object.entries(f.dani || {}).forEach(([datum, v]) => {
-    const m = datum.slice(0, 7);
-    ukupno.set(m, (ukupno.get(m) || 0) + (Number(v?.sati) || 0));
-  })));
-  return ukupno;
+// Direktni rad u projekciji = kapacitet proizvodnje: broj ljudi × radni dani (pon–pet bez praznika) × sati dnevno.
+// Zadani broj ljudi su aktivni zaposlenici radione (iste pozicije kao skupina "radiona" u evidenciji rada).
+const brojLjudiProizvodnje = (db) => (db.zaposlenici || []).filter((z) => z.status === "Aktivan" && grupaEvidencije(z, db.pozicijeZaposlenika) === "radiona").length;
+const radniDaniMjeseca = (mjesec, praznici, nakonDatuma = "") => {
+  const [g, m] = mjesec.split("-").map(Number);
+  const zadnji = new Date(Date.UTC(g, m, 0)).getUTCDate();
+  let n = 0;
+  for (let d = 1; d <= zadnji; d++) {
+    const datum = `${mjesec}-${String(d).padStart(2, "0")}`;
+    const dow = new Date(Date.UTC(g, m - 1, d)).getUTCDay();
+    if (dow >= 1 && dow <= 5 && datum > nakonDatuma && !jePraznik(datum, praznici)) n++;
+  }
+  return n;
 };
 
 // stope: podizvođači (% prihoda) te mjesečni prosjeci iz zadnjeg izvještaja knjigovodstva (trošak razdoblja, rad DE,
 // transport kad za mjesec nema narudžbe transporta, OTP troškovi i OTP prihod) — struktura kao račun dobiti i gubitka (A–N).
-function izracunProjekcije(db, { od, doMjeseca, danas, trosakSata, materijalPostotak, fiksniMjesecno, raspored = {}, satiPlana, stope = {} }) {
+function izracunProjekcije(db, { od, doMjeseca, danas, trosakSata, materijalPostotak, fiksniMjesecno, raspored = {}, stope = {} }) {
   const mjeseci = mjeseciIzmedu(od, doMjeseca);
   const tekuci = danas.slice(0, 7);
   const poMj = Object.fromEntries(mjeseci.map((m) => [m, { prihodOstvareno: 0, prihodProjekcija: 0, satiOstvareno: 0, satiPlan: 0, materijalOstvareno: 0, materijalProjekcija: 0, transport: 0, vanjski: 0 }]));
@@ -12763,9 +12756,15 @@ function izracunProjekcije(db, { od, doMjeseca, danas, trosakSata, materijalPost
     poMj[m].materijalOstvareno += (n.stavke || []).reduce((a, s) => a + efektivnaKolicinaMaterijala(s, (db.materijali || []).find((x) => x.id === s.materijalId)) * (s.cijenaPoJed != null ? Number(s.cijenaPoJed) || 0 : cijenaMat.get(s.materijalId) || 0), 0);
   });
   const radiona = satiRadionePoMjesecu(db);
+  // prošli dani: prisutnost radione s kioska; od sutra: kapacitet (ljudi × radni dani × sati dnevno)
+  const ljudi = Number(stope.brojLjudi) > 0 ? Number(stope.brojLjudi) : brojLjudiProizvodnje(db);
+  const satiDnevno = Number(stope.satiDnevno) > 0 ? Number(stope.satiDnevno) : 8;
   mjeseci.forEach((m) => {
     if (m <= tekuci) poMj[m].satiOstvareno = radiona.get(m) || 0;
-    if (m >= tekuci) poMj[m].satiPlan = satiPlana?.get(m) || 0;
+    if (m >= tekuci) {
+      poMj[m].radniDani = radniDaniMjeseca(m, db.praznici, m === tekuci ? danas : "");
+      poMj[m].satiPlan = ljudi * poMj[m].radniDani * satiDnevno;
+    }
   });
 
   // Projekcija po projektu
@@ -12890,7 +12889,7 @@ function izracunProjekcije(db, { od, doMjeseca, danas, trosakSata, materijalPost
     bezCijeneIsporuka: projekti.filter((r) => r.bezCijeneIsporuka && !r.rucno).map((r) => ({ sifra: r.sifra, naziv: r.naziv })),
     bezTroskaSata: !(sata > 0),
   };
-  return { mjeseci, redovi, ukupno, projekti: projekti.sort((a, b) => b.uRazdoblju - a.uRazdoblju || usporediPrirodno(a.sifra, b.sifra)), kupci, ponude, upozorenja, tekuci };
+  return { ljudi, satiDnevno, mjeseci, redovi, ukupno, projekti: projekti.sort((a, b) => b.uRazdoblju - a.uRazdoblju || usporediPrirodno(a.sifra, b.sifra)), kupci, ponude, upozorenja, tekuci };
 }
 
 // Stope projekcije iz izvještaja knjigovodstva: postotci prihoda (materijal, podizvođači), mjesečni prosjeci (trošak
@@ -12921,13 +12920,6 @@ function ProjekcijaView({ db, update, showToast, mozeMijenjati, mojId }) {
   const spremi = (promjena) => update("nedovrsenaProizvodnja", { ...np, ...promjena });
   const spremiPost = (promjena) => spremi({ projekcija: { ...post, ...promjena } });
 
-  const satiPlana = useMemo(() => {
-    try {
-      const normativ = { naziv: db.normativi?.naziv || "", grupe: (db.normativi?.grupe || []).map((g) => ({ kljuc: g.kljuc, naziv: g.naziv, ucinakKgH: Number(g.ucinakKgH) || 0, raspodjela: g.raspodjela || {} })) };
-      return satiPlanaPoMjesecu(izracunajPlanProizvodnje({ db, normativ, odsutnosti: odsutnostiZaPlan(db.evidencijaRada, danas), danas }));
-    } catch (e) { console.error("Plan proizvodnje za projekciju:", e); return null; }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [db.radniNalozi, db.projekti, db.zaposlenici, db.praznici, db.kapacitetiDana, db.planProizvodnje, db.normativi, db.evidencijaRada, danas]);
   const odM = od <= doM ? od : doM, doMj = od <= doM ? doM : od;
   // Zadnji izvještaj knjigovodstva (račun dobiti i gubitka A–N + satnica proizvodnje) — iz njega se postavljaju stope;
   // svaka stopa se može i ručno promijeniti.
@@ -12937,13 +12929,16 @@ function ProjekcijaView({ db, update, showToast, mozeMijenjati, mojId }) {
     trosakSataDirektni: post.trosakSataDirektni ?? np.trosakSata, materijalPostotak: post.materijalPostotak ?? 35,
     podizvodaciPostotak: post.podizvodaciPostotak ?? 0, trosakRazdobljaMj: post.trosakRazdobljaMj ?? 0, radDEMj: post.radDEMj ?? 0,
     transportMj: post.transportMj ?? 0, fiksniMjesecno: post.fiksniMjesecno ?? 0, otpPrihodMj: post.otpPrihodMj ?? 0,
+    brojLjudi: post.brojLjudi ?? null, satiDnevno: 8,
   };
+  const ljudiAuto = brojLjudiProizvodnje(db);
   const rez = useMemo(() => izracunProjekcije(db, {
-    od: odM, doMjeseca: doMj, danas, trosakSata: stope.trosakSataDirektni, materijalPostotak: stope.materijalPostotak, fiksniMjesecno: stope.fiksniMjesecno, raspored: post.raspored || {}, satiPlana, stope,
-  }), [db, odM, doMj, danas, satiPlana, post, np.trosakSata]); // eslint-disable-line react-hooks/exhaustive-deps
+    od: odM, doMjeseca: doMj, danas, trosakSata: stope.trosakSataDirektni, materijalPostotak: stope.materijalPostotak, fiksniMjesecno: stope.fiksniMjesecno, raspored: post.raspored || {}, stope,
+  }), [db, odM, doMj, danas, post, np.trosakSata]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const polja = [
     { k: "trosakSataDirektni", naziv: "Direktni rad", jed: "€/h", oznaka: "E" },
+    { k: "brojLjudi", naziv: "Ljudi u proizvodnji", jed: "ljudi", oznaka: "E" },
     { k: "materijalPostotak", naziv: "Materijal bez ponude", jed: "% prihoda", oznaka: "B" },
     { k: "podizvodaciPostotak", naziv: "Usluge podizvođača", jed: "% prihoda", oznaka: "C" },
     { k: "trosakRazdobljaMj", naziv: "Trošak razdoblja", jed: "€/mj", oznaka: "D" },
@@ -12955,7 +12950,7 @@ function ProjekcijaView({ db, update, showToast, mozeMijenjati, mojId }) {
   const spremiUnos = () => {
     const v = Number(String(unos.vrijednost).replace(",", "."));
     if (!(v >= 0)) { showToast("Upiši broj."); return; }
-    spremiPost({ [unos.polje]: v });
+    spremiPost({ [unos.polje]: unos.polje === "brojLjudi" && !(v > 0) ? null : v }); // broj ljudi 0 = opet automatski
     setUnos(null);
   };
   const ulazIzvjestaja = useRef(null);
@@ -13019,7 +13014,7 @@ function ProjekcijaView({ db, update, showToast, mozeMijenjati, mojId }) {
   const u = rez.upozorenja;
   const brojUpozorenja = u.kasni.length + u.bezVrijednosti.length + u.bezCijeneIsporuka.length + (u.bezTroskaSata ? 1 : 0) + (kb ? 0 : 1);
   const bojaRez = (v) => (v >= 0 ? "var(--green)" : "var(--rust)");
-  const fmtStopa = (p, v) => (p.jed.startsWith("%") ? `${(Number(v) || 0).toLocaleString("hr-HR")} %` : p.jed === "€/h" ? `${(Number(v) || 0).toLocaleString("hr-HR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €/h` : eur(v));
+  const fmtStopa = (p, v) => (p.jed === "ljudi" ? `${v ?? ljudiAuto} ljudi` : p.jed.startsWith("%") ? `${(Number(v) || 0).toLocaleString("hr-HR")} %` : p.jed === "€/h" ? `${(Number(v) || 0).toLocaleString("hr-HR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €/h` : eur(v));
   return (
     <div>
       <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 14 }}>
@@ -13072,11 +13067,11 @@ function ProjekcijaView({ db, update, showToast, mozeMijenjati, mojId }) {
                 ) : (
                   <div style={{ display: "flex", gap: 6, alignItems: "center", minHeight: 30 }}>
                     <strong className="f-mono" style={{ color: p.k === "trosakSataDirektni" && !(Number(v) > 0) ? "var(--rust)" : "var(--ink)" }}>{p.k === "trosakSataDirektni" && !(Number(v) > 0) ? "nije upisan" : fmtStopa(p, v)}</strong>
-                    {mozeMijenjati && <Btn size="sm" icon={Pencil} aria-label={`Promijeni ${p.naziv}`} onClick={() => setUnos({ polje: p.k, vrijednost: String(v ?? "") })} />}
+                    {mozeMijenjati && <Btn size="sm" icon={Pencil} aria-label={`Promijeni ${p.naziv}`} onClick={() => setUnos({ polje: p.k, vrijednost: String(v ?? (p.k === "brojLjudi" ? ljudiAuto : "")) })} />}
                   </div>
                 )}
                 <div style={{ fontSize: 10.5, color: izv != null && Math.abs((Number(v) || 0) - izv) > 0.001 ? "var(--steel)" : "var(--ink-faint)" }}>
-                  {izv != null ? (Math.abs((Number(v) || 0) - izv) > 0.001 ? `ručno · izvještaj ${fmtStopa(p, izv)}` : "iz izvještaja") : p.k === "trosakSataDirektni" ? (post.trosakSataDirektni == null ? "trošak sata iz Nedovršene proizvodnje" : "ručno") : "ručno"}
+                  {p.k === "brojLjudi" ? (v == null ? `aktivni u radioni · × radni dani × ${stope.satiDnevno} h` : `ručno · u radioni ${ljudiAuto} aktivnih`) : izv != null ? (Math.abs((Number(v) || 0) - izv) > 0.001 ? `ručno · izvještaj ${fmtStopa(p, izv)}` : "iz izvještaja") : p.k === "trosakSataDirektni" ? (post.trosakSataDirektni == null ? "trošak sata iz Nedovršene proizvodnje" : "ručno") : "ručno"}
                 </div>
               </div>
             );
@@ -13115,7 +13110,7 @@ function ProjekcijaView({ db, update, showToast, mozeMijenjati, mojId }) {
                 <td className="f-mono" style={TD}>{eur(r.materijal)}</td>
                 <td className="f-mono" style={TD}>{eur(r.podizvodaci)}</td>
                 <td className="f-mono" style={TD}>{eur(r.trosakRazdoblja)}</td>
-                <td className="f-mono" style={TD}>{eur(r.rad)}<div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{fmtSati0(r.sati)} h</div></td>
+                <td className="f-mono" style={TD}>{eur(r.rad)}<div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{fmtSati0(r.sati)} h{r.radniDani != null && <> · {rez.ljudi} × {r.radniDani} d</>}</div></td>
                 <td className="f-mono" style={TD}>{eur(r.radDE)}</td>
                 <td className="f-mono" style={TD}>{eur(r.transport)}{r.transportProcjena && <div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>prosjek</div>}</td>
                 <td className="f-mono" style={{ ...TD, fontWeight: 700, color: bojaRez(r.rezultat1) }}>{eur(r.rezultat1)}</td>
@@ -13165,7 +13160,7 @@ function ProjekcijaView({ db, update, showToast, mozeMijenjati, mojId }) {
         <strong>Prihod</strong>: ugovoreno (narudžbe kupca, bez narudžbe vrijednost projekta, kupaonice masa × €/kg normativa) minus isporučeno kupcu; preostalo na rok projekta, dodatne narudžbe po udjelu sati, kupaonice po rasporedu isporuka, ili po ručnom rasporedu. Prošli mjeseci: isporučeno (otpremnice kupcu).
         {" "}<strong>B · Materijal</strong>: projicirani prihod × udio materijala iz kalkulacije ponude (bez ponude: postotak); prošli mjeseci zaprimljene narudžbenice.
         {" "}<strong>C · Podizvođači</strong>: postotak prihoda + vanjski troškovi projekta. <strong>D · Trošak razdoblja</strong>, <strong>Rad DE</strong>, <strong>J · OTP troškovi</strong> i <strong>K · OTP prihod</strong>: mjesečni prosjek iz zadnjeg izvještaja knjigovodstva.
-        {" "}<strong>E · Direktni rad</strong>: sati × trošak direktnog rada po satu (satnica proizvodnje) — prošli dani prisutnost radione s kioska, dalje plan proizvodnje.
+        {" "}<strong>E · Direktni rad</strong>: sati × trošak direktnog rada po satu (satnica proizvodnje) — prošli dani prisutnost radione s kioska, od sutra broj ljudi u proizvodnji × radni dani (pon–pet, bez praznika) × 8 h.
         {" "}<strong>H · Transport</strong>: narudžbe za transport po datumu utovara; mjesec bez narudžbe dobiva prosjek iz izvještaja.
         {" "}<strong>Rezultat I</strong> = A − B − C − D − E − H; <strong>Rezultat II</strong> = Rezultat I − J + K.
       </p>
