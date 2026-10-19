@@ -1565,7 +1565,8 @@ const KARTICE_MODULA = {
 // admin za tu poziciju eksplicitno postavio false. Ista logika kao dozvolaZaKarticu u server.js.
 const dozvolaZaKarticu = (pozicija, modulKey, karticaKey) => {
   const eksplicitno = pozicija?.karticeDozvole?.[modulKey]?.[karticaKey];
-  return { pristup: eksplicitno?.pristup !== false, izmjene: eksplicitno?.izmjene !== false };
+  // grupe: popis grupa zaposlenika čiji se podaci vide u kartici (Evidencija rada: radiona, praktikant, ostalo, kooperant); null = sve
+  return { pristup: eksplicitno?.pristup !== false, izmjene: eksplicitno?.izmjene !== false, grupe: Array.isArray(eksplicitno?.grupe) ? eksplicitno.grupe : null };
 };
 
 // Popis kartica modula na koje pozicija ima pristup (za skrivanje tabova u stranicama).
@@ -13801,14 +13802,18 @@ function MjesecOdabir({ value, onChange, style }) {
 }
 
 /* ============================== EVIDENCIJA RADA — MJESEČNA MREŽA ============================== */
-function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true }) {
+function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true, dozvoljeneGrupe = null }) {
+  // Pozicija može biti ograničena na neke grupe (radiona, praktikant, ostalo = tehnički ured, kooperant): ostale se uopće ne prikazuju.
+  const smijeGrupu = (g) => !dozvoljeneGrupe || dozvoljeneGrupe.includes(g);
   const [mjesec, setMjesec] = useState(todayISO().slice(0, 7));
   const [urediCeliju, setUrediCeliju] = useState(null); // { zaposlenikId, datum, vrsta, od, do, postojeciId }
 
   // Automatska odjava zaostalih smjena sad se pokreće sama na backendu (vidi provjeriAutoOdjavu u
   // server.js) — više ne ovisi o tome je li itko baš otvorio ovaj tab na vrijeme.
 
-  const { neprijavljeni, neodjavljeni } = useMemo(() => upozorenjaEvidencije(db), [db]);
+  const upozorenja = useMemo(() => upozorenjaEvidencije(db), [db]);
+  const neprijavljeni = upozorenja.neprijavljeni.filter((z) => smijeGrupu(grupaEvidencije(z, db.pozicijeZaposlenika)));
+  const neodjavljeni = upozorenja.neodjavljeni.filter((e) => { const z = db.zaposlenici.find((zz) => zz.id === e.zaposlenikId); return z && smijeGrupu(grupaEvidencije(z, db.pozicijeZaposlenika)); });
   const kioskUrl = `${window.location.origin}${window.location.pathname}?kiosk=1`;
   const [printOtvoren, setPrintOtvoren] = useState(false);
 
@@ -13838,10 +13843,10 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true })
   const aktivniSort = useMemo(() => db.zaposlenici
     .filter((z) => z.status === "Aktivan")
     .sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")), [db.zaposlenici]);
-  const radionaSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "radiona"), [aktivniSort, db.pozicijeZaposlenika]);
-  const praktikantiSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "praktikant"), [aktivniSort, db.pozicijeZaposlenika]);
-  const tehnickiSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "ostalo"), [aktivniSort, db.pozicijeZaposlenika]);
-  const kooperantiSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "kooperant"), [aktivniSort, db.pozicijeZaposlenika]);
+  const radionaSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "radiona" && smijeGrupu("radiona")), [aktivniSort, db.pozicijeZaposlenika, dozvoljeneGrupe]);
+  const praktikantiSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "praktikant" && smijeGrupu("praktikant")), [aktivniSort, db.pozicijeZaposlenika, dozvoljeneGrupe]);
+  const tehnickiSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "ostalo" && smijeGrupu("ostalo")), [aktivniSort, db.pozicijeZaposlenika, dozvoljeneGrupe]);
+  const kooperantiSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "kooperant" && smijeGrupu("kooperant")), [aktivniSort, db.pozicijeZaposlenika, dozvoljeneGrupe]);
 
   // Mjesečni zbrojevi za desne stupce mreže (i ispis) — isti izračun kao obračun plaće.
   const sazetci = useMemo(() => new Map(aktivniSort.map((z) => [z.id, zbrojeviEvidencije(z, mjesec, db)])), [aktivniSort, mjesec, db]);
@@ -14052,17 +14057,26 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true })
         );
         return (
           <>
-            <div className="label" style={{ marginBottom: 6 }}>Radiona ({radionaSort.length})</div>
-            {radionaSort.length === 0 ? <EmptyState text="Nema aktivnih zaposlenika u radioni." /> : <TablicaEvidencije lista={radionaSort} />}
+            {dozvoljeneGrupe && <p style={{ fontSize: 11.5, color: "var(--ink-faint)", margin: "0 0 10px" }}>Tvoja pozicija vidi samo: {[["radiona", "Radiona"], ["praktikant", "Praktikanti"], ["ostalo", "Tehnički ured i administracija"], ["kooperant", "Kooperanti"]].filter(([g]) => smijeGrupu(g)).map(([, n]) => n).join(", ") || "ništa"}.</p>}
+            {smijeGrupu("radiona") && (<>
+              <div className="label" style={{ marginBottom: 6 }}>Radiona ({radionaSort.length})</div>
+              {radionaSort.length === 0 ? <EmptyState text="Nema aktivnih zaposlenika u radioni." /> : <TablicaEvidencije lista={radionaSort} />}
+            </>)}
 
-            <div className="label" style={{ marginTop: 20, marginBottom: 6 }}>Praktikanti ({praktikantiSort.length})</div>
-            {praktikantiSort.length === 0 ? <EmptyState text="Nema aktivnih praktikanata." /> : <TablicaEvidencije lista={praktikantiSort} />}
+            {smijeGrupu("praktikant") && (<>
+              <div className="label" style={{ marginTop: 20, marginBottom: 6 }}>Praktikanti ({praktikantiSort.length})</div>
+              {praktikantiSort.length === 0 ? <EmptyState text="Nema aktivnih praktikanata." /> : <TablicaEvidencije lista={praktikantiSort} />}
+            </>)}
 
-            <div className="label" style={{ marginTop: 20, marginBottom: 6 }}>Tehnički ured i administracija ({tehnickiSort.length})</div>
-            {tehnickiSort.length === 0 ? <EmptyState text="Nema aktivnih zaposlenika u tehničkom uredu." /> : <TablicaEvidencije lista={tehnickiSort} />}
+            {smijeGrupu("ostalo") && (<>
+              <div className="label" style={{ marginTop: 20, marginBottom: 6 }}>Tehnički ured i administracija ({tehnickiSort.length})</div>
+              {tehnickiSort.length === 0 ? <EmptyState text="Nema aktivnih zaposlenika u tehničkom uredu." /> : <TablicaEvidencije lista={tehnickiSort} />}
+            </>)}
 
-            <div className="label" style={{ marginTop: 20, marginBottom: 6 }}>Kooperanti ({kooperantiSort.length})</div>
-            {kooperantiSort.length === 0 ? <EmptyState text="Nema aktivnih kooperanata." /> : <TablicaEvidencije lista={kooperantiSort} />}
+            {smijeGrupu("kooperant") && (<>
+              <div className="label" style={{ marginTop: 20, marginBottom: 6 }}>Kooperanti ({kooperantiSort.length})</div>
+              {kooperantiSort.length === 0 ? <EmptyState text="Nema aktivnih kooperanata." /> : <TablicaEvidencije lista={kooperantiSort} />}
+            </>)}
           </>
         );
       })()}
@@ -15405,7 +15419,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
         </>
       )}
 
-      {tab === "evidencija" && <EvidencijaTab db={db} update={update} patchEvidencija={patchEvidencija} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "evidencija").izmjene} />}
+      {tab === "evidencija" && <EvidencijaTab db={db} update={update} patchEvidencija={patchEvidencija} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "evidencija").izmjene} dozvoljeneGrupe={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "evidencija").grupe} />}
 
       {tab === "obracun" && <ObracunPlacaTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "obracun").izmjene} />}
       {tab === "satinalozi" && <SatiPoNalozimaTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "satinalozi").izmjene} />}
@@ -15521,16 +15535,37 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
                     {otvoren && (
                       <div style={{ marginLeft: 25, marginTop: 8, display: "grid", gap: 6 }}>
                         {(KARTICE_MODULA[m.key]?.kartice || []).map((k) => {
-                          const { pristup, izmjene } = dozvolaZaKarticu(pozForm, m.key, k.key);
+                          const { pristup, izmjene, grupe } = dozvolaZaKarticu(pozForm, m.key, k.key);
+                          // Evidencija rada: pozicija može vidjeti samo neke grupe zaposlenika (po zadanom sve)
+                          const ogranicivaGrupe = m.key === "zaposlenici" && k.key === "evidencija";
+                          const GRUPE_EVIDENCIJE = [["radiona", "Radiona"], ["praktikant", "Praktikanti"], ["ostalo", "Tehnički ured i administracija"], ["kooperant", "Kooperanti"]];
+                          const promijeniGrupu = (g, uklj) => {
+                            const trenutne = grupe || GRUPE_EVIDENCIJE.map(([x]) => x);
+                            const nove = uklj ? [...new Set([...trenutne, g])] : trenutne.filter((x) => x !== g);
+                            if (nove.length === 0) return; // barem jedna grupa mora ostati
+                            postaviKarticu(m.key, k.key, "grupe", nove.length === GRUPE_EVIDENCIJE.length ? undefined : nove);
+                          };
                           return (
-                            <div key={k.key} style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 12 }}>
-                              <span style={{ flex: 1, color: "var(--ink-soft)" }}>{k.naziv}</span>
-                              <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
-                                <input type="checkbox" checked={pristup} onChange={(e) => postaviKarticu(m.key, k.key, "pristup", e.target.checked)} /> Pristup
-                              </label>
-                              <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: pristup ? "pointer" : "not-allowed", opacity: pristup ? 1 : 0.4 }}>
-                                <input type="checkbox" checked={izmjene} disabled={!pristup} onChange={(e) => postaviKarticu(m.key, k.key, "izmjene", e.target.checked)} /> Izmjene
-                              </label>
+                            <div key={k.key}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 12 }}>
+                                <span style={{ flex: 1, color: "var(--ink-soft)" }}>{k.naziv}</span>
+                                <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
+                                  <input type="checkbox" checked={pristup} onChange={(e) => postaviKarticu(m.key, k.key, "pristup", e.target.checked)} /> Pristup
+                                </label>
+                                <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: pristup ? "pointer" : "not-allowed", opacity: pristup ? 1 : 0.4 }}>
+                                  <input type="checkbox" checked={izmjene} disabled={!pristup} onChange={(e) => postaviKarticu(m.key, k.key, "izmjene", e.target.checked)} /> Izmjene
+                                </label>
+                              </div>
+                              {ogranicivaGrupe && pristup && (
+                                <div style={{ marginTop: 4, marginLeft: 12, display: "flex", flexWrap: "wrap", gap: 14, fontSize: 11.5, color: "var(--ink-soft)" }}>
+                                  <span>Vidi grupe:</span>
+                                  {GRUPE_EVIDENCIJE.map(([g, naziv]) => (
+                                    <label key={g} style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
+                                      <input type="checkbox" checked={!grupe || grupe.includes(g)} onChange={(e) => promijeniGrupu(g, e.target.checked)} /> {naziv}
+                                    </label>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
