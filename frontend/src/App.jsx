@@ -9297,7 +9297,7 @@ function SlanjePonudeModal({ ponuda, kupac, db, update, showToast, posiljatelj, 
         datumTekst: fmtDate(ponuda.datum), vrijediDoTekst: fmtDate(addDays(ponuda.datum, 30)),
         pozdrav: `${ponuda.kontaktOsobaTitula === "frau" ? "Sehr geehrte Frau" : "Sehr geehrter Herr"} ${ponuda.kontaktOsoba || "___"},`,
       });
-      const imePdfa = `${jezik === "de" ? "Angebot" : "Ponuda"}_${ponuda.broj}.pdf`;
+      const imePdfa = `${ponuda.broj}.pdf`;
       preuzmiDatoteku(napraviEml({ primatelji: adrese, naslov, tekst, pdf, imePdfa }), imePdfa.replace(/\.pdf$/, ".eml").replace(/[^A-Za-z0-9._-]+/g, "_"));
       // adresa se pamti uz ponudu, da je sljedeći put ne treba ponovno upisivati
       update("ponude", db.ponude.map((x) => (x.id === ponuda.id ? { ...x, emailKupca: adrese.join(", "), emailPripremljen: todayISO() } : x)));
