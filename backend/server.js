@@ -1289,7 +1289,8 @@ async function podijeliZaboravljeneProgrameRezanja() {
           trajanjeMin: preostaloMin, radniNalogId: pr.radniNalogId, napomena: pr.napomena, status: "Na čekanju",
           stavkeMaterijala: noveStavke, operaterId: "", pokrenuoId: null, zavrsioId: null, segmentPocetak: null, odradjenoMin: 0, autoPodijeljen: true,
         });
-        nova = [...nova, dodani[dodani.length - 1]];
+        // nastavak ostaje na mjestu programa koji je podijeljen (odmah iza njega), ne ide na kraj reda
+        nova.splice(nova.findIndex((x) => x.id === pr.id) + 1, 0, dodani[dodani.length - 1]);
       }
       promijenjeno = true;
       console.log(`Program rezanja ${pr.brojPrograma} automatski ${preostaloMin > 0 ? "podijeljen" : "zatvoren"} nakon odjave operatera ${operaterId} (${odlazakISO}).`);

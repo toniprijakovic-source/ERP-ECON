@@ -6646,12 +6646,12 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija, refetchKljuc }) 
       stavkeMaterijala: noveStavke, operaterId: "", pokrenuoId: null, zavrsioId: null,
       segmentPocetak: null, odradjenoMin: 0,
     };
-    update("programiRezanja", [
-      ...db.programiRezanja.map((p) => (p.id === programId
-        ? { ...p, status: "Završeno", zavrsetak: sada, odradjenoMin: konacnoOdradjenoMin, segmentPocetak: null, zavrsioId: p.operaterId || p.zavrsioId || null, stavkeMaterijala: zatvoreneStavke }
-        : p)),
-      noviProgram,
-    ]);
+    // Nastavak ulazi odmah iza programa koji se dijeli (a taj prelazi među završene), pa ostaje na istom mjestu u redoslijedu rezanja.
+    const poslijeDijeljenja = db.programiRezanja.map((p) => (p.id === programId
+      ? { ...p, status: "Završeno", zavrsetak: sada, odradjenoMin: konacnoOdradjenoMin, segmentPocetak: null, zavrsioId: p.operaterId || p.zavrsioId || null, stavkeMaterijala: zatvoreneStavke }
+      : p));
+    poslijeDijeljenja.splice(poslijeDijeljenja.findIndex((p) => p.id === programId) + 1, 0, noviProgram);
+    update("programiRezanja", poslijeDijeljenja);
     if (materijaliPromijenjeni) update("materijali", materijali);
     showToast(`Program podijeljen — nastavak ${noviBroj} dodan u red čekanja.`);
   };
