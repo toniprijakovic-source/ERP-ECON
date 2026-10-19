@@ -9650,7 +9650,8 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
     lista.sort(imaRucniPoredak ? (a, b) => (a.poredak ?? Infinity) - (b.poredak ?? Infinity) : (a, b) => usporediPrirodno(a.sifra, b.sifra));
     return lista;
   }, [db.projekti, imaRucniPoredak]);
-  const projektiZavrseni = useMemo(() => [...db.projekti].filter((p) => p.status === "Završen").sort((a, b) => (b.rokZavrsetka || "").localeCompare(a.rokZavrsetka || "")), [db.projekti]);
+  // Završeni projekti imaju isti redoslijed kao aktualni: ručni poredak ako postoji, inače po šifri.
+  const projektiZavrseni = useMemo(() => [...db.projekti].filter((p) => p.status === "Završen").sort(imaRucniPoredak ? (a, b) => (a.poredak ?? Infinity) - (b.poredak ?? Infinity) || usporediPrirodno(a.sifra, b.sifra) : (a, b) => usporediPrirodno(a.sifra, b.sifra)), [db.projekti, imaRucniPoredak]);
   const ispisiTablicu = (naslov, zaglavlja, redovi) => ispisiTablicuPdf({ naslov, zaglavlja, redovi, nazivTvrtke: db.postavkeTvrtke?.naziv, showToast });
   const ispisiProjekte = (lista, naslov) => {
     const imeVoditelja = (id) => { const v = db.zaposlenici.find((z) => z.id === id); return v ? `${v.prezime} ${v.ime}` : ""; };
