@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import logoEcon from "./assets/logo-econ.jpg";
 import QRCode from "qrcode";
-import { napraviPdfUpitaMaterijala, napraviEml, preuzmiDatoteku, potpisEmail } from "./pdfNabave";
+import { napraviPdfUpitaMaterijala, napraviPdfPonude, napraviEml, preuzmiDatoteku, potpisEmail } from "./pdfNabave";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
@@ -9133,11 +9133,9 @@ Zahlung: 14 Kalendertage nach Lieferung
 
 Angebot 30 Tage gültig.`;
 
-function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
-  const [jezik, setJezik] = useState("hr");
-  const L = PRIJEVODI_PONUDE[jezik];
+// Cijene i zbrojevi ponude za ispis i PDF u privitku e-pošte (jedna formula, da oba uvijek pokazuju isto).
+const racunajPrikazPonude = (ponuda, db) => {
   const t = db.postavkeTvrtke || {};
-  const izradio = db.zaposlenici.find((z) => z.id === ponuda.izradioId);
   const calc = izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala);
   const pdvStopa = Number(t.pdvStopa ?? 25);
   // Cijena po stavci (sa maržom) — ista formula kao u Rekapitulaciji; osnovica ponude je zbroj
@@ -9148,7 +9146,15 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
   }));
   const osnovica = cijenePozicija.reduce((s, r) => s + r.cijena, 0);
   const pdvIznos = osnovica * (pdvStopa / 100);
-  const ukupno = osnovica + pdvIznos;
+  return { pdvStopa, cijenePozicija, osnovica, pdvIznos, ukupno: osnovica + pdvIznos };
+};
+
+function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
+  const [jezik, setJezik] = useState("hr");
+  const L = PRIJEVODI_PONUDE[jezik];
+  const t = db.postavkeTvrtke || {};
+  const izradio = db.zaposlenici.find((z) => z.id === ponuda.izradioId);
+  const { pdvStopa, cijenePozicija, osnovica, pdvIznos, ukupno } = racunajPrikazPonude(ponuda, db);
 
   return (
     <Modal wide title={`Pregled za ispis — Ponuda ${ponuda.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(ponuda.broj)}>Ispis / Spremi kao PDF</Btn></>}>
@@ -9258,6 +9264,67 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
           <strong>{L.oib}</strong>: {t.oib} | <strong>MB</strong>: {t.mb} | <strong>VAT-ID:</strong> {t.vatId} | <strong>IBAN:</strong> {t.iban} | <strong>SWIFT:</strong> {t.swift} | {L.upisano} {t.sud}, <strong>{L.mbs}:</strong> {t.mbs} | <strong>{L.uprava}:</strong> {t.uprava}
         </div>
       </div>
+    </Modal>
+  );
+}
+
+// E-mail kupcu s PDF-om ponude u privitku: priprema se neposlana poruka (.eml) koju Outlook otvara za provjeru i slanje.
+function SlanjePonudeModal({ ponuda, kupac, db, update, showToast, posiljatelj, onClose }) {
+  const [jezik, setJezik] = useState("de");
+  const [adresa, setAdresa] = useState(ponuda.emailKupca || kupac?.email || "");
+  const pozdravDe = ponuda.kontaktOsoba ? `${ponuda.kontaktOsobaTitula === "frau" ? "Sehr geehrte Frau" : "Sehr geehrter Herr"} ${ponuda.kontaktOsoba},` : "Sehr geehrte Damen und Herren,";
+  const naslovZa = (j) => `${j === "de" ? "Angebot" : "Ponuda"} - ${ponuda.broj}`;
+  const tekstZa = (j) => {
+    const potpis = potpisEmail(posiljatelj, db.postavkeTvrtke);
+    if (j === "de") return `${pozdravDe}\n\nvielen Dank für Ihr Interesse an einer Zusammenarbeit.\n\nIm Anhang sende ich Ihnen unser Angebot für die Arbeiten gemäß Ihrer Anfrage.\n\nBitte bestätigen Sie mir kurz den Erhalt des Angebots und teilen Sie mir mit, wann wir mit Ihrer Rückmeldung rechnen dürfen.\n\n${potpis}`;
+    return `Poštovani,\n\nzahvaljujemo na interesu za suradnju.\n\nU privitku Vam šaljem našu ponudu za radove prema Vašem upitu.\n\nMolim Vas da mi kratko potvrdite primitak ponude i javite kada možemo očekivati Vaš odgovor.\n\n${potpis}`;
+  };
+  const [naslov, setNaslov] = useState(naslovZa("de"));
+  const [tekst, setTekst] = useState(tekstZa("de"));
+  const [radim, setRadim] = useState(false);
+  const promijeniJezik = (j) => { setJezik(j); setNaslov(naslovZa(j)); setTekst(tekstZa(j)); };
+  const adrese = adresa.split(/[;,\s]+/).filter((x) => x.includes("@"));
+  const pripremi = async () => {
+    if (!adrese.length) { showToast("Upiši e-mail adresu kupca."); return; }
+    setRadim(true);
+    try {
+      const L = PRIJEVODI_PONUDE[jezik];
+      const { pdvStopa, cijenePozicija, osnovica, pdvIznos, ukupno } = racunajPrikazPonude(ponuda, db);
+      const redci = cijenePozicija.map(({ p, cijena }) => ({ oznaka: p.oznaka, naziv: p.naziv, opis: p.opis, kolicina: p.kolicina, jedCijenaTekst: fmtCurDec(cijena / (Number(p.kolicina) || 1)), ukupnoTekst: fmtCurDec(cijena) }));
+      const pdf = await napraviPdfPonude({
+        ponuda, kupac, tvrtka: db.postavkeTvrtke, izradio: db.zaposlenici.find((z) => z.id === ponuda.izradioId), redci,
+        osnovicaTekst: fmtCurDec(osnovica), pdvTekst: fmtCurDec(pdvIznos), ukupnoTekst: fmtCurDec(ukupno), pdvStopa, jezik, L,
+        datumTekst: fmtDate(ponuda.datum), vrijediDoTekst: fmtDate(addDays(ponuda.datum, 30)),
+        pozdrav: `${ponuda.kontaktOsobaTitula === "frau" ? "Sehr geehrte Frau" : "Sehr geehrter Herr"} ${ponuda.kontaktOsoba || "___"},`,
+      });
+      const imePdfa = `${jezik === "de" ? "Angebot" : "Ponuda"}_${ponuda.broj}.pdf`;
+      preuzmiDatoteku(napraviEml({ primatelji: adrese, naslov, tekst, pdf, imePdfa }), imePdfa.replace(/\.pdf$/, ".eml").replace(/[^A-Za-z0-9._-]+/g, "_"));
+      // adresa se pamti uz ponudu, da je sljedeći put ne treba ponovno upisivati
+      update("ponude", db.ponude.map((x) => (x.id === ponuda.id ? { ...x, emailKupca: adrese.join(", "), emailPripremljen: todayISO() } : x)));
+      showToast("Poruka je pripremljena. Otvori preuzetu datoteku (dvoklik), provjeri i klikni Pošalji u Outlooku.");
+      onClose();
+    } catch (e) {
+      console.error(e);
+      showToast("Greška pri izradi PDF-a ili poruke.");
+    } finally {
+      setRadim(false);
+    }
+  };
+  return (
+    <Modal wide title={`Pošalji ponudu ${ponuda.broj} kupcu`} onClose={onClose}
+      footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Mail} onClick={pripremi} disabled={radim}>{radim ? "Pripremam…" : "Pripremi poruku u Outlooku"}</Btn></>}>
+      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 0 }}>Priprema se poruka s priloženim PDF-om ponude. Preuzetu datoteku (.eml) otvori dvoklikom — otvara se u Outlooku kao neposlana poruka koju provjeriš i pošalješ. {ponuda.emailPripremljen && <strong style={{ color: "var(--green)" }}>Zadnja priprema: {fmtDate(ponuda.emailPripremljen)}.</strong>}</p>
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
+        <Field label="E-mail adresa kupca (više adresa odvoji zarezom)"><input className="input" type="text" value={adresa} onChange={(e) => setAdresa(e.target.value)} placeholder={kupac?.email || "ime@tvrtka.de"} /></Field>
+        <Field label="Jezik PDF-a i poruke">
+          <div style={{ display: "flex", gap: 6 }}>
+            <Btn size="sm" variant={jezik === "de" ? "primary" : "ghost"} onClick={() => promijeniJezik("de")}>Deutsch</Btn>
+            <Btn size="sm" variant={jezik === "hr" ? "primary" : "ghost"} onClick={() => promijeniJezik("hr")}>Hrvatski</Btn>
+          </div>
+        </Field>
+      </div>
+      <Field label="Naslov poruke"><input className="input" value={naslov} onChange={(e) => setNaslov(e.target.value)} /></Field>
+      <Field label="Tekst poruke (potpis je prilagođen osobi koja šalje — ime, GSM i e-mail iz Zaposlenika)"><textarea className="textarea" rows={16} value={tekst} onChange={(e) => setTekst(e.target.value)} /></Field>
     </Modal>
   );
 }
@@ -9687,6 +9754,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [otvoriProjektId]);
   const [printPonuda, setPrintPonuda] = useState(null);
+  const [slanjePonude, setSlanjePonude] = useState(null); // ponuda za koju se priprema e-mail kupcu
 
   const emptyLaser = () => ({ id: null, broj: sljedeciBroj(db.ponudeLasera, "broj", "LAS-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", cjenik: prazniCjenikLasera(), stavke: [], savijanje: { brojPregiba: 0, minPoKom: 0 }, ostaleStavke: [], projektId: null });
   const [laserForm, setLaserForm] = useState(emptyLaser());
@@ -10078,6 +10146,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
             { key: "ukupno", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCurDec(izracunPonude(r, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala).cijenaKonacna)}</span> },
             { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
             { key: "pdf", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrintPonuda(r)}>PDF ponude</Btn> },
+            { key: "email", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Mail} onClick={() => setSlanjePonude(r)}>E-mail kupcu</Btn> },
             { key: "kopiraj", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Copy} onClick={() => kopirajPonudu(r)}>Kopiraj</Btn> },
             {
               key: "akcija", label: "", render: (r) =>
@@ -10239,6 +10308,9 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
                 </div>
               </Field>
             </div>
+            <Field label="E-mail kupca za slanje ponude">
+              <input className="input" type="text" placeholder={db.kupci.find((k) => k.id === ponForm.kupacId)?.email || "ime@tvrtka.de — na tu adresu se šalje ponuda (gumb „E-mail kupcu“ u popisu ponuda)"} value={ponForm.emailKupca || ""} onChange={(e) => setPonForm({ ...ponForm, emailKupca: e.target.value })} />
+            </Field>
 
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 6 }}>
               <label className="label" style={{ marginBottom: 0 }}>Pozicije i kalkulacija sati</label>
@@ -10320,6 +10392,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
           </Modal>
         );
       })()}
+      {slanjePonude && <SlanjePonudeModal ponuda={db.ponude.find((x) => x.id === slanjePonude.id) || slanjePonude} kupac={db.kupci.find((k) => k.id === slanjePonude.kupacId)} db={db} update={update} showToast={showToast} posiljatelj={db.zaposlenici.find((z) => z.id === mojId)} onClose={() => setSlanjePonude(null)} />}
       {printPonuda && <PonudaPrintModal ponuda={printPonuda} kupac={db.kupci.find((k) => k.id === printPonuda.kupacId)} db={db} onClose={() => setPrintPonuda(null)} />}
       {modal === "laser" && <PonudaLaseraModal form={laserForm} setForm={setLaserForm} db={db} onSave={saveLaser} onClose={() => setModal(null)} />}
       {printLaser && <PonudaLaseraPrintModal ponuda={printLaser} kupac={db.kupci.find((k) => k.id === printLaser.kupacId)} db={db} onClose={() => setPrintLaser(null)} />}

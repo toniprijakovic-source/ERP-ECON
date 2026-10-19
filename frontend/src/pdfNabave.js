@@ -98,6 +98,100 @@ export async function napraviPdfUpitaMaterijala({ broj, datum, izradioIme, stavk
   return buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
 }
 
+// PDF ponude kupcu (vektorski tekst) — isti sadržaj kao ispis ponude u aplikaciji (hrvatski ili njemački), za privitak e-pošte.
+// L = prijevodi (PRIJEVODI_PONUDE), brojevi su već formatirani u aplikaciji da PDF i ispis uvijek pokazuju isto.
+export async function napraviPdfPonude({ ponuda, kupac, tvrtka, izradio, redci, osnovicaTekst, pdvTekst, ukupnoTekst, pdvStopa, jezik, L, datumTekst, vrijediDoTekst, pozdrav }) {
+  const pdfMake = await ucitajPdfMake();
+  const t = tvrtka || {};
+  const siva = "#555";
+  const de = jezik === "de";
+  const podnozje = () => ({
+    margin: [36, 0, 36, 16],
+    stack: [
+      { canvas: [{ type: "line", x1: 0, y1: 0, x2: 523, y2: 0, lineWidth: 0.6, lineColor: "#999" }] },
+      {
+        margin: [0, 4, 0, 0], fontSize: 7, color: "#333", lineHeight: 1.25,
+        text: [
+          { text: `${L.oib}: `, bold: true }, `${t.oib || ""} | `, { text: "MB: ", bold: true }, `${t.mb || ""} | `, { text: "VAT-ID: ", bold: true }, `${t.vatId || ""} | `,
+          { text: "IBAN: ", bold: true }, `${t.iban || ""} | `, { text: "SWIFT: ", bold: true }, `${t.swift || ""} | ${L.upisano} ${t.sud || ""}, `, { text: `${L.mbs}: `, bold: true }, `${t.mbs || ""} | `, { text: `${L.uprava}: `, bold: true }, `${t.uprava || ""}`,
+        ],
+      },
+    ],
+  });
+  const zaglavljeCelije = [L.poz, L.naziv, L.kom, L.jedCijena, L.ukupnaCijena].map((x, i) => ({ text: x, bold: true, fillColor: "#f0f0f0", fontSize: 8.5, alignment: i >= 2 ? "right" : "left" }));
+  const redoviTablice = (redci || []).map((r) => [
+    { text: String(r.oznaka ?? ""), fontSize: 9 },
+    { stack: [{ text: r.naziv || "", fontSize: 9 }, ...(r.opis ? [{ text: r.opis, fontSize: 8, color: siva, margin: [0, 2, 0, 0] }] : [])] },
+    { text: String(r.kolicina ?? ""), alignment: "right", fontSize: 9 },
+    { text: r.jedCijenaTekst, alignment: "right", fontSize: 9 },
+    { text: r.ukupnoTekst, alignment: "right", fontSize: 9 },
+  ]);
+  const zbrojevi = de
+    ? [[{ text: L.ukupno, bold: true, fontSize: 11 }, { text: osnovicaTekst, bold: true, alignment: "right", fontSize: 12 }]]
+    : [
+      [{ text: L.osnovica, color: siva }, { text: osnovicaTekst, bold: true, alignment: "right" }],
+      [{ text: `${L.pdv} (${pdvStopa}%):`, color: siva }, { text: pdvTekst, bold: true, alignment: "right" }],
+      [{ text: L.ukupno, bold: true, fontSize: 11, margin: [0, 4, 0, 0] }, { text: ukupnoTekst, bold: true, alignment: "right", fontSize: 12, margin: [0, 4, 0, 0] }],
+    ];
+  const dd = {
+    pageSize: "A4",
+    pageMargins: [36, 36, 36, 62],
+    defaultStyle: { font: "Roboto", fontSize: 9.5, color: "#111" },
+    info: { title: `${L.ponuda} ${ponuda.broj}`, author: t.naziv || "" },
+    footer: podnozje,
+    content: [
+      {
+        columns: [
+          { width: "*", stack: [{ text: L.ponuda, bold: true, fontSize: 15 }, { text: `${L.broj}: ${ponuda.broj}`, fontSize: 10.5, margin: [0, 2, 0, 0] }] },
+          {
+            width: 230, alignment: "right", fontSize: 8.5, lineHeight: 1.3,
+            stack: [{ text: t.naziv || "", bold: true, fontSize: 11 }, { text: t.djelatnost || "", color: siva, fontSize: 7.5, margin: [0, 0, 0, 3] }, t.adresa || "", t.telefon || "", t.email || ""],
+          },
+        ],
+        margin: [0, 0, 0, 16],
+      },
+      {
+        columns: [
+          { width: "*", stack: [{ text: L.narucitelj, color: siva, fontSize: 9, margin: [0, 0, 0, 2] }, { text: (kupac && kupac.naziv) || "—", bold: true }, (kupac && kupac.adresa) || "", ...(kupac && kupac.oib ? [`${L.oib}: ${kupac.oib}`] : [])], fontSize: 9.5 },
+          {
+            width: 250,
+            table: { body: [[{ text: L.datumPonude, color: siva }, { text: datumTekst, bold: true }], [{ text: L.vrijediDo, color: siva }, { text: vrijediDoTekst, bold: true }], [{ text: L.predmet, color: siva }, { text: ponuda.naziv || "", bold: true }]] },
+            layout: "noBorders", fontSize: 9.5,
+          },
+        ],
+        margin: [0, 0, 0, 14],
+      },
+      ...(de ? [{
+        margin: [0, 0, 0, 14], fontSize: 9.5,
+        stack: [pozdrav, { text: "vielen Dank auf Ihre Anfrage.", margin: [0, 8, 0, 0] }, "Aufgrund Ihrer Anfrage hiermit unsere Angebot für die Material, Herstellung und Lieferung zwar wie folgt:"],
+      }] : []),
+      ...(redoviTablice.length ? [
+        { text: L.tehnickiOpis, bold: true, margin: [0, 0, 0, 5] },
+        {
+          table: { headerRows: 1, dontBreakRows: true, widths: [62, "*", 38, 78, 80], body: [zaglavljeCelije, ...redoviTablice] },
+          layout: { hLineWidth: () => 0.6, vLineWidth: () => 0.6, hLineColor: () => "#333", vLineColor: () => "#333", paddingLeft: () => 4, paddingRight: () => 4, paddingTop: () => 3, paddingBottom: () => 3 },
+          margin: [0, 0, 0, 14],
+        },
+      ] : []),
+      { columns: [{ width: "*", text: "" }, { width: 250, table: { widths: ["*", "auto"], body: zbrojevi }, layout: "noBorders" }], margin: [0, 0, 0, de ? 4 : 18], unbreakable: true },
+      ...(de ? [{ text: L.napomenaPorez, alignment: "right", color: siva, fontSize: 8.5, margin: [0, 0, 0, 16] }] : []),
+      ...(de && ponuda.napomenaNjemacki ? [{ text: ponuda.napomenaNjemacki, fontSize: 9, margin: [0, 0, 0, 16] }] : []),
+      ...(ponuda.napomena ? [{ text: [{ text: `${L.napomena} `, bold: true }, ponuda.napomena], fontSize: 9.5, margin: [0, 0, 0, 14] }] : []),
+      {
+        unbreakable: true, fontSize: 9.5,
+        stack: [
+          ...(de ? [] : [{ text: L.uvjeti }]),
+          { text: L.postovanje, margin: [0, de ? 0 : 10, 0, 0] },
+          { text: t.naziv || "", bold: true, margin: [0, 6, 0, 0] },
+          ...(izradio ? [`${izradio.prezime || ""} ${izradio.ime || ""}`.trim(), ...(izradio.telefon ? [`Mobil: ${izradio.telefon}`] : []), ...(izradio.email ? [`e-Mail: ${izradio.email}`] : [])] : []),
+        ],
+      },
+    ],
+  };
+  const buffer = await pdfMake.createPdf(dd).getBuffer();
+  return buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+}
+
 const utf8 = (s) => new TextEncoder().encode(s);
 const base64 = (bajtovi) => {
   let bin = "";
