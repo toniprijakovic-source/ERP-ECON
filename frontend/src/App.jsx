@@ -1145,6 +1145,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
   // vidi dozvoliKatalog niže), mase/cijena se za prikaz i izračun uživo izvode iz kataloga umjesto
   // iz db.materijali. Zapis na skladištu se stvara (ili se poveća postojeći) tek pri "Primi robu".
   const resolvMat = (r) => {
+    if (r.rucniNaziv !== undefined) return { sifra: "", naziv: r.rucniNaziv, jm: r.jm || "kom", cijena: 0, kgPoM: 0, kgPoM2: 0, kgPoKom: 0 };
     if (r.materijalId) return materijali.find((x) => x.id === r.materijalId);
     if (r.katalogId) {
       const k = katalog.find((x) => x.id === r.katalogId);
@@ -1204,6 +1205,11 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
     const duzinaDef = r.duzinaM ?? 6;
     const sirinaDef = r.sirinaM ?? 1.25;
     const komadaDef = r.komada ?? 1;
+    if (val === "rucno::") {
+      // Stavka koja nije ni na skladištu ni u katalogu: naziv se upisuje ručno (bilo što), količina u zadanoj jedinici.
+      azurirajRedak(i, { materijalId: "", katalogId: "", rucniNaziv: r.rucniNaziv ?? "", jm: r.jm || "kom", nacinUnosa: "kolicina", cijenaPoJed: r.cijenaPoJed || 0 });
+      return;
+    }
     if (val.startsWith("kat::")) {
       const katId = val.slice(5);
       const entry = (katalog || []).find((k) => k.id === katId);
@@ -1212,7 +1218,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
         const jeLim = entry.jedinica === "kg/m2";
         const jeKomadni = entry.jedinica === "kg/kom";
         const nacin = jeDuzina ? "duzina" : jeLim ? "lim" : jeKomadni ? "komadi" : "kolicina";
-        azurirajRedak(i, { materijalId: "", katalogId: katId, nacinUnosa: nacin, duzinaM: duzinaDef, sirinaM: sirinaDef, komada: komadaDef, cijenaPoJed: jeLim ? 1.25 : 1.15 });
+        azurirajRedak(i, { materijalId: "", katalogId: katId, rucniNaziv: undefined, jm: undefined, nacinUnosa: nacin, duzinaM: duzinaDef, sirinaM: sirinaDef, komada: komadaDef, cijenaPoJed: jeLim ? 1.25 : 1.15 });
       }
     } else {
       const mat = materijali.find((m) => m.id === val);
@@ -1221,7 +1227,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
       const jeLim = !uKomadima && mat?.kgPoM2 > 0;
       const nacin = jeDuzina ? "duzina" : jeLim ? "lim" : !uKomadima && mat?.kgPoKom > 0 ? "komadi" : "kolicina";
       const cijenaPoJed = zadnjaCijenaIzNarudzbenice(val, narudzbenice) ?? (mat ? mat.cijena : 0);
-      azurirajRedak(i, { materijalId: val, katalogId: "", nacinUnosa: nacin, duzinaM: duzinaDef, sirinaM: sirinaDef, komada: komadaDef, cijenaPoJed });
+      azurirajRedak(i, { materijalId: val, katalogId: "", rucniNaziv: undefined, jm: undefined, nacinUnosa: nacin, duzinaM: duzinaDef, sirinaM: sirinaDef, komada: komadaDef, cijenaPoJed });
     }
   };
 
@@ -1231,7 +1237,8 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
         {rows.length === 0 && <div style={{ textAlign: "center", color: "var(--ink-faint)", padding: "14px 0", fontSize: 13 }}>Nema stavki. Dodaj materijal.</div>}
         {rows.map((r, i) => {
           const mat = resolvMat(r);
-          const nacin = r.nacinUnosa || "kolicina";
+          const jeRucna = r.rucniNaziv !== undefined;
+          const nacin = jeRucna ? "kolicina" : (r.nacinUnosa || "kolicina");
           const kol = efektivnaKolicina(r, mat);
           return (
             <div key={i} className="card" style={{ padding: 10, marginBottom: 8, background: "var(--surface-alt)" }}>
@@ -1245,8 +1252,9 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
                 )}
                 <div style={{ flex: 1 }}>
                   <label className="label">Materijal</label>
-                  <select className="select" value={r.materijalId || (r.katalogId ? `kat::${r.katalogId}` : "")} onChange={(e) => odaberiMaterijal(i, e.target.value)}>
+                  <select className="select" value={jeRucna ? "rucno::" : (r.materijalId || (r.katalogId ? `kat::${r.katalogId}` : ""))} onChange={(e) => odaberiMaterijal(i, e.target.value)}>
                     <option value="">Odaberi materijal…</option>
+                    {dozvoliKatalog && <option value="rucno::">✎ Ručno upiši naziv (bilo što)…</option>}
                     <optgroup label="Zalihe (skladište)">
                       {materijali.map((m) => <option key={m.id} value={m.id}>{m.sifra} — {m.naziv}</option>)}
                     </optgroup>
@@ -1256,6 +1264,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
                       </optgroup>
                     )}
                   </select>
+                  {jeRucna && <input className="input" style={{ marginTop: 6 }} aria-label={`Naziv stavke ${i + 1}`} placeholder="Upiši naziv stavke (bilo što)" value={r.rucniNaziv} onChange={(e) => update(i, { rucniNaziv: e.target.value })} />}
                 </div>
                 {projekti && (
                   <div style={{ width: 250 }}>
@@ -1270,7 +1279,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
               </div>
 
               <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginTop: 8, flexWrap: "wrap" }}>
-                <div style={{ width: 165 }}>
+                {!jeRucna && <div style={{ width: 165 }}>
                   <label className="label">Način unosa</label>
                   <select className="select" value={nacin} onChange={(e) => azurirajRedak(i, { nacinUnosa: e.target.value })}>
                     <option value="duzina">Dužina profila × komada</option>
@@ -1278,7 +1287,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
                     <option value="komadi">Komadi (masa po komadu)</option>
                     <option value="kolicina">Ručni unos količine</option>
                   </select>
-                </div>
+                </div>}
                 {nacin === "duzina" ? (
                   <>
                     <div style={{ width: 110 }}><label className="label">Dužina (mm)</label><input className="input f-mono" type="number" min="0" step="1" value={Math.round((Number(r.duzinaM ?? 6)) * 1000)} onChange={(e) => azurirajRedak(i, { duzinaM: (Number(e.target.value) || 0) / 1000 })} /></div>
@@ -1309,6 +1318,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
                 ) : (
                   <div style={{ width: 120 }}><label className="label">Količina ({mat?.jm || "kg"})</label><input className="input f-mono" type="number" min="0" value={r.kolicina} onChange={(e) => update(i, { kolicina: e.target.value })} /></div>
                 )}
+                {jeRucna && <div style={{ width: 90 }}><label className="label">Jedinica</label><input className="input" aria-label={`Jedinica ${i + 1}`} placeholder="kom, kg, m…" value={r.jm ?? ""} onChange={(e) => update(i, { jm: e.target.value })} /></div>}
                 <div style={{ width: 130 }}>
                   <label className="label">Kvaliteta</label>
                   <KvalitetaOznakaSelect kvalitete={kvalitete} value={r.kvaliteta} onChange={(v) => update(i, { kvaliteta: v })} />
@@ -3376,13 +3386,13 @@ function ZaprimanjeModal({ narudzbenica, db, onPotvrdi, onClose }) {
   const nazivStavke = (s) => {
     const m = db.materijali.find((x) => x.id === s.materijalId);
     const k = (db.katalogProfila || []).find((x) => x.id === s.katalogId);
-    return m ? m.naziv : k ? katalogOznakaPuna(k) : "—";
+    return m ? m.naziv : k ? katalogOznakaPuna(k) : (s.rucniNaziv || "—");
   };
   const komadna = (s) => ["duzina", "lim", "komadi"].includes(s.nacinUnosa) && Number(s.komada) > 0;
   const brojKomada = (s) => (komadna(s) ? Math.max(1, Math.round(Number(s.komada) || 1)) : 1);
   // Ukupna količina stavke u jedinici prikaza (komadi ili jedinica materijala) — dijelovi po šaržama se upisuju u njoj.
   const ukupnoStavke = (s) => (komadna(s) ? Number(s.komada) : Number(s.kolicina) || 0);
-  const jedinicaStavke = (s) => (komadna(s) ? "kom" : db.materijali.find((x) => x.id === s.materijalId)?.jm || "");
+  const jedinicaStavke = (s) => (komadna(s) ? "kom" : db.materijali.find((x) => x.id === s.materijalId)?.jm || s.jm || "");
   // Po stavci popis dijelova { kolicina, sarza, naljepnice, rucno }: jedan dio = cijela stavka (dosadašnje ponašanje).
   const [dijelovi, setDijelovi] = useState(() => Object.fromEntries(narudzbenica.stavke.map((s, i) => [i, [{ kolicina: "", sarza: s.sarza || "", naljepnice: brojKomada(s), rucno: false }]])));
   const [greska, setGreska] = useState("");
@@ -5158,9 +5168,9 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
         const mm = (v) => Math.round((Number(v) || 0) * 1000);
         const zaokruzi = (v) => Math.round((Number(v) || 0) * 100) / 100;
         const nacin = s.nacinUnosa || "kolicina";
-        const kom = nacin === "kolicina" ? `${zaokruzi(s.kolicina)} ${m?.jm || "kg"}` : zaokruzi(s.komada);
+        const kom = nacin === "kolicina" ? `${zaokruzi(s.kolicina)} ${m?.jm || s.jm || "kg"}` : zaokruzi(s.komada);
         const dim = nacin === "duzina" ? String(mm(s.duzinaM)) : nacin === "lim" ? `${mm(s.duzinaM)}×${mm(s.sirinaM)}` : "";
-        return { kolicina: kom, dimenzijaMM: dim, vrstaStavke: "", vrstaMaterijala: m ? m.naziv : kat ? katalogOznakaPuna(kat) : "—", kvaliteta: s.kvaliteta || m?.kvaliteta || "", normaIsporuke: "", dodatniZahtjevi: projekt ? `Za projekt ${projekt.sifra}` : "" };
+        return { kolicina: kom, dimenzijaMM: dim, vrstaStavke: "", vrstaMaterijala: m ? m.naziv : kat ? katalogOznakaPuna(kat) : (s.rucniNaziv || "—"), kvaliteta: s.kvaliteta || m?.kvaliteta || "", normaIsporuke: "", dodatniZahtjevi: projekt ? `Za projekt ${projekt.sifra}` : "" };
       });
     setPrintDoc({ tip: "Narudžba", brojDokumenta: row.broj, datum: row.datum, izradioIme: zaposlenikIme(row.izradioId), dobavljacIme: db.dobavljaci.find((d) => d.id === row.dobavljacId)?.naziv || "", stavke, napomena: /^Generirano iz upita \S+$/.test(String(row.napomena || "").trim()) ? "" : String(row.napomena || "").trim() });
   };
