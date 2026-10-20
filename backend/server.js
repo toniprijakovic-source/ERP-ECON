@@ -385,9 +385,13 @@ app.post("/api/kiosk/scan", async (req, res) => {
 
       // Blokada slučajnog dvostrukog očitanja kartice — ista osoba ne može ponovno
       // prijaviti dolazak/odlazak unutar KIOSK_BLOKADA_MIN minuta od svoje zadnje akcije.
+      // Samo stvarni dolasci/odlasci koji su se već dogodili: cjelodnevni zapisi (godišnji, bolovanje…) i zapisi u
+      // budućnosti (npr. unaprijed upisan godišnji, vrijeme 00:00) nisu "zadnje skeniranje" i ne smiju blokirati kiosk.
       const zadnjaAkcija = moji.reduce((naj, e) => {
+        if ((e.vrsta || "rad") !== "rad") return naj;
         const vrijeme = e.vrijemeOdlaska || e.vrijemeDolaska;
-        return vrijeme && (!naj || new Date(vrijeme) > new Date(naj)) ? vrijeme : naj;
+        if (!vrijeme || new Date(vrijeme) > sada) return naj;
+        return !naj || new Date(vrijeme) > new Date(naj) ? vrijeme : naj;
       }, null);
       if (zadnjaAkcija) {
         const proteklaMin = (sada - new Date(zadnjaAkcija)) / 60000;
