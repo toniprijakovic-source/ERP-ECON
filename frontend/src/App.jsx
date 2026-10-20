@@ -1075,9 +1075,9 @@ const Btn = ({ variant = "ghost", size, icon: Icon, children, className = "", ..
   </button>
 );
 
-const Modal = ({ title, onClose, children, footer, wide, xwide }) => (
+const Modal = ({ title, onClose, children, footer, wide, xwide, maxSirina }) => (
   <div className="modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-    <div className="modal-panel" style={xwide ? { maxWidth: 1140 } : wide ? { maxWidth: 820 } : undefined}>
+    <div className="modal-panel" style={maxSirina ? { maxWidth: maxSirina } : xwide ? { maxWidth: 1140 } : wide ? { maxWidth: 820 } : undefined}>
       <div className="modal-header">
         <h3 className="f-display" style={{ fontSize: 17, fontWeight: 600 }}>{title}</h3>
         <button className="btn btn-icon btn-ghost" onClick={onClose}><X size={16} /></button>
@@ -7157,7 +7157,7 @@ function NarudzbaModal({ narudzba, projekt, db, update, showToast, onClose }) {
   };
 
   return (
-    <Modal wide title={narudzba ? `Narudžba ${narudzba.broj}` : "Nova narudžba kupca"} onClose={onClose} footer={<>{narudzba && <Btn variant="danger" icon={Trash2} onClick={obrisi}>Obriši narudžbu</Btn>}<Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi}>Spremi</Btn></>}>
+    <Modal wide maxSirina={1066} title={narudzba ? `Narudžba ${narudzba.broj}` : "Nova narudžba kupca"} onClose={onClose} footer={<>{narudzba && <Btn variant="danger" icon={Trash2} onClick={obrisi}>Obriši narudžbu</Btn>}<Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi}>Spremi</Btn></>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
         <Field label="Broj narudžbe kupca"><input className="input f-mono" value={form.broj} onChange={(e) => setForm({ ...form, broj: e.target.value })} placeholder="npr. E-BEST-2026-106" /></Field>
         <Field label="Datum narudžbe"><input className="input" type="date" value={form.datum} onChange={(e) => setForm({ ...form, datum: e.target.value })} /></Field>
@@ -7167,7 +7167,7 @@ function NarudzbaModal({ narudzba, projekt, db, update, showToast, onClose }) {
 
       <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Stavke (cijene se koriste kasnije u podlozi za fakturu; količina i masa mogu se iskoristiti za uvoz u normativ)</div>
       <table className="erp-table">
-        <thead><tr><th style={{ width: 90 }}>Šifra</th><th>Naziv</th><th style={{ width: 55 }}>JM</th><th style={{ width: 75 }}>Količina</th><th style={{ width: 95 }}>Masa (kg/kom)</th><th style={{ width: 310 }}>Cijena</th><th style={{ width: 36 }}></th></tr></thead>
+        <thead><tr><th style={{ width: 90 }}>Šifra</th><th style={{ width: 310 }}>Naziv</th><th style={{ width: 55 }}>JM</th><th style={{ width: 75 }}>Količina</th><th style={{ width: 95 }}>Masa (kg/kom)</th><th style={{ width: 310 }}>Cijena</th><th style={{ width: 36 }}></th></tr></thead>
         <tbody>
           {form.stavke.length === 0 && <tr><td colSpan={7}><EmptyState text="Nema stavki. Dodaj stavku." /></td></tr>}
           {form.stavke.map((s, i) => {
