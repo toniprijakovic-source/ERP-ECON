@@ -3714,25 +3714,48 @@ const sarzePoDimenzijama = (materijal, knjiga, kljuceviDimenzija, jeLim = true) 
   });
   return mapa;
 };
-// Dimenzije materijala u popisu zaliha: svaka dimenzija u svom redu sa šaržom (iz matične knjige) i lokacijom.
-function DimenzijeMaterijala({ materijal, knjiga, katalog }) {
+// Dimenzije materijala u popisu zaliha: stupci Dimenzije / Stanje / Šarža / Lokacija prikazuju po jedan red za svaku dimenziju
+// (isti razmak redaka u svim stupcima, pa su redovi poravnati); šarža dolazi iz matične knjige, lokacija iz obrasca materijala.
+const redoviZalihe = (materijal, knjiga, katalog) => {
   const kat = (katalog || []).find((k) => k.id === materijal.katalogId);
   const jeLim = kat?.jedinica === "kg/m2";
   const redovi = kat && kat.jedinica !== "kg/kom" ? redoviIzDimenzija(materijal.dimenzije, materijal.kolicina, jeLim) : null;
-  if (!redovi) return <>{materijal.dimenzije}</>;
+  if (!redovi) return null;
   const kljucevi = redovi.map((r) => kljucDimenzije(r.duzinaMM, r.sirinaMM));
   const sarze = sarzePoDimenzijama(materijal, knjiga, kljucevi, jeLim);
+  return redovi.map((r, i) => ({ dimenzija: `${jeLim ? `${r.duzinaMM}×${r.sirinaMM}` : r.duzinaMM} mm`, komada: r.komada, sarza: (sarze.get(kljucevi[i]) || []).join(", "), lokacija: materijal.lokacijeDuzina?.[kljucevi[i]] || "" }));
+};
+const VISINA_REDA_ZALIHE = 18;
+function RedoviZalihe({ redovi, zadnji, stil, children }) {
+  // zadnji = sadržaj dodatnog retka ispod dimenzija (zbroj) — u ostalim stupcima prazan, da visine ostanu jednake
   return (
-    <div style={{ display: "grid", gap: 2 }}>
-      {redovi.map((r, i) => (
-        <div key={i} style={{ fontSize: 12.5 }}>
-          <span className="f-mono">{jeLim ? `${r.duzinaMM}×${r.sirinaMM}` : r.duzinaMM} mm{redovi.length > 1 ? ` × ${r.komada}` : ""}</span>
-          {sarze.get(kljucevi[i]) && <span style={{ color: "var(--steel)", fontSize: 11.5 }}> · šarža {sarze.get(kljucevi[i]).join(", ")}</span>}
-          {materijal.lokacijeDuzina?.[kljucevi[i]] && <span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {materijal.lokacijeDuzina[kljucevi[i]]}</span>}
-        </div>
-      ))}
+    <div style={{ display: "grid", fontSize: 12.5, lineHeight: `${VISINA_REDA_ZALIHE}px`, whiteSpace: "nowrap", ...stil }}>
+      {redovi.map((r, i) => <div key={i} style={{ height: VISINA_REDA_ZALIHE }}>{children(r, i) || " "}</div>)}
+      {zadnji !== undefined && <div style={{ height: VISINA_REDA_ZALIHE }}>{zadnji || " "}</div>}
     </div>
   );
+}
+const NEMA = <span style={{ color: "var(--ink-faint)" }}>—</span>;
+function ZalihaStupac({ materijal, knjiga, katalog, vrsta }) {
+  const redovi = redoviZalihe(materijal, knjiga, katalog);
+  const vise = redovi && redovi.length > 1;
+  if (!redovi) {
+    if (vrsta === "dimenzije") return <>{materijal.dimenzije}</>;
+    if (vrsta === "sarza") { const s = [...new Set((knjiga || []).filter((z) => z.materijalId === materijal.id && String(z.sarza || "").trim()).map((z) => z.sarza.trim()))]; return s.length ? <span className="f-mono" style={{ fontSize: 12.5 }}>{s.join(", ")}</span> : NEMA; }
+    return materijal.lokacija ? <>{materijal.lokacija}</> : NEMA;
+  }
+  if (vrsta === "dimenzije") return <RedoviZalihe redovi={redovi} zadnji={vise ? <span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}>Ukupno</span> : undefined}>{(r) => <span className="f-mono">{r.dimenzija}</span>}</RedoviZalihe>;
+  if (vrsta === "kolicina") {
+    const ispod = Number(materijal.kolicina) < Number(materijal.minZaliha);
+    return (
+      <RedoviZalihe redovi={redovi} zadnji={vise ? <span style={{ fontWeight: 700, color: ispod ? "var(--rust)" : "inherit" }}>{materijal.kolicina} {materijal.jm}{ispod && <AlertTriangle size={12} style={{ marginLeft: 4, verticalAlign: -2 }} />}</span> : undefined}>
+        {(r) => <span className="f-mono" style={!vise && ispod ? { color: "var(--rust)", fontWeight: 700 } : undefined}>{r.komada} {materijal.jm}{!vise && ispod && <AlertTriangle size={12} style={{ marginLeft: 4, verticalAlign: -2 }} />}</span>}
+      </RedoviZalihe>
+    );
+  }
+  if (vrsta === "sarza") return <RedoviZalihe redovi={redovi} zadnji={vise ? "" : undefined}>{(r) => (r.sarza ? <span className="f-mono" style={{ color: "var(--steel)" }}>{r.sarza}</span> : NEMA)}</RedoviZalihe>;
+  const samoOpca = !redovi.some((r) => r.lokacija) && materijal.lokacija;
+  return <RedoviZalihe redovi={redovi} zadnji={vise ? "" : undefined}>{(r, i) => (samoOpca ? (i === 0 ? materijal.lokacija : "") : (r.lokacija || NEMA))}</RedoviZalihe>;
 }
 
 function SkladistePage({ db, update, showToast, mojaPozicija }) {
@@ -3788,6 +3811,8 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
   const mozeMaticne = (mojaPozicija?.moduli || []).includes("kontrola") && dozvolaZaKarticu(mojaPozicija, "kontrola", "maticna").izmjene;
   // Šarže koje su (ili će kasnije biti) upisane u matičnoj knjizi za dimenzije ovog materijala — prikazuju se uz redak dimenzije.
   const sarzeForm = modal?.mode === "edit" && form.id ? sarzePoDimenzijama(form, db.maticnaKnjiga, katalogUnos.redovi.map((r) => kljucDimenzije(r.duzinaMM, jeLimUnos ? r.sirinaMM : 0)), jeLimUnos) : new Map();
+  // Polje šarže retka: što je korisnik upisao, a dok nije ništa dirao — šarža iz matične knjige za tu dimenziju.
+  const sarzaRedaUnos = (r) => (r.sarza !== undefined ? r.sarza : (sarzeForm.get(kljucDimenzije(r.duzinaMM, jeLimUnos ? r.sirinaMM : 0)) || []).join(", "));
   const kreirajMaticniZaRed = (i) => {
     const r = katalogUnos.redovi[i];
     const mat = db.materijali.find((m) => m.id === form.id);
@@ -3795,7 +3820,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
     const komada = Number(String(r.komada).replace(",", ".")) || 0;
     if (!(komada > 0)) { showToast("Upiši broj komada za tu dužinu."); return; }
     const opis = `${jeLimUnos ? `${r.duzinaMM || 0}×${r.sirinaMM || 0}` : `${r.duzinaMM || 0}`} mm`;
-    const zapis = { ...noviZapisMaticneKnjige({ mat, kolicina: komada, sarza: String(r.sarza || "").trim(), kvaliteta: mat.kvaliteta || "", narudzbenica: null, knjiga: db.maticnaKnjiga || [] }), dimenzije: opis };
+    const zapis = { ...noviZapisMaticneKnjige({ mat, kolicina: komada, sarza: String(sarzaRedaUnos(r) || "").trim(), kvaliteta: mat.kvaliteta || "", narudzbenica: null, knjiga: db.maticnaKnjiga || [] }), dimenzije: opis };
     update("maticnaKnjiga", [...(db.maticnaKnjiga || []), zapis]);
     showToast(`Matični broj za ${opis} × ${komada} kreiran${zapis.sarza ? ` (šarža ${zapis.sarza})` : ""} — vidi ga u Kontroli kvalitete.`);
   };
@@ -3932,13 +3957,15 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
             { key: "naziv", label: "Naziv" },
             { key: "tip", label: "Tip" },
             { key: "kvaliteta", label: "Kvaliteta", render: (r) => r.kvaliteta || <span style={{ color: "var(--ink-faint)" }}>—</span> },
-            { key: "dimenzije", label: "Dimenzije", render: (r) => <DimenzijeMaterijala materijal={r} knjiga={db.maticnaKnjiga} katalog={db.katalogProfila} /> },
-            { key: "kolicina", label: "Stanje", render: (r) => <span className="f-mono" style={{ color: r.kolicina < r.minZaliha ? "var(--rust)" : "inherit", fontWeight: r.kolicina < r.minZaliha ? 700 : 400 }}>{r.kolicina} {r.jm}{r.kolicina < r.minZaliha && <AlertTriangle size={12} style={{ marginLeft: 4, verticalAlign: -2 }} />}</span> },
+            { key: "dimenzije", label: "Dimenzije", render: (r) => <ZalihaStupac vrsta="dimenzije" materijal={r} knjiga={db.maticnaKnjiga} katalog={db.katalogProfila} /> },
+            { key: "kolicina", label: "Stanje", render: (r) => (redoviZalihe(r, db.maticnaKnjiga, db.katalogProfila)
+              ? <ZalihaStupac vrsta="kolicina" materijal={r} knjiga={db.maticnaKnjiga} katalog={db.katalogProfila} />
+              : <span className="f-mono" style={{ color: r.kolicina < r.minZaliha ? "var(--rust)" : "inherit", fontWeight: r.kolicina < r.minZaliha ? 700 : 400 }}>{r.kolicina} {r.jm}{r.kolicina < r.minZaliha && <AlertTriangle size={12} style={{ marginLeft: 4, verticalAlign: -2 }} />}</span>) },
             { key: "rezervirano", label: "Rezervirano", render: (r) => { const rez = rezPoMaterijalu.get(r.id) || 0; return rez > 0 ? <span className="f-mono" style={{ color: rez > r.kolicina ? "var(--rust)" : "var(--steel)", fontWeight: 600 }}>{zaokruziKolicinu(rez)} {r.jm}</span> : <span style={{ color: "var(--ink-faint)" }}>—</span>; } },
             { key: "slobodno", label: "Slobodno", render: (r) => { const slob = (Number(r.kolicina) || 0) - (rezPoMaterijalu.get(r.id) || 0); return <span className="f-mono" style={{ color: slob < 0 ? "var(--rust)" : "inherit", fontWeight: slob < 0 ? 700 : 400 }}>{zaokruziKolicinu(slob)} {r.jm}</span>; } },
-            { key: "minZaliha", label: "Min. zaliha", render: (r) => <span className="f-mono">{r.minZaliha} {r.jm}</span> },
+            { key: "sarza", label: "Šarža", render: (r) => <ZalihaStupac vrsta="sarza" materijal={r} knjiga={db.maticnaKnjiga} katalog={db.katalogProfila} /> },
             { key: "cijena", label: "Cijena/jed.", render: (r) => <span className="f-mono">{fmtCurDec(r.cijena)}</span> },
-            { key: "lokacija", label: "Lokacija" },
+            { key: "lokacija", label: "Lokacija", render: (r) => <ZalihaStupac vrsta="lokacija" materijal={r} knjiga={db.maticnaKnjiga} katalog={db.katalogProfila} /> },
             { key: "rez", label: "", render: (r) => <Btn size="sm" variant="ghost" onClick={() => setRezZa(r.id)}>Rezervacije</Btn> },
             { key: "nalj", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Printer} onClick={() => setNaljepnicaZa(r.id)}>Naljepnica</Btn> },
             { key: "izdaj", label: "", render: (r) => mozeIzdatnice && r.kolicina > 0 && <Btn size="sm" variant="ghost" icon={PackageMinus} onClick={() => setIzdajZa(r.id)}>Izdaj na projekt</Btn> },
@@ -4055,7 +4082,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
                   {!jeKomadUnos && (
                     <div style={{ width: 150 }}>
                       {i === 0 && <label className="label">Šarža</label>}
-                      <input className="input f-mono" aria-label={`Šarža ${i + 1}`} placeholder="šarža (neobavezno)" value={r.sarza || ""} onChange={(e) => postaviRedUnos(i, { sarza: e.target.value })} />
+                      <input className="input f-mono" aria-label={`Šarža ${i + 1}`} placeholder="šarža (neobavezno)" value={sarzaRedaUnos(r) || ""} onChange={(e) => postaviRedUnos(i, { sarza: e.target.value })} />
                     </div>
                   )}
                   {!jeKomadUnos && (
@@ -4085,7 +4112,6 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
                     </div>
                   )}
                   {katalogUnos.redovi.length > 1 && <button type="button" className="btn btn-icon btn-ghost" aria-label={`Ukloni dužinu ${i + 1}`} onClick={() => ukloniRedUnos(i)}><X size={14} /></button>}
-                  {sarzeForm.get(kljucDimenzije(r.duzinaMM, jeLimUnos ? r.sirinaMM : 0)) && <div style={{ flexBasis: "100%", fontSize: 11.5, color: "var(--steel)" }}>Šarža iz matične knjige: {sarzeForm.get(kljucDimenzije(r.duzinaMM, jeLimUnos ? r.sirinaMM : 0)).join(", ")}</div>}
                 </div>
               ))}
               {!jeKomadUnos && <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajRedUnos}>Dodaj još jednu {jeLimUnos ? "dimenziju" : "dužinu"}</Btn>}
