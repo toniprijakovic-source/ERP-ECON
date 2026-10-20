@@ -3698,6 +3698,43 @@ const redoviIzDimenzija = (dimenzije, kolicina, jeLim) => {
   return redovi;
 };
 
+// Ključ dimenzije iz brojeva u tekstu ("3115 mm", "3000 × 1500 mm", "3000×1500") — za povezivanje redaka dimenzija
+// materijala s matičnim brojevima (šarže) i lokacijama po dimenziji.
+const kljucDimenzijeTekst = (tekst, jeLim = true) => (String(tekst || "").match(/\d+(?:[.,]\d+)?/g) || []).slice(0, jeLim ? 2 : 1).map((x) => String(Math.round(Number(x.replace(",", ".")) || 0))).join("x");
+const kljucDimenzije = (duzinaMM, sirinaMM) => `${Math.round(Number(duzinaMM) || 0)}${Number(sirinaMM) > 0 ? `x${Math.round(Number(sirinaMM))}` : ""}`;
+// Šarže po dimenziji: iz matičnih brojeva materijala (dimenzija na zapisu); zapis bez dimenzije pripada jedinoj dimenziji materijala.
+const sarzePoDimenzijama = (materijal, knjiga, kljuceviDimenzija, jeLim = true) => {
+  const mapa = new Map();
+  (knjiga || []).filter((z) => z.materijalId === materijal.id && String(z.sarza || "").trim()).forEach((z) => {
+    const k = z.dimenzije ? kljucDimenzijeTekst(z.dimenzije, jeLim) : (kljuceviDimenzija.length === 1 ? kljuceviDimenzija[0] : null);
+    if (!k) return;
+    const lista = mapa.get(k) || [];
+    if (!lista.includes(z.sarza.trim())) lista.push(z.sarza.trim());
+    mapa.set(k, lista);
+  });
+  return mapa;
+};
+// Dimenzije materijala u popisu zaliha: svaka dimenzija u svom redu sa šaržom (iz matične knjige) i lokacijom.
+function DimenzijeMaterijala({ materijal, knjiga, katalog }) {
+  const kat = (katalog || []).find((k) => k.id === materijal.katalogId);
+  const jeLim = kat?.jedinica === "kg/m2";
+  const redovi = kat && kat.jedinica !== "kg/kom" ? redoviIzDimenzija(materijal.dimenzije, materijal.kolicina, jeLim) : null;
+  if (!redovi) return <>{materijal.dimenzije}</>;
+  const kljucevi = redovi.map((r) => kljucDimenzije(r.duzinaMM, r.sirinaMM));
+  const sarze = sarzePoDimenzijama(materijal, knjiga, kljucevi, jeLim);
+  return (
+    <div style={{ display: "grid", gap: 2 }}>
+      {redovi.map((r, i) => (
+        <div key={i} style={{ fontSize: 12.5 }}>
+          <span className="f-mono">{jeLim ? `${r.duzinaMM}×${r.sirinaMM}` : r.duzinaMM} mm{redovi.length > 1 ? ` × ${r.komada}` : ""}</span>
+          {sarze.get(kljucevi[i]) && <span style={{ color: "var(--steel)", fontSize: 11.5 }}> · šarža {sarze.get(kljucevi[i]).join(", ")}</span>}
+          {materijal.lokacijeDuzina?.[kljucevi[i]] && <span style={{ color: "var(--ink-soft)", fontSize: 11.5 }}> · {materijal.lokacijeDuzina[kljucevi[i]]}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function SkladistePage({ db, update, showToast, mojaPozicija }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "skladiste");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "zalihe");
@@ -3749,6 +3786,8 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
   // Matični broj za jednu dužinu/dimenziju (redak): zapis u matičnoj knjizi (Kontrola kvalitete) s komadima tog retka i šaržom;
   // stanje na skladištu se ne mijenja (komadi su već u stanju), a broj dodjeljuje poslužitelj.
   const mozeMaticne = (mojaPozicija?.moduli || []).includes("kontrola") && dozvolaZaKarticu(mojaPozicija, "kontrola", "maticna").izmjene;
+  // Šarže koje su (ili će kasnije biti) upisane u matičnoj knjizi za dimenzije ovog materijala — prikazuju se uz redak dimenzije.
+  const sarzeForm = modal?.mode === "edit" && form.id ? sarzePoDimenzijama(form, db.maticnaKnjiga, katalogUnos.redovi.map((r) => kljucDimenzije(r.duzinaMM, jeLimUnos ? r.sirinaMM : 0)), jeLimUnos) : new Map();
   const kreirajMaticniZaRed = (i) => {
     const r = katalogUnos.redovi[i];
     const mat = db.materijali.find((m) => m.id === form.id);
@@ -3778,7 +3817,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
     const kat = db.katalogProfila.find((k) => k.id === item.katalogId);
     const redovi = kat && kat.jedinica !== "kg/kom" ? redoviIzDimenzija(item.dimenzije, item.kolicina, kat.jedinica === "kg/m2") : null;
     const kv = (db.kvaliteteMaterijala || []).find((k) => k.id === item.kvaliteta || (k.oznaka && k.oznaka === item.kvaliteta));
-    setKatalogUnos(redovi ? { katalogId: kat.id, kvaliteta: kv?.id || "celik", redovi } : emptyKatalogUnos);
+    setKatalogUnos(redovi ? { katalogId: kat.id, kvaliteta: kv?.id || "celik", redovi: redovi.map((r) => ({ ...r, lokacija: item.lokacijeDuzina?.[kljucDimenzije(r.duzinaMM, r.sirinaMM)] || "" })) } : emptyKatalogUnos);
     setModal({ mode: "edit" });
   };
   const save = () => {
@@ -3791,6 +3830,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
     const payload = {
       ...form, sifra: sifraZaSpremanje, katalogId: katalogEntry ? katalogEntry.id : (form.katalogId || null), projektId: null, cijena: Number(form.cijena), minZaliha: Number(form.minZaliha),
       dimenzije: dimenzijeIzKataloga,
+      lokacijeDuzina: katalogEntry && !jeKomadUnos ? Object.fromEntries(katalogUnos.redovi.filter((r) => String(r.lokacija || "").trim()).map((r) => [kljucDimenzije(r.duzinaMM, jeLimUnos ? r.sirinaMM : 0), String(r.lokacija).trim()])) : (form.lokacijeDuzina || {}),
       kolicina: katalogEntry ? ukupnoKomadaUnos : Number(form.kolicina),
       jm: katalogEntry ? "kom" : form.jm,
       kgPoM: katalogEntry ? (jeLimUnos || jeKomadUnos ? 0 : Number(katalogEntry.vrijednost)) : Number(form.kgPoM) || 0,
@@ -3892,7 +3932,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
             { key: "naziv", label: "Naziv" },
             { key: "tip", label: "Tip" },
             { key: "kvaliteta", label: "Kvaliteta", render: (r) => r.kvaliteta || <span style={{ color: "var(--ink-faint)" }}>—</span> },
-            { key: "dimenzije", label: "Dimenzije" },
+            { key: "dimenzije", label: "Dimenzije", render: (r) => <DimenzijeMaterijala materijal={r} knjiga={db.maticnaKnjiga} katalog={db.katalogProfila} /> },
             { key: "kolicina", label: "Stanje", render: (r) => <span className="f-mono" style={{ color: r.kolicina < r.minZaliha ? "var(--rust)" : "inherit", fontWeight: r.kolicina < r.minZaliha ? 700 : 400 }}>{r.kolicina} {r.jm}{r.kolicina < r.minZaliha && <AlertTriangle size={12} style={{ marginLeft: 4, verticalAlign: -2 }} />}</span> },
             { key: "rezervirano", label: "Rezervirano", render: (r) => { const rez = rezPoMaterijalu.get(r.id) || 0; return rez > 0 ? <span className="f-mono" style={{ color: rez > r.kolicina ? "var(--rust)" : "var(--steel)", fontWeight: 600 }}>{zaokruziKolicinu(rez)} {r.jm}</span> : <span style={{ color: "var(--ink-faint)" }}>—</span>; } },
             { key: "slobodno", label: "Slobodno", render: (r) => { const slob = (Number(r.kolicina) || 0) - (rezPoMaterijalu.get(r.id) || 0); return <span className="f-mono" style={{ color: slob < 0 ? "var(--rust)" : "inherit", fontWeight: slob < 0 ? 700 : 400 }}>{zaokruziKolicinu(slob)} {r.jm}</span>; } },
@@ -4018,6 +4058,12 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
                       <input className="input f-mono" aria-label={`Šarža ${i + 1}`} placeholder="šarža (neobavezno)" value={r.sarza || ""} onChange={(e) => postaviRedUnos(i, { sarza: e.target.value })} />
                     </div>
                   )}
+                  {!jeKomadUnos && (
+                    <div style={{ width: 150 }}>
+                      {i === 0 && <label className="label">Lokacija</label>}
+                      <input className="input" aria-label={`Lokacija ${i + 1}`} placeholder="lokacija dimenzije" value={r.lokacija || ""} onChange={(e) => postaviRedUnos(i, { lokacija: e.target.value })} />
+                    </div>
+                  )}
                   {mozeMaticne && !jeKomadUnos && (
                     <div>
                       {i === 0 && <label className="label">&nbsp;</label>}
@@ -4039,6 +4085,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
                     </div>
                   )}
                   {katalogUnos.redovi.length > 1 && <button type="button" className="btn btn-icon btn-ghost" aria-label={`Ukloni dužinu ${i + 1}`} onClick={() => ukloniRedUnos(i)}><X size={14} /></button>}
+                  {sarzeForm.get(kljucDimenzije(r.duzinaMM, jeLimUnos ? r.sirinaMM : 0)) && <div style={{ flexBasis: "100%", fontSize: 11.5, color: "var(--steel)" }}>Šarža iz matične knjige: {sarzeForm.get(kljucDimenzije(r.duzinaMM, jeLimUnos ? r.sirinaMM : 0)).join(", ")}</div>}
                 </div>
               ))}
               {!jeKomadUnos && <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajRedUnos}>Dodaj još jednu {jeLimUnos ? "dimenziju" : "dužinu"}</Btn>}
