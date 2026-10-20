@@ -9909,11 +9909,27 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
     // kao JEDAN zajednički popis, pa se ovdje zbrajaju preko svih stavki.
     const sviMaterijalStavke = (ponuda.pozicije || []).flatMap((p) => p.materijalStavke || []);
     const sveOstaleStavke = (ponuda.pozicije || []).flatMap((p) => p.ostaleStavke || []);
+    // Potreban sirovi materijal iz kartice "Materijal" u ponudi (šipke 6 m / 12 m po profilu i limovi s otpadom) prenosi se
+    // u projekt kao planirani materijal — u projektu se količine i dalje mogu korigirati. Limovi se prenose u standardnim
+    // pločama 3000×1500 mm (broj ploča = površina s otpadom / 4,5 m², zaokruženo gore).
+    const potrebno = izracun.potrebanMaterijal || { profili: [], limovi: [] };
+    const kgPoM = (katalogId) => Number(db.katalogProfila.find((k) => k.id === katalogId)?.vrijednost) || 0;
+    const materijalIzPonude = [
+      ...potrebno.profili.flatMap((p) => [[6, p.brojPo6], [12, p.brojPo12]].filter(([, n]) => n > 0).map(([duljina, n]) => ({
+        materijalId: "", katalogId: p.katalogId, nacinUnosa: "duzina", duzinaM: duljina, sirinaM: 1.25, komada: n,
+        kolicina: Math.round(duljina * n * kgPoM(p.katalogId) * 100) / 100, cijenaPoJed: 1.15, kvaliteta: "", izPonude: true,
+      }))),
+      ...potrebno.limovi.filter((l) => l.povrsinaM2 > 0).map((l) => {
+        const ploca = 3 * 1.5;
+        const komada = Math.max(1, Math.ceil((l.povrsinaM2 * (1 + (Number(l.otpadPostotak) || 0) / 100)) / ploca - 1e-9));
+        return { materijalId: "", katalogId: l.katalogId, nacinUnosa: "lim", duzinaM: 3, sirinaM: 1.5, komada, kolicina: Math.round(ploca * komada * kgPoM(l.katalogId) * 100) / 100, cijenaPoJed: 1.25, kvaliteta: "", izPonude: true };
+      }),
+    ];
     const noviProjekt = {
       id: uid("proj"), sifra, naziv, kupacId: ponuda.kupacId,
       status: "Odobren", vrijednost: Math.round(calc.cijenaKonacna), rokPocetka: todayISO(), rokZavrsetka: addDays(todayISO(), 60),
       opis: `Kreirano iz ponude ${ponuda.broj}.`,
-      izvorPonudaId: ponuda.id, pozicije: ponuda.pozicije || [], materijalStavke: sviMaterijalStavke, ostaleStavke: sveOstaleStavke,
+      izvorPonudaId: ponuda.id, pozicije: ponuda.pozicije || [], materijalStavke: [...sviMaterijalStavke, ...materijalIzPonude], ostaleStavke: sveOstaleStavke,
       voditeljId: "", zadaci: noviZadaciIzStandarda(),
       faze: { ...praznaFazaSati(), ...Object.fromEntries(OPERACIJE.map((o) => [o.label, calc.satiPoOperaciji[o.key]])), "Montaža (teren)": calc.satiMontaze },
     };
@@ -9956,7 +9972,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
     patchProjekti([noviProjekt], []);
     update("radniNalozi", [...db.radniNalozi, ...noviNalozi]);
     update("ponude", db.ponude.map((p) => (p.id === ponuda.id ? { ...p, projektId: noviProjekt.id } : p)));
-    showToast(`Projekt ${noviProjekt.sifra} kreiran s ${noviNalozi.length} radnih naloga.`);
+    showToast(`Projekt ${noviProjekt.sifra} kreiran s ${noviNalozi.length} radnih naloga${materijalIzPonude.length ? ` i ${materijalIzPonude.length} stavki planiranog materijala (profili i limovi iz ponude)` : ""}.`);
     if (imaModulProjekti) setPage("projekti");
   };
 
