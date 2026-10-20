@@ -3746,6 +3746,20 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
   const postaviRedUnos = (i, patch) => setKatalogUnos((k) => ({ ...k, redovi: k.redovi.map((r, idx) => (idx === i ? { ...r, ...patch } : r)) }));
   const dodajRedUnos = () => setKatalogUnos((k) => ({ ...k, redovi: [...k.redovi, { duzinaMM: "", sirinaMM: "", komada: 1 }] }));
   const ukloniRedUnos = (i) => setKatalogUnos((k) => ({ ...k, redovi: k.redovi.filter((_, idx) => idx !== i) }));
+  // Matični broj za jednu dužinu/dimenziju (redak): zapis u matičnoj knjizi (Kontrola kvalitete) s komadima tog retka i šaržom;
+  // stanje na skladištu se ne mijenja (komadi su već u stanju), a broj dodjeljuje poslužitelj.
+  const mozeMaticne = (mojaPozicija?.moduli || []).includes("kontrola") && dozvolaZaKarticu(mojaPozicija, "kontrola", "maticna").izmjene;
+  const kreirajMaticniZaRed = (i) => {
+    const r = katalogUnos.redovi[i];
+    const mat = db.materijali.find((m) => m.id === form.id);
+    if (!mat) { showToast("Prvo spremi materijal, pa kreiraj matični broj."); return; }
+    const komada = Number(String(r.komada).replace(",", ".")) || 0;
+    if (!(komada > 0)) { showToast("Upiši broj komada za tu dužinu."); return; }
+    const opis = `${jeLimUnos ? `${r.duzinaMM || 0}×${r.sirinaMM || 0}` : `${r.duzinaMM || 0}`} mm`;
+    const zapis = { ...noviZapisMaticneKnjige({ mat, kolicina: komada, sarza: String(r.sarza || "").trim(), kvaliteta: mat.kvaliteta || "", narudzbenica: null, knjiga: db.maticnaKnjiga || [] }), dimenzije: opis };
+    update("maticnaKnjiga", [...(db.maticnaKnjiga || []), zapis]);
+    showToast(`Matični broj za ${opis} × ${komada} kreiran${zapis.sarza ? ` (šarža ${zapis.sarza})` : ""} — vidi ga u Kontroli kvalitete.`);
+  };
 
   const odaberiKatalogUnos = (katalogId) => {
     setKatalogUnos({ ...emptyKatalogUnos, katalogId });
@@ -3998,6 +4012,18 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
                     {i === 0 && <label className="label">Komada</label>}
                     <input className="input f-mono" type="number" min="0" step="1" aria-label={`Komada ${i + 1}`} value={r.komada} onChange={(e) => postaviRedUnos(i, { komada: e.target.value })} />
                   </div>
+                  {!jeKomadUnos && (
+                    <div style={{ width: 150 }}>
+                      {i === 0 && <label className="label">Šarža</label>}
+                      <input className="input f-mono" aria-label={`Šarža ${i + 1}`} placeholder="šarža (neobavezno)" value={r.sarza || ""} onChange={(e) => postaviRedUnos(i, { sarza: e.target.value })} />
+                    </div>
+                  )}
+                  {mozeMaticne && !jeKomadUnos && (
+                    <div>
+                      {i === 0 && <label className="label">&nbsp;</label>}
+                      <Btn size="sm" variant="ghost" icon={ShieldCheck} disabled={modal?.mode !== "edit" || !form.id} title={modal?.mode !== "edit" ? "Prvo spremi materijal, pa kreiraj matični broj" : "Kreira matični broj u Kontroli kvalitete za ovu dužinu (komada × šarža)"} onClick={() => kreirajMaticniZaRed(i)}>Kreiraj matični broj</Btn>
+                    </div>
+                  )}
                   {i === 0 && (
                     <div style={{ width: 170 }}>
                       <label className="label">Kvaliteta materijala</label>
@@ -4016,6 +4042,11 @@ function SkladistePage({ db, update, showToast, mojaPozicija }) {
                 </div>
               ))}
               {!jeKomadUnos && <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajRedUnos}>Dodaj još jednu {jeLimUnos ? "dimenziju" : "dužinu"}</Btn>}
+              {modal?.mode === "edit" && form.id && (db.maticnaKnjiga || []).some((z) => z.materijalId === form.id) && (
+                <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 8 }}>
+                  <strong>Matični brojevi ovog materijala:</strong> {[...(db.maticnaKnjiga || [])].filter((z) => z.materijalId === form.id).sort((a, b) => (Number(a.broj) || 0) - (Number(b.broj) || 0)).map((z) => `${z.broj} (${z.kolicinaPrimljeno} ${z.jm || "kom"}${z.dimenzije ? ` · ${z.dimenzije}` : ""}${z.sarza ? ` · šarža ${z.sarza}` : ""})`).join("; ")}
+                </div>
+              )}
               {modal?.mode === "edit" && form.id && Math.abs((Number(form.kolicina) || 0) - ukupnoKomadaUnos) > 0.0005 && (
                 <div style={{ fontSize: 12, color: "var(--rust)", marginTop: 6, fontWeight: 600 }}>Pažnja: trenutno stanje na skladištu je {form.kolicina} kom, a zbroj redaka je {ukupnoKomadaUnos} kom — spremanjem stanje postaje {ukupnoKomadaUnos} kom.</div>
               )}
