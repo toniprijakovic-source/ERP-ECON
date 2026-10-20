@@ -10151,7 +10151,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
             { key: "kopiraj", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Copy} onClick={() => kopirajPonudu(r)}>Kopiraj</Btn> },
             {
               key: "akcija", label: "", render: (r) =>
-                r.projektId ? <span style={{ fontSize: 11, color: "var(--green)" }}>→ {projSifra(r.projektId)}</span>
+                r.projektId && db.projekti.some((p) => p.id === r.projektId) ? <span style={{ fontSize: 11, color: "var(--green)" }}>→ {projSifra(r.projektId)}</span>
                 : r.status === "Prihvaćena" ? <Btn size="sm" icon={FolderInput} onClick={() => setPretvorba({ ponuda: r, tip: "standard", broj: "", naziv: r.naziv })}>Pretvori u projekt</Btn>
                 : null
             },
@@ -10176,7 +10176,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
             { key: "kopiraj", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Copy} onClick={() => kopirajLaser(r)}>Kopiraj</Btn> },
             {
               key: "akcija", label: "", render: (r) =>
-                r.projektId ? <span style={{ fontSize: 11, color: "var(--green)" }}>→ {projSifra(r.projektId)}</span>
+                r.projektId && db.projekti.some((p) => p.id === r.projektId) ? <span style={{ fontSize: 11, color: "var(--green)" }}>→ {projSifra(r.projektId)}</span>
                 : r.status === "Prihvaćena" ? <Btn size="sm" icon={FolderInput} onClick={() => setPretvorba({ ponuda: r, tip: "laser", broj: "", naziv: r.naziv })}>Pretvori u projekt</Btn>
                 : null
             },
@@ -10403,7 +10403,12 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
           label={del.type === "proj" || del.type === "laser" ? (del.row.naziv || del.row.broj) : del.row.broj}
           onCancel={() => setDel(null)}
           onConfirm={() => {
-            if (del.type === "proj") patchProjekti([], [del.row.id]);
+            if (del.type === "proj") {
+              patchProjekti([], [del.row.id]);
+              // ponude pretvorene u ovaj projekt opet postaju slobodne za pretvaranje u projekt
+              if (db.ponude.some((p) => p.projektId === del.row.id)) update("ponude", db.ponude.map((p) => (p.projektId === del.row.id ? { ...p, projektId: null } : p)));
+              if ((db.ponudeLasera || []).some((p) => p.projektId === del.row.id)) update("ponudeLasera", db.ponudeLasera.map((p) => (p.projektId === del.row.id ? { ...p, projektId: null } : p)));
+            }
             else if (del.type === "laser") update("ponudeLasera", db.ponudeLasera.filter((p) => p.id !== del.row.id));
             else update("ponude", db.ponude.filter((p) => p.id !== del.row.id));
             setDel(null);
