@@ -1136,7 +1136,7 @@ const zadnjaCijenaIzNarudzbenice = (materijalId, narudzbenice) => {
 // (redak pamti broj upita u upitBroj), pa se novi materijal naknadno dodan na projekt lako uključi u novi upit.
 const izabranZaUpit = (r) => (r.izborUpita !== undefined ? !!r.izborUpita : !r.upitBroj);
 
-function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = [], narudzbenice = [], dozvoliKatalog = false, projekti = null, kvalitete = [], izborUpita = false }) {
+function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = [], narudzbenice = [], dozvoliKatalog = false, dozvoliRucno = dozvoliKatalog, projekti = null, kvalitete = [], izborUpita = false }) {
   const addRow = () => setRows([...rows, mode === "materijal" ? { materijalId: "", nacinUnosa: "kolicina", kolicina: 1, duzinaM: 6, sirinaM: 1.25, komada: 1, cijenaPoJed: 0, kvaliteta: "" } : { opis: "", kolicina: 1, jm: "kom", cijenaJed: 0 }]);
   const removeRow = (i) => setRows(rows.filter((_, idx) => idx !== i));
   const update = (i, patch) => setRows(rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
@@ -1254,7 +1254,7 @@ function LineItemsEditor({ mode, rows = [], setRows, materijali = [], katalog = 
                   <label className="label">Materijal</label>
                   <select className="select" value={jeRucna ? "rucno::" : (r.materijalId || (r.katalogId ? `kat::${r.katalogId}` : ""))} onChange={(e) => odaberiMaterijal(i, e.target.value)}>
                     <option value="">Odaberi materijal…</option>
-                    {dozvoliKatalog && <option value="rucno::">✎ Ručno upiši naziv (bilo što)…</option>}
+                    {dozvoliRucno && <option value="rucno::">✎ Ručno upiši naziv (bilo što)…</option>}
                     <optgroup label="Zalihe (skladište)">
                       {materijali.map((m) => <option key={m.id} value={m.id}>{m.sifra} — {m.naziv}</option>)}
                     </optgroup>
@@ -8296,7 +8296,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
 
             <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line-strong)" }}>
               <div className="label" style={{ marginBottom: 2 }}>Materijal (iz skladišta) — za ovu stavku</div>
-              <LineItemsEditor mode="materijal" rows={p.materijalStavke || []} setRows={(rows) => updatePoz(p.id, { materijalStavke: rows })} materijali={materijaliSkladiste} katalog={katalog} narudzbenice={narudzbenice} kvalitete={kvalitete} />
+              <LineItemsEditor mode="materijal" rows={p.materijalStavke || []} setRows={(rows) => updatePoz(p.id, { materijalStavke: rows })} materijali={materijaliSkladiste} katalog={katalog} narudzbenice={narudzbenice} kvalitete={kvalitete} dozvoliRucno />
             </div>
 
             {otvorene[p.id] && (
@@ -10631,7 +10631,9 @@ function ZavrsenProjektAnalizaModal({ projekt, db, onClose }) {
     const neto = (Number(st.kolicinaIzdano) || 0) - (Number(st.kolicinaVraceno) || 0);
     return s2 + neto * (m ? Number(m.cijena) || 0 : 0);
   }, 0), 0);
-  const razlikaMaterijal = planiranoMaterijal != null ? stvarnoMaterijal - planiranoMaterijal : null;
+  // Ručno upisane stavke "Potrebnog materijala" (naziv bilo čega, ne prolaze skladište ni izdatnice): količina × cijena.
+  const rucniMaterijal = (projekt.materijalStavke || []).filter((s) => s.rucniNaziv !== undefined).reduce((a, s) => a + (Number(s.cijenaPoJed) || 0) * (Number(s.kolicina) || 0), 0);
+  const razlikaMaterijal = planiranoMaterijal != null ? stvarnoMaterijal + rucniMaterijal - planiranoMaterijal : null;
 
   return (
     <Modal wide title={`Analiza projekta — ${projekt.sifra} — ${projekt.naziv}`} onClose={onClose} footer={<Btn onClick={onClose}>Zatvori</Btn>}>
@@ -10666,9 +10668,10 @@ function ZavrsenProjektAnalizaModal({ projekt, db, onClose }) {
         <p style={{ fontSize: 12.5, color: "var(--ink-faint)", marginBottom: 10 }}>Projekt nije kreiran iz ponude — planirani trošak materijala nije poznat. Stvarni trošak (izdatnice) prikazan je ispod.</p>
       ) : null}
       <div className="card" style={{ padding: 14, background: "var(--surface-alt)" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, fontSize: 12.5 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, fontSize: 12.5 }}>
           <div><div style={{ color: "var(--ink-soft)" }}>Planirano (ponuda)</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{planiranoMaterijal != null ? fmtCurDec(planiranoMaterijal) : "—"}</div></div>
           <div><div style={{ color: "var(--ink-soft)" }}>Stvarno (izdatnice)</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(stvarnoMaterijal)}</div></div>
+          <div><div style={{ color: "var(--ink-soft)" }}>Ručno upisane stavke</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(rucniMaterijal)}</div></div>
           <div>
             <div style={{ color: "var(--ink-soft)" }}>Razlika</div>
             <div className="f-mono" style={{ fontSize: 15, fontWeight: 700, color: razlikaMaterijal == null ? "inherit" : razlikaMaterijal > 0 ? "var(--rust)" : razlikaMaterijal < 0 ? "var(--green)" : "inherit" }}>
