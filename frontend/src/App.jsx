@@ -2925,14 +2925,31 @@ const formatSifre = (sifra) => (/^\d{8}$/.test(String(sifra)) ? String(sifra).re
 const zaokruziKolicinu = (v) => Math.round((Number(v) || 0) * 1000) / 1000;
 
 // Izdavanje materijala na projekt prvo troši rezervaciju tog projekta za taj materijal.
-const potrosiRezervacije = (rezervacije, materijalId, projektId, kolicina) => {
+// izdanoPoDuzinama (neobavezno): [{ duzinaMM, sirinaMM, izdano }] — rezervacija po dužinama prvo gubi komade upravo izdanih dužina.
+const potrosiRezervacije = (rezervacije, materijalId, projektId, kolicina, izdanoPoDuzinama = null) => {
   if (!projektId) return rezervacije;
   let ostalo = Number(kolicina) || 0;
   return rezervacije.map((r) => {
     if (r.materijalId !== materijalId || r.projektId !== projektId || ostalo <= 0) return r;
     const uzmi = Math.min(Number(r.kolicina) || 0, ostalo);
     ostalo -= uzmi;
-    return { ...r, kolicina: zaokruziKolicinu((Number(r.kolicina) || 0) - uzmi) };
+    let po = r.po;
+    if (Array.isArray(po) && po.length) {
+      let zaSkinuti = uzmi;
+      po = po.map((x) => {
+        const iz = (izdanoPoDuzinama || []).find((i) => Number(i.duzinaMM) === Number(x.duzinaMM) && (Number(i.sirinaMM) || 0) === (Number(x.sirinaMM) || 0));
+        if (!iz || zaSkinuti <= 0) return x;
+        const skini = Math.min(Number(x.komada) || 0, Number(iz.izdano) || 0, zaSkinuti);
+        zaSkinuti -= skini;
+        return { ...x, komada: zaokruziKolicinu((Number(x.komada) || 0) - skini) };
+      }).map((x) => {
+        if (zaSkinuti <= 0) return x;
+        const skini = Math.min(Number(x.komada) || 0, zaSkinuti);
+        zaSkinuti -= skini;
+        return { ...x, komada: zaokruziKolicinu((Number(x.komada) || 0) - skini) };
+      }).filter((x) => x.komada > 0.0005);
+    }
+    return { ...r, kolicina: zaokruziKolicinu((Number(r.kolicina) || 0) - uzmi), ...(po ? { po } : {}) };
   }).filter((r) => r.kolicina > 0.0005);
 };
 const rezerviranoZaMaterijal = (rezervacije, materijalId) => (rezervacije || []).filter((r) => r.materijalId === materijalId).reduce((s, r) => s + (Number(r.kolicina) || 0), 0);
@@ -3237,8 +3254,33 @@ function RezervacijeMaterijalaModal({ materijal, db, update, showToast, mozeMije
   const slobodno = (Number(materijal.kolicina) || 0) - rezervirano;
   const [projektId, setProjektId] = useState("");
   const [kolicina, setKolicina] = useState("");
+  const [poDuzinama, setPoDuzinama] = useState({}); // koliko komada koje dužine se rezervira (materijal s više dužina)
+  // Materijal s više dužina (npr. "3115 mm × 14; 3050 mm × 1"): rezervira se po dužinama, kao i izdavanje.
+  const katMat = db.katalogProfila.find((k) => k.id === materijal.katalogId);
+  const jeLimMat = katMat?.jedinica === "kg/m2";
+  const redoviMat = (() => {
+    if (materijal.jm !== "kom" || !katMat || katMat.jedinica === "kg/kom") return null;
+    const r = redoviIzDimenzija(materijal.dimenzije, materijal.kolicina, jeLimMat);
+    return r && r.length > 1 ? r : null;
+  })();
+  const kljucDuzine = (d, s) => `${Number(d)}x${Number(s) || 0}`;
+  const opisDuzineRez = (r) => `${jeLimMat && (r.sirinaMM || r.sirinaMM === 0) ? `${r.duzinaMM}×${r.sirinaMM}` : r.duzinaMM} mm`;
+  const rezerviranoPoDuzini = new Map();
+  njegove.forEach((r) => (r.po || []).forEach((x) => rezerviranoPoDuzini.set(kljucDuzine(x.duzinaMM, x.sirinaMM), (rezerviranoPoDuzini.get(kljucDuzine(x.duzinaMM, x.sirinaMM)) || 0) + (Number(x.komada) || 0))));
+  const slobodnoPoDuzini = (r) => Math.max(0, zaokruziKolicinu((Number(r.komada) || 0) - (rezerviranoPoDuzini.get(kljucDuzine(r.duzinaMM, r.sirinaMM)) || 0)));
   const projektNaziv = (id) => { const p = db.projekti.find((x) => x.id === id); return p ? `${p.sifra} — ${p.naziv}` : "(projekt više ne postoji)"; };
   const dodaj = () => {
+    if (redoviMat) {
+      if (!projektId) { showToast("Odaberi projekt."); return; }
+      const stavke = redoviMat.map((r, i) => ({ r, q: brojIzUnosa(poDuzinama[i]) })).filter((x) => x.q > 0);
+      if (!stavke.length) { showToast("Upiši koliko komada koje dužine rezerviraš."); return; }
+      const prekoracenje = stavke.find((x) => x.q > slobodnoPoDuzini(x.r) + 1e-9);
+      if (prekoracenje) { showToast(`Dužine ${opisDuzineRez({ duzinaMM: Number(prekoracenje.r.duzinaMM), sirinaMM: prekoracenje.r.sirinaMM ? Number(prekoracenje.r.sirinaMM) : null })} slobodno je samo ${slobodnoPoDuzini(prekoracenje.r)} kom.`); return; }
+      const po = stavke.map((x) => ({ duzinaMM: Number(x.r.duzinaMM), sirinaMM: x.r.sirinaMM ? Number(x.r.sirinaMM) : null, komada: x.q }));
+      update("rezervacije", [...sve, { id: uid("rez"), materijalId: materijal.id, projektId, kolicina: zaokruziKolicinu(po.reduce((a, x) => a + x.komada, 0)), po, datum: todayISO(), izvor: "rucno", napomena: "" }]);
+      setProjektId(""); setPoDuzinama({});
+      return;
+    }
     const k = Number(String(kolicina).replace(",", "."));
     if (!projektId || !(k > 0)) { showToast("Odaberi projekt i upiši količinu."); return; }
     update("rezervacije", [...sve, { id: uid("rez"), materijalId: materijal.id, projektId, kolicina: k, datum: todayISO(), izvor: "rucno", napomena: "" }]);
@@ -3260,8 +3302,8 @@ function RezervacijeMaterijalaModal({ materijal, db, update, showToast, mozeMije
           <tbody>
             {njegove.map((r) => (
               <tr key={r.id}>
-                <td>{projektNaziv(r.projektId)}</td>
-                <td>{mozeMijenjati
+                <td>{projektNaziv(r.projektId)}{(r.po || []).length > 0 && <div className="f-mono" style={{ fontSize: 11, color: "var(--ink-soft)" }}>{r.po.map((x) => `${opisDuzineRez(x)} × ${x.komada}`).join("; ")}</div>}</td>
+                <td>{mozeMijenjati && !(r.po || []).length
                   ? <input key={`${r.id}-${r.kolicina}`} className="input f-mono" style={{ padding: "4px 8px" }} defaultValue={r.kolicina} onBlur={(e) => { if (e.target.value !== String(r.kolicina)) promijeniKolicinu(r.id, e.target.value); }} />
                   : <span className="f-mono">{r.kolicina}</span>}</td>
                 <td className="f-mono">{fmtDate(r.datum)}</td>
@@ -3275,14 +3317,26 @@ function RezervacijeMaterijalaModal({ materijal, db, update, showToast, mozeMije
       {mozeMijenjati && (
         <>
           <div className="label">Nova rezervacija</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 130px auto", gap: 8, alignItems: "end" }}>
+          <div style={{ display: "grid", gridTemplateColumns: redoviMat ? "1fr auto" : "1fr 130px auto", gap: 8, alignItems: "end" }}>
             <select className="select" aria-label="Projekt" value={projektId} onChange={(e) => setProjektId(e.target.value)}>
               <option value="">— odaberi projekt —</option>
               {aktivni.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
             </select>
-            <input className="input f-mono" aria-label="Količina" inputMode="decimal" placeholder={`Količina (${materijal.jm})`} value={kolicina} onChange={(e) => setKolicina(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") dodaj(); }} />
+            {redoviMat ? null : <input className="input f-mono" aria-label="Količina" inputMode="decimal" placeholder={`Količina (${materijal.jm})`} value={kolicina} onChange={(e) => setKolicina(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") dodaj(); }} />}
             <Btn variant="primary" icon={Plus} onClick={dodaj}>Dodaj</Btn>
           </div>
+          {redoviMat && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginBottom: 4 }}>Upiši koliko komada koje dužine rezerviraš (prazno = ne rezervira se):</div>
+              {redoviMat.map((r, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                  <span className="f-mono" style={{ width: 230, fontSize: 12 }}>{opisDuzineRez({ duzinaMM: r.duzinaMM, sirinaMM: r.sirinaMM || null })} <span style={{ color: "var(--ink-faint)" }}>(na stanju: {r.komada}, slobodno: {slobodnoPoDuzini(r)})</span></span>
+                  <input className="input f-mono" style={{ width: 90 }} inputMode="decimal" placeholder="rezerviraj" aria-label={`Rezerviraj dužinu ${opisDuzineRez({ duzinaMM: r.duzinaMM, sirinaMM: r.sirinaMM || null })}`} value={poDuzinama[i] ?? ""} onChange={(e) => setPoDuzinama({ ...poDuzinama, [i]: e.target.value })} />
+                </div>
+              ))}
+              <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Ukupno rezerviraš: {zaokruziKolicinu(redoviMat.reduce((a, _, i) => a + brojIzUnosa(poDuzinama[i]), 0))} kom</div>
+            </div>
+          )}
         </>
       )}
       <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 10 }}>Rezervacije nastaju same kad se zaprimi narudžbenica sa stavkama „Za projekt“. Kad se materijal izda na projekt, prvo se troši rezervacija tog projekta.</p>
@@ -4116,7 +4170,10 @@ function IzdatnicaModal({ db, update, showToast, initialMaterijalId, onClose, on
     {
       const prije = db.rezervacije || [];
       let rez = prije;
-      zbrojPoMaterijalu.forEach((kol, matId) => { rez = potrosiRezervacije(rez, matId, projektId, kol); });
+      zbrojPoMaterijalu.forEach((kol, matId) => {
+        const izdanoPoDuzinama = validne.flatMap((st, k) => (st.materijalId === matId ? (izdaneDuzine.get(k) || []).map((r) => ({ duzinaMM: Number(r.duzinaMM), sirinaMM: r.sirinaMM ? Number(r.sirinaMM) : null, izdano: r.izdano })) : []));
+        rez = potrosiRezervacije(rez, matId, projektId, kol, izdanoPoDuzinama);
+      });
       if (rez.length !== prije.length || rez.some((r, i) => r !== prije[i])) update("rezervacije", rez);
     }
     showToast(`Izdatnica ${novaIzdatnica.broj} kreirana.`);
