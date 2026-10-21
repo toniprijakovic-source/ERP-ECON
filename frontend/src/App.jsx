@@ -4407,7 +4407,7 @@ function IzdatnicaPrintModal({ izdatnica, projekt, izdao, postavkeTvrtke, onClos
               <tr key={s.id || i}>
                 <td>{i + 1}.</td><td className="f-mono">{s.sifra}</td><td>{s.naziv}{(s.izdanoRedovi || []).length > 0 && <div style={{ fontSize: 9.5, color: "#555" }}>Dimenzije: {s.dimenzije}</div>}{(s.matBrojevi || []).some((a) => a.broj) && <div style={{ fontSize: 9.5, color: "#555" }}>Matični br.: {s.matBrojevi.filter((a) => a.broj).map((a) => a.broj).join(", ")}</div>}</td><td>{s.jm}</td>
                 <td className="f-mono">{s.kolicinaIzdano}</td>
-                <td className="f-mono">{s.kolicinaVraceno != null ? s.kolicinaVraceno : ""}{(s.povratRedovi || []).length > 0 && <div style={{ fontSize: 9.5, color: "#555" }}>{s.povratRedovi.map((r) => `${r.duzinaMM ? `${(r.duzinaMM / 1000).toLocaleString("hr-HR")}${r.sirinaMM ? `×${(r.sirinaMM / 1000).toLocaleString("hr-HR")}` : ""} m` : "cijeli"} × ${r.komada}`).join("; ")}</div>}</td>
+                <td className="f-mono">{s.kolicinaVraceno != null ? s.kolicinaVraceno : ""}{(s.povratRedovi || []).length > 0 && <div style={{ fontSize: 9.5, color: "#555" }}>{s.povratRedovi.map((r) => `${r.duzinaMM ? `${r.duzinaMM}${r.sirinaMM ? `×${r.sirinaMM}` : ""} mm` : "cijeli"} × ${r.komada}`).join("; ")}</div>}</td>
               </tr>
             ))}
             {Array.from({ length: PRAZNI_REDOVI }).map((_, i) => (
@@ -4459,7 +4459,7 @@ function ZaprimiPovratModal({ izdatnica, db, update, showToast, onClose }) {
       const kol = Math.round(ukupnoVraceno(st) * 1000) / 1000;
       const jeLim = jeLimMat(mat);
       const povratRedovi = st.jm === "kom"
-        ? (redovi[st.id] || []).filter((x) => brojIzUnosa(x.komada) > 0).map((x) => ({ duzinaMM: brojIzUnosa(x.duzina) > 0 ? Math.round(brojIzUnosa(x.duzina) * 1000) : null, sirinaMM: jeLim && brojIzUnosa(x.sirina) > 0 ? Math.round(brojIzUnosa(x.sirina) * 1000) : null, komada: brojIzUnosa(x.komada) }))
+        ? (redovi[st.id] || []).filter((x) => brojIzUnosa(x.komada) > 0).map((x) => ({ duzinaMM: brojIzUnosa(x.duzina) > 0 ? Math.round(brojIzUnosa(x.duzina)) : null, sirinaMM: jeLim && brojIzUnosa(x.sirina) > 0 ? Math.round(brojIzUnosa(x.sirina)) : null, komada: brojIzUnosa(x.komada) }))
         : [];
       if (kol > 0) {
         noviMaterijali = noviMaterijali.map((m) => {
@@ -4488,7 +4488,7 @@ function ZaprimiPovratModal({ izdatnica, db, update, showToast, onClose }) {
 
   return (
     <Modal wide title={`Zaprimi povrat — Izdatnica ${izdatnica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={potvrdi} disabled={saljem}>{saljem ? "Spremanje…" : "Zaprimi povrat"}</Btn></>}>
-      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Upiši što se od izdanog vraća na skladište (ostavi prazno ako je sve utrošeno). Za profile i limove upiši dužinu u metrima i broj komada — redaka može biti više, za svaku dužinu jedan. Prazna dužina znači cijeli komad kao što je izdano.</p>
+      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Upiši što se od izdanog vraća na skladište (ostavi prazno ako je sve utrošeno). Za profile i limove upiši dužinu u milimetrima i broj komada — redaka može biti više, za svaku dužinu jedan. Prazna dužina znači cijeli komad kao što je izdano.</p>
       <table className="erp-table">
         <thead><tr><th>Materijal</th><th style={{ width: 100 }}>Izdano</th><th style={{ width: 360 }}>Vraćeno</th></tr></thead>
         <tbody>
@@ -4505,8 +4505,8 @@ function ZaprimiPovratModal({ izdatnica, db, update, showToast, onClose }) {
                     <>
                       {(redovi[st.id] || []).map((r, i) => (
                         <div key={i} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
-                          <input className="input f-mono" style={{ width: 100 }} inputMode="decimal" placeholder="dužina (m)" aria-label={`Dužina u metrima ${i + 1}`} value={r.duzina} onChange={(e) => postaviRed(st.id, i, { duzina: e.target.value })} />
-                          {jeLim && <input className="input f-mono" style={{ width: 100 }} inputMode="decimal" placeholder="širina (m)" aria-label={`Širina u metrima ${i + 1}`} value={r.sirina} onChange={(e) => postaviRed(st.id, i, { sirina: e.target.value })} />}
+                          <input className="input f-mono" style={{ width: 100 }} inputMode="decimal" placeholder="dužina (mm)" aria-label={`Dužina u milimetrima ${i + 1}`} value={r.duzina} onChange={(e) => postaviRed(st.id, i, { duzina: e.target.value })} />
+                          {jeLim && <input className="input f-mono" style={{ width: 100 }} inputMode="decimal" placeholder="širina (mm)" aria-label={`Širina u milimetrima ${i + 1}`} value={r.sirina} onChange={(e) => postaviRed(st.id, i, { sirina: e.target.value })} />}
                           <span style={{ color: "var(--ink-faint)" }}>×</span>
                           <input className="input f-mono" style={{ width: 80 }} inputMode="decimal" placeholder="komada" aria-label={`Komada ${i + 1}`} value={r.komada} onChange={(e) => postaviRed(st.id, i, { komada: e.target.value })} />
                           {(redovi[st.id] || []).length > 1 && <button type="button" className="btn btn-icon btn-ghost" aria-label={`Ukloni redak ${i + 1}`} onClick={() => ukloniRed(st.id, i)}><X size={14} /></button>}
