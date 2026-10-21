@@ -3210,9 +3210,9 @@ function JavnaKarticaMaticnog({ broj }) {
 // Ostali slučajevi (jedna dimenzija, Kontrola kvalitete) idu na izbor matičnog broja.
 function NaljepnicaMaterijalaModal(props) {
   const { materijal, db, dodajMaticne } = props;
-  const kat = (db.katalogProfila || []).find((k) => k.id === materijal.katalogId);
-  const jeLim = kat?.jedinica === "kg/m2";
-  const redovi = dodajMaticne && kat && kat.jedinica !== "kg/kom" ? redoviIzDimenzija(materijal.dimenzije, materijal.kolicina, jeLim) : null;
+  const f = formatiMaterijala(materijal, db);
+  const jeLim = !!f?.jeLim;
+  const redovi = dodajMaticne && f ? redoviIzDimenzija(materijal.dimenzije, materijal.kolicina, jeLim) : null;
   if (redovi && redovi.length > 1) return <NaljepnicaPoDimenzijama {...props} jeLim={jeLim} redovi={redovi} />;
   return <NaljepnicaMaticnogModal {...props} />;
 }
@@ -3807,9 +3807,10 @@ const sarzePoDimenzijama = (materijal, knjiga, kljuceviDimenzija, jeLim = true) 
 // Dimenzije materijala u popisu zaliha: stupci Dimenzije / Stanje / Šarža / Lokacija prikazuju po jedan red za svaku dimenziju
 // (isti razmak redaka u svim stupcima, pa su redovi poravnati); šarža dolazi iz matične knjige, lokacija iz obrasca materijala.
 const redoviZalihe = (materijal, knjiga, katalog) => {
-  const kat = (katalog || []).find((k) => k.id === materijal.katalogId);
-  const jeLim = kat?.jedinica === "kg/m2";
-  const redovi = kat && kat.jedinica !== "kg/kom" ? redoviIzDimenzija(materijal.dimenzije, materijal.kolicina, jeLim) : null;
+  // isto pravilo kao pri zaprimanju/izdavanju: materijal u komadima iz kataloga ili s dimenzijom u mm (npr. pocinčani lim "3000×1500 mm")
+  const f = formatiMaterijala(materijal, { katalogProfila: katalog });
+  const jeLim = !!f?.jeLim;
+  const redovi = f ? redoviIzDimenzija(materijal.dimenzije, materijal.kolicina, jeLim) : null;
   if (!redovi) return null;
   const kljucevi = redovi.map((r) => kljucDimenzije(r.duzinaMM, r.sirinaMM));
   const sarze = sarzePoDimenzijama(materijal, knjiga, kljucevi, jeLim);
