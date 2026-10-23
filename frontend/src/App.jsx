@@ -3862,6 +3862,8 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne }) {
   const [del, setDel] = useState(null);
   const [izdajZa, setIzdajZa] = useState(null); // materijalId za predpunjenje IzdatnicaModal, ili true za praznu
   const [prikaziNulte, setPrikaziNulte] = useState(false); // materijal sa stanjem 0 je inače skriven s popisa zaliha
+  const [filterNaziv, setFilterNaziv] = useState("");
+  const [filterKvaliteta, setFilterKvaliteta] = useState(""); // "" = sve kvalitete
   const [grupaZaliha, setGrupaZaliha] = useState(() => { try { return localStorage.getItem("erp_skladiste_grupa") || "profili"; } catch { return "profili"; } }); // "profili" | "ploce" | "ostalo"
   const [rezZa, setRezZa] = useState(null); // materijalId čije se rezervacije uređuju
   const [naljepnicaZa, setNaljepnicaZa] = useState(null); // materijalId za ispis naljepnice
@@ -4032,7 +4034,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne }) {
         {(() => {
           const vidljivi = prikaziNulte ? db.materijali : db.materijali.filter((m) => Number(m.kolicina) > 0);
           const broj = (g) => vidljivi.filter((m) => grupaMaterijala(m, db.katalogProfila) === g).length;
-          const odaberi = (g) => { setGrupaZaliha(g); try { localStorage.setItem("erp_skladiste_grupa", g); } catch { /* pohrana nije dostupna */ } };
+          const odaberi = (g) => { setGrupaZaliha(g); setFilterKvaliteta(""); try { localStorage.setItem("erp_skladiste_grupa", g); } catch { /* pohrana nije dostupna */ } };
           return (
             <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
               {[["profili", "Skladište profila"], ["ploce", "Skladište ploča"], ["ostalo", "Ostalo"]].map(([g, naziv]) => (
@@ -4050,27 +4052,50 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne }) {
             </label>
           );
         })()}
+        {(() => {
+          const uGrupi = (prikaziNulte ? db.materijali : db.materijali.filter((m) => Number(m.kolicina) > 0)).filter((m) => grupaMaterijala(m, db.katalogProfila) === grupaZaliha);
+          const kvalitete = [...new Set(uGrupi.map((m) => String(m.kvaliteta || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "hr"));
+          const aktivno = filterNaziv.trim() || filterKvaliteta;
+          return (
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 10 }}>
+              <div style={{ width: 240 }}>
+                <label className="label">Naziv</label>
+                <input className="input" aria-label="Filter po nazivu" placeholder="dio naziva, npr. Lim 8" value={filterNaziv} onChange={(e) => setFilterNaziv(e.target.value)} />
+              </div>
+              <div style={{ width: 200 }}>
+                <label className="label">Kvaliteta</label>
+                <select className="select" aria-label="Filter po kvaliteti" value={filterKvaliteta} onChange={(e) => setFilterKvaliteta(e.target.value)}>
+                  <option value="">Sve kvalitete</option>
+                  {kvalitete.map((k) => <option key={k} value={k}>{k}</option>)}
+                  {uGrupi.some((m) => !String(m.kvaliteta || "").trim()) && <option value="__bez__">bez kvalitete</option>}
+                </select>
+              </div>
+              {aktivno && <Btn variant="ghost" size="sm" onClick={() => { setFilterNaziv(""); setFilterKvaliteta(""); }}>Poništi filtere</Btn>}
+            </div>
+          );
+        })()}
         <EntityPage
-          title="" data={(prikaziNulte ? db.materijali : db.materijali.filter((m) => Number(m.kolicina) > 0)).filter((m) => grupaMaterijala(m, db.katalogProfila) === grupaZaliha)} onAdd={openAdd} onEdit={openEdit} onDelete={(row) => setDel(row)}
+          title="" data={(prikaziNulte ? db.materijali : db.materijali.filter((m) => Number(m.kolicina) > 0)).filter((m) => grupaMaterijala(m, db.katalogProfila) === grupaZaliha)
+            .filter((m) => !filterNaziv.trim() || String(m.naziv || "").toLowerCase().includes(filterNaziv.trim().toLowerCase()))
+            .filter((m) => !filterKvaliteta || (filterKvaliteta === "__bez__" ? !String(m.kvaliteta || "").trim() : String(m.kvaliteta || "").trim() === filterKvaliteta))} onAdd={openAdd} onEdit={openEdit} onDelete={(row) => setDel(row)}
           addLabel="Novi materijal" searchKeys={["sifra", "naziv", "tip"]} readOnly={!mozeZalihe}
           rowClass={(row) => (row.kolicina < row.minZaliha ? "row-warn" : "")}
           columns={[
             { key: "sifra", label: "Šifra", render: (r) => <span className="f-mono">{formatSifre(r.sifra)}</span> },
             { key: "naziv", label: "Naziv" },
-            { key: "tip", label: "Tip" },
             { key: "kvaliteta", label: "Kvaliteta", render: (r) => r.kvaliteta || <span style={{ color: "var(--ink-faint)" }}>—</span> },
             { key: "dimenzije", label: "Dimenzije", render: (r) => <ZalihaStupac vrsta="dimenzije" materijal={r} knjiga={db.maticnaKnjiga} katalog={db.katalogProfila} /> },
             { key: "kolicina", label: "Stanje", render: (r) => (redoviZalihe(r, db.maticnaKnjiga, db.katalogProfila)
               ? <ZalihaStupac vrsta="kolicina" materijal={r} knjiga={db.maticnaKnjiga} katalog={db.katalogProfila} />
               : <span className="f-mono" style={{ color: r.kolicina < r.minZaliha ? "var(--rust)" : "inherit", fontWeight: r.kolicina < r.minZaliha ? 700 : 400 }}>{r.kolicina} {r.jm}{r.kolicina < r.minZaliha && <AlertTriangle size={12} style={{ marginLeft: 4, verticalAlign: -2 }} />}</span>) },
-            { key: "rezervirano", label: "Rezervirano / Slobodno", render: (r) => {
+            { key: "rezervirano", label: "Raspoloživost", render: (r) => {
               const rez = rezPoMaterijalu.get(r.id) || 0;
               const slob = (Number(r.kolicina) || 0) - rez;
-              const oznaka = { color: "var(--ink-faint)", fontSize: 11, display: "inline-block", width: 34 };
+              const oznaka = { color: "var(--ink-faint)", fontSize: 11, display: "inline-block", width: 70 };
               return (
                 <div style={{ fontSize: 12.5, lineHeight: "18px", whiteSpace: "nowrap" }}>
-                  <div><span style={oznaka}>Rez.</span>{rez > 0 ? <span className="f-mono" style={{ color: rez > r.kolicina ? "var(--rust)" : "var(--steel)", fontWeight: 600 }}>{zaokruziKolicinu(rez)} {r.jm}</span> : <span style={{ color: "var(--ink-faint)" }}>—</span>}</div>
-                  <div><span style={oznaka}>Slob.</span><span className="f-mono" style={{ color: slob < 0 ? "var(--rust)" : "inherit", fontWeight: slob < 0 ? 700 : 400 }}>{zaokruziKolicinu(slob)} {r.jm}</span></div>
+                  <div><span style={oznaka}>Rezervirano</span>{rez > 0 ? <span className="f-mono" style={{ color: rez > r.kolicina ? "var(--rust)" : "var(--steel)", fontWeight: 600 }}>{zaokruziKolicinu(rez)} {r.jm}</span> : <span style={{ color: "var(--ink-faint)" }}>—</span>}</div>
+                  <div><span style={oznaka}>Slobodno</span><span className="f-mono" style={{ color: slob < 0 ? "var(--rust)" : "inherit", fontWeight: slob < 0 ? 700 : 400 }}>{zaokruziKolicinu(slob)} {r.jm}</span></div>
                 </div>
               );
             } },
