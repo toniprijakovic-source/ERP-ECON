@@ -126,6 +126,8 @@ const KARTICE_MODULA = {
 // Zadatke svih zaposlenika (slobodniZadaci) vide samo ove pozicije; ostali dobivaju samo zadatke
 // koji su njima dodijeljeni ili koje su sami dodali.
 const POZICIJE_SVI_ZADACI = ["poz-direktor", "poz-administrator"];
+// Ove pozicije smiju zadavati zadatke drugima s nadzorne ploče i bez pristupa projektima (npr. voditelj proizvodnje).
+const POZICIJE_ZADAVANJE_ZADATAKA = ["poz-voditelj-proizvodnje"];
 const filtrirajSlobodneZadatke = (zadaci, pozicija, zaposlenikId) => (Array.isArray(zadaci) && !POZICIJE_SVI_ZADACI.includes(pozicija?.id)
   ? zadaci.filter((z) => z.dodijeljenoId === zaposlenikId || z.kreiraoId === zaposlenikId)
   : zadaci);
@@ -777,7 +779,7 @@ app.put("/api/obavijesti/potvrdi", autentikacija, async (req, res) => {
 // trenutni zaključani popis u bazi, da istodobne izmjene ne prepišu jedna drugu.
 app.put("/api/slobodniZadaci/patch", autentikacija, async (req, res) => {
   const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
-  const upravitelj = izracunajDozvoljeneKljuceve(pozicija).pisivo.has("projekti");
+  const upravitelj = izracunajDozvoljeneKljuceve(pozicija).pisivo.has("projekti") || POZICIJE_ZADAVANJE_ZADATAKA.includes(pozicija?.id);
   const upsert = Array.isArray(req.body.upsert) ? req.body.upsert : [];
   const remove = Array.isArray(req.body.remove) ? req.body.remove : [];
   const danas = new Date().toISOString().slice(0, 10);

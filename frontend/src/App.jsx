@@ -2598,7 +2598,8 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
   // Zadatke svih zaposlenika vide samo direktor i glavni administrator; ostali vide samo svoje.
   const mozeVidjetiTudje = ["poz-direktor", "poz-administrator"].includes(mojaPozicija?.id);
   // Zadavati zadatke drugoj osobi (i brisati tuđe) smiju još i korisnici s pristupom projektima.
-  const mozeZadavatiDrugima = mozeVidjetiTudje || ((mojaPozicija?.moduli || []).includes("projekti") && dozvolaZaKarticu(mojaPozicija, "projekti", "projekti").pristup);
+  // Voditelj proizvodnje ih smije zadavati i bez modula Projekti (isto pravilo kao na poslužitelju: POZICIJE_ZADAVANJE_ZADATAKA).
+  const mozeZadavatiDrugima = mozeVidjetiTudje || mojaPozicija?.id === "poz-voditelj-proizvodnje" || ((mojaPozicija?.moduli || []).includes("projekti") && dozvolaZaKarticu(mojaPozicija, "projekti", "projekti").pristup);
   const imeZaposlenika = (id) => { const z = db.zaposlenici.find((x) => x.id === id); return z ? `${z.prezime} ${z.ime}` : "—"; };
   const sviOtvoreniZadaci = [];
   db.projekti.forEach((p) => {
