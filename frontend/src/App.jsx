@@ -1952,6 +1952,7 @@ export default function App() {
   const [db, setDb] = useState(null);
   const [page, setPage] = useState("dashboard");
   const [transportiTab, setTransportiTab] = useState(null); // kartica Transporta koja se otvara iz nadzorne ploče
+  const [zaposleniciPocetak, setZaposleniciPocetak] = useState(null); // { tab, prikaz } kartice Zaposlenika koja se otvara iz nadzorne ploče
   const [kkProjektId, setKkProjektId] = useState(null); // projekt čiji se popis ugrađenog materijala otvara u Kontroli kvalitete
   const [otvoriProjektId, setOtvoriProjektId] = useState(null); // id projekta čije detalje treba otvoriti pri dolasku na Projekte
   const [toast, setToast] = useState(null);
@@ -2431,7 +2432,7 @@ export default function App() {
         )}
 
         <div className="erp-sadrzaj" style={{ padding: 24, flex: 1, overflowY: "auto", minWidth: 0 }}>
-          {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} patchZadatakNapomena={patchZadatakNapomena} potvrdiObavijesti={potvrdiObavijesti} otvoriTransporte={() => { setTransportiTab("narudzbe"); setPage("transporti"); }} />}
+          {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} patchZadatakNapomena={patchZadatakNapomena} potvrdiObavijesti={potvrdiObavijesti} otvoriTransporte={() => { setTransportiTab("narudzbe"); setPage("transporti"); }} otvoriUskladenost={() => { setZaposleniciPocetak({ tab: "satinalozi", prikaz: "uskladenost" }); setPage("zaposlenici"); }} />}
           {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} dodajMaticne={dodajMaticne} />}
           {aktivnaStranica === "kontrola" && <KontrolaKvalitetePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} projektId={kkProjektId} ocistiProjekt={() => setKkProjektId(null)} />}
           {aktivnaStranica === "transporti" && <TransportiPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} pocetniTab={transportiTab} ocistiTab={() => setTransportiTab(null)} />}
@@ -2440,7 +2441,7 @@ export default function App() {
           {(aktivnaStranica === "projekti" || aktivnaStranica === "ponude") && <ProjektiPage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} patchProjekt={patchProjekt} patchProjekti={patchProjekti} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjektId={otvoriProjektId} ocistiOtvoriProjekt={() => setOtvoriProjektId(null)} otvoriKvalitetu={dopusteniKljucevi.includes("kontrola") ? (id) => { setKkProjektId(id); setPage("kontrola"); } : undefined} />}
           {(aktivnaStranica === "otpremnice" || aktivnaStranica === "fakturiranje") && <FakturiranjePage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} />}
           {aktivnaStranica === "partneri" && <PartneriPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
-          {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} patchEvidencija={patchEvidencija} mojaPozicija={mojaPozicija} />}
+          {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} patchEvidencija={patchEvidencija} mojaPozicija={mojaPozicija} pocetak={zaposleniciPocetak} ocistiPocetak={() => setZaposleniciPocetak(null)} />}
         </div>
 
       </div>
@@ -2583,7 +2584,7 @@ function NapomenaZadatka({ zadatak, imeZaposlenika, mozeUredjivati, onSpremi, uv
 }
 
 /* ============================== DASHBOARD ============================== */
-function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, patchZadatakIzvrseno, patchZadatakNapomena, potvrdiObavijesti, otvoriTransporte }) {
+function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, patchZadatakIzvrseno, patchZadatakNapomena, potvrdiObavijesti, otvoriTransporte, otvoriUskladenost }) {
   const [zadaciZa, setZadaciZa] = useState("moji"); // "moji" | "svi" | id zaposlenika
   const [skupinaZadataka, setSkupinaZadataka] = useState("aktualni"); // "aktualni" | "zavrseni"
   const [dodajZadatakOtvoreno, setDodajZadatakOtvoreno] = useState(false);
@@ -2621,6 +2622,14 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
   };
   const mozeMijenjatiProjekte = (mojaPozicija?.moduli || []).includes("projekti") && dozvolaZaKarticu(mojaPozicija, "projekti", "projekti").izmjene;
   // Transporti koji još nisu obavljeni (narudžba za transport bez isporučenog CMR-a), po datumu utovara.
+  // Upozorenje o neusklađenim satima radione (evidencija rada vs razdužene sate): zadnjih 14 dana do prekjučer (jučer još ima rok).
+  const vidiUskladenost = (mojaPozicija?.moduli || []).includes("zaposlenici") && dozvolaZaKarticu(mojaPozicija, "zaposlenici", "satinalozi").pristup;
+  const uskladenost = useMemo(() => {
+    if (!vidiUskladenost) return null;
+    const danas = todayISO();
+    const u = uskladenostSati(db, dodajDane(danas, -15), dodajDane(danas, -2));
+    return u.brojDana > 0 ? u : null;
+  }, [vidiUskladenost, db.zaposlenici, db.evidencijaRada, db.satiPoNalogu, db.postavkePlaca, db.pozicijeZaposlenika]); // eslint-disable-line react-hooks/exhaustive-deps
   const vidiTransporte = (mojaPozicija?.moduli || []).includes("transporti");
   const transportiUToku = vidiTransporte ? (db.narudzbeTransporta || []).filter((n) => statusNarudzbeTransporta(n, db.cmr) !== "Prevezeno").sort((a, b) => (a.utovarDatum || "9999").localeCompare(b.utovarDatum || "9999")) : [];
   const spremiNapomenuSlobodnog = (id, tekst) => update("slobodniZadaci", slobodniZadaci.map((z) => (z.id === id ? { ...z, napomena: tekst || null, napomenaAutorId: tekst ? mojId : null, napomenaDatum: tekst ? todayISO() : null } : z)));
@@ -2786,6 +2795,26 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
             </table>
           )}
         </div>
+
+        {uskladenost && (
+          <div className="card" style={{ padding: 16, borderLeft: "3px solid var(--rust)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8 }}>
+              <AlertTriangle size={15} color="var(--rust)" />
+              <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600 }}>Neusklađeni sati (radiona)</h3>
+              <Btn variant="ghost" size="sm" onClick={otvoriUskladenost} style={{ marginLeft: "auto" }}>Otvori</Btn>
+            </div>
+            <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 8 }}>
+              {uskladenost.brojRadnika} {uskladenost.brojRadnika === 1 ? "radnik ima" : "radnika ima"} ukupno {uskladenost.brojDana} {uskladenost.brojDana === 1 ? "dan" : "dana"} u zadnjih 14 dana u kojima se sati iz evidencije i razduženi sati ne poklapaju.
+            </div>
+            {uskladenost.redovi.filter((r) => r.dani.length > 0).slice(0, 5).map((r) => (
+              <div key={r.zaposlenik.id} onClick={otvoriUskladenost} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12.5, padding: "4px 0", borderTop: "1px solid var(--line)", cursor: "pointer" }}>
+                <span>{r.zaposlenik.prezime} {r.zaposlenik.ime}</span>
+                <span className="f-mono" style={{ color: "var(--rust)" }}>{r.dani.length} {r.dani.length === 1 ? "dan" : "dana"}</span>
+              </div>
+            ))}
+            {uskladenost.brojRadnika > 5 && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 4 }}>… i još {uskladenost.brojRadnika - 5}</div>}
+          </div>
+        )}
 
         {vidiTransporte && (
           <div className="card" style={{ padding: 16 }}>
@@ -15131,8 +15160,46 @@ function ObracunVanjskiPrintModal({ redovi, mjesec, db, onClose }) {
 // Dnevni unos sati po radnom nalogu, po zaposleniku. "utrosenoSati" na radnom nalogu postaje
 // IZVEDENO polje (zbroj ovih redaka) umjesto ručno upisanog broja — vidi zbrojSatiZaNalog i
 // polje "Utrošeno sati" u ProizvodnjaPage.
-function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
-  const [prikaz, setPrikaz] = useState("dnevno"); // "dnevno" (unos) | "mjesecno" (pregled po nalozima/operacijama)
+// Usklađenost sati radione: sati iz evidencije rada (samo stvarni rad, obračunski sati) uspoređeni s razduženim satima
+// (sati po nalozima + stalni poslovi) po radniku i danu, za razdoblje od-do (uključivo). Tekući dan se ne računa — poziva
+// se s "do" najkasnije jučer. Vraća sažetak i radnike s popisom dana koji se ne poklapaju.
+const dodajDane = (iso, n) => { const d = new Date(`${iso}T12:00:00`); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const uskladenostSati = (db, od, do_) => {
+  const radnici = (db.zaposlenici || []).filter((z) => z.status === "Aktivan" && grupaEvidencije(z, db.pozicijeZaposlenika) === "radiona");
+  const ids = new Set(radnici.map((z) => z.id));
+  const ev = new Map(), raz = new Map(); // zaposlenikId -> Map(datum -> sati)
+  const dodaj = (m, id, datum, h) => { const dani = m.get(id) || new Map(); dani.set(datum, (dani.get(datum) || 0) + h); m.set(id, dani); };
+  (db.evidencijaRada || []).forEach((e) => {
+    if ((e.vrsta || "rad") !== "rad" || !ids.has(e.zaposlenikId)) return;
+    const d = e.vrijemeDolaska.slice(0, 10);
+    if (d < od || d > do_) return;
+    dodaj(ev, e.zaposlenikId, d, e.vrijemeOdlaska ? obracunskiSati(e.vrijemeDolaska, e.vrijemeOdlaska, odrediSmjenu(e.vrijemeDolaska, db.postavkePlaca), db.postavkePlaca) : 0);
+  });
+  let projekti = 0, stalni = 0, bezRadnika = 0;
+  (db.satiPoNalogu || []).forEach((s) => {
+    if (s.datum < od || s.datum > do_) return;
+    const h = Number(s.sati) || 0;
+    if (!s.zaposlenikId) { bezRadnika += h; return; } // ukupni unos voditelja (Plan proizvodnje) — nema radnika
+    if (!ids.has(s.zaposlenikId)) return;
+    dodaj(raz, s.zaposlenikId, s.datum, h);
+    if (stalniPosao(s.radniNalogId)) stalni += h; else projekti += h;
+  });
+  let evidencija = 0;
+  const redovi = radnici.map((z) => {
+    const e = ev.get(z.id) || new Map(), r = raz.get(z.id) || new Map();
+    const dani = [...new Set([...e.keys(), ...r.keys()])].sort().map((datum) => ({ datum, ev: e.get(datum) || 0, raz: r.get(datum) || 0 })).filter((x) => Math.abs(x.ev - x.raz) > 0.01);
+    const sveEv = [...e.values()].reduce((a, h) => a + h, 0), sveRaz = [...r.values()].reduce((a, h) => a + h, 0);
+    evidencija += sveEv;
+    return { zaposlenik: z, evidencija: sveEv, razduzeno: sveRaz, razlika: sveEv - sveRaz, dani };
+  }).filter((r) => r.evidencija > 0 || r.razduzeno > 0).sort((a, b) => b.dani.length - a.dani.length || (a.zaposlenik.prezime + a.zaposlenik.ime).localeCompare(b.zaposlenik.prezime + b.zaposlenik.ime, "hr"));
+  const nerazdijeljeno = Math.max(0, evidencija - projekti - stalni - bezRadnika);
+  return { redovi, sazetak: { evidencija, projekti, stalni, bezRadnika, nerazdijeljeno, posto: evidencija > 0 ? ((projekti + stalni + bezRadnika) / evidencija) * 100 : 0 }, brojDana: redovi.reduce((a, r) => a + r.dani.length, 0), brojRadnika: redovi.filter((r) => r.dani.length > 0).length };
+};
+
+function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetniPrikaz = null }) {
+  const [prikaz, setPrikaz] = useState(pocetniPrikaz || "dnevno"); // "dnevno" (unos) | "mjesecno" (pregled po nalozima/operacijama) | "uskladenost"
+  const [uskladenostMjesec, setUskladenostMjesec] = useState(todayISO().slice(0, 7));
+  const [uskladenostOtvoren, setUskladenostOtvoren] = useState(null); // id radnika čiji se dani prikazuju
   const [datum, setDatum] = useState(todayISO());
   const [uredjivanje, setUredjivanje] = useState(null); // id zaposlenika trenutno otvorenog za unos
   const [redoviUnos, setRedoviUnos] = useState([]);
@@ -15253,7 +15320,79 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
       <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
         <div className={`nav-tab ${prikaz === "dnevno" ? "active" : ""}`} onClick={() => setPrikaz("dnevno")}>Dnevni unos</div>
         <div className={`nav-tab ${prikaz === "mjesecno" ? "active" : ""}`} onClick={() => setPrikaz("mjesecno")}>Pregled po mjesecu</div>
+        <div className={`nav-tab ${prikaz === "uskladenost" ? "active" : ""}`} onClick={() => setPrikaz("uskladenost")}>Usklađenost sati</div>
       </div>
+
+      {prikaz === "uskladenost" && (() => {
+        const jucer = dodajDane(todayISO(), -1);
+        const [g, m] = uskladenostMjesec.split("-").map(Number);
+        const zadnjiDan = `${uskladenostMjesec}-${String(new Date(g, m, 0).getDate()).padStart(2, "0")}`;
+        const doDana = zadnjiDan < jucer ? zadnjiDan : jucer;
+        const od = `${uskladenostMjesec}-01`;
+        const u = od > doDana ? null : uskladenostSati(db, od, doDana);
+        const DAN = ["ned", "pon", "uto", "sri", "čet", "pet", "sub"];
+        const h = (x) => (Math.round(x * 10) / 10).toLocaleString("hr-HR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+        const kartica = (naslov, vrijednost, boja, podnaslov) => (
+          <div className="card" style={{ padding: "10px 14px", minWidth: 160, flex: "1 1 160px" }}>
+            <div style={{ fontSize: 11, color: "var(--ink-soft)", textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>{naslov}</div>
+            <div className="f-mono" style={{ fontSize: 20, fontWeight: 700, color: boja || "inherit" }}>{vrijednost}</div>
+            {podnaslov && <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{podnaslov}</div>}
+          </div>
+        );
+        return (
+          <>
+            <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Usporedba sati iz evidencije rada (samo stvarni rad, obračunski sati) i razduženih sati (sati po nalozima i stalni poslovi) za radionu, po radniku i danu. Tekući dan se ne računa: provjerava se do jučer.</p>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+              <span className="label">Mjesec</span>
+              <MjesecOdabir value={uskladenostMjesec} onChange={(v) => { setUskladenostMjesec(v); setUskladenostOtvoren(null); }} />
+            </div>
+            {!u ? <EmptyState text="Za odabrani mjesec još nema dana koji se mogu provjeriti." /> : (
+              <>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+                  {kartica("Sati iz evidencije", `${h(u.sazetak.evidencija)} h`)}
+                  {kartica("Razdijeljeno na projekte", `${h(u.sazetak.projekti)} h`, null, u.sazetak.evidencija > 0 ? `${Math.round((u.sazetak.projekti / u.sazetak.evidencija) * 100)} % evidencije` : "")}
+                  {kartica("Stalni poslovi", `${h(u.sazetak.stalni)} h`, null, u.sazetak.evidencija > 0 ? `${Math.round((u.sazetak.stalni / u.sazetak.evidencija) * 100)} % evidencije` : "")}
+                  {u.sazetak.bezRadnika > 0 && kartica("Ukupni unos (bez radnika)", `${h(u.sazetak.bezRadnika)} h`, null, "Plan proizvodnje")}
+                  {kartica("Nerazdijeljeno", `${h(u.sazetak.nerazdijeljeno)} h`, u.sazetak.nerazdijeljeno > 0.05 ? "var(--rust)" : "var(--green)", `${u.brojRadnika} radnika, ${u.brojDana} dana ne poklapa se`)}
+                </div>
+                <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+                  <table className="erp-table">
+                    <thead><tr><th>Radnik</th><th style={{ width: 110, textAlign: "right" }}>Evidencija</th><th style={{ width: 110, textAlign: "right" }}>Razduženo</th><th style={{ width: 100, textAlign: "right" }}>Razlika</th><th style={{ width: 70, textAlign: "right" }}>%</th><th style={{ width: 190 }}>Dani koji se ne poklapaju</th></tr></thead>
+                    <tbody>
+                      {u.redovi.map((r) => {
+                        const otvoren = uskladenostOtvoren === r.zaposlenik.id;
+                        return (
+                          <React.Fragment key={r.zaposlenik.id}>
+                            <tr>
+                              <td>{r.zaposlenik.prezime} {r.zaposlenik.ime}</td>
+                              <td className="f-mono" style={{ textAlign: "right" }}>{h(r.evidencija)} h</td>
+                              <td className="f-mono" style={{ textAlign: "right" }}>{h(r.razduzeno)} h</td>
+                              <td className="f-mono" style={{ textAlign: "right", color: Math.abs(r.razlika) > 0.05 ? "var(--rust)" : "inherit", fontWeight: Math.abs(r.razlika) > 0.05 ? 700 : 400 }}>{r.razlika > 0.05 ? "+" : ""}{h(r.razlika)} h</td>
+                              <td className="f-mono" style={{ textAlign: "right", color: "var(--ink-soft)" }}>{r.evidencija > 0 ? `${Math.round((r.razduzeno / r.evidencija) * 100)} %` : "—"}</td>
+                              <td>{r.dani.length === 0 ? <span style={{ color: "var(--green)", fontSize: 12 }}>✓ sve se poklapa</span> : <Btn variant="ghost" size="sm" onClick={() => setUskladenostOtvoren(otvoren ? null : r.zaposlenik.id)}>{r.dani.length} {r.dani.length === 1 ? "dan" : "dana"} {otvoren ? "▲" : "▼"}</Btn>}</td>
+                            </tr>
+                            {otvoren && (
+                              <tr><td colSpan={6} style={{ background: "var(--surface-alt)" }}>
+                                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                  {r.dani.map((d) => (
+                                    <span key={d.datum} className="f-mono" style={{ fontSize: 12, padding: "3px 8px", border: "1px solid var(--line)", borderRadius: 3, background: "var(--surface)" }}>
+                                      {fmtDate(d.datum)} {DAN[new Date(`${d.datum}T12:00:00`).getDay()]}: evidencija {h(d.ev)} h, razduženo <strong style={{ color: "var(--rust)" }}>{h(d.raz)} h</strong>
+                                    </span>
+                                  ))}
+                                </div>
+                              </td></tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </>
+        );
+      })()}
 
       {prikaz === "dnevno" && (
       <>
@@ -15298,7 +15437,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
             <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Presjek evidentiranih sati po projektu za odabrani mjesec, po operaciji (fazi): sati svih radnih naloga projekta zbrojeni su u jedan stupac, a dodatna narudžba projekta ima zaseban stupac. Prikazani su samo projekti koji su taj mjesec imali unesene sate. Ispod su stalni poslovi izvan projekata (ako se isti dan upišu i po radniku i ukupno od voditelja, sati se zbrajaju).</p>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
               <span className="label">Mjesec</span>
-              <input className="input f-mono" type="month" style={{ width: 160 }} value={mjesecPregled} onChange={(e) => setMjesecPregled(e.target.value)} />
+              <MjesecOdabir value={mjesecPregled} onChange={setMjesecPregled} />
             </div>
             {nalozi.length === 0 ? <EmptyState text="Nema evidentiranih sati po nalozima za odabrani mjesec." /> : (
               <div className="card" style={{ padding: 0, overflowX: "auto" }}>
@@ -15654,9 +15793,11 @@ function GodisnjiOdmorTab({ db, update, showToast, mozeMijenjati }) {
   );
 }
 
-function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija, mojaPozicija }) {
+function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija, mojaPozicija, pocetak, ocistiPocetak }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "zaposlenici");
-  const [tab, setTab] = useState(dozvKartice[0]?.key || "zaposlenici");
+  // pocetak = { tab, prikaz }: otvaranje izravno na karticu (npr. upozorenje o usklađenosti sati s nadzorne ploče)
+  const [tab, setTab] = useState(() => (pocetak?.tab && dozvKartice.some((k) => k.key === pocetak.tab) ? pocetak.tab : (dozvKartice[0]?.key || "zaposlenici")));
+  useEffect(() => { if (pocetak && ocistiPocetak) ocistiPocetak(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "zaposlenici"); }, [dozvKartice, tab]);
   const mozeZaposlenici = dozvolaZaKarticu(mojaPozicija, "zaposlenici", "zaposlenici").izmjene;
   const mozePozicije = dozvolaZaKarticu(mojaPozicija, "zaposlenici", "pozicije").izmjene;
@@ -15788,7 +15929,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
       {tab === "evidencija" && <EvidencijaTab db={db} update={update} patchEvidencija={patchEvidencija} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "evidencija").izmjene} dozvoljeneGrupe={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "evidencija").grupe} />}
 
       {tab === "obracun" && <ObracunPlacaTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "obracun").izmjene} />}
-      {tab === "satinalozi" && <SatiPoNalozimaTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "satinalozi").izmjene} />}
+      {tab === "satinalozi" && <SatiPoNalozimaTab pocetniPrikaz={pocetak?.prikaz || null} db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "satinalozi").izmjene} />}
       {tab === "godisnji" && <GodisnjiOdmorTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "godisnji").izmjene} />}
 
       {modal === "zap" && (
