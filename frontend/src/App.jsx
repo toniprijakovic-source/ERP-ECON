@@ -1549,6 +1549,7 @@ const MODULI_APLIKACIJE = [
   { key: "otpremnice", label: "Otpremnice i CMR", icon: PackageCheck },
   { key: "fakturiranje", label: "Financije", icon: Receipt },
   { key: "partneri", label: "Kupci i dobavljači", icon: Users },
+  { key: "evidencijasati", label: "Evidencija sati", icon: Clock },
   { key: "zaposlenici", label: "Zaposlenici", icon: UserCog },
 ];
 
@@ -1568,7 +1569,8 @@ const KARTICE_MODULA = {
   otpremnice: { kartice: [{ key: "otpremnice", naziv: "Otpremnice" }, { key: "cmr", naziv: "CMR" }] },
   fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "podloge", naziv: "Podloge za fakturu" }, { key: "nedovrsena", naziv: "Nedovršena proizvodnja" }, { key: "analiza", naziv: "Analiza projekata" }, { key: "produktivnost", naziv: "Produktivnost (kg/h)" }, { key: "projekcija", naziv: "Projekcija" }] },
   partneri: { kartice: [{ key: "kupci", naziv: "Kupci" }, { key: "dobavljaci", naziv: "Dobavljači" }] },
-  zaposlenici: { kartice: [{ key: "zaposlenici", naziv: "Zaposlenici" }, { key: "pozicije", naziv: "Pozicije" }, { key: "evidencija", naziv: "Evidencija rada" }, { key: "obracun", naziv: "Obračun plaća" }, { key: "satinalozi", naziv: "Sati po nalozima" }, { key: "godisnji", naziv: "Godišnji odmor" }] },
+  evidencijasati: { kartice: [{ key: "evidencija", naziv: "Evidencija rada" }, { key: "satinalozi", naziv: "Sati po nalozima" }] },
+  zaposlenici: { kartice: [{ key: "zaposlenici", naziv: "Zaposlenici" }, { key: "pozicije", naziv: "Pozicije" }, { key: "obracun", naziv: "Obračun plaća" }, { key: "godisnji", naziv: "Godišnji odmor" }] },
 };
 
 // Dozvola za jednu karticu — po zadanom TRUE (naslijeđeno od dodjele modula), osim ako je
@@ -1952,7 +1954,7 @@ export default function App() {
   const [db, setDb] = useState(null);
   const [page, setPage] = useState("dashboard");
   const [transportiTab, setTransportiTab] = useState(null); // kartica Transporta koja se otvara iz nadzorne ploče
-  const [zaposleniciPocetak, setZaposleniciPocetak] = useState(null); // { tab, prikaz } kartice Zaposlenika koja se otvara iz nadzorne ploče
+  const [evidencijaSatiPocetak, setEvidencijaSatiPocetak] = useState(null); // { tab, prikaz, grupa } kartice Evidencije sati koja se otvara iz nadzorne ploče
   const [kkProjektId, setKkProjektId] = useState(null); // projekt čiji se popis ugrađenog materijala otvara u Kontroli kvalitete
   const [otvoriProjektId, setOtvoriProjektId] = useState(null); // id projekta čije detalje treba otvoriti pri dolasku na Projekte
   const [toast, setToast] = useState(null);
@@ -2432,7 +2434,7 @@ export default function App() {
         )}
 
         <div className="erp-sadrzaj" style={{ padding: 24, flex: 1, overflowY: "auto", minWidth: 0 }}>
-          {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} patchZadatakNapomena={patchZadatakNapomena} potvrdiObavijesti={potvrdiObavijesti} otvoriTransporte={() => { setTransportiTab("narudzbe"); setPage("transporti"); }} otvoriUskladenost={(grupa) => { setZaposleniciPocetak({ tab: "satinalozi", prikaz: "uskladenost", grupa: grupa || "radiona" }); setPage("zaposlenici"); }} />}
+          {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} patchZadatakNapomena={patchZadatakNapomena} potvrdiObavijesti={potvrdiObavijesti} otvoriTransporte={() => { setTransportiTab("narudzbe"); setPage("transporti"); }} otvoriUskladenost={(grupa) => { setEvidencijaSatiPocetak({ tab: "satinalozi", prikaz: "uskladenost", grupa: grupa || "radiona" }); setPage("evidencijasati"); }} />}
           {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} dodajMaticne={dodajMaticne} />}
           {aktivnaStranica === "kontrola" && <KontrolaKvalitetePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} projektId={kkProjektId} ocistiProjekt={() => setKkProjektId(null)} />}
           {aktivnaStranica === "transporti" && <TransportiPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} pocetniTab={transportiTab} ocistiTab={() => setTransportiTab(null)} />}
@@ -2441,7 +2443,8 @@ export default function App() {
           {(aktivnaStranica === "projekti" || aktivnaStranica === "ponude") && <ProjektiPage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} patchProjekt={patchProjekt} patchProjekti={patchProjekti} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjektId={otvoriProjektId} ocistiOtvoriProjekt={() => setOtvoriProjektId(null)} otvoriKvalitetu={dopusteniKljucevi.includes("kontrola") ? (id) => { setKkProjektId(id); setPage("kontrola"); } : undefined} />}
           {(aktivnaStranica === "otpremnice" || aktivnaStranica === "fakturiranje") && <FakturiranjePage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} />}
           {aktivnaStranica === "partneri" && <PartneriPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
-          {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} patchEvidencija={patchEvidencija} mojaPozicija={mojaPozicija} pocetak={zaposleniciPocetak} ocistiPocetak={() => setZaposleniciPocetak(null)} />}
+          {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} mojaPozicija={mojaPozicija} />}
+          {aktivnaStranica === "evidencijasati" && <EvidencijaSatiPage db={db} update={update} showToast={showToast} patchEvidencija={patchEvidencija} mojaPozicija={mojaPozicija} pocetak={evidencijaSatiPocetak} ocistiPocetak={() => setEvidencijaSatiPocetak(null)} />}
         </div>
 
       </div>
@@ -2623,7 +2626,7 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
   const mozeMijenjatiProjekte = (mojaPozicija?.moduli || []).includes("projekti") && dozvolaZaKarticu(mojaPozicija, "projekti", "projekti").izmjene;
   // Transporti koji još nisu obavljeni (narudžba za transport bez isporučenog CMR-a), po datumu utovara.
   // Upozorenje o neusklađenim satima radione (evidencija rada vs razdužene sate): zadnjih 14 dana do prekjučer (jučer još ima rok).
-  const vidiUskladenost = (mojaPozicija?.moduli || []).includes("zaposlenici") && dozvolaZaKarticu(mojaPozicija, "zaposlenici", "satinalozi").pristup;
+  const vidiUskladenost = (mojaPozicija?.moduli || []).includes("evidencijasati") && dozvolaZaKarticu(mojaPozicija, "evidencijasati", "satinalozi").pristup;
   const uskladenost = useMemo(() => {
     if (!vidiUskladenost) return null;
     const danas = todayISO();
@@ -6548,7 +6551,7 @@ function StalniPosloviDanas({ db, update, datum, showToast, mozeMijenjati }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 12, padding: "12px 16px", borderBottom: "1px solid var(--line)" }}>
         <div>
           <h3 className="f-display" style={{ fontSize: 16, fontWeight: 600 }}>Stalni poslovi (izvan projekata)</h3>
-          <p style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 2 }}>Ukupni sati po poslu za odabrani dan ({fmtDate(datum)}). Isti poslovi mogu se upisati i po radniku (Zaposlenici → Sati po nalozima); pregled po mjesecu je tamo. Za utovar–istovar, prijevoze i popravak može se upisati projekt na koji se sati odnose.</p>
+          <p style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 2 }}>Ukupni sati po poslu za odabrani dan ({fmtDate(datum)}). Isti poslovi mogu se upisati i po radniku (Evidencija sati → Sati po nalozima); pregled po mjesecu je tamo. Za utovar–istovar, prijevoze i popravak može se upisati projekt na koji se sati odnose.</p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <span className="f-mono" style={{ fontSize: 13 }}>Ukupno: <strong>{fmtSati(ukupno)} h</strong></span>
@@ -9397,7 +9400,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
           <div className="label">Radni nalozi</div>
           <Btn variant="ghost" size="sm" icon={Plus} onClick={kreirajRadneNaloge}>{satiNormativa ? "Kreiraj radne naloge iz normativa" : "Kreiraj radne naloge"}</Btn>
         </div>
-        {satiNormativa && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 6 }}>Kupaonice: nalozi dobivaju sate po operaciji iz normativa i služe za upis sati po radnicima (Zaposlenici → Sati po nalozima). Plan proizvodnje kupaonice i dalje računa iz normativa i rasporeda isporuka.</div>}
+        {satiNormativa && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 6 }}>Kupaonice: nalozi dobivaju sate po operaciji iz normativa i služe za upis sati po radnicima (Evidencija sati → Sati po nalozima). Plan proizvodnje kupaonice i dalje računa iz normativa i rasporeda isporuka.</div>}
         {nalozi.length === 0 ? <EmptyState text="Nema radnih naloga za ovaj projekt." /> : (
           <table className="erp-table">
             <thead><tr><th>Broj</th><th>Faza</th><th>Tim</th><th>Sati (utr./plan.)</th><th>Status</th><th style={{ width: 40 }} /></tr></thead>
@@ -15797,11 +15800,28 @@ function GodisnjiOdmorTab({ db, update, showToast, mozeMijenjati }) {
   );
 }
 
-function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija, mojaPozicija, pocetak, ocistiPocetak }) {
-  const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "zaposlenici");
-  // pocetak = { tab, prikaz }: otvaranje izravno na karticu (npr. upozorenje o usklađenosti sati s nadzorne ploče)
-  const [tab, setTab] = useState(() => (pocetak?.tab && dozvKartice.some((k) => k.key === pocetak.tab) ? pocetak.tab : (dozvKartice[0]?.key || "zaposlenici")));
+function EvidencijaSatiPage({ db, update, showToast, patchEvidencija, mojaPozicija, pocetak, ocistiPocetak }) {
+  const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "evidencijasati");
+  // pocetak = { tab, prikaz, grupa }: otvaranje izravno na karticu (npr. upozorenje o usklađenosti sati s nadzorne ploče)
+  const [tab, setTab] = useState(() => (pocetak?.tab && dozvKartice.some((k) => k.key === pocetak.tab) ? pocetak.tab : (dozvKartice[0]?.key || "evidencija")));
   useEffect(() => { if (pocetak && ocistiPocetak) ocistiPocetak(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "evidencija"); }, [dozvKartice, tab]);
+  return (
+    <div>
+      <PageHeader title="Evidencija sati" icon={Clock} subtitle="Evidencija dolazaka i odlazaka te sati razdijeljeni po radnim nalozima" />
+      <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
+        {dozvKartice.some((k) => k.key === "evidencija") && <div className={`nav-tab ${tab === "evidencija" ? "active" : ""}`} onClick={() => setTab("evidencija")}>Evidencija rada</div>}
+        {dozvKartice.some((k) => k.key === "satinalozi") && <div className={`nav-tab ${tab === "satinalozi" ? "active" : ""}`} onClick={() => setTab("satinalozi")}>Sati po nalozima</div>}
+      </div>
+      {tab === "evidencija" && <EvidencijaTab db={db} update={update} patchEvidencija={patchEvidencija} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "evidencijasati", "evidencija").izmjene} dozvoljeneGrupe={dozvolaZaKarticu(mojaPozicija, "evidencijasati", "evidencija").grupe} />}
+      {tab === "satinalozi" && <SatiPoNalozimaTab pocetniPrikaz={pocetak?.prikaz || null} pocetnaGrupa={pocetak?.grupa || null} db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "evidencijasati", "satinalozi").izmjene} />}
+    </div>
+  );
+}
+
+function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija }) {
+  const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "zaposlenici");
+  const [tab, setTab] = useState(dozvKartice[0]?.key || "zaposlenici");
   useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "zaposlenici"); }, [dozvKartice, tab]);
   const mozeZaposlenici = dozvolaZaKarticu(mojaPozicija, "zaposlenici", "zaposlenici").izmjene;
   const mozePozicije = dozvolaZaKarticu(mojaPozicija, "zaposlenici", "pozicije").izmjene;
@@ -15858,9 +15878,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
       <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
         {dozvKartice.some((k) => k.key === "zaposlenici") && <div className={`nav-tab ${tab === "zaposlenici" ? "active" : ""}`} onClick={() => setTab("zaposlenici")}>Zaposlenici</div>}
         {dozvKartice.some((k) => k.key === "pozicije") && <div className={`nav-tab ${tab === "pozicije" ? "active" : ""}`} onClick={() => setTab("pozicije")}>Pozicije</div>}
-        {dozvKartice.some((k) => k.key === "evidencija") && <div className={`nav-tab ${tab === "evidencija" ? "active" : ""}`} onClick={() => setTab("evidencija")}>Evidencija rada</div>}
         {dozvKartice.some((k) => k.key === "obracun") && <div className={`nav-tab ${tab === "obracun" ? "active" : ""}`} onClick={() => setTab("obracun")}>Obračun plaća</div>}
-        {dozvKartice.some((k) => k.key === "satinalozi") && <div className={`nav-tab ${tab === "satinalozi" ? "active" : ""}`} onClick={() => setTab("satinalozi")}>Sati po nalozima</div>}
         {dozvKartice.some((k) => k.key === "godisnji") && <div className={`nav-tab ${tab === "godisnji" ? "active" : ""}`} onClick={() => setTab("godisnji")}>Godišnji odmor</div>}
       </div>
 
@@ -15930,10 +15948,8 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
         </>
       )}
 
-      {tab === "evidencija" && <EvidencijaTab db={db} update={update} patchEvidencija={patchEvidencija} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "evidencija").izmjene} dozvoljeneGrupe={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "evidencija").grupe} />}
 
       {tab === "obracun" && <ObracunPlacaTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "obracun").izmjene} />}
-      {tab === "satinalozi" && <SatiPoNalozimaTab pocetniPrikaz={pocetak?.prikaz || null} pocetnaGrupa={pocetak?.grupa || null} db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "satinalozi").izmjene} />}
       {tab === "godisnji" && <GodisnjiOdmorTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "godisnji").izmjene} />}
 
       {modal === "zap" && (
@@ -16048,7 +16064,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, patchEvidencija,
                         {(KARTICE_MODULA[m.key]?.kartice || []).map((k) => {
                           const { pristup, izmjene, grupe } = dozvolaZaKarticu(pozForm, m.key, k.key);
                           // Evidencija rada: pozicija može vidjeti samo neke grupe zaposlenika (po zadanom sve)
-                          const ogranicivaGrupe = m.key === "zaposlenici" && k.key === "evidencija";
+                          const ogranicivaGrupe = m.key === "evidencijasati" && k.key === "evidencija";
                           const GRUPE_EVIDENCIJE = [["radiona", "Radiona"], ["praktikant", "Praktikanti"], ["ostalo", "Tehnički ured i administracija"], ["kooperant", "Kooperanti"]];
                           const promijeniGrupu = (g, uklj) => {
                             const trenutne = grupe || GRUPE_EVIDENCIJE.map(([x]) => x);

@@ -108,12 +108,15 @@ const KARTICE_MODULA = {
     kupci: { citanje: ["kupci"], pisanje: ["kupci"] },
     dobavljaci: { citanje: ["dobavljaci"], pisanje: ["dobavljaci"] },
   },
+  // Evidencija sati (odvojeno od modula Zaposlenici od 24.10.2026.): evidencija rada i sati po nalozima.
+  evidencijasati: {
+    evidencija: { citanje: ["evidencijaRada", "postavkePlaca", "praznici"], pisanje: ["evidencijaRada"] },
+    satinalozi: { citanje: ["evidencijaRada", "postavkePlaca", "radniNalozi", "zaposlenici", "satiPoNalogu"], pisanje: ["satiPoNalogu", "radniNalozi"] },
+  },
   zaposlenici: {
     zaposlenici: { citanje: ["zaposlenici"], pisanje: ["zaposlenici"] },
     pozicije: { citanje: ["pozicijeZaposlenika"], pisanje: ["pozicijeZaposlenika"] },
-    evidencija: { citanje: ["evidencijaRada", "postavkePlaca", "praznici"], pisanje: ["evidencijaRada"] },
     obracun: { citanje: ["evidencijaRada", "postavkePlaca", "praznici", "zaposlenici", "doplaciPlaca", "postavkeTvrtke"], pisanje: ["postavkePlaca", "praznici", "doplaciPlaca"] },
-    satinalozi: { citanje: ["evidencijaRada", "postavkePlaca", "radniNalozi", "zaposlenici", "satiPoNalogu"], pisanje: ["satiPoNalogu", "radniNalozi"] },
     // Godišnji odmor: pravo na dane (staž izvan Econa, složenost, preneseno, korekcija — upis u godisnjiOdmor) i iskorišteni
     // dani iz evidencije rada (godišnji i detašman - godišnji), uz praznike i pozicije za skupine radiona / režija.
     godisnji: { citanje: ["godisnjiOdmor", "evidencijaRada", "praznici", "zaposlenici", "pozicijeZaposlenika", "postavkeTvrtke"], pisanje: ["godisnjiOdmor"] },
@@ -1318,9 +1321,46 @@ async function podijeliZaboravljeneProgrameRezanja() {
   }
 }
 
+// Jednokratna (idempotentna) migracija: kartice Evidencija rada i Sati po nalozima prešle su iz modula Zaposlenici u novi modul
+// Evidencija sati. Svaka pozicija koja ima modul Zaposlenici dobije i novi modul, a postavke tih kartica (pristup, izmjene,
+// ograničenje po grupama) kopiraju se, pa nitko ne gubi ni dobiva pristup. Ako pozicija nema pristup ni jednoj od dvije kartice,
+// modul joj se ne dodaje. Pozicije koje već imaju novi modul se ne diraju.
+async function migrirajEvidencijaSati() {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query("SELECT value FROM app_data WHERE key = 'pozicijeZaposlenika' FOR UPDATE");
+    const pozicije = r.rows[0]?.value;
+    if (!Array.isArray(pozicije)) { await client.query("ROLLBACK"); return; }
+    let promijenjeno = 0;
+    const nove = pozicije.map((p) => {
+      const moduli = Array.isArray(p.moduli) ? p.moduli : [];
+      if (!moduli.includes("zaposlenici") || moduli.includes("evidencijasati")) return p;
+      const staro = p.karticeDozvole?.zaposlenici || {};
+      const imaPristup = (k) => staro[k]?.pristup !== false;
+      if (!imaPristup("evidencija") && !imaPristup("satinalozi")) return p;
+      const kopija = {};
+      ["evidencija", "satinalozi"].forEach((k) => { if (staro[k]) kopija[k] = staro[k]; });
+      promijenjeno++;
+      return { ...p, moduli: [...moduli, "evidencijasati"], karticeDozvole: { ...(p.karticeDozvole || {}), ...(Object.keys(kopija).length ? { evidencijasati: kopija } : {}) } };
+    });
+    if (promijenjeno > 0) {
+      await client.query("UPDATE app_data SET value = $1, updated_at = now() WHERE key = 'pozicijeZaposlenika'", [JSON.stringify(nove)]);
+      console.log(`Migracija: modul Evidencija sati dodan na ${promijenjeno} pozicija.`);
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Greška kod migracije modula Evidencija sati:", e);
+  } finally {
+    client.release();
+  }
+}
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`ERP backend sluša na portu ${PORT}`);
+  migrirajEvidencijaSati();
   provjeriAutoOdjavu();
   setInterval(provjeriAutoOdjavu, 15 * 60 * 1000);
   podijeliZaboravljeneProgrameRezanja();
