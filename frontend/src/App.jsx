@@ -1478,8 +1478,8 @@ function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete
               </div>
               {ostali.some((c) => c.label) && (
                 <dl className="mob-kartica-polja">
-                  {ostali.filter((c) => c.label).map((c) => (
-                    <React.Fragment key={c.key}><dt>{c.label}</dt><dd>{vrijednost(c, row)}</dd></React.Fragment>
+                  {ostali.filter((c) => c.label && !(c.mobSakrij && c.mobSakrij(row))).map((c) => (
+                    <React.Fragment key={c.key}><dt>{c.label}</dt><dd>{c.mobRender ? c.mobRender(row) : vrijednost(c, row)}</dd></React.Fragment>
                   ))}
                 </dl>
               )}
@@ -3829,6 +3829,27 @@ function RedoviZalihe({ redovi, zadnji, stil, children }) {
   );
 }
 const NEMA = <span style={{ color: "var(--ink-faint)" }}>—</span>;
+// Kartica na mobitelu: stupci Dimenzije/Stanje/Šarža/Lokacija ne mogu ostati odvojeni (red se ne poravnava s dimenzijom),
+// pa se po dimenziji prikazuju zajedno: "1250×2500 mm × 13 kom" i ispod šarža i lokacija.
+function ZalihaMobitel({ materijal, knjiga, katalog }) {
+  const redovi = redoviZalihe(materijal, knjiga, katalog);
+  if (!redovi) return <>{materijal.dimenzije}</>;
+  const samoOpca = !redovi.some((r) => r.lokacija) && materijal.lokacija;
+  return (
+    <div style={{ display: "grid", gap: 6 }}>
+      {redovi.map((r, i) => {
+        const sitno = [r.sarze.length ? `šarža ${r.sarze.join(", ")}` : "", r.lokacija || (samoOpca && i === 0 ? materijal.lokacija : "")].filter(Boolean).join(" · ");
+        return (
+          <div key={i}>
+            <div className="f-mono">{r.dimenzija} <span style={{ color: "var(--ink-soft)" }}>× {r.komada} {materijal.jm}</span></div>
+            {sitno && <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{sitno}</div>}
+          </div>
+        );
+      })}
+      {redovi.length > 1 && <div style={{ fontWeight: 700 }}>Ukupno {materijal.kolicina} {materijal.jm}</div>}
+    </div>
+  );
+}
 function ZalihaStupac({ materijal, knjiga, katalog, vrsta }) {
   const redovi = redoviZalihe(materijal, knjiga, katalog);
   const vise = redovi && redovi.length > 1;
@@ -4085,8 +4106,8 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne }) {
             { key: "sifra", label: "Šifra", render: (r) => <span className="f-mono">{formatSifre(r.sifra)}</span> },
             { key: "naziv", label: "Naziv" },
             { key: "kvaliteta", label: "Kvaliteta", render: (r) => r.kvaliteta || <span style={{ color: "var(--ink-faint)" }}>—</span> },
-            { key: "dimenzije", label: "Dimenzije", render: (r) => <ZalihaStupac vrsta="dimenzije" materijal={r} knjiga={db.maticnaKnjiga} katalog={db.katalogProfila} /> },
-            { key: "kolicina", label: "Stanje", render: (r) => (redoviZalihe(r, db.maticnaKnjiga, db.katalogProfila)
+            { key: "dimenzije", label: "Dimenzije", render: (r) => <ZalihaStupac vrsta="dimenzije" materijal={r} knjiga={db.maticnaKnjiga} katalog={db.katalogProfila} />, mobRender: (r) => <ZalihaMobitel materijal={r} knjiga={db.maticnaKnjiga} katalog={db.katalogProfila} /> },
+            { key: "kolicina", label: "Stanje", mobSakrij: (r) => !!redoviZalihe(r, db.maticnaKnjiga, db.katalogProfila), render: (r) => (redoviZalihe(r, db.maticnaKnjiga, db.katalogProfila)
               ? <ZalihaStupac vrsta="kolicina" materijal={r} knjiga={db.maticnaKnjiga} katalog={db.katalogProfila} />
               : <span className="f-mono" style={{ color: r.kolicina < r.minZaliha ? "var(--rust)" : "inherit", fontWeight: r.kolicina < r.minZaliha ? 700 : 400 }}>{r.kolicina} {r.jm}{r.kolicina < r.minZaliha && <AlertTriangle size={12} style={{ marginLeft: 4, verticalAlign: -2 }} />}</span>) },
             { key: "rezervirano", label: "Raspoloživost", render: (r) => {
@@ -4100,8 +4121,8 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne }) {
                 </div>
               );
             } },
-            { key: "sarza", label: "Šarža", render: (r) => <ZalihaStupac vrsta="sarza" materijal={r} knjiga={db.maticnaKnjiga} katalog={db.katalogProfila} /> },
-            { key: "lokacija", label: "Lokacija", render: (r) => <ZalihaStupac vrsta="lokacija" materijal={r} knjiga={db.maticnaKnjiga} katalog={db.katalogProfila} /> },
+            { key: "sarza", label: "Šarža", mobSakrij: (r) => !!redoviZalihe(r, db.maticnaKnjiga, db.katalogProfila), render: (r) => <ZalihaStupac vrsta="sarza" materijal={r} knjiga={db.maticnaKnjiga} katalog={db.katalogProfila} /> },
+            { key: "lokacija", label: "Lokacija", mobSakrij: (r) => !!redoviZalihe(r, db.maticnaKnjiga, db.katalogProfila), render: (r) => <ZalihaStupac vrsta="lokacija" materijal={r} knjiga={db.maticnaKnjiga} katalog={db.katalogProfila} /> },
             { key: "akcije", label: "", render: (r) => (
               <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "stretch", minWidth: 128 }}>
                 <Btn size="sm" variant="ghost" onClick={() => setRezZa(r.id)}>Rezervacije</Btn>
