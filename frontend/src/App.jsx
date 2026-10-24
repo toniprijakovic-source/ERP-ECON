@@ -15152,8 +15152,27 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
       .filter((r) => r.nalog)
       .sort((a, b) => usporediPrirodno(a.nalog.broj, b.nalog.broj));
     const faze = FAZE.filter((f) => nalozi.some((r) => r.nalog.faza === f));
-    return { nalozi, faze };
-  }, [db.satiPoNalogu, db.radniNalozi, mjesecPregled]);
+    // Stupac = projekt (sati svih njegovih naloga zbrojeni po operaciji); dodatna narudžba projekta je zaseban stupac.
+    // Redoslijed projekata isti kao na popisu projekata: ručni poredak ako postoji, inače po šifri.
+    const imaRucniPoredak = db.projekti.some((p) => p.poredak != null);
+    const mjestoProjekta = new Map(db.projekti.map((p) => [p.id, p]));
+    const stupciMapa = new Map();
+    nalozi.forEach((r) => {
+      const kljuc = `${r.nalog.projektId || ""}|${r.nalog.dodatakId || ""}`;
+      const s = stupciMapa.get(kljuc) || { kljuc, projekt: mjestoProjekta.get(r.nalog.projektId) || null, dodatakId: r.nalog.dodatakId || "", poFazi: new Map(), sati: 0 };
+      s.poFazi.set(r.nalog.faza, (s.poFazi.get(r.nalog.faza) || 0) + r.sati);
+      s.sati += r.sati;
+      stupciMapa.set(kljuc, s);
+    });
+    const poProjektu = imaRucniPoredak ? (a, b) => (a.poredak ?? Infinity) - (b.poredak ?? Infinity) || usporediPrirodno(a.sifra, b.sifra) : (a, b) => usporediPrirodno(a.sifra, b.sifra);
+    const stupci = [...stupciMapa.values()].sort((a, b) => {
+      if (a.projekt && b.projekt && a.projekt.id !== b.projekt.id) return poProjektu(a.projekt, b.projekt);
+      if (!a.projekt !== !b.projekt) return a.projekt ? -1 : 1; // nalozi bez projekta na kraju
+      if (!a.dodatakId !== !b.dodatakId) return a.dodatakId ? 1 : -1; // osnovna narudžba prije dodataka
+      return String(a.dodatakId).localeCompare(String(b.dodatakId));
+    });
+    return { nalozi, faze, stupci };
+  }, [db.satiPoNalogu, db.radniNalozi, db.projekti, mjesecPregled]);
 
   const zaposlenikIme = (id) => { const z = db.zaposlenici.find((zz) => zz.id === id); return z ? `${z.prezime} ${z.ime}` : "—"; };
 
@@ -15270,13 +15289,13 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
       )}
 
       {prikaz === "mjesecno" && (() => {
-        const { nalozi, faze } = pregledMjeseca;
-        const ukupnoPoNalogu = (nalogId) => nalozi.find((r) => r.nalog.id === nalogId)?.sati || 0;
+        const { nalozi, faze, stupci } = pregledMjeseca;
         const ukupnoPoFazi = (faza) => nalozi.filter((r) => r.nalog.faza === faza).reduce((s, r) => s + r.sati, 0);
         const ukupnoSve = nalozi.reduce((s, r) => s + r.sati, 0);
+        const nazivDodatka = (s) => (s.dodatakId ? s.projekt?.dodaci?.find((d) => d.id === s.dodatakId)?.naziv || "dodatak" : "");
         return (
           <>
-            <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Presjek evidentiranih sati po radnom nalogu za odabrani mjesec, grupirano po operaciji (fazi) kojoj nalog pripada. Prikazani su samo nalozi koji su taj mjesec imali unesene sate. Ispod su stalni poslovi izvan projekata (ako se isti dan upišu i po radniku i ukupno od voditelja, sati se zbrajaju).</p>
+            <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Presjek evidentiranih sati po projektu za odabrani mjesec, po operaciji (fazi): sati svih radnih naloga projekta zbrojeni su u jedan stupac, a dodatna narudžba projekta ima zaseban stupac. Prikazani su samo projekti koji su taj mjesec imali unesene sate. Ispod su stalni poslovi izvan projekata (ako se isti dan upišu i po radniku i ukupno od voditelja, sati se zbrajaju).</p>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
               <span className="label">Mjesec</span>
               <input className="input f-mono" type="month" style={{ width: 160 }} value={mjesecPregled} onChange={(e) => setMjesecPregled(e.target.value)} />
@@ -15287,7 +15306,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
                   <thead>
                     <tr>
                       <th style={{ position: "sticky", left: 0, background: "var(--surface-alt)", zIndex: 1 }}>Operacija</th>
-                      {nalozi.map((r) => <th key={r.nalog.id} style={{ minWidth: 90 }} title={`${r.nalog.broj} — ${r.nalog.naziv}${dodatakNaloga(r.nalog, db.projekti) ? ` · dodatak: ${dodatakNaloga(r.nalog, db.projekti)}` : ""}`}>{r.nalog.broj}{dodatakNaloga(r.nalog, db.projekti) && <div style={{ fontSize: 9.5, fontWeight: 600, color: "var(--steel)", textTransform: "none", whiteSpace: "normal" }}>{dodatakNaloga(r.nalog, db.projekti)}</div>}</th>)}
+                      {stupci.map((s) => <th key={s.kljuc} style={{ minWidth: 90 }} title={`${s.projekt ? `${s.projekt.sifra} — ${s.projekt.naziv}` : "Nalozi bez projekta"}${nazivDodatka(s) ? ` · dodatak: ${nazivDodatka(s)}` : ""}`}>{s.projekt ? s.projekt.sifra : "Bez projekta"}{nazivDodatka(s) && <div style={{ fontSize: 9.5, fontWeight: 600, color: "var(--steel)", textTransform: "none", whiteSpace: "normal" }}>{nazivDodatka(s)}</div>}</th>)}
                       <th style={{ minWidth: 90, background: "var(--surface-alt)" }}>Ukupno</th>
                     </tr>
                   </thead>
@@ -15295,9 +15314,9 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
                     {faze.map((faza) => (
                       <tr key={faza}>
                         <td style={{ position: "sticky", left: 0, background: "var(--surface)", fontWeight: 600 }}>{fazaOznaka(faza)}</td>
-                        {nalozi.map((r) => (
-                          <td key={r.nalog.id} className="f-mono" style={{ textAlign: "center", color: r.nalog.faza === faza ? "var(--ink)" : "var(--ink-faint)" }}>
-                            {r.nalog.faza === faza ? r.sati.toFixed(1) : "—"}
+                        {stupci.map((s) => (
+                          <td key={s.kljuc} className="f-mono" style={{ textAlign: "center", color: s.poFazi.has(faza) ? "var(--ink)" : "var(--ink-faint)" }}>
+                            {s.poFazi.has(faza) ? s.poFazi.get(faza).toFixed(1) : "—"}
                           </td>
                         ))}
                         <td className="f-mono" style={{ textAlign: "center", fontWeight: 700, background: "var(--surface-alt)" }}>{ukupnoPoFazi(faza).toFixed(1)}</td>
@@ -15305,7 +15324,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true }) {
                     ))}
                     <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
                       <td style={{ position: "sticky", left: 0, background: "var(--surface-alt)" }}>UKUPNO</td>
-                      {nalozi.map((r) => <td key={r.nalog.id} className="f-mono" style={{ textAlign: "center" }}>{ukupnoPoNalogu(r.nalog.id).toFixed(1)}</td>)}
+                      {stupci.map((s) => <td key={s.kljuc} className="f-mono" style={{ textAlign: "center" }}>{s.sati.toFixed(1)}</td>)}
                       <td className="f-mono" style={{ textAlign: "center" }}>{ukupnoSve.toFixed(1)}</td>
                     </tr>
                   </tbody>
