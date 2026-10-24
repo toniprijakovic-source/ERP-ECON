@@ -2434,7 +2434,7 @@ export default function App() {
         )}
 
         <div className="erp-sadrzaj" style={{ padding: 24, flex: 1, overflowY: "auto", minWidth: 0 }}>
-          {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} patchZadatakNapomena={patchZadatakNapomena} potvrdiObavijesti={potvrdiObavijesti} otvoriTransporte={() => { setTransportiTab("narudzbe"); setPage("transporti"); }} otvoriUskladenost={(grupa) => { setEvidencijaSatiPocetak({ tab: "satinalozi", prikaz: "uskladenost", grupa: grupa || "radiona" }); setPage("evidencijasati"); }} />}
+          {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} showToast={showToast} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} patchZadatakNapomena={patchZadatakNapomena} potvrdiObavijesti={potvrdiObavijesti} otvoriTransporte={() => { setTransportiTab("narudzbe"); setPage("transporti"); }} otvoriUskladenost={(grupa) => { setEvidencijaSatiPocetak({ tab: "satinalozi", prikaz: "uskladenost", grupa: grupa || "radiona" }); setPage("evidencijasati"); }} />}
           {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} dodajMaticne={dodajMaticne} />}
           {aktivnaStranica === "kontrola" && <KontrolaKvalitetePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} projektId={kkProjektId} ocistiProjekt={() => setKkProjektId(null)} />}
           {aktivnaStranica === "transporti" && <TransportiPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} pocetniTab={transportiTab} ocistiTab={() => setTransportiTab(null)} />}
@@ -2586,8 +2586,43 @@ function NapomenaZadatka({ zadatak, imeZaposlenika, mozeUredjivati, onSpremi, uv
   return mozeUredjivati ? <div onClick={stani} style={{ marginLeft: uvlaka, marginTop: 4 }}><button type="button" onClick={otvori} style={STIL_LINK_GUMBA}>+ Napomena</button></div> : null;
 }
 
+/* ============================== UPITNIK NA ZADATKU ============================== */
+// Zadatak na nadzornoj ploči može nositi upitnik (npr. pitanja za računovodstvo): zadatak.upitnik = { naslov, uvod,
+// pitanja: [{ id, odjeljak, tekst }], odgovori: { [id]: "tekst" } }. Osoba kojoj je zadatak dodijeljen upisuje odgovore
+// (mogu se spremati u više navrata), a zadavatelj ih vidi na istom mjestu.
+const odgovorenoUpitnik = (z) => (z.upitnik?.pitanja || []).filter((p) => String(z.upitnik.odgovori?.[p.id] || "").trim()).length;
+function UpitnikModal({ zadatak, mozeOdgovarati, onSpremi, onClose }) {
+  const u = zadatak.upitnik;
+  const [odgovori, setOdgovori] = useState(() => ({ ...(u.odgovori || {}) }));
+  const odjeljci = [...new Set(u.pitanja.map((p) => p.odjeljak || ""))];
+  const odgovoreno = u.pitanja.filter((p) => String(odgovori[p.id] || "").trim()).length;
+  const promijenjeno = JSON.stringify(odgovori) !== JSON.stringify(u.odgovori || {});
+  return (
+    <Modal wide title={u.naslov || zadatak.naziv} onClose={onClose}
+      footer={<>
+        <span style={{ marginRight: "auto", fontSize: 12.5, color: "var(--ink-soft)" }}>Odgovoreno {odgovoreno} od {u.pitanja.length}{u.zadnjaIzmjena ? ` · zadnje spremanje ${fmtDate(u.zadnjaIzmjena.slice(0, 10))}` : ""}</span>
+        <Btn onClick={onClose}>{mozeOdgovarati ? "Odustani" : "Zatvori"}</Btn>
+        {mozeOdgovarati && <Btn variant="ghost" icon={Save} onClick={() => onSpremi(odgovori, false)} disabled={!promijenjeno}>Spremi odgovore</Btn>}
+        {mozeOdgovarati && <Btn variant="primary" icon={CheckCircle2} onClick={() => onSpremi(odgovori, true)}>Spremi i označi završenim</Btn>}
+      </>}>
+      {u.uvod && <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 0, whiteSpace: "pre-wrap" }}>{u.uvod}</p>}
+      {odjeljci.map((odjeljak) => (
+        <div key={odjeljak} style={{ marginBottom: 14 }}>
+          {odjeljak && <div className="label" style={{ marginBottom: 6, fontSize: 12 }}>{odjeljak}</div>}
+          {u.pitanja.filter((p) => (p.odjeljak || "") === odjeljak).map((p) => (
+            <div key={p.id} className="card" style={{ padding: 12, marginBottom: 8 }}>
+              <div style={{ fontSize: 13, whiteSpace: "pre-wrap", marginBottom: 6 }}><strong>{p.id}.</strong> {p.tekst}</div>
+              <textarea className="textarea" rows={3} aria-label={`Odgovor na pitanje ${p.id}`} placeholder={mozeOdgovarati ? "Upiši odgovor (po mogućnosti s primjerom i brojkama)…" : "Nema odgovora"} value={odgovori[p.id] || ""} disabled={!mozeOdgovarati} onChange={(e) => setOdgovori((o) => ({ ...o, [p.id]: e.target.value }))} />
+            </div>
+          ))}
+        </div>
+      ))}
+    </Modal>
+  );
+}
+
 /* ============================== DASHBOARD ============================== */
-function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, patchZadatakIzvrseno, patchZadatakNapomena, potvrdiObavijesti, otvoriTransporte, otvoriUskladenost }) {
+function Dashboard({ db, update, showToast, setPage, otvoriProjekt, mojId, mojaPozicija, patchZadatakIzvrseno, patchZadatakNapomena, potvrdiObavijesti, otvoriTransporte, otvoriUskladenost }) {
   const [zadaciZa, setZadaciZa] = useState("moji"); // "moji" | "svi" | id zaposlenika
   const [skupinaZadataka, setSkupinaZadataka] = useState("aktualni"); // "aktualni" | "zavrseni"
   const [dodajZadatakOtvoreno, setDodajZadatakOtvoreno] = useState(false);
@@ -2638,6 +2673,13 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
   const spremiNapomenuSlobodnog = (id, tekst) => update("slobodniZadaci", slobodniZadaci.map((z) => (z.id === id ? { ...z, napomena: tekst || null, napomenaAutorId: tekst ? mojId : null, napomenaDatum: tekst ? todayISO() : null } : z)));
   const oznaciSlobodniIzvrsenim = (id) => update("slobodniZadaci", slobodniZadaci.map((z) => (z.id === id ? { ...z, izvrseno: true, izvrsioId: mojId, datumIzvrsenja: todayISO() } : z)));
   const obrisiSlobodni = (id) => { if (window.confirm("Obrisati ovaj zadatak?")) update("slobodniZadaci", slobodniZadaci.filter((z) => z.id !== id)); };
+  const [upitnikId, setUpitnikId] = useState(null);
+  const upitnikZadatak = upitnikId ? slobodniZadaci.find((z) => z.id === upitnikId) : null;
+  const spremiUpitnik = (id, odgovori, zavrsi) => {
+    update("slobodniZadaci", slobodniZadaci.map((z) => (z.id === id ? { ...z, upitnik: { ...z.upitnik, odgovori, zadnjaIzmjena: sadaISO(), odgovorioId: mojId }, ...(zavrsi ? { izvrseno: true, izvrsioId: mojId, datumIzvrsenja: todayISO() } : {}) } : z)));
+    setUpitnikId(null);
+    showToast(zavrsi ? "Odgovori spremljeni, zadatak je završen." : "Odgovori spremljeni.");
+  };
   const brojPoOsobi = new Map();
   sviOtvoreniZadaci.forEach((z) => brojPoOsobi.set(z.dodijeljenoId, (brojPoOsobi.get(z.dodijeljenoId) || 0) + 1));
   const osobeSaZadacima = [...brojPoOsobi.keys()].filter((id) => id !== mojId).sort((a, b) => imeZaposlenika(a).localeCompare(imeZaposlenika(b), "hr"));
@@ -2716,6 +2758,7 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
               <Btn variant="primary" size="sm" icon={Plus} onClick={dodajSlobodniZadatak}>Dodaj</Btn>
             </div>
           )}
+          {upitnikZadatak?.upitnik && <UpitnikModal zadatak={upitnikZadatak} mozeOdgovarati={upitnikZadatak.dodijeljenoId === mojId && !upitnikZadatak.izvrseno} onSpremi={(odgovori, zavrsi) => spremiUpitnik(upitnikZadatak.id, odgovori, zavrsi)} onClose={() => setUpitnikId(null)} />}
           {skupinaZadataka === "zavrseni" && (zavrseniZadaci.length === 0 ? <EmptyState text="Nema završenih zadataka (prikazuju se zadaci zadani od 05.10.2026.)." /> : (
             <div>
               {zavrseniZadaci.map((z) => (
@@ -2725,6 +2768,7 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
                     <div style={{ fontSize: 13 }}>{z.naziv}<MapaZadatka z={z} />{z.novo && <span className="badge badge-success" style={{ marginLeft: 6 }}>novo</span>}</div>
                     <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{z.slobodan ? "Bez projekta" : `${z.projektSifra} — ${z.projektNaziv}`}{z.sebi ? " · moj zadatak" : <> · završeno — <strong style={{ color: "var(--ink-soft)" }}>{imeZaposlenika(z.izvrsioId)}</strong></>}{z.datumIzvrsenja ? ` · ${fmtDate(z.datumIzvrsenja)}` : ""}</div>
                     {z.napomena && <div style={{ marginTop: 4, padding: "4px 8px", background: "var(--surface-alt)", borderRadius: 3, fontSize: 12, whiteSpace: "pre-wrap" }}>{z.napomena}</div>}
+                    {z.upitnik && <div style={{ marginTop: 4 }}><Btn size="sm" variant={z.dodijeljenoId === mojId && !z.izvrseno ? "primary" : "ghost"} onClick={() => setUpitnikId(z.id)}>Pogledaj odgovore ({odgovorenoUpitnik(z)}/{z.upitnik.pitanja.length})</Btn></div>}
                   </div>
                   {z.novo && <Btn size="sm" onClick={() => potvrdiObavijesti([{ vrsta: "zavrsetak", izvor: z.izvor, projektId: z.projektId, zadId: z.id }])}>U redu</Btn>}
                 </div>
@@ -2746,6 +2790,7 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
                         mozeUredjivati={z.slobodan ? (z.kreiraoId === mojId || mozeZadavatiDrugima) : mozeMijenjatiProjekte}
                         onSpremi={(tekst) => (z.slobodan ? spremiNapomenuSlobodnog(z.id, tekst) : patchZadatakNapomena(z.projektId, z.id, tekst))}
                       />
+                      {z.upitnik && <div style={{ marginTop: 4 }}><Btn size="sm" variant={z.dodijeljenoId === mojId && !z.izvrseno ? "primary" : "ghost"} onClick={() => setUpitnikId(z.id)}>Pogledaj odgovore ({odgovorenoUpitnik(z)}/{z.upitnik.pitanja.length})</Btn></div>}
                     </div>
                     {z.planiraniDatum && <span className="f-mono" style={{ fontSize: 11.5, color: kasni ? "var(--rust)" : "var(--ink-soft)", flexShrink: 0, whiteSpace: "nowrap" }}>{fmtDate(z.planiraniDatum)}</span>}
                     {z.slobodan && (mozeZadavatiDrugima || z.kreiraoId === mojId) && <button type="button" onClick={() => obrisiSlobodni(z.id)} title="Obriši zadatak" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-faint)", padding: 0, flexShrink: 0 }}><Trash2 size={13} /></button>}
@@ -2772,6 +2817,7 @@ function Dashboard({ db, update, setPage, otvoriProjekt, mojId, mojaPozicija, pa
                         mozeUredjivati={z.slobodan ? (z.dodijeljenoId === mojId || z.kreiraoId === mojId || mozeZadavatiDrugima) : (z.dodijeljenoId === mojId || mozeMijenjatiProjekte)}
                         onSpremi={(tekst) => (z.slobodan ? spremiNapomenuSlobodnog(z.id, tekst) : patchZadatakNapomena(z.projektId, z.id, tekst))}
                       />
+                      {z.upitnik && <div style={{ marginTop: 4 }}><Btn size="sm" variant={z.dodijeljenoId === mojId && !z.izvrseno ? "primary" : "ghost"} onClick={() => setUpitnikId(z.id)}>{z.dodijeljenoId === mojId ? "Otvori upitnik" : "Pogledaj odgovore"} ({odgovorenoUpitnik(z)}/{z.upitnik.pitanja.length})</Btn></div>}
                     </div>
                     {z.planiraniDatum && <span className="f-mono" style={{ fontSize: 11.5, color: kasni ? "var(--rust)" : "var(--ink-soft)", flexShrink: 0, whiteSpace: "nowrap" }}>{fmtDate(z.planiraniDatum)}</span>}
                     {z.slobodan && (mozeZadavatiDrugima || z.kreiraoId === mojId) && <button type="button" onClick={() => obrisiSlobodni(z.id)} title="Obriši zadatak" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-faint)", padding: 0, flexShrink: 0 }}><Trash2 size={13} /></button>}
