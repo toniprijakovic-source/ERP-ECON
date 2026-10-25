@@ -16,6 +16,29 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 
+// ---------- Evidencija aktivnosti u aplikaciji (vidi tablicu aktivnost_dan; pregled samo za glavnog administratora) ----------
+// Izmjene: svaki uspješan upis (PUT/POST/DELETE) prijavljenog korisnika broji se po danu i po ključu podataka. Ne bilježe se
+// prijava, kiosk, obavijesti i sama evidencija aktivnosti. Radi se nakon odgovora, pa ne usporava rad i ne smije srušiti zahtjev.
+const danZagreb = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Zagreb" });
+app.use((req, res, next) => {
+  if (!["PUT", "POST", "DELETE", "PATCH"].includes(req.method) || !req.path.startsWith("/api/")) return next();
+  res.on("finish", () => {
+    try {
+      if (res.statusCode >= 400 || !req.zaposlenikId) return;
+      const dijelovi = req.path.split("/").filter(Boolean);
+      const kljuc = dijelovi[1] === "data" ? dijelovi[2] : dijelovi[1];
+      if (!kljuc || ["aktivnost", "auth", "kiosk", "obavijesti"].includes(kljuc)) return;
+      pool.query(
+        `INSERT INTO aktivnost_dan (zaposlenik_id, dan, izmjene, izmjene_kljucevi, zadnja) VALUES ($1, $2, 1, jsonb_build_object($3::text, 1), now())
+         ON CONFLICT (zaposlenik_id, dan) DO UPDATE SET izmjene = aktivnost_dan.izmjene + 1,
+           izmjene_kljucevi = jsonb_set(aktivnost_dan.izmjene_kljucevi, ARRAY[$3::text], to_jsonb(COALESCE((aktivnost_dan.izmjene_kljucevi->>$3::text)::int, 0) + 1))`,
+        [req.zaposlenikId, danZagreb(), String(kljuc).slice(0, 40)]
+      ).catch(() => {});
+    } catch { /* bilježenje nikad ne smije utjecati na zahtjev */ }
+  });
+  next();
+});
+
 // Veza prema bazi se drži otvorenom (idle 10 min + redovit SELECT 1): kiosk skenira rijetko, a nova
 // veza prema Supabase poolera košta ~0,3-0,8 s koje bi osoba čekala ispred čitača.
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_URL?.includes("supabase") ? { rejectUnauthorized: false } : undefined, idleTimeoutMillis: 10 * 60 * 1000, keepAlive: true });
@@ -461,6 +484,46 @@ app.get("/api/kiosk/ping", (req, res) => res.json({ ok: true }));
 // Vrijeme poslužitelja — preglednik iz njega računa koliko sat uređaja odstupa (npr. računalo na
 // laseru s krivom vremenskom zonom), pa se početak/kraj rezanja bilježi prema poslužitelju.
 // verzija = commit koji trenutno radi na Renderu (za provjeru je li nova verzija objavljena).
+// Otkucaj aktivnosti: preglednik ga šalje svake minute dok je kartica otvorena i korisnik je nešto radio u zadnjih 5 minuta.
+// Dva otkucaja unutar 45 s (npr. dvije kartice) broje se kao jedna minuta.
+app.post("/api/aktivnost/ping", autentikacija, async (req, res) => {
+  const modul = String(req.body?.modul || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 40) || "nepoznato";
+  const uredaj = req.body?.uredaj === "mobitel" ? "mobitel" : "racunalo";
+  try {
+    await pool.query(
+      `INSERT INTO aktivnost_dan (zaposlenik_id, dan, minuta, moduli, uredaj, zadnja) VALUES ($1, $2, 1, jsonb_build_object($3::text, 1), jsonb_build_object($4::text, 1), now())
+       ON CONFLICT (zaposlenik_id, dan) DO UPDATE SET minuta = aktivnost_dan.minuta + 1,
+         moduli = jsonb_set(aktivnost_dan.moduli, ARRAY[$3::text], to_jsonb(COALESCE((aktivnost_dan.moduli->>$3::text)::int, 0) + 1)),
+         uredaj = jsonb_set(aktivnost_dan.uredaj, ARRAY[$4::text], to_jsonb(COALESCE((aktivnost_dan.uredaj->>$4::text)::int, 0) + 1)),
+         zadnja = now()
+       WHERE aktivnost_dan.zadnja < now() - interval '45 seconds'`,
+      [req.zaposlenikId, danZagreb(), modul, uredaj]
+    );
+    res.json({ ok: true });
+  } catch { res.status(500).json({ error: "Greška." }); }
+});
+
+// Pregled aktivnosti za mjesec (YYYY-MM): samo glavni administrator.
+app.get("/api/aktivnost", autentikacija, async (req, res) => {
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  if (pozicija?.id !== "poz-administrator") return res.status(403).json({ error: "Nemaš pristup." });
+  const mjesec = /^\d{4}-\d{2}$/.test(String(req.query.mjesec || "")) ? req.query.mjesec : danZagreb().slice(0, 7);
+  const od = `${mjesec}-01`;
+  try {
+    const [dani, prijave, zadnjePrijave, zadnjeAktivnosti, pocetak] = await Promise.all([
+      pool.query("SELECT zaposlenik_id, to_char(dan, 'YYYY-MM-DD') AS dan, minuta, izmjene, moduli, uredaj, izmjene_kljucevi, zadnja FROM aktivnost_dan WHERE dan >= $1::date AND dan < ($1::date + interval '1 month') ORDER BY dan", [od]),
+      pool.query("SELECT zaposlenik_id, count(*) FILTER (WHERE uspjesno)::int AS uspjesne, count(*) FILTER (WHERE NOT uspjesno)::int AS neuspjesne, array_agg(DISTINCT to_char(vrijeme AT TIME ZONE 'Europe/Zagreb', 'YYYY-MM-DD')) FILTER (WHERE uspjesno) AS dani FROM login_log WHERE (vrijeme AT TIME ZONE 'Europe/Zagreb') >= $1::timestamp AND (vrijeme AT TIME ZONE 'Europe/Zagreb') < ($1::timestamp + interval '1 month') GROUP BY zaposlenik_id", [od]),
+      pool.query("SELECT zaposlenik_id, max(vrijeme) AS zadnja FROM login_log WHERE uspjesno GROUP BY zaposlenik_id"),
+      pool.query("SELECT zaposlenik_id, max(zadnja) AS zadnja FROM aktivnost_dan GROUP BY zaposlenik_id"),
+      pool.query("SELECT to_char(min(dan), 'YYYY-MM-DD') AS pocetak FROM aktivnost_dan"),
+    ]);
+    res.json({ mjesec, dani: dani.rows, prijave: prijave.rows, zadnjePrijave: zadnjePrijave.rows, zadnjeAktivnosti: zadnjeAktivnosti.rows, pocetakPracenja: pocetak.rows[0]?.pocetak || null });
+  } catch (e) {
+    console.error("Greška kod čitanja aktivnosti:", e);
+    res.status(500).json({ error: "Greška kod čitanja aktivnosti." });
+  }
+});
+
 app.get("/api/vrijeme", (req, res) => res.json({ sada: new Date().toISOString(), verzija: process.env.RENDER_GIT_COMMIT?.slice(0, 7) || null }));
 
 // ---------- Javna kartica matičnog broja (QR kod s naljepnice materijala, bez prijave) ----------
@@ -1321,6 +1384,22 @@ async function podijeliZaboravljeneProgrameRezanja() {
   }
 }
 
+// Tablica aktivnosti: jedan redak po korisniku i danu (minute aktivnosti, broj izmjena, minute po modulu i uređaju). Zaključana za
+// Supabase Data API (RLS uključen, bez dozvola za anon/authenticated); čita se samo preko poslužitelja. Podaci se čuvaju 3 mjeseca.
+async function pripremiAktivnost() {
+  try {
+    await pool.query(`CREATE TABLE IF NOT EXISTS aktivnost_dan (
+      zaposlenik_id text NOT NULL, dan date NOT NULL, minuta integer NOT NULL DEFAULT 0, izmjene integer NOT NULL DEFAULT 0,
+      moduli jsonb NOT NULL DEFAULT '{}', uredaj jsonb NOT NULL DEFAULT '{}', izmjene_kljucevi jsonb NOT NULL DEFAULT '{}',
+      zadnja timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (zaposlenik_id, dan))`);
+    await pool.query("ALTER TABLE aktivnost_dan ENABLE ROW LEVEL SECURITY");
+    await pool.query("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN REVOKE ALL ON aktivnost_dan FROM anon; END IF; IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN REVOKE ALL ON aktivnost_dan FROM authenticated; END IF; END $$");
+    await pool.query("DELETE FROM aktivnost_dan WHERE dan < (current_date - interval '3 months')");
+  } catch (e) {
+    console.error("Greška kod pripreme tablice aktivnosti:", e);
+  }
+}
+
 // Jednokratna (idempotentna) migracija: kartice Evidencija rada i Sati po nalozima prešle su iz modula Zaposlenici u novi modul
 // Evidencija sati. Svaka pozicija koja ima modul Zaposlenici dobije i novi modul, a postavke tih kartica (pristup, izmjene,
 // ograničenje po grupama) kopiraju se, pa nitko ne gubi ni dobiva pristup. Ako pozicija nema pristup ni jednoj od dvije kartice,
@@ -1361,6 +1440,8 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`ERP backend sluša na portu ${PORT}`);
   migrirajEvidencijaSati();
+  pripremiAktivnost();
+  setInterval(pripremiAktivnost, 6 * 60 * 60 * 1000);
   provjeriAutoOdjavu();
   setInterval(provjeriAutoOdjavu, 15 * 60 * 1000);
   podijeliZaboravljeneProgrameRezanja();

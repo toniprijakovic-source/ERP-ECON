@@ -2434,6 +2434,7 @@ export default function App() {
         )}
 
         <div className="erp-sadrzaj" style={{ padding: 24, flex: 1, overflowY: "auto", minWidth: 0 }}>
+          <PracenjeAktivnosti modul={aktivnaStranica} />
           {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} showToast={showToast} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} patchZadatakNapomena={patchZadatakNapomena} potvrdiObavijesti={potvrdiObavijesti} otvoriTransporte={() => { setTransportiTab("narudzbe"); setPage("transporti"); }} otvoriUskladenost={(grupa) => { setEvidencijaSatiPocetak({ tab: "satinalozi", prikaz: "uskladenost", grupa: grupa || "radiona" }); setPage("evidencijasati"); }} />}
           {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} dodajMaticne={dodajMaticne} />}
           {aktivnaStranica === "kontrola" && <KontrolaKvalitetePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} projektId={kkProjektId} ocistiProjekt={() => setKkProjektId(null)} />}
@@ -15846,6 +15847,132 @@ function GodisnjiOdmorTab({ db, update, showToast, mozeMijenjati }) {
   );
 }
 
+/* ============================== AKTIVNOST U APLIKACIJI ============================== */
+// Nevidljivo praćenje: dok je korisnik prijavljen, kartica otvorena i nešto je radio u zadnjih 5 minuta, svake minute se
+// poslužitelju šalje otkucaj (modul + uređaj). Ništa se korisniku ne prikazuje. Pregled vidi samo glavni administrator.
+function PracenjeAktivnosti({ modul }) {
+  const zadnjiUnos = useRef(Date.now());
+  const modulRef = useRef(modul);
+  modulRef.current = modul;
+  useEffect(() => {
+    const oznaci = () => { zadnjiUnos.current = Date.now(); };
+    const dogadjaji = ["mousemove", "keydown", "click", "touchstart", "scroll"];
+    dogadjaji.forEach((d) => window.addEventListener(d, oznaci, { passive: true }));
+    const t = setInterval(() => {
+      if (document.visibilityState !== "visible" || Date.now() - zadnjiUnos.current > 5 * 60 * 1000) return;
+      fetch(`${API_URL}/api/aktivnost/ping`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` },
+        body: JSON.stringify({ modul: modulRef.current, uredaj: window.innerWidth < 760 ? "mobitel" : "racunalo" }),
+      }).catch(() => {});
+    }, 60 * 1000);
+    return () => { clearInterval(t); dogadjaji.forEach((d) => window.removeEventListener(d, oznaci)); };
+  }, []);
+  return null;
+}
+
+const minuteUTekst = (m) => (m >= 60 ? `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min` : `${m} min`);
+function AktivnostTab({ db }) {
+  const [mjesec, setMjesec] = useState(todayISO().slice(0, 7));
+  const [podaci, setPodaci] = useState(null);
+  const [greska, setGreska] = useState("");
+  const [otvoren, setOtvoren] = useState(null);
+  useEffect(() => {
+    let aktivno = true;
+    setPodaci(null); setGreska(""); setOtvoren(null);
+    fetch(`${API_URL}/api/aktivnost?mjesec=${mjesec}`, { headers: { Authorization: `Bearer ${localStorage.getItem("erp_token")}` } })
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((d) => { if (aktivno) setPodaci(d); })
+      .catch(() => { if (aktivno) setGreska("Greška pri učitavanju aktivnosti."); });
+    return () => { aktivno = false; };
+  }, [mjesec]);
+  const nazivModula = (k) => MODULI_APLIKACIJE.find((m) => m.key === k)?.label || k;
+  const vrijeme = (iso) => (iso ? new Date(iso).toLocaleString("hr-HR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
+  const redovi = useMemo(() => {
+    if (!podaci) return [];
+    return db.zaposlenici.filter((z) => z.status === "Aktivan").map((z) => {
+      const dani = podaci.dani.filter((d) => d.zaposlenik_id === z.id);
+      const prijava = podaci.prijave.find((p) => p.zaposlenik_id === z.id);
+      const moduli = {}, uredaj = {};
+      dani.forEach((d) => {
+        Object.entries(d.moduli || {}).forEach(([k, v]) => { moduli[k] = (moduli[k] || 0) + v; });
+        Object.entries(d.uredaj || {}).forEach(([k, v]) => { uredaj[k] = (uredaj[k] || 0) + v; });
+      });
+      const minuta = dani.reduce((a, d) => a + d.minuta, 0);
+      const najModul = Object.entries(moduli).sort((a, b) => b[1] - a[1])[0];
+      return {
+        z, dani, prijava, minuta, izmjene: dani.reduce((a, d) => a + d.izmjene, 0), moduli, najModul,
+        aktivnihDana: dani.filter((d) => d.minuta > 0).length,
+        mobitelPosto: minuta > 0 ? Math.round(((uredaj.mobitel || 0) / minuta) * 100) : 0,
+        prijave: prijava?.uspjesne || 0, neuspjesne: prijava?.neuspjesne || 0,
+        zadnjaPrijava: podaci.zadnjePrijave.find((p) => p.zaposlenik_id === z.id)?.zadnja || null,
+        zadnjaAktivnost: podaci.zadnjeAktivnosti.find((p) => p.zaposlenik_id === z.id)?.zadnja || null,
+      };
+    }).sort((a, b) => b.minuta - a.minuta || b.prijave - a.prijave || (a.z.prezime + a.z.ime).localeCompare(b.z.prezime + b.z.ime, "hr"));
+  }, [podaci, db.zaposlenici]);
+  return (
+    <div>
+      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 12 }}>
+        Aktivno vrijeme je procjena (svaka minuta u kojoj je kartica bila otvorena i korisnik je nešto radio u zadnjih 5 minuta). Izmjene su broj spremanja u aplikaciji.
+        {podaci?.pocetakPracenja ? ` Vrijeme, moduli i izmjene bilježe se od ${fmtDate(podaci.pocetakPracenja)}, a čuvaju se 3 mjeseca.` : ""} Prijave postoje od 13.08.2026. Kiosk se ne računa.
+      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+        <span className="label">Mjesec</span>
+        <MjesecOdabir value={mjesec} onChange={setMjesec} />
+      </div>
+      {greska ? <EmptyState text={greska} /> : !podaci ? <EmptyState text="Učitavanje…" /> : (
+        <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+          <table className="erp-table">
+            <thead><tr><th>Korisnik</th><th>Zadnja aktivnost</th><th style={{ textAlign: "right" }}>Aktivnih dana</th><th style={{ textAlign: "right" }}>Aktivno vrijeme</th><th style={{ textAlign: "right" }}>Prijave</th><th style={{ textAlign: "right" }}>Izmjene</th><th>Najviše koristi</th><th style={{ textAlign: "right" }}>Mobitel</th><th /></tr></thead>
+            <tbody>
+              {redovi.map((r) => {
+                const sviDani = [...new Set([...r.dani.map((d) => d.dan), ...(r.prijava?.dani || [])])].sort();
+                const prazno = r.minuta === 0 && r.izmjene === 0 && r.prijave === 0;
+                return (
+                  <React.Fragment key={r.z.id}>
+                    <tr style={prazno ? { color: "var(--ink-faint)" } : undefined}>
+                      <td>{r.z.prezime} {r.z.ime}</td>
+                      <td className="f-mono" style={{ fontSize: 12 }}>{vrijeme(r.zadnjaAktivnost || r.zadnjaPrijava)}</td>
+                      <td className="f-mono" style={{ textAlign: "right" }}>{r.aktivnihDana || "—"}</td>
+                      <td className="f-mono" style={{ textAlign: "right", fontWeight: 600 }}>{r.minuta > 0 ? minuteUTekst(r.minuta) : "—"}</td>
+                      <td className="f-mono" style={{ textAlign: "right" }}>{r.prijave || "—"}{r.neuspjesne > 0 && <span style={{ color: "var(--rust)", fontSize: 11 }}> (+{r.neuspjesne} neuspj.)</span>}</td>
+                      <td className="f-mono" style={{ textAlign: "right" }}>{r.izmjene || "—"}</td>
+                      <td style={{ fontSize: 12 }}>{r.najModul ? `${nazivModula(r.najModul[0])} (${minuteUTekst(r.najModul[1])})` : "—"}</td>
+                      <td className="f-mono" style={{ textAlign: "right" }}>{r.minuta > 0 ? `${r.mobitelPosto} %` : "—"}</td>
+                      <td>{sviDani.length > 0 && <Btn variant="ghost" size="sm" onClick={() => setOtvoren(otvoren === r.z.id ? null : r.z.id)}>Dani {otvoren === r.z.id ? "▲" : "▼"}</Btn>}</td>
+                    </tr>
+                    {otvoren === r.z.id && (
+                      <tr><td colSpan={9} style={{ background: "var(--surface-alt)" }}>
+                        <table className="erp-table" style={{ margin: 0 }}>
+                          <thead><tr><th>Dan</th><th>Prijava</th><th style={{ textAlign: "right" }}>Aktivno</th><th style={{ textAlign: "right" }}>Izmjene</th><th>Po modulima</th></tr></thead>
+                          <tbody>
+                            {sviDani.map((dan) => {
+                              const d = r.dani.find((x) => x.dan === dan);
+                              return (
+                                <tr key={dan}>
+                                  <td className="f-mono">{fmtDate(dan)}</td>
+                                  <td>{r.prijava?.dani?.includes(dan) ? "✓" : ""}</td>
+                                  <td className="f-mono" style={{ textAlign: "right" }}>{d?.minuta ? minuteUTekst(d.minuta) : "—"}</td>
+                                  <td className="f-mono" style={{ textAlign: "right" }}>{d?.izmjene || "—"}</td>
+                                  <td style={{ fontSize: 12 }}>{d ? Object.entries(d.moduli || {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${nazivModula(k)} ${v} min`).join(", ") : ""}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </td></tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EvidencijaSatiPage({ db, update, showToast, patchEvidencija, mojaPozicija, pocetak, ocistiPocetak }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "evidencijasati");
   // pocetak = { tab, prikaz, grupa }: otvaranje izravno na karticu (npr. upozorenje o usklađenosti sati s nadzorne ploče)
@@ -15868,7 +15995,7 @@ function EvidencijaSatiPage({ db, update, showToast, patchEvidencija, mojaPozici
 function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "zaposlenici");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "zaposlenici");
-  useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "zaposlenici"); }, [dozvKartice, tab]);
+  useEffect(() => { if (tab !== "aktivnost" && !dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "zaposlenici"); }, [dozvKartice, tab]);
   const mozeZaposlenici = dozvolaZaKarticu(mojaPozicija, "zaposlenici", "zaposlenici").izmjene;
   const mozePozicije = dozvolaZaKarticu(mojaPozicija, "zaposlenici", "pozicije").izmjene;
   const [modal, setModal] = useState(null);
@@ -15926,6 +16053,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija }) 
         {dozvKartice.some((k) => k.key === "pozicije") && <div className={`nav-tab ${tab === "pozicije" ? "active" : ""}`} onClick={() => setTab("pozicije")}>Pozicije</div>}
         {dozvKartice.some((k) => k.key === "obracun") && <div className={`nav-tab ${tab === "obracun" ? "active" : ""}`} onClick={() => setTab("obracun")}>Obračun plaća</div>}
         {dozvKartice.some((k) => k.key === "godisnji") && <div className={`nav-tab ${tab === "godisnji" ? "active" : ""}`} onClick={() => setTab("godisnji")}>Godišnji odmor</div>}
+        {mojaPozicija?.id === "poz-administrator" && <div className={`nav-tab ${tab === "aktivnost" ? "active" : ""}`} onClick={() => setTab("aktivnost")}>Aktivnost u aplikaciji</div>}
       </div>
 
       {tab === "zaposlenici" && (
@@ -15996,6 +16124,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija }) 
 
 
       {tab === "obracun" && <ObracunPlacaTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "obracun").izmjene} />}
+      {tab === "aktivnost" && mojaPozicija?.id === "poz-administrator" && <AktivnostTab db={db} />}
       {tab === "godisnji" && <GodisnjiOdmorTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "godisnji").izmjene} />}
 
       {modal === "zap" && (
