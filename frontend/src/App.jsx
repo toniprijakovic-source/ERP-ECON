@@ -8077,6 +8077,15 @@ const pbObrisi = (projekt, pbId) => {
   if (retci.some((i) => i.uOtpremniciId)) return null;
   return { proizvodniBrojevi: (projekt.proizvodniBrojevi || []).filter((pb) => pb.id !== pbId), isporuke: (projekt.isporuke || []).filter((i) => i.proizvodniBrojId !== pbId) };
 };
+// Brisanje više brojeva odjednom: oni s dijelom u otpremnici se preskaču (vraća i koliko ih je obrisano/preskočeno)
+const pbObrisiViseStruko = (projekt, pbIds) => {
+  const zakljucani = new Set((projekt.isporuke || []).filter((i) => pbIds.includes(i.proizvodniBrojId) && i.uOtpremniciId).map((i) => i.proizvodniBrojId));
+  const brisi = new Set(pbIds.filter((id) => !zakljucani.has(id)));
+  return {
+    patch: { proizvodniBrojevi: (projekt.proizvodniBrojevi || []).filter((pb) => !brisi.has(pb.id)), isporuke: (projekt.isporuke || []).filter((i) => !brisi.has(i.proizvodniBrojId)) },
+    obrisano: brisi.size, preskoceno: pbIds.length - brisi.size,
+  };
+};
 
 const normOznake = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
 // Tip iz zalijepljenog popisa: točno podudaranje oznake, a ako ga nema, jedinstveno djelomično (npr. "C2 v02" među oznakama).
@@ -8127,11 +8136,11 @@ const parsirajPopisPB = (tekst, stavkePod, stavkeKomplet, postojeciBrojevi) => {
   return redovi;
 };
 
-function ProizvodniBrojeviDodajModal({ stavkePod, stavkeKomplet, postojeciBrojevi, onDodaj, onClose }) {
+function ProizvodniBrojeviDodajModal({ stavkePod, stavkeKomplet, postojeciBrojevi, pocetno, onDodaj, onClose }) {
   const [brojevi, setBrojevi] = useState("");
-  const [podId, setPodId] = useState("");
-  const [stranicaId, setStranicaId] = useState("");
-  const [datum, setDatum] = useState("");
+  const [podId, setPodId] = useState(pocetno?.podId || "");
+  const [stranicaId, setStranicaId] = useState(pocetno?.stranicaId || "");
+  const [datum, setDatum] = useState(pocetno?.datum || "");
   const postojeci = new Set(postojeciBrojevi.map(normOznake));
   const sviBrojevi = [...new Set(brojevi.split(/[\s,;]+/).map((b) => b.trim()).filter(Boolean))];
   const novi = sviBrojevi.filter((b) => !postojeci.has(normOznake(b)));
@@ -8142,9 +8151,9 @@ function ProizvodniBrojeviDodajModal({ stavkePod, stavkeKomplet, postojeciBrojev
     onDodaj(novi.map((broj) => ({ broj, podId, stranicaId, datum })), preskoceni);
   };
   return (
-    <Modal title="Dodaj proizvodne brojeve" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi} disabled={novi.length === 0 || !podId || !stranicaId}>Dodaj {novi.length > 0 ? `(${novi.length})` : ""}</Btn></>}>
-      <p style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 12 }}>Odaberi kombinaciju poda i stranice i upiši jedan ili više proizvodnih brojeva koji je koriste (odvoji ih razmakom, zarezom ili novim redom). Svaki broj dobiva po jedan pod i jednu stranicu.</p>
-      <Field label="Proizvodni brojevi"><textarea className="input" rows={3} placeholder="npr. H11, H12, H15" value={brojevi} onChange={(e) => setBrojevi(e.target.value)} /></Field>
+    <Modal title={pocetno ? `Kopiraj proizvodni broj ${pocetno.izBroja}` : "Dodaj proizvodne brojeve"} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi} disabled={novi.length === 0 || !podId || !stranicaId}>{pocetno ? "Kopiraj" : "Dodaj"} {novi.length > 0 ? `(${novi.length})` : ""}</Btn></>}>
+      <p style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 12 }}>{pocetno ? `Pod, stranica i datum preuzeti su iz proizvodnog broja ${pocetno.izBroja} (možeš ih promijeniti). Upiši novi proizvodni broj — ili više njih odjednom (odvoji ih razmakom, zarezom ili novim redom). Novi brojevi počinju kao neisporučeni.` : "Odaberi kombinaciju poda i stranice i upiši jedan ili više proizvodnih brojeva koji je koriste (odvoji ih razmakom, zarezom ili novim redom). Svaki broj dobiva po jedan pod i jednu stranicu."}</p>
+      <Field label={pocetno ? "Novi proizvodni broj(evi)" : "Proizvodni brojevi"}><textarea className="input" rows={3} autoFocus={!!pocetno} placeholder="npr. H11, H12, H15" value={brojevi} onChange={(e) => setBrojevi(e.target.value)} /></Field>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <Field label="Pod">
           <select className="select" value={podId} onChange={(e) => setPodId(e.target.value)}>
@@ -9334,6 +9343,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
   const proizvodniBrojevi = projekt.proizvodniBrojevi || [];
   const rucneIsporuke = isporuke.filter((i) => !i.proizvodniBrojId);
   const [pbDodajOtvoren, setPbDodajOtvoren] = useState(false);
+  const [pbPocetno, setPbPocetno] = useState(null); // kombinacija preuzeta iz postojećeg broja kad se kopira
   const [pbPopisOtvoren, setPbPopisOtvoren] = useState(false);
   const [pbOdabrani, setPbOdabrani] = useState([]);
   const [pbGrupniDatum, setPbGrupniDatum] = useState("");
@@ -9346,6 +9356,12 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
     showToast && showToast(`Dodano proizvodnih brojeva: ${novi.length}${preskoceno > 0 ? ` (preskočeno ${preskoceno})` : ""}.`);
   };
   const urediBrojPB = (id, broj) => { if (broj.trim() && broj.trim() !== (proizvodniBrojevi.find((pb) => pb.id === id)?.broj || "")) patchProjekt({ proizvodniBrojevi: proizvodniBrojevi.map((pb) => (pb.id === id ? { ...pb, broj: broj.trim() } : pb)) }); };
+  const obrisiOznacenePB = () => potvrdiBrisanje(() => {
+    const { patch, obrisano, preskoceno } = pbObrisiViseStruko(projekt, pbOdabrani);
+    if (obrisano > 0) patchProjekt(patch);
+    setPbOdabrani([]);
+    showToast && showToast(`Obrisano proizvodnih brojeva: ${obrisano}${preskoceno > 0 ? ` (${preskoceno} preskočeno — već u otpremnici)` : ""}.`);
+  }, pbOdabrani.length === 1 ? "označeni proizvodni broj" : `označene proizvodne brojeve (${pbOdabrani.length})`);
   const postaviGrupniDatumPB = () => { patchProjekt(pbPostaviDatum(projekt, pbOdabrani, pbGrupniDatum)); showToast && showToast(`Datum ${pbGrupniDatum ? fmtDate(pbGrupniDatum) : "(prazan)"} postavljen na ${pbOdabrani.length} proizvodnih brojeva.`); };
 
   const azurirajZadatke = (noviZadaci) => patchProjekt({ zadaci: noviZadaci });
@@ -9487,7 +9503,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
             <strong className="f-display" style={{ fontSize: 14 }}>Proizvodni brojevi ({proizvodniBrojevi.length})</strong>
             <div style={{ display: "flex", gap: 8 }}>
               <Btn variant="ghost" size="sm" icon={FileText} onClick={() => setPbPopisOtvoren(true)} disabled={stavkePod.length === 0 || stavkeKomplet.length === 0}>Zalijepi popis</Btn>
-              <Btn variant="ghost" size="sm" icon={Plus} onClick={() => setPbDodajOtvoren(true)} disabled={stavkePod.length === 0 || stavkeKomplet.length === 0}>Dodaj proizvodne brojeve</Btn>
+              <Btn variant="ghost" size="sm" icon={Plus} onClick={() => { setPbPocetno(null); setPbDodajOtvoren(true); }} disabled={stavkePod.length === 0 || stavkeKomplet.length === 0}>Dodaj proizvodne brojeve</Btn>
             </div>
           </div>
           {stavkePod.length === 0 || stavkeKomplet.length === 0 ? (
@@ -9504,10 +9520,12 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
                 <span style={{ color: "var(--ink-soft)" }}>Datum za označene ({pbOdabrani.length}):</span>
                 <input className="input" type="date" style={{ width: 150 }} value={pbGrupniDatum} onChange={(e) => setPbGrupniDatum(e.target.value)} />
                 <Btn size="sm" variant="ghost" disabled={pbOdabrani.length === 0} onClick={postaviGrupniDatumPB}>Postavi datum</Btn>
+                <span style={{ color: "var(--ink-faint)" }}>·</span>
+                <Btn size="sm" variant="ghost" icon={Trash2} disabled={pbOdabrani.length === 0} onClick={obrisiOznacenePB}>Obriši označene{pbOdabrani.length > 0 ? ` (${pbOdabrani.length})` : ""}</Btn>
               </div>
               <div style={{ overflowX: "auto" }}>
-                <table className="erp-table" style={{ minWidth: 1020 }}>
-                  <thead><tr><th style={{ width: 28 }} /><th style={{ width: 110 }}>Proizvodni broj</th><th style={{ minWidth: 200 }}>Pod</th><th style={{ minWidth: 200 }}>Stranica</th><th style={{ width: 140 }}>Datum isporuke</th><th style={{ width: 70, textAlign: "center" }}>Pod isporučen</th><th style={{ width: 80, textAlign: "center" }}>Stranica isporučena</th><th style={{ width: 120 }} /><th style={{ width: 36 }} /></tr></thead>
+                <table className="erp-table" style={{ minWidth: 1060 }}>
+                  <thead><tr><th style={{ width: 28 }} /><th style={{ width: 110 }}>Proizvodni broj</th><th style={{ minWidth: 200 }}>Pod</th><th style={{ minWidth: 200 }}>Stranica</th><th style={{ width: 140 }}>Datum isporuke</th><th style={{ width: 70, textAlign: "center" }}>Pod isporučen</th><th style={{ width: 80, textAlign: "center" }}>Stranica isporučena</th><th style={{ width: 120 }} /><th style={{ width: 36 }} /><th style={{ width: 36 }} /></tr></thead>
                   <tbody>
                     {[...proizvodniBrojevi].sort((a, b) => (datumPB(isporuke, a.id) || "9999").localeCompare(datumPB(isporuke, b.id) || "9999") || usporediPrirodno(a.broj, b.broj)).map((pb) => {
                       const retci = retciPB(isporuke, pb.id);
@@ -9531,6 +9549,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
                           <td style={{ textAlign: "center" }}><input type="checkbox" disabled={!retci.pod || zakljucan(retci.pod)} checked={!!retci.pod?.isporuceno} title={zakljucan(retci.pod) ? "Uključeno u otpremnicu — status se mijenja preko te otpremnice" : ""} onChange={(e) => patchProjekt(pbPostaviIsporuceno(projekt, pb.id, GRUPA_POD, e.target.checked))} /></td>
                           <td style={{ textAlign: "center" }}><input type="checkbox" disabled={!retci.stranica || zakljucan(retci.stranica)} checked={!!retci.stranica?.isporuceno} title={zakljucan(retci.stranica) ? "Uključeno u otpremnicu — status se mijenja preko te otpremnice" : ""} onChange={(e) => patchProjekt(pbPostaviIsporuceno(projekt, pb.id, GRUPA_STRANICA, e.target.checked))} /></td>
                           <td style={{ fontSize: 11 }}>{otpremniceBr.length > 0 ? <span style={{ color: "var(--ink-soft)" }}>U otpremnici {otpremniceBr.join(", ")}</span> : kasni ? <span style={{ color: "var(--rust)", fontWeight: 600 }}>Kasni</span> : null}</td>
+                          <td><button className="btn btn-icon btn-ghost" title="Kopiraj proizvodni broj (isti pod, stranica i datum, novi broj)" onClick={() => { setPbPocetno({ izBroja: pb.broj, podId: pb.podId || "", stranicaId: pb.stranicaId || "", datum }); setPbDodajOtvoren(true); }}><Copy size={14} color="var(--ink-soft)" /></button></td>
                           <td><button className="btn btn-icon btn-ghost" disabled={zakljucan(retci.pod) || zakljucan(retci.stranica)} onClick={() => potvrdiBrisanje(() => primijeniPB(pbObrisi(projekt, pb.id)), `proizvodni broj ${pb.broj}`)}><Trash2 size={14} color={zakljucan(retci.pod) || zakljucan(retci.stranica) ? "var(--ink-faint)" : "var(--rust)"} /></button></td>
                         </tr>
                       );
@@ -9735,7 +9754,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
     {uvozOdabir && <OdaberiNarudzbuModal narudzbe={narudzbeProjekta} naslov="Uvoz u normativ — odaberi narudžbu" onOdaberi={(n) => { setUvozOdabir(false); setUvozOtvoren(n); }} onClose={() => setUvozOdabir(false)} />}
     {otpremniceModal && <OtpremniceListModal projekt={projekt} narudzbe={narudzbeProjekta} db={db} update={update} patchProjekt={patchProjektAsync} showToast={showToast} onClose={() => setOtpremniceModal(false)} />}
     {normativOtvoren && <NormativiModal db={db} update={update} showToast={showToast} onClose={() => setNormativOtvoren(false)} />}
-    {pbDodajOtvoren && <ProizvodniBrojeviDodajModal stavkePod={stavkePod} stavkeKomplet={stavkeKomplet} postojeciBrojevi={brojeviPB} onDodaj={dodajPB} onClose={() => setPbDodajOtvoren(false)} />}
+    {pbDodajOtvoren && <ProizvodniBrojeviDodajModal stavkePod={stavkePod} stavkeKomplet={stavkeKomplet} postojeciBrojevi={brojeviPB} pocetno={pbPocetno} onDodaj={dodajPB} onClose={() => setPbDodajOtvoren(false)} />}
     {pbPopisOtvoren && <ProizvodniBrojeviPopisModal stavkePod={stavkePod} stavkeKomplet={stavkeKomplet} postojeciBrojevi={brojeviPB} onDodaj={dodajPB} onClose={() => setPbPopisOtvoren(false)} />}
     {uvozOtvoren && <NarudzbaUvozModal narudzba={uvozOtvoren} stavkePod={stavkePod} stavkeKomplet={stavkeKomplet} onUvezi={uveziIzNarudzbe} onClose={() => setUvozOtvoren(false)} />}
     </>
