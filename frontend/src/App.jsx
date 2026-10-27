@@ -15247,10 +15247,13 @@ const uskladenostSati = (db, od, do_, grupa = "radiona") => {
 };
 
 function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetniPrikaz = null, pocetnaGrupa = null }) {
-  const [prikaz, setPrikaz] = useState(pocetniPrikaz || "dnevno"); // "dnevno" (unos) | "mjesecno" (pregled po nalozima/operacijama) | "uskladenost"
+  const [prikaz, setPrikaz] = useState(pocetniPrikaz || "dnevno"); // "dnevno" (unos) | "mjesecno" (pregled po nalozima/operacijama) | "radnik" | "uskladenost"
   const [uskladenostMjesec, setUskladenostMjesec] = useState(todayISO().slice(0, 7));
   const [uskladenostGrupa, setUskladenostGrupa] = useState(pocetnaGrupa || "radiona"); // "radiona" | "kooperant"
   const [uskladenostOtvoren, setUskladenostOtvoren] = useState(null); // id radnika čiji se dani prikazuju
+  const [radnikMjesec, setRadnikMjesec] = useState(todayISO().slice(0, 7)); // pregled po radniku
+  const [radnikGrupa, setRadnikGrupa] = useState("svi"); // "svi" | "radiona" | "kooperant" | "ostalo"
+  const [radnikOtvoren, setRadnikOtvoren] = useState(null); // id radnika čiji se nalozi prikazuju
   const [datum, setDatum] = useState(todayISO());
   const [uredjivanje, setUredjivanje] = useState(null); // id zaposlenika trenutno otvorenog za unos
   const [redoviUnos, setRedoviUnos] = useState([]);
@@ -15371,6 +15374,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
       <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
         <div className={`nav-tab ${prikaz === "dnevno" ? "active" : ""}`} onClick={() => setPrikaz("dnevno")}>Dnevni unos</div>
         <div className={`nav-tab ${prikaz === "mjesecno" ? "active" : ""}`} onClick={() => setPrikaz("mjesecno")}>Pregled po mjesecu</div>
+        <div className={`nav-tab ${prikaz === "radnik" ? "active" : ""}`} onClick={() => setPrikaz("radnik")}>Pregled po radniku</div>
         <div className={`nav-tab ${prikaz === "uskladenost" ? "active" : ""}`} onClick={() => setPrikaz("uskladenost")}>Usklađenost sati</div>
       </div>
 
@@ -15480,6 +15484,116 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
       )}
       </>
       )}
+
+      {prikaz === "radnik" && (() => {
+        const h = (x) => (Math.round(x * 10) / 10).toLocaleString("hr-HR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+        const nalogPoId = new Map(db.radniNalozi.map((n) => [n.id, n]));
+        const projektPoId = new Map(db.projekti.map((p) => [p.id, p]));
+        const radnici = new Map(); // zaposlenikId -> { ukupno, stalni, poFazi, nalozi: Map(nalogId -> { sati, dani }) , stalniPoslovi: Map }
+        db.satiPoNalogu.filter((s) => s.zaposlenikId && s.datum.slice(0, 7) === radnikMjesec).forEach((s) => {
+          const z = db.zaposlenici.find((x) => x.id === s.zaposlenikId);
+          if (!z) return;
+          if (radnikGrupa !== "svi" && grupaEvidencije(z, db.pozicijeZaposlenika) !== radnikGrupa) return;
+          const r = radnici.get(z.id) || { z, ukupno: 0, stalni: 0, poFazi: new Map(), nalozi: new Map(), stalniPoslovi: new Map() };
+          const sati = Number(s.sati) || 0;
+          r.ukupno += sati;
+          const stalniP = stalniPosao(s.radniNalogId);
+          if (stalniP) {
+            r.stalni += sati;
+            r.stalniPoslovi.set(stalniP.id, (r.stalniPoslovi.get(stalniP.id) || 0) + sati);
+          } else if (nalogPoId.has(s.radniNalogId)) {
+            const n = nalogPoId.get(s.radniNalogId);
+            r.poFazi.set(n.faza, (r.poFazi.get(n.faza) || 0) + sati);
+            const e = r.nalozi.get(n.id) || { nalog: n, sati: 0, dani: new Set() };
+            e.sati += sati; e.dani.add(s.datum);
+            r.nalozi.set(n.id, e);
+          }
+          radnici.set(z.id, r);
+        });
+        const redovi = [...radnici.values()].sort((a, b) => (a.z.prezime + a.z.ime).localeCompare(b.z.prezime + b.z.ime, "hr"));
+        const ukupnoSve = redovi.reduce((a, r) => a + r.ukupno, 0);
+        return (
+          <>
+            <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Za odabrani mjesec: koliko je sati svaki radnik evidentirao po operacijama te na kojim projektima i radnim nalozima (uz operaciju koju nalog označava). Računaju se samo sati upisani po radniku; ukupni unos voditelja (Plan proizvodnje) nema radnika pa nije uključen.</p>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+              <span className="label">Mjesec</span>
+              <MjesecOdabir value={radnikMjesec} onChange={(v) => { setRadnikMjesec(v); setRadnikOtvoren(null); }} />
+              <div style={{ display: "flex", gap: 6, marginLeft: 8 }}>
+                {[["svi", "Svi"], ["radiona", "Radiona"], ["kooperant", "Kooperanti"], ["ostalo", "Tehnički ured"]].map(([k, naziv]) => <Btn key={k} variant={radnikGrupa === k ? "primary" : "ghost"} size="sm" onClick={() => { setRadnikGrupa(k); setRadnikOtvoren(null); }}>{naziv}</Btn>)}
+              </div>
+            </div>
+            {redovi.length === 0 ? <EmptyState text="Nema evidentiranih sati po radniku za odabrani mjesec." /> : (
+              <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+                <table className="erp-table">
+                  <thead><tr><th>Radnik</th><th style={{ textAlign: "right", width: 90 }}>Ukupno</th><th style={{ width: 80, textAlign: "right" }}>Stalni poslovi</th><th>Po operacijama</th><th style={{ textAlign: "right", width: 80 }}>Naloga</th><th style={{ width: 100 }} /></tr></thead>
+                  <tbody>
+                    {redovi.map((r) => {
+                      const otvoren = radnikOtvoren === r.z.id;
+                      const fazeR = [...r.poFazi.entries()].sort((a, b) => b[1] - a[1]);
+                      // popis naloga grupiran po projektu (osnovna narudžba i dodaci posebno)
+                      const poProjektu = new Map();
+                      r.nalozi.forEach((e) => {
+                        const k = `${e.nalog.projektId || ""}|${e.nalog.dodatakId || ""}`;
+                        const g = poProjektu.get(k) || { projekt: projektPoId.get(e.nalog.projektId) || null, dodatakId: e.nalog.dodatakId || "", sati: 0, nalozi: [] };
+                        g.sati += e.sati; g.nalozi.push(e);
+                        poProjektu.set(k, g);
+                      });
+                      const grupeProjekata = [...poProjektu.values()].sort((a, b) => b.sati - a.sati);
+                      return (
+                        <React.Fragment key={r.z.id}>
+                          <tr>
+                            <td style={{ fontWeight: 600 }}>{r.z.prezime} {r.z.ime}</td>
+                            <td className="f-mono" style={{ textAlign: "right", fontWeight: 700 }}>{h(r.ukupno)} h</td>
+                            <td className="f-mono" style={{ textAlign: "right", color: r.stalni > 0 ? "inherit" : "var(--ink-faint)" }}>{r.stalni > 0 ? `${h(r.stalni)} h` : "—"}</td>
+                            <td style={{ fontSize: 12 }}>
+                              {fazeR.length === 0 ? <span style={{ color: "var(--ink-faint)" }}>—</span> : fazeR.map(([faza, sati]) => (
+                                <span key={faza} style={{ display: "inline-block", margin: "1px 6px 1px 0", padding: "1px 7px", border: "1px solid var(--line)", borderRadius: 3, background: "var(--surface-alt)", whiteSpace: "nowrap" }}>{fazaOznaka(faza)} <strong className="f-mono">{h(sati)}</strong></span>
+                              ))}
+                            </td>
+                            <td className="f-mono" style={{ textAlign: "right" }}>{r.nalozi.size || "—"}</td>
+                            <td><Btn variant="ghost" size="sm" onClick={() => setRadnikOtvoren(otvoren ? null : r.z.id)}>Detalji {otvoren ? "▲" : "▼"}</Btn></td>
+                          </tr>
+                          {otvoren && (
+                            <tr><td colSpan={6} style={{ background: "var(--surface-alt)" }}>
+                              <table className="erp-table" style={{ margin: 0 }}>
+                                <thead><tr><th>Projekt</th><th>Radni nalog</th><th>Operacija</th><th style={{ textAlign: "right" }}>Dana</th><th style={{ textAlign: "right" }}>Sati</th></tr></thead>
+                                <tbody>
+                                  {grupeProjekata.map((g) => (
+                                    <React.Fragment key={`${g.projekt?.id || ""}|${g.dodatakId}`}>
+                                      {[...g.nalozi].sort((a, b) => usporediPrirodno(a.nalog.broj, b.nalog.broj)).map((e, i) => (
+                                        <tr key={e.nalog.id}>
+                                          <td style={{ fontWeight: i === 0 ? 600 : 400 }}>{i === 0 ? <>{g.projekt ? `${g.projekt.sifra} — ${g.projekt.naziv}` : "Bez projekta"}{g.dodatakId && <span style={{ color: "var(--steel)", fontSize: 11 }}> · dodatak: {g.projekt?.dodaci?.find((d) => d.id === g.dodatakId)?.naziv || "dodatak"}</span>}{g.nalozi.length > 1 && <span className="f-mono" style={{ color: "var(--ink-soft)", fontSize: 11 }}> · ukupno {h(g.sati)} h</span>}</> : ""}</td>
+                                          <td className="f-mono">{e.nalog.broj}</td>
+                                          <td>{fazaNaloga(e.nalog)}</td>
+                                          <td className="f-mono" style={{ textAlign: "right" }}>{e.dani.size}</td>
+                                          <td className="f-mono" style={{ textAlign: "right", fontWeight: 600 }}>{h(e.sati)} h</td>
+                                        </tr>
+                                      ))}
+                                    </React.Fragment>
+                                  ))}
+                                  {[...r.stalniPoslovi.entries()].map(([id, sati]) => (
+                                    <tr key={id}><td style={{ color: "var(--ink-soft)" }}>Stalni posao</td><td /><td>{nazivStalnogPosla(stalniPosao(id))}</td><td /><td className="f-mono" style={{ textAlign: "right", fontWeight: 600 }}>{h(sati)} h</td></tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </td></tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                    <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
+                      <td>UKUPNO ({redovi.length})</td>
+                      <td className="f-mono" style={{ textAlign: "right" }}>{h(ukupnoSve)} h</td>
+                      <td className="f-mono" style={{ textAlign: "right" }}>{h(redovi.reduce((a, r) => a + r.stalni, 0))} h</td>
+                      <td colSpan={3} />
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {prikaz === "mjesecno" && (() => {
         const { nalozi, faze, stupci } = pregledMjeseca;
