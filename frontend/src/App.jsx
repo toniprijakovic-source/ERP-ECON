@@ -5582,7 +5582,10 @@ const FAZE = [...OPERACIJE.map((o) => o.label), "Montaža (teren)", "Kontrola kv
 const praznaFazaSati = () => Object.fromEntries(FAZE.map((f) => [f, 0]));
 // Slovne oznake faza prema "Popisu šifri" (slova G i Q ne postoje). Montaža (teren), Kontrola kvalitete i Ostalo dobile su W, X i Y.
 const FAZA_SLOVO = { "Pila": "B", "Laser za profile": "C", "Laser za limove": "D", "Kutno savijanje": "E", "Strojna obrada": "F", "Priprema pozicija za sklapanje": "H", "Sklapanje - konstrukcije": "I", "Sklapanje - kupaonice": "J", "Zavarivanje": "K", "Brušenje": "L", "Ravnanje": "M", "Bojanje": "N", "Montaža (teren)": "W", "Kontrola kvalitete": "X", "Ostalo": "Y" };
-const fazaOznaka = (f) => (FAZA_SLOVO[f] ? `${FAZA_SLOVO[f]} – ${f}` : f);
+// Faza se u podacima (projekti, nalozi, kompetencije, plan) i dalje zove "Kontrola kvalitete", a prikazuje se kao "Dorada konstrukcije".
+const FAZA_PRIKAZ = { "Kontrola kvalitete": "Dorada konstrukcije" };
+const nazivFaze = (f) => FAZA_PRIKAZ[f] || f;
+const fazaOznaka = (f) => (FAZA_SLOVO[f] ? `${FAZA_SLOVO[f]} – ${nazivFaze(f)}` : f);
 // Faza radnog naloga uz naziv dodatne operacije iz ponude (npr. "Y – Ostalo · Pjeskarenje").
 const fazaNaloga = (n) => (n?.operacija ? `${fazaOznaka(n.faza)} · ${n.operacija}` : fazaOznaka(n?.faza));
 // Naziv dodatne narudžbe projekta na koju glasi nalog (prazno za osnovnu narudžbu).
@@ -6032,7 +6035,7 @@ function PlanPoProjektu({ plan, patchProjekt, mozeMijenjati, otvoriProjekt }) {
     upozorenja.push(<><strong>{kasneP.length} od {projekti.length} projekata kasni</strong> — najviše {top.map((p) => `${p.projekt.sifra} (${-p.rezervaDana} ${danaRijec(p.rezervaDana)})`).join(", ")}.</>);
   }
   if (puniStrojevi.length) upozorenja.push(<><strong>{puniStrojevi.map((s) => (s === "Kutno savijanje" ? "Preša" : s)).join(", ")}</strong> rade punim kapacitetom — vidi prijedloge u „Opterećenje i smjene“.</>);
-  plan.fazeBezLjudi.forEach((f) => upozorenja.push(<>Fazu <strong>{f}</strong> nitko nema u kompetencijama — nalozi te faze se ne mogu isplanirati. Dodaj kompetenciju zaposleniku.</>));
+  plan.fazeBezLjudi.forEach((f) => upozorenja.push(<>Fazu <strong>{nazivFaze(f)}</strong> nitko nema u kompetencijama — nalozi te faze se ne mogu isplanirati. Dodaj kompetenciju zaposleniku.</>));
   plan.poslovi.filter((p) => p.nedovrseno && !p.faze.some((f) => plan.fazeBezLjudi.includes(f.faza))).slice(0, 3).forEach((p) => upozorenja.push(<><strong>{p.projekt.sifra}</strong>: plan ne može završiti sve faze u sljedećih godinu dana.</>));
   if (bezDatumaKom) upozorenja.push(<><strong>{bezDatumaKom} kupaonica nema datum isporuke</strong> ({plan.kupaonice.filter((k) => k.bezDatumaKom).map((k) => `${k.projekt.sifra}: ${k.bezDatumaKom} kom.`).join(", ")}; {fmtSati0(bezDatumaSati)} h) — plan ih ne vidi dok se ne upiše raspored isporuka.</>);
   if (plan.bezFaza.length) upozorenja.push(<><strong>{plan.bezFaza.length} aktivnih projekata nema faza</strong> — dok se ne upišu sati (kartica „Projekti bez faza“), plan za taj posao ne zna.</>);
@@ -6058,7 +6061,7 @@ function PlanPoProjektu({ plan, patchProjekt, mozeMijenjati, otvoriProjekt }) {
     <div style={{ position: "absolute", top: gore - 3, left: `${pct(iso) + 50 / DANA}%`, width: 8, height: 8, marginLeft: -3, background: "var(--ink)", transform: "rotate(45deg)" }} />
   </> : null);
   const MiniFaze = ({ p, vrh, korak, debljina }) => <>
-    {p.faze.filter((f) => f.od).map((f) => <div key={f.nalogId} title={`${f.faza} · ${kratkiDatum(f.od)}–${kratkiDatum(f.do)} · ${fmtSati(Math.max(0, f.plan - f.utroseno))} h`} style={{ position: "absolute", top: vrh + Math.max(0, razinaFazePlana(f.faza) === -1 ? 2 : razinaFazePlana(f.faza)) * korak, height: debljina, ...traka(f.od, f.do), background: PLAN_BOJA[f.faza] || "#6B737B", borderRadius: 1 }} />)}
+    {p.faze.filter((f) => f.od).map((f) => <div key={f.nalogId} title={`${nazivFaze(f.faza)} · ${kratkiDatum(f.od)}–${kratkiDatum(f.do)} · ${fmtSati(Math.max(0, f.plan - f.utroseno))} h`} style={{ position: "absolute", top: vrh + Math.max(0, razinaFazePlana(f.faza) === -1 ? 2 : razinaFazePlana(f.faza)) * korak, height: debljina, ...traka(f.od, f.do), background: PLAN_BOJA[f.faza] || "#6B737B", borderRadius: 1 }} />)}
     {p.zavrsne.map((z) => <div key={z.vrsta} title={`${z.vrsta} · ${kratkiDatum(z.od)}–${kratkiDatum(z.do)}`} style={{ position: "absolute", top: vrh + 8 * korak, height: debljina, ...traka(z.od, z.do), background: PLAN_BOJA[z.vrsta], borderRadius: 1 }} />)}
   </>;
   const RedakFaze = ({ boja, naslov, podnaslov, od, doD, tekst }) => (
@@ -6164,7 +6167,7 @@ function PlanPoProjektu({ plan, patchProjekt, mozeMijenjati, otvoriProjekt }) {
                       </div>
                       {otvoreni.has(r.k) && (
                         <div style={{ background: "#F7F8F9", borderTop: "1px dashed var(--line)" }}>
-                          {p.faze.map((f) => <RedakFaze key={f.nalogId} boja={PLAN_BOJA[f.faza] || "#6B737B"} naslov={f.operacija ? `${f.faza} · ${f.operacija}` : f.faza} podnaslov={`${f.broj}${f.utroseno > 0 ? ` · utrošeno ${fmtSati(f.utroseno)} od ${fmtSati(f.plan)} h` : ` · ${fmtSati(f.plan)} h`}`} od={f.od} doD={f.do} tekst={`${fmtSati(Math.max(0, f.plan - f.utroseno))} h${f.status === "U tijeku" ? " · u tijeku" : ""}`} />)}
+                          {p.faze.map((f) => <RedakFaze key={f.nalogId} boja={PLAN_BOJA[f.faza] || "#6B737B"} naslov={f.operacija ? `${nazivFaze(f.faza)} · ${f.operacija}` : nazivFaze(f.faza)} podnaslov={`${f.broj}${f.utroseno > 0 ? ` · utrošeno ${fmtSati(f.utroseno)} od ${fmtSati(f.plan)} h` : ` · ${fmtSati(f.plan)} h`}`} od={f.od} doD={f.do} tekst={`${fmtSati(Math.max(0, f.plan - f.utroseno))} h${f.status === "U tijeku" ? " · u tijeku" : ""}`} />)}
                           {p.zavrsne.map((z) => <RedakFaze key={z.vrsta} boja={PLAN_BOJA[z.vrsta]} naslov={z.vrsta} podnaslov={`${z.dana} ${radnihDanaRijec(z.dana)} nakon proizvodnje`} od={z.od} doD={z.do} tekst={`${z.dana} d`} />)}
                           <AkcijeProjekta projekt={p.projekt} />
                         </div>
@@ -6313,7 +6316,7 @@ function PlanOpterecenje({ plan, db, podaci, update, showToast, mozeMijenjati })
   PLAN_STROJEVI.filter((s) => !post.drugaSmjena[s] && puniDani(s).length >= 5).forEach((s) => prijedlozi.push({
     tekst: <><strong>{s}</strong> radi punim kapacitetom ({raspon(puniDani(s))}), a 2. smjena za nju nije predviđena. {plan.kompetentnih[s] <= 1 ? `Samo ${plan.kompetentnih[s]} osoba zna raditi tu fazu — dodaj kompetenciju još nekome ili dio posla daj u kooperaciju.` : "Prekovremeni rad ili 2. smjena skratili bi red čekanja (2. smjena se dopušta u postavkama plana)."}</>,
   }));
-  cekanje.forEach((c) => prijedlozi.push({ tekst: <><strong>{c.faza}</strong>: nalozi čekaju na slobodne ljude ukupno ~{fmtSati0(c.ceka)} h u sljedećih 6 tjedana. Prekovremeni ili još jedna osoba s tom kompetencijom skratili bi čekanje.</> }));
+  cekanje.forEach((c) => prijedlozi.push({ tekst: <><strong>{nazivFaze(c.faza)}</strong>: nalozi čekaju na slobodne ljude ukupno ~{fmtSati0(c.ceka)} h u sljedećih 6 tjedana. Prekovremeni ili još jedna osoba s tom kompetencijom skratili bi čekanje.</> }));
   if (kompleta > 0) prijedlozi.push({ tekst: <><strong>Normativ kupaonica</strong>: po raspodjeli iz normativa jedan komplet (pod + stranice) treba oko {fmtSati(sumaFazeKup("Laser za profile") / kompleta)} h lasera za profile, {fmtSati(sumaFazeKup("Laser za limove") / kompleta)} h lasera za limove, {fmtSati(sumaFazeKup("Pila") / kompleta)} h pile i {fmtSati(sumaFazeKup("Kutno savijanje") / kompleta)} h preše. Ako je stvarno vrijeme na strojevima drukčije, ispravi postotke u normativu (detalji projekta kupaonica → Uredi normativ).</> });
 
   const TH = { textAlign: "center", whiteSpace: "nowrap" };
@@ -6351,7 +6354,7 @@ function PlanOpterecenje({ plan, db, podaci, update, showToast, mozeMijenjati })
             <tbody>
               {sveFaze.filter((f) => TJEDNI.some((t) => fazaTjedan(f, t).h > 0.05)).map((f) => (
                 <tr key={f}>
-                  <td style={{ fontWeight: 600, whiteSpace: "nowrap" }}><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: PLAN_BOJA[f] || "#6B737B", marginRight: 8 }} />{f}{PLAN_STROJEVI.includes(f) && <span style={{ fontWeight: 400, fontSize: 11, color: "var(--ink-soft)" }}> · stroj</span>}</td>
+                  <td style={{ fontWeight: 600, whiteSpace: "nowrap" }}><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: PLAN_BOJA[f] || "#6B737B", marginRight: 8 }} />{nazivFaze(f)}{PLAN_STROJEVI.includes(f) && <span style={{ fontWeight: 400, fontSize: 11, color: "var(--ink-soft)" }}> · stroj</span>}</td>
                   <td className="f-mono" style={{ textAlign: "center" }}>{f === "Ostalo" ? "svi" : plan.kompetentnih[f] || 0}</td>
                   {TJEDNI.map((t) => {
                     const c = fazaTjedan(f, t);
@@ -6585,7 +6588,7 @@ function PlanDanasUnos({ plan, db, update, patchProjekt, showToast, mozeMijenjat
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "12px 16px", borderTop: "1px solid var(--line)" }}>
             <select className="select" style={{ maxWidth: 420 }} value={odabir} onChange={(e) => setOdabir(e.target.value)}>
               <option value="">Dodaj drugu fazu…</option>
-              {ponudaZaDodati.map((n) => <option key={n.id} value={n.id}>{n.broj} — {projektPoId.get(n.projektId)?.sifra}{dodatakNaloga(n, db.projekti) ? ` · dodatak: ${dodatakNaloga(n, db.projekti)}` : ""} · {n.faza}</option>)}
+              {ponudaZaDodati.map((n) => <option key={n.id} value={n.id}>{n.broj} — {projektPoId.get(n.projektId)?.sifra}{dodatakNaloga(n, db.projekti) ? ` · dodatak: ${dodatakNaloga(n, db.projekti)}` : ""} · {nazivFaze(n.faza)}</option>)}
             </select>
             <Btn size="sm" icon={Plus} onClick={() => { if (odabir) { setDodani([...dodani, odabir]); setOdabir(""); } }}>Dodaj</Btn>
           </div>
@@ -6679,7 +6682,7 @@ function StalniPosloviDanas({ db, update, datum, showToast, mozeMijenjati }) {
 
 /* ---------- Projekti bez faza — brzi unos sati ---------- */
 const PLAN_FAZE_UNOSA = ["Pila", "Laser za profile", "Laser za limove", "Kutno savijanje", "Strojna obrada", "Priprema pozicija za sklapanje", "Sklapanje - konstrukcije", "Zavarivanje", "Brušenje", "Ravnanje", "Kontrola kvalitete"];
-const KRATKI_NAZIV_FAZE = { "Laser za profile": "Laser profili", "Laser za limove": "Laser limovi", "Kutno savijanje": "Kutno sav.", "Strojna obrada": "Strojna", "Priprema pozicija za sklapanje": "Priprema", "Sklapanje - konstrukcije": "Sklapanje", "Kontrola kvalitete": "Kontrola" };
+const KRATKI_NAZIV_FAZE = { "Laser za profile": "Laser profili", "Laser za limove": "Laser limovi", "Kutno savijanje": "Kutno sav.", "Strojna obrada": "Strojna", "Priprema pozicija za sklapanje": "Priprema", "Sklapanje - konstrukcije": "Sklapanje", "Kontrola kvalitete": "Dorada" };
 function PlanBezFaza({ plan, db, update, patchProjekt, showToast, mozeMijenjati }) {
   const [unos, setUnos] = useState({}); // { projektId: { faza: "sati", zavrsna: "bez" } }
   const red = (id) => unos[id] || {};
@@ -6726,7 +6729,7 @@ function PlanBezFaza({ plan, db, update, patchProjekt, showToast, mozeMijenjati 
                 <tr key={p.id}>
                   <td style={{ maxWidth: 220 }}><span className="f-mono" style={{ fontSize: 12, fontWeight: 600 }}>{p.sifra}</span><div style={{ fontSize: 11.5, color: "var(--ink-soft)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.naziv}</div></td>
                   <td className="f-mono" style={{ fontSize: 12, whiteSpace: "nowrap", color: p.rokZavrsetka && p.rokZavrsetka < plan.danas ? "var(--rust)" : "inherit" }}>{p.rokZavrsetka ? kratkiDatum(p.rokZavrsetka) : "—"}{p.rokZavrsetka && p.rokZavrsetka < plan.danas && <div style={{ fontFamily: "var(--font-body)", fontSize: 10.5 }}>prošao</div>}</td>
-                  {PLAN_FAZE_UNOSA.map((f) => <td key={f} style={{ padding: "6px 4px" }}><input className="input f-mono" inputMode="decimal" aria-label={`${f} sati za ${p.sifra}`} placeholder="—" disabled={!mozeMijenjati} style={{ width: 56, padding: "5px 6px", textAlign: "right" }} value={red(p.id)[f] || ""} onChange={(e) => postavi(p.id, f, e.target.value)} /></td>)}
+                  {PLAN_FAZE_UNOSA.map((f) => <td key={f} style={{ padding: "6px 4px" }}><input className="input f-mono" inputMode="decimal" aria-label={`${nazivFaze(f)} sati za ${p.sifra}`} placeholder="—" disabled={!mozeMijenjati} style={{ width: 56, padding: "5px 6px", textAlign: "right" }} value={red(p.id)[f] || ""} onChange={(e) => postavi(p.id, f, e.target.value)} /></td>)}
                   <td><select className="select" aria-label={`Završna obrada za ${p.sifra}`} disabled={!mozeMijenjati} style={{ padding: "5px 6px", minWidth: 150 }} value={red(p.id).zavrsna || p.zavrsnaObrada || "bez"} onChange={(e) => postavi(p.id, "zavrsna", e.target.value)}>{ZAVRSNE_OBRADE.map((z) => <option key={z.key} value={z.key}>{z.naziv}</option>)}</select></td>
                   <td>{mozeMijenjati && <Btn size="sm" onClick={() => kreiraj([p])}>Kreiraj naloge</Btn>}</td>
                 </tr>
@@ -6764,7 +6767,7 @@ function PlanPostavke({ plan, db, update, showToast, mozeMijenjati }) {
               {i > 0 && <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontSize: 10.5, color: "var(--ink-soft)" }}><ArrowRight size={16} />+1 dan</div>}
               <div style={{ padding: "8px 10px", border: "1px solid var(--line-strong)", borderTop: `4px solid ${PLAN_BOJA[faze[0]] || PLAN_BOJA[{ "Priprema pozicija": "Priprema pozicija za sklapanje", "Sklapanje": "Sklapanje - konstrukcije", "Kontrola (ako ima sati)": "Kontrola kvalitete" }[faze[0]]] || "#6B737B"}`, borderRadius: 3, background: "var(--surface)", minWidth: 130 }}>
                 <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ink-soft)", fontWeight: 700 }}>{n}</div>
-                {faze.map((f) => <div key={f} style={{ fontSize: 13, fontWeight: 600 }}>{f}</div>)}
+                {faze.map((f) => <div key={f} style={{ fontSize: 13, fontWeight: 600 }}>{nazivFaze(f)}</div>)}
               </div>
             </React.Fragment>
           ))}
@@ -7121,7 +7124,7 @@ function PlanRezanjaView({ db, update, showToast, mojaPozicija, refetchKljuc }) 
     const rn = db.radniNalozi.find((r) => r.id === id);
     if (!rn) return "—";
     const proj = db.projekti.find((p) => p.id === rn.projektId);
-    return `${rn.broj} — ${proj?.sifra || ""} ${rn.faza}`;
+    return `${rn.broj} — ${proj?.sifra || ""} ${nazivFaze(rn.faza)}`;
   };
 
   const KpiCard = ({ label, value, sub }) => (
@@ -8458,7 +8461,7 @@ function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija, mo
                   sate — ovisnost o tuđem projektu ili o fazi bez planiranih sati nema smisla. */}
               <select className="select" value={form.ovisiONalogId || ""} onChange={(e) => setForm({ ...form, ovisiONalogId: e.target.value || null })}>
                 <option value="">— Bez ovisnosti —</option>
-                {db.radniNalozi.filter((r) => r.id !== form.id && r.projektId === form.projektId && Number(trenutniProjekt?.faze?.[r.faza]) > 0).map((r) => <option key={r.id} value={r.id}>{r.broj} — {r.faza}</option>)}
+                {db.radniNalozi.filter((r) => r.id !== form.id && r.projektId === form.projektId && Number(trenutniProjekt?.faze?.[r.faza]) > 0).map((r) => <option key={r.id} value={r.id}>{r.broj} — {nazivFaze(r.faza)}</option>)}
               </select>
             </Field>
             {form.ovisiONalogId && (
@@ -16789,7 +16792,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija }) 
                       type="checkbox" checked={(zapForm.kompetencije || []).includes(f)}
                       onChange={() => setZapForm({ ...zapForm, kompetencije: (zapForm.kompetencije || []).includes(f) ? zapForm.kompetencije.filter((k) => k !== f) : [...(zapForm.kompetencije || []), f] })}
                     />
-                    {f}
+                    {nazivFaze(f)}
                   </label>
                 ))}
               </div>
