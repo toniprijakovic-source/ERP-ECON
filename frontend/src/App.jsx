@@ -15044,6 +15044,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
             <th style={{ width: 80 }}>Prekovremeni</th>
             <th style={{ width: 100 }}>Prikaz prekovremenih</th>
             <th style={{ width: 90 }}>God./praz.</th>
+            <th style={{ width: 80 }} title="Udaljenost do posla, jedan smjer (uređuje se u Zaposlenici → uredi zaposlenika)">Do posla</th>
             <th style={{ width: 70 }}>Putni</th>
             <th style={{ width: 80 }}>Obrok</th>
             <th style={{ width: 95 }}>Ukupno neto</th>
@@ -15066,6 +15067,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
                 />
               </td>
               <td className="f-mono">{r.placeniNerad.toFixed(1)} h</td>
+              <td className="f-mono">{Number(r.zaposlenik.udaljenostKm) > 0 ? `${String(Number(r.zaposlenik.udaljenostKm)).replace(".", ",")} km` : "—"}</td>
               <td className="f-mono">{fmtCurDec(r.putni)}</td>
               <td className="f-mono">{fmtCurDec(r.topliObrok)}</td>
               <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(r.ukupno)}</td>
@@ -15077,6 +15079,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
             <td className="f-mono">{uk.redovni.toFixed(1)} h</td>
             <td className="f-mono">{uk.prekovremeniStvarno.toFixed(1)} h</td>
             <td className="f-mono">{uk.prekovremeni.toFixed(1)} h</td>
+            <td></td>
             <td></td>
             <td className="f-mono">{fmtCurDec(uk.putni)}</td>
             <td className="f-mono">{fmtCurDec(uk.topliObrok)}</td>
@@ -15281,7 +15284,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
               <span>Godišnji / praznici / dopust / detašman ({detaljZaposlenik.placeniNerad.toFixed(1)} h)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosNerad)}</span>
               {detaljZaposlenik.detasmanSati > 0 && <><span style={{ color: "var(--ink-faint)", fontSize: 11 }}>— od toga detašman: {detaljZaposlenik.detasmanSati.toFixed(1)} h</span><span></span></>}
               <span>Dodatak na staž ({detaljZaposlenik.staz} god. × {detaljZaposlenik.daniStaza} dana)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.dodatakStaz)}</span>
-              <span>Putni troškovi</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.putni)}</span>
+              <span>Putni troškovi{Number(detaljZaposlenik.zaposlenik.udaljenostKm) > 0 && <span style={{ color: "var(--ink-faint)" }}> (do posla {String(Number(detaljZaposlenik.zaposlenik.udaljenostKm)).replace(".", ",")} km, jedan smjer)</span>}</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.putni)}</span>
               <span>Topli obrok</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.topliObrok)}</span>
               {detaljZaposlenik.prebacenoSubota > 0 && <><span style={{ color: "var(--ink-faint)", fontSize: 11 }}>— subotnji putni ({fmtCurDec(detaljZaposlenik.prebacenoPutni)}) i topli obrok ({fmtCurDec(detaljZaposlenik.prebacenoObrok)}) prebačeni u stimulaciju</span><span></span></>}
               {detaljZaposlenik.danaSluzbenogPuta > 0 && <><span>Dnevnica službeni put ({detaljZaposlenik.danaSluzbenogPuta} dana)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.dnevnicaTeren)}</span></>}
