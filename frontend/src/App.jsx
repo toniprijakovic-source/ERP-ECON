@@ -11260,6 +11260,102 @@ function OtpremniceBezPodlogeKartica({ db, update, onNapraviPodlogu, mozeMijenja
   );
 }
 
+// Fakturirano po mjesecima: zbroj podloga (prije predujma) po datumu obračuna na podlozi.
+function FakturiranoPoMjesecima({ db, onOtvoriPodlogu }) {
+  const [mjesec, setMjesec] = useState(todayISO().slice(0, 7));
+  const podloge = db.podlogeZaFakturu || [];
+  const godina = mjesec.slice(0, 4);
+  const zbrojZa = (m) => { const lista = podloge.filter((p) => (p.datum || "").slice(0, 7) === m); return { broj: lista.length, zbroj: lista.reduce((a, p) => a + (Number(p.zbroj) || 0), 0), zaPlatiti: lista.reduce((a, p) => a + (Number(p.zaPlatiti) || 0), 0) }; };
+  const prethodni = (() => { const [g, m] = mjesec.split("-").map(Number); return m === 1 ? `${g - 1}-12` : `${g}-${String(m - 1).padStart(2, "0")}`; })();
+  const tekuci = zbrojZa(mjesec), prosli = zbrojZa(prethodni);
+  const razlika = prosli.zbroj > 0 ? Math.round(((tekuci.zbroj - prosli.zbroj) / prosli.zbroj) * 100) : null;
+  const podlogeMjeseca = podloge.filter((p) => (p.datum || "").slice(0, 7) === mjesec).sort((a, b) => (a.datum || "").localeCompare(b.datum || "") || usporediPrirodno(a.broj, b.broj));
+  const kupacPodloge = (p) => { const n = db.narudzbe.find((x) => x.id === p.narudzbaId); return db.kupci.find((k) => k.id === (n?.kupacId || db.projekti.find((pr) => pr.id === p.projektId)?.kupacId))?.naziv || "Nepoznat kupac"; };
+  const poKupcu = new Map();
+  podlogeMjeseca.forEach((p) => { const k = kupacPodloge(p); const e = poKupcu.get(k) || { broj: 0, zbroj: 0 }; e.broj += 1; e.zbroj += Number(p.zbroj) || 0; poKupcu.set(k, e); });
+  const kupciRedovi = [...poKupcu.entries()].sort((a, b) => b[1].zbroj - a[1].zbroj);
+  const mjeseciGodine = Array.from({ length: 12 }, (_, i) => { const m = `${godina}-${String(i + 1).padStart(2, "0")}`; return { m, naziv: NAZIVI_MJESECI[i], ...zbrojZa(m) }; });
+  const godinaZbroj = mjeseciGodine.reduce((a, r) => ({ broj: a.broj + r.broj, zbroj: a.zbroj + r.zbroj, zaPlatiti: a.zaPlatiti + r.zaPlatiti }), { broj: 0, zbroj: 0, zaPlatiti: 0 });
+  const rucnoUMjesecu = (db.otpremnice || []).filter((o) => o.fakturiranoRucno && (o.fakturiranoRucnoDatum || "").slice(0, 7) === mjesec).length;
+  const plocica = { flex: "1 1 160px", padding: "10px 14px" };
+  return (
+    <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+        <strong style={{ fontSize: 14 }}>Fakturirano po mjesecima</strong>
+        <MjesecOdabir value={mjesec} onChange={setMjesec} style={{ marginLeft: 8 }} />
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        <div className="card" style={plocica}><div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Fakturirano u mjesecu</div><div className="f-mono" style={{ fontWeight: 700, fontSize: 18, color: "var(--steel)" }}>{fmtCurDec(tekuci.zbroj)}</div></div>
+        <div className="card" style={plocica}><div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Broj podloga</div><div className="f-mono" style={{ fontWeight: 700, fontSize: 18 }}>{tekuci.broj}</div></div>
+        <div className="card" style={plocica}>
+          <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>U odnosu na {NAZIVI_MJESECI[Number(prethodni.slice(5)) - 1].toLowerCase()} {prethodni.slice(0, 4)}.</div>
+          <div className="f-mono" style={{ fontWeight: 700, fontSize: 18, color: razlika === null ? "var(--ink-faint)" : razlika >= 0 ? "var(--moss, #2E7D4F)" : "var(--rust)" }}>{razlika === null ? "—" : `${razlika > 0 ? "+" : ""}${razlika} %`}</div>
+          <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>prethodno: {fmtCurDec(prosli.zbroj)}</div>
+        </div>
+      </div>
+      {rucnoUMjesecu > 0 && <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 10 }}>Napomena: u ovom mjesecu je još {rucnoUMjesecu} {rucnoUMjesecu === 1 ? "otpremnica označena" : "otpremnica označeno"} kao ručno fakturirano (faktura izdana izvan aplikacije) — bez iznosa, pa nisu u zbroju.</div>}
+
+      {kupciRedovi.length > 0 && (
+        <>
+          <div className="label" style={{ marginBottom: 6 }}>Po kupcu — {NAZIVI_MJESECI[Number(mjesec.slice(5)) - 1].toLowerCase()} {godina}.</div>
+          <table className="erp-table" style={{ marginBottom: 14 }}>
+            <thead><tr><th>Kupac</th><th style={{ textAlign: "right", width: 100 }}>Podloga</th><th style={{ textAlign: "right", width: 150 }}>Fakturirano</th><th style={{ textAlign: "right", width: 80 }}>Udio</th></tr></thead>
+            <tbody>
+              {kupciRedovi.map(([naziv, e]) => (
+                <tr key={naziv}><td>{naziv}</td><td className="f-mono" style={{ textAlign: "right" }}>{e.broj}</td><td className="f-mono" style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(e.zbroj)}</td><td className="f-mono" style={{ textAlign: "right" }}>{tekuci.zbroj > 0 ? `${Math.round((e.zbroj / tekuci.zbroj) * 100)} %` : "—"}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      <div className="label" style={{ marginBottom: 6 }}>Po mjesecima — {godina}.</div>
+      <div style={{ overflowX: "auto" }}>
+        <table className="erp-table">
+          <thead><tr><th>Mjesec</th><th style={{ textAlign: "right", width: 100 }}>Podloga</th><th style={{ textAlign: "right", width: 150 }}>Fakturirano</th><th style={{ textAlign: "right", width: 150 }}>Za platiti (nakon predujma)</th></tr></thead>
+          <tbody>
+            {mjeseciGodine.map((r) => (
+              <tr key={r.m} onClick={() => setMjesec(r.m)} style={{ cursor: "pointer", background: r.m === mjesec ? "var(--surface-alt)" : undefined, color: r.broj === 0 ? "var(--ink-faint)" : undefined, fontWeight: r.m === mjesec ? 700 : 400 }}>
+                <td>{r.naziv}</td>
+                <td className="f-mono" style={{ textAlign: "right" }}>{r.broj || "—"}</td>
+                <td className="f-mono" style={{ textAlign: "right" }}>{r.broj ? fmtCurDec(r.zbroj) : "—"}</td>
+                <td className="f-mono" style={{ textAlign: "right" }}>{r.broj ? fmtCurDec(r.zaPlatiti) : "—"}</td>
+              </tr>
+            ))}
+            <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
+              <td>UKUPNO {godina}.</td>
+              <td className="f-mono" style={{ textAlign: "right" }}>{godinaZbroj.broj}</td>
+              <td className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(godinaZbroj.zbroj)}</td>
+              <td className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(godinaZbroj.zaPlatiti)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {podlogeMjeseca.length > 0 && (
+        <>
+          <div className="label" style={{ marginTop: 14, marginBottom: 6 }}>Podloge u mjesecu ({NAZIVI_MJESECI[Number(mjesec.slice(5)) - 1].toLowerCase()} {godina}.)</div>
+          <table className="erp-table">
+            <thead><tr><th>Broj</th><th>Projekt</th><th>Kupac</th><th>Datum</th><th style={{ textAlign: "right" }}>Fakturirano</th><th style={{ width: 70 }} /></tr></thead>
+            <tbody>
+              {podlogeMjeseca.map((p) => (
+                <tr key={p.id}>
+                  <td className="f-mono">{p.broj}</td>
+                  <td>{db.projekti.find((pr) => pr.id === p.projektId)?.sifra || "—"}</td>
+                  <td>{kupacPodloge(p)}</td>
+                  <td>{fmtDate(p.datum)}</td>
+                  <td className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(p.zbroj)}</td>
+                  <td><Btn size="sm" icon={Eye} onClick={() => onOtvoriPodlogu(p)}>PDF</Btn></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
+  );
+}
+
 function PodlogeZaFakturuTab({ db, update, showToast, mozeMijenjati = true }) {
   const [formOpen, setFormOpen] = useState(false); // false | { projektId }
   const [printPodloga, setPrintPodloga] = useState(null);
@@ -11274,6 +11370,7 @@ function PodlogeZaFakturuTab({ db, update, showToast, mozeMijenjati = true }) {
           <Btn variant="primary" icon={Plus} onClick={() => setFormOpen({ projektId: "" })}>Nova podloga za fakturu</Btn>
         </div>
       )}
+      <FakturiranoPoMjesecima db={db} onOtvoriPodlogu={setPrintPodloga} />
       {db.podlogeZaFakturu.length === 0 ? <EmptyState text="Nema izrađenih podloga za fakturu." /> : (
         <table className="erp-table">
           <thead><tr><th>Broj</th><th>Projekt</th><th>Datum</th><th>Za platiti</th><th></th></tr></thead>
