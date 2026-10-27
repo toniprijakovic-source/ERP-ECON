@@ -11036,6 +11036,7 @@ function PodlogaZaFakturuFormModal({ db, update, showToast, onClose, pocetniProj
   const [odabraneOtpId, setOdabraneOtpId] = useState(() => (pocetniProjektId ? otpremniceBezPodloge(db).filter((o) => o.projektId === pocetniProjektId).map((o) => o.id) : []));
   const [vorkasa, setVorkasa] = useState(0);
   const [datum, setDatum] = useState(todayISO());
+  const [dodatneStavke, setDodatneStavke] = useState([]);
 
   const otpremniceZaProjekt = db.otpremnice.filter((o) => o.projektId === projektId && o.vrsta !== "kooperant");
   const bezPodloge = new Set(otpremniceBezPodloge(db).map((o) => o.id));
@@ -11044,9 +11045,14 @@ function PodlogaZaFakturuFormModal({ db, update, showToast, onClose, pocetniProj
   // cijene se traže po stavci kroz sve narudžbe projekta (otpremnica upućuje na stavku narudžbe po id-u)
   const narudzba = narudzbeProjekta.length ? { id: narudzbeProjekta[0].id, stavke: narudzbeProjekta.flatMap((n) => n.stavke || []) } : undefined;
   const odabraneOtp = otpremniceZaProjekt.filter((o) => odabraneOtpId.includes(o.id));
-  const stavke = izracunajStavkePodloge(odabraneOtp, narudzba);
+  // Dodatne stavke koje nisu na narudžbi (npr. transport koji plaća kupac) upisuju se ručno i ulaze u podlogu kao obične stavke.
+  const stavkeOtpremnica = izracunajStavkePodloge(odabraneOtp, narudzba);
+  const dodatneValjane = dodatneStavke.filter((d) => d.naziv.trim());
+  const dodatneZaPodlogu = dodatneValjane.map((d) => { const kolicina = Number(d.kolicina) || 0, cijena = Number(d.cijena) || 0; return { naziv: d.naziv.trim(), sifra: "", jm: d.jm.trim(), cijena, kolicina, ukupno: kolicina * cijena, dodatna: true }; });
+  const stavke = [...stavkeOtpremnica, ...dodatneZaPodlogu];
   const zbroj = stavke.reduce((s, x) => s + x.ukupno, 0);
   const zaPlatiti = zbroj - (Number(vorkasa) || 0);
+  const urediDodatnu = (i, polje, vrijednost) => setDodatneStavke((prev) => prev.map((d, j) => (j === i ? { ...d, [polje]: vrijednost } : d)));
 
   const toggleOtp = (id) => setOdabraneOtpId((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
@@ -11100,6 +11106,26 @@ function PodlogaZaFakturuFormModal({ db, update, showToast, onClose, pocetniProj
               </tbody>
             </table>
           )}
+
+          <div className="label" style={{ marginTop: 14, marginBottom: 6 }}>Dodatne stavke (npr. transport koji plaća kupac)</div>
+          {dodatneStavke.length > 0 && (
+            <table className="erp-table">
+              <thead><tr><th>Naziv</th><th style={{ width: 80 }}>JM</th><th style={{ width: 90 }}>Kol.</th><th style={{ width: 110 }}>Cijena</th><th style={{ width: 110 }}>Ukupno</th><th style={{ width: 40 }} /></tr></thead>
+              <tbody>
+                {dodatneStavke.map((d, i) => (
+                  <tr key={i}>
+                    <td><input className="input" value={d.naziv} placeholder="npr. Transport" onChange={(e) => urediDodatnu(i, "naziv", e.target.value)} /></td>
+                    <td><input className="input" value={d.jm} onChange={(e) => urediDodatnu(i, "jm", e.target.value)} /></td>
+                    <td><input className="input f-mono" type="number" step="any" value={d.kolicina} onChange={(e) => urediDodatnu(i, "kolicina", e.target.value)} /></td>
+                    <td><input className="input f-mono" type="number" step="0.01" value={d.cijena} onChange={(e) => urediDodatnu(i, "cijena", e.target.value)} /></td>
+                    <td className="f-mono">{fmtCurDec((Number(d.kolicina) || 0) * (Number(d.cijena) || 0))}</td>
+                    <td><Btn size="sm" variant="ghost" icon={Trash2} onClick={() => setDodatneStavke((prev) => prev.filter((_, j) => j !== i))} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <div style={{ marginTop: 6 }}><Btn size="sm" icon={Plus} onClick={() => setDodatneStavke((prev) => [...prev, { naziv: "", jm: "kom", kolicina: 1, cijena: "" }])}>Dodaj stavku</Btn></div>
 
           {stavke.length > 0 && (
             <>
