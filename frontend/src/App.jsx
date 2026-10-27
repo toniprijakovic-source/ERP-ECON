@@ -9397,7 +9397,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
 
   return (
     <>
-    <Modal wide title={`Detalji projekta — ${projekt.sifra}`} onClose={onClose} footer={<>{otvoriKvalitetu && <Btn variant="ghost" icon={ShieldCheck} onClick={() => { onClose(); otvoriKvalitetu(projekt.id); }}>Kvaliteta — ugrađeni materijal</Btn>}<Btn onClick={onClose}>Zatvori</Btn></>}>
+    <Modal wide maxSirina={1640} title={`Detalji projekta — ${projekt.sifra}`} onClose={onClose} footer={<>{otvoriKvalitetu && <Btn variant="ghost" icon={ShieldCheck} onClick={() => { onClose(); otvoriKvalitetu(projekt.id); }}>Kvaliteta — ugrađeni materijal</Btn>}<Btn onClick={onClose}>Zatvori</Btn></>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
         <div>
           <div style={{ fontSize: 17, fontWeight: 600 }} className="f-display">{projekt.naziv}</div>
