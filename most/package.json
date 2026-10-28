@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node most.js",
-    "test": "node test/kumulativ.test.js && node test/mapa.test.js && node test/kumulativ-zadaci.test.js && node test/pretvori.test.js"
+    "test": "node test/kumulativ.test.js && node test/mapa.test.js && node test/kumulativ-zadaci.test.js && node test/xrechnung-popis.test.js && node test/pretvori.test.js"
   },
   "dependencies": {
     "fast-xml-parser": "4.5.0",

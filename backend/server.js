@@ -787,7 +787,9 @@ const xrZadaci = [];
 let mostZadnjiPut = null;
 const XR_STATUSI_ZAVRSNI = ["Valjano", "Nevaljano", "Greška", "Gotovo"];
 // Vrste zadataka: izrada XRechnunga te čitanje/spremanje postavki kumulativa (kumulativ.json u mapi računa projekta).
-const XR_VRSTE = ["xrechnung", "kumulativ-citaj", "kumulativ-spremi"];
+const XR_VRSTE = ["xrechnung", "kumulativ-citaj", "kumulativ-spremi", "xrechnung-popis", "xrechnung-obrisi"];
+// Popis izrađenih XRechnunga samo čita pa ne blokira (i ne blokira ga) druge zadatke istog projekta.
+const xrBlokira = (z) => z.vrsta !== "xrechnung-popis" && (z.status === "Čeka" || z.status === "Obrada");
 
 const mostAutentikacija = (req, res, next) => {
   if (MOST_TOKEN.length < 24) return res.status(503).json({ error: "Most nije podešen (MOST_TOKEN nije postavljen na poslužitelju)." });
@@ -830,7 +832,8 @@ app.post("/api/xrechnung/zadaci", autentikacija, async (req, res) => {
   if (vrsta === "xrechnung" && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) return res.status(400).json({ error: "E-adresa kupca nije ispravna." });
   const kumulativ = vrsta === "kumulativ-spremi" ? xrKumulativ(req.body?.kumulativ) : null;
   if (vrsta === "kumulativ-spremi" && !kumulativ) return res.status(400).json({ error: "Nedostaju podaci o kumulativu." });
-  if (xrZadaci.some((z) => z.projektId === projektId && (z.status === "Čeka" || z.status === "Obrada"))) return res.status(409).json({ error: "Za ovaj projekt već postoji zadatak koji čeka ili se obrađuje." });
+  if (vrsta === "xrechnung-obrisi" && !String(racunBroj || "").trim()) return res.status(400).json({ error: "Nije zadan broj računa." });
+  if (vrsta !== "xrechnung-popis" && xrZadaci.some((z) => z.projektId === projektId && xrBlokira(z))) return res.status(409).json({ error: "Za ovaj projekt već postoji zadatak koji čeka ili se obrađuje." });
   const ja = (zaposlenici || []).find((z) => z.id === req.zaposlenikId);
   const zadatak = {
     id: crypto.randomUUID(), vrsta, projektId, sifra: xrTekst(projekt.sifra, 60), naziv: xrTekst(projekt.naziv, 160), mapa: xrTekst(projekt.mapa, 400),
@@ -880,6 +883,11 @@ app.post("/api/most/zadaci/:id/rezultat", mostAutentikacija, (req, res) => {
     datoteke: Array.isArray(b.datoteke) ? b.datoteke.slice(0, 10).map((d) => ({ naziv: xrTekst(d?.naziv, 200), putanja: xrTekst(d?.putanja, 500) })) : [],
     izlaznaMapa: xrTekst(b.izlaznaMapa, 500), probno: !!b.probno,
     kumulativ: xrKumulativ(b.kumulativ), mapaKumulativa: xrTekst(b.mapaKumulativa, 500),
+    xrechnungi: Array.isArray(b.xrechnungi) ? b.xrechnungi.slice(0, 50).map((x) => ({
+      broj: xrTekst(x?.broj, 40), datum: xrTekst(x?.datum, 10), kupac: xrTekst(x?.kupac, 160), eAdresa: xrTekst(x?.eAdresa, 254),
+      zaPlatiti: Number(x?.zaPlatiti) || 0, valjan: !!x?.valjan, mapa: xrTekst(x?.mapa, 500), promijenjeno: xrTekst(x?.promijenjeno, 30),
+      datoteke: Array.isArray(x?.datoteke) ? x.datoteke.slice(0, 12).map((d) => xrTekst(d, 200)) : [],
+    })) : null,
     zadnjiRacun: b.zadnjiRacun && typeof b.zadnjiRacun === "object" ? { broj: xrTekst(b.zadnjiRacun.broj, 40), datum: xrTekst(b.zadnjiRacun.datum, 10) } : null,
   };
   res.json({ ok: true });

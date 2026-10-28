@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { Greska } from "./lib/pretvori.js";
 import { obradi } from "./lib/obradi.js";
 import { citajKumulativ, spremiKumulativ } from "./lib/kumulativ-zadaci.js";
+import { popisXRechnunga, obrisiXRechnung } from "./lib/xrechnung-popis.js";
 
 const mapaMosta = path.dirname(fileURLToPath(import.meta.url));
 try { process.loadEnvFile(path.join(mapaMosta, ".env")); } catch { /* .env nije obavezan ako su varijable već postavljene */ }
@@ -55,6 +56,8 @@ async function obradiZadatak(z) {
   try {
     rezultat = vrsta === "kumulativ-citaj" ? await citajKumulativ(z, okolina)
       : vrsta === "kumulativ-spremi" ? await spremiKumulativ(z, okolina)
+      : vrsta === "xrechnung-popis" ? await popisXRechnunga(z, okolina)
+      : vrsta === "xrechnung-obrisi" ? await obrisiXRechnung(z, okolina)
       : await obradi(z, okolina);
   } catch (e) {
     if (!(e instanceof Greska)) console.error(e);
