@@ -6,3 +6,4 @@ backend/seed-data/
 most/alati/
 most/primjeri/
 most/proba-izlaz/
+most/*.log

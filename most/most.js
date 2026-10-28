@@ -51,6 +51,7 @@ async function obradiZadatak(z) {
   await api("POST", `/api/most/zadaci/${z.id}/rezultat`, rezultat);
 }
 
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(signal, () => { log(`Primljen signal ${signal} — most staje.`); process.exit(0); });
 log(`ECON most pokrenut. ERP: ${API} | Korijen: ${okolina.korijen} | Java: ${okolina.java}${okolina.probno ? " | PROBNI NAČIN" : ""}`);
 let greskaPrijavljena = false;
 for (;;) {

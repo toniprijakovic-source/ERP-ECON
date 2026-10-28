@@ -19,6 +19,11 @@ ništa se ne otvara prema vani). Zadatak nastaje klikom na **Financije → XRech
 2. Dvoklik na `pokreni-most.bat` (ili `node most.js`).
 3. U ERP-u kartica XRechnung pokazuje "Most je povezan".
 
+## Automatsko pokretanje
+Zadatak u Windows Planeru zadataka **"ERP Econ - XRechnung most"** pokreće most 30 s nakon prijave korisnika Econ (skriveno,
+bez prozora; Z: mora biti spojen u toj prijavi). Ispis mosta je u `most\most.log`. Ručno pokretanje/zaustavljanje:
+Planer zadataka → desni klik na zadatak → Run / End. Nakon promjene `.env` ili koda most treba zaustaviti i ponovno pokrenuti.
+
 `MOST_PROBNO=1` = probni način: rezultat ide u `most\proba-izlaz`, na Z: se ništa ne piše i `kumulativ.json` se ne mijenja.
 Za pravi rad postavi `MOST_PROBNO=0`.
 
