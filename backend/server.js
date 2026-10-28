@@ -105,10 +105,11 @@ const KARTICE_MODULA = {
   },
   // Financije (ključ ostaje "fakturiranje" zbog postojećih pozicija).
   fakturiranje: {
-    fakture: { citanje: ["fakture", "kupci", "projekti"], pisanje: ["fakture"] },
-    podloge: { citanje: ["podlogeZaFakturu", "projekti", "materijali", "otpremnice", "narudzbe", "kupci"], pisanje: ["podlogeZaFakturu", "otpremnice"] },
-    // Fakturirano po mjesecima: samo pregled zbroja podloga za fakturu (po mjesecu, kupcu) i ispis podloge.
-    fakturirano: { citanje: ["podlogeZaFakturu", "projekti", "otpremnice", "narudzbe", "kupci"], pisanje: [] },
+    // Faktura se veže uz podlogu za fakturu (faktura.podlogaId) pa kartice Fakture i Podloge čitaju oba popisa.
+    fakture: { citanje: ["fakture", "kupci", "projekti", "podlogeZaFakturu", "narudzbe", "otpremnice"], pisanje: ["fakture"] },
+    podloge: { citanje: ["podlogeZaFakturu", "projekti", "materijali", "otpremnice", "narudzbe", "kupci", "fakture"], pisanje: ["podlogeZaFakturu", "otpremnice"] },
+    // Fakturirano po mjesecima: samo pregled zbroja podloga za fakturu (po mjesecu, kupcu), naplaćenosti (status vezane fakture) i ispis podloge.
+    fakturirano: { citanje: ["podlogeZaFakturu", "projekti", "otpremnice", "narudzbe", "kupci", "fakture"], pisanje: [] },
     nedovrsena: { citanje: ["nedovrsenaProizvodnja", "projekti", "radniNalozi", "satiPoNalogu", "izdatnice", "materijali", "otpremnice", "narudzbe", "kupci", "dobavljaci", "narudzbeTransporta"], pisanje: ["nedovrsenaProizvodnja"] },
     analiza: { citanje: ["projekti", "radniNalozi", "ponude", "izdatnice", "materijali", "kupci", "cjenikRada", "katalogProfila", "kvaliteteMaterijala"], pisanje: [] },
     // Produktivnost (kg/h): po projektima masa ÷ sati upisani na naloge, po mjesecima isporučena masa ÷ sati

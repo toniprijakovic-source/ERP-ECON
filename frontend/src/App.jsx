@@ -11367,6 +11367,21 @@ const izracunajStavkePodloge = (otpremniceOdabrane, narudzba, projekt) => {
 // Otpremnica je "fakturirana" kad ulazi u neku podlogu za fakturu ili je ručno označena (faktura izdana izvan aplikacije).
 // Otpremnice kooperantima (dorada) se ne fakturiraju kupcu pa se ne prate.
 const podlogaZaOtpremnicu = (db, otpremnicaId) => (db.podlogeZaFakturu || []).find((p) => (p.otpremniceIds || []).includes(otpremnicaId));
+
+// Veza faktura ↔ podloga: pamti je samo faktura (faktura.podlogaId), da ne postoje dva zapisa koji se mogu razići.
+// Brisanje fakture tako samo "oslobodi" podlogu; podloga s fakturom se ne može obrisati.
+const fakturaZaPodlogu = (db, podlogaId) => (db.fakture || []).find((f) => f.podlogaId === podlogaId);
+const fakturaKasni = (f) => f.status !== "Plaćeno" && daysUntil(f.rokPlacanja) < 0;
+const kupacIdPodloge = (db, podloga) => (db.narudzbe || []).find((n) => n.id === podloga.narudzbaId)?.kupacId || (db.projekti || []).find((p) => p.id === podloga.projektId)?.kupacId || "";
+// Stavke fakture iz podloge. Predujam (Vorkasse) ide kao stavka s minusom da osnovica fakture odgovara iznosu "Za platiti" na podlozi.
+const stavkeFaktureIzPodloge = (podloga) => {
+  const stavke = (podloga.stavke || []).map((s) => ({ opis: `${s.sifra ? `${s.sifra} — ` : ""}${s.naziv}`, kolicina: Number(s.kolicina) || 0, jm: s.jm || "kom", cijenaJed: Number(s.cijena) || 0 }));
+  if (Number(podloga.vorkasa) > 0) stavke.push({ opis: "Odbitak predujma (Vorkasse)", kolicina: 1, jm: "kom", cijenaJed: -Number(podloga.vorkasa) });
+  return stavke;
+};
+const FakturaPodloge = ({ faktura }) => (faktura
+  ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span className="f-mono">{faktura.broj}</span><Badge status={fakturaKasni(faktura) ? "Kasni" : faktura.status} /></span>
+  : <span style={{ color: "var(--ink-faint)", fontSize: 12 }}>bez fakture</span>);
 const otpremniceBezPodloge = (db) => {
   const uPodlogama = new Set((db.podlogeZaFakturu || []).flatMap((p) => p.otpremniceIds || []));
   return (db.otpremnice || []).filter((o) => o.vrsta !== "kooperant" && !o.fakturiranoRucno && !uPodlogama.has(o.id));
@@ -11619,6 +11634,11 @@ function FakturiranoPoMjesecima({ db, onOtvoriPodlogu }) {
   const mjeseciGodine = Array.from({ length: 12 }, (_, i) => { const m = `${godina}-${String(i + 1).padStart(2, "0")}`; return { m, naziv: NAZIVI_MJESECI[i], ...zbrojZa(m) }; });
   const godinaZbroj = mjeseciGodine.reduce((a, r) => ({ broj: a.broj + r.broj, zbroj: a.zbroj + r.zbroj, zaPlatiti: a.zaPlatiti + r.zaPlatiti }), { broj: 0, zbroj: 0, zaPlatiti: 0 });
   const rucnoUMjesecu = (db.otpremnice || []).filter((o) => o.fakturiranoRucno && (o.fakturiranoRucnoDatum || "").slice(0, 7) === mjesec).length;
+  // Naplaćenost: podloga je naplaćena kad je faktura vezana uz nju u statusu "Plaćeno" (iznos je zbroj podloge, bez PDV-a, kao i "Fakturirano").
+  const fakturePodlogaMjeseca = podlogeMjeseca.map((p) => ({ p, f: fakturaZaPodlogu(db, p.id) }));
+  const placenoPodloge = fakturePodlogaMjeseca.filter(({ f }) => f?.status === "Plaćeno");
+  const placenoIznos = placenoPodloge.reduce((a, { p }) => a + (Number(p.zbroj) || 0), 0);
+  const bezFakture = fakturePodlogaMjeseca.filter(({ f }) => !f).length;
   const plocica = { flex: "1 1 160px", padding: "10px 14px" };
   return (
     <div className="card" style={{ padding: 14, marginBottom: 14 }}>
@@ -11633,6 +11653,11 @@ function FakturiranoPoMjesecima({ db, onOtvoriPodlogu }) {
           <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>U odnosu na {NAZIVI_MJESECI[Number(prethodni.slice(5)) - 1].toLowerCase()} {prethodni.slice(0, 4)}.</div>
           <div className="f-mono" style={{ fontWeight: 700, fontSize: 18, color: razlika === null ? "var(--ink-faint)" : razlika >= 0 ? "var(--moss, #2E7D4F)" : "var(--rust)" }}>{razlika === null ? "—" : `${razlika > 0 ? "+" : ""}${razlika} %`}</div>
           <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>prethodno: {fmtCurDec(prosli.zbroj)}</div>
+        </div>
+        <div className="card" style={plocica}>
+          <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Plaćeno (fakture u sustavu)</div>
+          <div className="f-mono" style={{ fontWeight: 700, fontSize: 18, color: "var(--moss, #2E7D4F)" }}>{fmtCurDec(placenoIznos)}</div>
+          <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{placenoPodloge.length} od {tekuci.broj} podloga{bezFakture > 0 ? ` · bez fakture u sustavu: ${bezFakture}` : ""}</div>
         </div>
       </div>
       {rucnoUMjesecu > 0 && <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 10 }}>Napomena: u ovom mjesecu je još {rucnoUMjesecu} {rucnoUMjesecu === 1 ? "otpremnica označena" : "otpremnica označeno"} kao ručno fakturirano (faktura izdana izvan aplikacije) — bez iznosa, pa nisu u zbroju.</div>}
@@ -11678,15 +11703,16 @@ function FakturiranoPoMjesecima({ db, onOtvoriPodlogu }) {
         <>
           <div className="label" style={{ marginTop: 14, marginBottom: 6 }}>Podloge u mjesecu ({NAZIVI_MJESECI[Number(mjesec.slice(5)) - 1].toLowerCase()} {godina}.)</div>
           <table className="erp-table">
-            <thead><tr><th>Broj</th><th>Projekt</th><th>Kupac</th><th>Datum</th><th style={{ textAlign: "right" }}>Fakturirano</th><th style={{ width: 70 }} /></tr></thead>
+            <thead><tr><th>Broj</th><th>Projekt</th><th>Kupac</th><th>Datum</th><th style={{ textAlign: "right" }}>Fakturirano</th><th>Faktura</th><th style={{ width: 70 }} /></tr></thead>
             <tbody>
-              {podlogeMjeseca.map((p) => (
+              {fakturePodlogaMjeseca.map(({ p, f }) => (
                 <tr key={p.id}>
                   <td className="f-mono">{p.broj}</td>
                   <td>{db.projekti.find((pr) => pr.id === p.projektId)?.sifra || "—"}</td>
                   <td>{kupacPodloge(p)}</td>
                   <td>{fmtDate(p.datum)}</td>
                   <td className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(p.zbroj)}</td>
+                  <td><FakturaPodloge faktura={f} /></td>
                   <td><Btn size="sm" icon={Eye} onClick={() => onOtvoriPodlogu(p)}>PDF</Btn></td>
                 </tr>
               ))}
@@ -11725,7 +11751,7 @@ function FakturiranoPoMjesecimaTab({ db }) {
   );
 }
 
-function PodlogeZaFakturuTab({ db, update, showToast, mozeMijenjati = true }) {
+function PodlogeZaFakturuTab({ db, update, showToast, mozeMijenjati = true, mozeFakture = false, onNapraviFakturu }) {
   const [formOpen, setFormOpen] = useState(false); // false | { projektId }
   const [printPodloga, setPrintPodloga] = useState(null);
   const [del, setDel] = useState(null);
@@ -11741,20 +11767,25 @@ function PodlogeZaFakturuTab({ db, update, showToast, mozeMijenjati = true }) {
       )}
       {db.podlogeZaFakturu.length === 0 ? <EmptyState text="Nema izrađenih podloga za fakturu." /> : (
         <table className="erp-table">
-          <thead><tr><th>Broj</th><th>Projekt</th><th>Datum</th><th>Za platiti</th><th></th></tr></thead>
+          <thead><tr><th>Broj</th><th>Projekt</th><th>Datum</th><th>Za platiti</th><th>Faktura</th><th></th></tr></thead>
           <tbody>
-            {[...db.podlogeZaFakturu].sort((a, b) => b.datum.localeCompare(a.datum)).map((p) => (
-              <tr key={p.id}>
-                <td className="f-mono">{p.broj}</td>
-                <td>{projektInfo(p.projektId)?.sifra || "—"}</td>
-                <td>{fmtDate(p.datum)}</td>
-                <td className="f-mono">{fmtCurDec(p.zaPlatiti)}</td>
-                <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                  <Btn size="sm" icon={Eye} onClick={() => setPrintPodloga(p)}>PDF</Btn>
-                  {mozeMijenjati && <button className="btn btn-icon btn-ghost" onClick={() => setDel(p)}><Trash2 size={14} color="var(--rust)" /></button>}
-                </td>
-              </tr>
-            ))}
+            {[...db.podlogeZaFakturu].sort((a, b) => b.datum.localeCompare(a.datum)).map((p) => {
+              const faktura = fakturaZaPodlogu(db, p.id);
+              return (
+                <tr key={p.id}>
+                  <td className="f-mono">{p.broj}</td>
+                  <td>{projektInfo(p.projektId)?.sifra || "—"}</td>
+                  <td>{fmtDate(p.datum)}</td>
+                  <td className="f-mono">{fmtCurDec(p.zaPlatiti)}</td>
+                  <td><FakturaPodloge faktura={faktura} /></td>
+                  <td style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                    {mozeFakture && !faktura && <Btn size="sm" icon={Receipt} onClick={() => onNapraviFakturu(p)}>Kreiraj fakturu</Btn>}
+                    <Btn size="sm" icon={Eye} onClick={() => setPrintPodloga(p)}>PDF</Btn>
+                    {mozeMijenjati && <button className="btn btn-icon btn-ghost" onClick={() => (faktura ? showToast(`Podloga ima fakturu ${faktura.broj} — prvo obriši fakturu.`) : setDel(p))}><Trash2 size={14} color="var(--rust)" /></button>}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}
@@ -14206,10 +14237,25 @@ function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, sh
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
   const [printFaktura, setPrintFaktura] = useState(null);
-  const emptyForm = () => ({ id: null, broj: sljedeciBroj(db.fakture, "broj", "FAK-2026-", 4), projektId: db.projekti[0]?.id || "", kupacId: db.projekti[0]?.kupacId || db.kupci[0]?.id, datumIzdavanja: todayISO(), rokPlacanja: todayISO(), status: "Nacrt", stavke: [] });
+  const [printPodloga, setPrintPodloga] = useState(null);
+  const emptyForm = () => ({ id: null, broj: sljedeciBroj(db.fakture, "broj", "FAK-2026-", 4), projektId: db.projekti[0]?.id || "", kupacId: db.projekti[0]?.kupacId || db.kupci[0]?.id, datumIzdavanja: todayISO(), rokPlacanja: todayISO(), status: "Nacrt", stavke: [], podlogaId: null });
   const [form, setForm] = useState(emptyForm());
 
   const openAdd = () => { setForm(emptyForm()); setModal(true); };
+  // Nova faktura iz podloge: projekt, kupac i stavke se prepišu s podloge, a faktura pamti podlogaId.
+  // Rok plaćanja je zadano 30 dana od danas — mijenja se u formi prije spremanja.
+  const otvoriFakturuIzPodloge = (podloga) => {
+    setForm({ ...emptyForm(), projektId: podloga.projektId, kupacId: kupacIdPodloge(db, podloga) || db.kupci[0]?.id, rokPlacanja: dodajDane(todayISO(), 30), stavke: stavkeFaktureIzPodloge(podloga), podlogaId: podloga.id });
+    setModal(true);
+  };
+  const podlogaForme = form.podlogaId ? (db.podlogeZaFakturu || []).find((p) => p.id === form.podlogaId) : null;
+  // Podloge koje se mogu vezati: iz istog projekta, bez fakture (osim one koju ova faktura već drži).
+  const podlogeZaOdabir = (db.podlogeZaFakturu || []).filter((p) => p.projektId === form.projektId && (p.id === form.podlogaId || !fakturaZaPodlogu(db, p.id)));
+  const odaberiPodlogu = (id) => {
+    const pd = (db.podlogeZaFakturu || []).find((p) => p.id === id);
+    if (!pd) { setForm({ ...form, podlogaId: null }); return; }
+    setForm({ ...form, podlogaId: pd.id, kupacId: kupacIdPodloge(db, pd) || form.kupacId, stavke: form.stavke.length ? form.stavke : stavkeFaktureIzPodloge(pd) });
+  };
   const openEdit = (row) => { setForm(JSON.parse(JSON.stringify(row))); setModal(true); };
   const save = () => {
     if (form.id) update("fakture", db.fakture.map((f) => (f.id === form.id ? form : f)));
@@ -14219,7 +14265,7 @@ function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, sh
   };
   const kupacNaziv = (id) => db.kupci.find((k) => k.id === id)?.naziv || "—";
   const projNaziv = (id) => db.projekti.find((p) => p.id === id)?.naziv || "—";
-  const isOverdue = (row) => row.status !== "Plaćeno" && daysUntil(row.rokPlacanja) < 0;
+  const isOverdue = fakturaKasni;
 
   return (
     <div>
@@ -14232,7 +14278,7 @@ function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, sh
 
       {tab === "otpremnice" && <OtpremniceTab db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeOtpremnice} />}
       {tab === "cmr" && <CmrTab db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeCmr} mojId={mojId} />}
-      {tab === "podloge" && <PodlogeZaFakturuTab db={db} update={update} showToast={showToast} mozeMijenjati={mozePodloge} />}
+      {tab === "podloge" && <PodlogeZaFakturuTab db={db} update={update} showToast={showToast} mozeMijenjati={mozePodloge} mozeFakture={mozeFakture} onNapraviFakturu={otvoriFakturuIzPodloge} />}
       {tab === "fakturirano" && <FakturiranoPoMjesecimaTab db={db} />}
       {tab === "nedovrsena" && <NedovrsenaProizvodnjaView db={db} update={update} showToast={showToast} mozeMijenjati={mozeNedovrsenu} mojId={mojId} />}
       {tab === "produktivnost" && <ProduktivnostView db={db} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeProduktivnost} />}
@@ -14262,6 +14308,7 @@ function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, sh
           { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
           { key: "kupac", label: "Kupac", render: (r) => kupacNaziv(r.kupacId) },
           { key: "projekt", label: "Projekt", render: (r) => projNaziv(r.projektId) },
+          { key: "podloga", label: "Podloga", render: (r) => { const pd = r.podlogaId ? (db.podlogeZaFakturu || []).find((p) => p.id === r.podlogaId) : null; return pd ? <Btn size="sm" variant="ghost" onClick={() => setPrintPodloga(pd)}>{pd.broj}</Btn> : <span style={{ color: "var(--ink-faint)", fontSize: 12 }}>—</span>; } },
           { key: "datumIzdavanja", label: "Izdano", render: (r) => fmtDate(r.datumIzdavanja) },
           { key: "rokPlacanja", label: "Rok plaćanja", render: (r) => <span style={{ color: isOverdue(r) ? "var(--rust)" : "inherit", fontWeight: isOverdue(r) ? 700 : 400 }}>{fmtDate(r.rokPlacanja)}</span> },
           { key: "iznos", label: "Iznos (s PDV-om)", render: (r) => <span className="f-mono">{fmtCurDec(izracunFakture(r, db.postavkeTvrtke?.pdvStopa).ukupno)}</span> },
@@ -14274,12 +14321,23 @@ function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, sh
       {modal && (
         <Modal wide title={form.id ? `Faktura ${form.broj}` : "Nova faktura"} onClose={() => setModal(false)} footer={<><Btn onClick={() => setModal(false)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={save}>Spremi</Btn></>}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label="Projekt"><select className="select" value={form.projektId} onChange={(e) => { const proj = db.projekti.find((p) => p.id === e.target.value); setForm({ ...form, projektId: e.target.value, kupacId: proj?.kupacId || form.kupacId }); }}>{db.projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}</select></Field>
+            <Field label="Projekt"><select className="select" value={form.projektId} onChange={(e) => { const proj = db.projekti.find((p) => p.id === e.target.value); setForm({ ...form, projektId: e.target.value, kupacId: proj?.kupacId || form.kupacId, podlogaId: podlogaForme?.projektId === e.target.value ? form.podlogaId : null }); }}>{db.projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}</select></Field>
             <Field label="Kupac"><select className="select" value={form.kupacId} onChange={(e) => setForm({ ...form, kupacId: e.target.value })}>{db.kupci.map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}</select></Field>
             <Field label="Datum izdavanja"><input className="input" type="date" value={form.datumIzdavanja} onChange={(e) => setForm({ ...form, datumIzdavanja: e.target.value })} /></Field>
             <Field label="Rok plaćanja"><input className="input" type="date" value={form.rokPlacanja} onChange={(e) => setForm({ ...form, rokPlacanja: e.target.value })} /></Field>
           </div>
           <Field label="Status"><select className="select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{["Nacrt", "Poslano", "Djelomično plaćeno", "Plaćeno", "Kasni"].map((s) => <option key={s}>{s}</option>)}</select></Field>
+          <Field label="Podloga za fakturu (neobavezno)">
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <select className="select" style={{ flex: "1 1 260px" }} value={form.podlogaId || ""} onChange={(e) => odaberiPodlogu(e.target.value)}>
+                <option value="">— bez podloge —</option>
+                {podlogeZaOdabir.map((p) => <option key={p.id} value={p.id}>{p.broj} · {fmtDate(p.datum)} · za platiti {fmtCurDec(p.zaPlatiti)}</option>)}
+              </select>
+              {podlogaForme && <Btn size="sm" onClick={() => setForm({ ...form, stavke: stavkeFaktureIzPodloge(podlogaForme) })}>Učitaj stavke iz podloge</Btn>}
+              {podlogaForme && <Btn size="sm" icon={Eye} onClick={() => setPrintPodloga(podlogaForme)}>PDF podloge</Btn>}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 3 }}>Nude se podloge odabranog projekta koje još nemaju fakturu.</div>
+          </Field>
           <Field label="Stavke fakture"><LineItemsEditor mode="custom" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} /></Field>
           {(() => { const calc = izracunFakture(form, db.postavkeTvrtke?.pdvStopa); return (
             <div className="card" style={{ padding: 12, background: "var(--surface-alt)", marginTop: 4 }}>
@@ -14288,12 +14346,18 @@ function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, sh
                 <div><div style={{ color: "var(--ink-soft)" }}>PDV ({calc.stopa}%)</div><div className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(calc.pdvIznos)}</div></div>
                 <div><div style={{ color: "var(--ink-soft)" }}>Ukupno za platiti</div><div className="f-mono" style={{ fontWeight: 700, color: "var(--steel)" }}>{fmtCurDec(calc.ukupno)}</div></div>
               </div>
+              {podlogaForme && (() => { const razlika = calc.osnovica - (Number(podlogaForme.zaPlatiti) || 0); const ista = Math.abs(razlika) < 0.005; return (
+                <div style={{ fontSize: 12, marginTop: 8, color: ista ? "var(--ink-soft)" : "var(--rust)" }}>
+                  Podloga {podlogaForme.broj}: za platiti {fmtCurDec(podlogaForme.zaPlatiti)} (bez PDV-a) — {ista ? "osnovica fakture se slaže." : `osnovica fakture se razlikuje za ${fmtCurDec(razlika)}.`}
+                </div>
+              ); })()}
             </div>
           ); })()}
         </Modal>
       )}
       {del && <ConfirmDelete label={del.broj} onCancel={() => setDel(null)} onConfirm={() => { update("fakture", db.fakture.filter((f) => f.id !== del.id)); setDel(null); showToast("Faktura obrisana."); }} />}
       {printFaktura && <FakturaPrintModal faktura={printFaktura} kupac={db.kupci.find((k) => k.id === printFaktura.kupacId)} projekt={db.projekti.find((p) => p.id === printFaktura.projektId)} postavkeTvrtke={db.postavkeTvrtke} onClose={() => setPrintFaktura(null)} />}
+      {printPodloga && <PodlogaZaFakturuPrikaz db={db} podloga={printPodloga} onClose={() => setPrintPodloga(null)} />}
     </div>
   );
 }
