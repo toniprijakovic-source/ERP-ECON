@@ -41,6 +41,13 @@ export async function obradi(zadatak, okolina) {
   const kum = ucitajKumulativ([odabran.mapaRacuna, ...mapeRacuna.filter((m) => m !== odabran.mapaRacuna)], zadatak.sifra, okolina);
   const cfg = kum ? nizDoRacuna(kum.cfg, racun.broj) : null;
   poruke.push(cfg ? "Način: Abschlag s kumulativom (kumulativ.json)" : "Način: običan račun (nema kumulativ.json)");
+  // Zaštita: Abschlagsrechnung (stavka "... nach Abrechnungsblatt") bez kumulativ.json ne smije se spremiti kao običan račun — iznos za
+  // platiti u XML-u (Konplast) nije onaj koji kupac plaća (odbitak avansa). U probnom načinu to je samo upozorenje.
+  if (!cfg && racun.linije.some((l) => /abrechnungsblatt/i.test(l.naziv))) {
+    const upozorenje = `Račun ${racun.broj} izgleda kao Abschlagsrechnung (stavka "nach Abrechnungsblatt"), a uz račune nema kumulativ.json — iznos za platiti u XRechnungu ne bi odgovarao PDF-u kupcu (odbitak avansa). Dodaj kumulativ.json (ugovor, avans, prijašnji računi).`;
+    if (!okolina.probno) throw new Greska(upozorenje);
+    poruke.push(`UPOZORENJE: ${upozorenje}`);
+  }
 
   const ishod = await izradi(racun, { prodavatelj: okolina.postavke.prodavatelj, eAdresa: zadatak.eAdresa, referenca: zadatak.referenca, sifra: zadatak.sifra, kumulativ: cfg });
   poruke.push(...ishod.poruke);

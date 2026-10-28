@@ -34,7 +34,8 @@ Za pravi rad postavi `MOST_PROBNO=0`.
 Datoteka u mapi `Fakture` projekta: `gesamtauftrag`, `vorauszahlung`, popis `racuni` (prvi je A-Konto račun, zatim
 redovni računi s `iznos` = što je kupac platio i `kumulativ` = "Summe Netto" tog računa) i neobavezno `isporuka`.
 Most nakon svakog valjanog XRechnunga sam upiše taj račun u niz. Primjer: `primjeri\kumulativ-RN-170-208.json`.
-Bez te datoteke račun se pretvara kao običan (bez kumulativa).
+Bez te datoteke račun se pretvara kao običan (bez kumulativa). **Zaštita:** račun čija stavka sadrži "nach Abrechnungsblatt"
+(Abschlagsrechnung) bez `kumulativ.json` se u pravom načinu ODBIJA (iznos za platiti ne bi odgovarao PDF-u kupcu); u probnom je to samo upozorenje.
 
 ## Ograničenja prve verzije
 Samo isporuke u EU bez PDV-a (kategorija K), valuta EUR, bez popusta na stavkama; domaće račune šalje Konplast.
