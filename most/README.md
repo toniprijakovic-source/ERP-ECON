@@ -12,7 +12,8 @@ ništa se ne otvara prema vani). Zadatak nastaje klikom na **Financije → XRech
 3. napravi XRechnung 3.0 (UBL); ako uz račune postoji `Fakture\kumulativ.json`, računa kumulativ (avans, prijašnji računi)
    i dodaje tablicu "Zahlungsspezifikation" kao PDF prilog,
 4. službeno ga provjeri (KoSIT validator + XRechnung konfiguracija, Java u `alati\java`),
-5. spremi `XRechnung_<broj>.xml`, `Zahlungsspezifikation_<broj>.pdf` i `Pruefbericht_<broj>.html` u podmapu `XRechnung`
+5. spremi `XRechnung_<broj>.xml`, `XRechnung_<broj>_Ansicht.pdf` (čitljiv PDF prikaz XRechnunga), `Zahlungsspezifikation_<broj>.pdf`
+   i `Pruefbericht_<broj>.html` u podmapu `XRechnung`
    uz račun i javi rezultat ERP-u. Račun se NE šalje kupcu (slanje mailom dolazi u drugoj fazi).
 
 ## Pokretanje

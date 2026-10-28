@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { procitajKonplast, izradi, Greska } from "../lib/pretvori.js";
 import { validirajXml } from "../lib/validator.js";
+import { napraviPrikazPdf, sigurno } from "../lib/prikaz.js";
 
 const mapa = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const xmlTekst = fs.readFileSync(path.join(mapa, "primjeri", "konplast-13-1-8.xml"), "utf8");
@@ -33,6 +34,12 @@ const ctx288 = { ...ctx, referenca: "", sifra: "RN 170-288", kumulativ: cfg288 }
 const abschlag288 = await izradi(racun288, ctx288);
 provjeri(abschlag288.sazetak.zaPlatiti === 104692 && abschlag288.sazetak.avans === 44868, "RN 170-288: za platiti 104.692,00, odbijeni avans 44.868,00 (kao u PDF-u kupcu)");
 provjeri(abschlag288.xml.includes("<cbc:BuyerReference>10326001-308900-0001</cbc:BuyerReference>"), "RN 170-288: referenca kupca iz \"Auftragsnummer\"");
+
+// 1c) Čitljiv PDF prikaz XRechnunga
+const pdfAbschlag = await napraviPrikazPdf(abschlag288.xml);
+const pdfObican = await napraviPrikazPdf((await izradi(racun, { ...ctx, kumulativ: null })).xml);
+provjeri(Buffer.from(pdfAbschlag).subarray(0, 4).toString() === "%PDF" && Buffer.from(pdfObican).subarray(0, 4).toString() === "%PDF", "PDF prikaz: nastaje za Abschlag i za običan račun");
+provjeri(sigurno("Čakovec, Đurđevac, Šupljika — ž") === "Cakovec, Djurdjevac, Šupljika — ž", `PDF prikaz: znakovi izvan WinAnsi zamijenjeni, š/ž/— ostaju (${sigurno("Čakovec, Đurđevac")})`);
 
 // 2) Običan račun (bez kumulativa): iznos za platiti je Konplastov
 const obican = await izradi(racun, { ...ctx, kumulativ: null });

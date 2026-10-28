@@ -5,6 +5,7 @@ import path from "node:path";
 import { Greska, procitajKonplast, izradi } from "./pretvori.js";
 import { nadjiMapuProjekta, nadjiMapeRacuna, nadjiRacune } from "./mapa.js";
 import { validirajXml } from "./validator.js";
+import { napraviPrikazPdf } from "./prikaz.js";
 
 // Postavke kumulativa (ugovor, avans, prijašnji računi) žive uz račune u kumulativ.json: prvo u mapi računa u kojoj je pronađen
 // račun, a ako je tamo nema, u drugoj mapi računa istog projekta. Ako datoteke nema, račun se pretvara kao običan (bez
@@ -70,6 +71,8 @@ export async function obradi(zadatak, okolina) {
     const datoteke = [];
     const zapisi = (naziv, sadrzaj) => { const p = path.join(izlaznaMapa, naziv); fs.writeFileSync(p, sadrzaj); datoteke.push({ naziv, putanja: p }); };
     zapisi(`XRechnung_${oznaka}${valjan ? "" : "_NEVALJAN"}.xml`, ishod.xml);
+    // Čitljiv PDF prikaz samog XRechnunga (za provjeru prije slanja); neuspjeh prikaza ne ruši izradu računa.
+    try { zapisi(`XRechnung_${oznaka}${valjan ? "" : "_NEVALJAN"}_Ansicht.pdf`, await napraviPrikazPdf(ishod.xml)); } catch (e) { poruke.push(`PDF prikaz nije napravljen: ${e.message}`); }
     if (ishod.pdfBytes) zapisi(ishod.pdfNaziv, ishod.pdfBytes);
     if (val.izvjestajHtml) zapisi(`Pruefbericht_${oznaka}.html`, fs.readFileSync(val.izvjestajHtml));
 
