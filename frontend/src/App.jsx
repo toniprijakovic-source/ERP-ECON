@@ -11336,12 +11336,27 @@ function FakturaPrintModal({ faktura, kupac, projekt, postavkeTvrtke, onClose })
 /* ============================== PODLOGA ZA FAKTURU ============================== */
 // Spaja stavke odabranih otpremnica po istoj stavci narudžbe (zbraja količine ako se
 // ista stavka isporučuje kroz više otpremnica) i množi s cijenom iz narudžbe kupca.
-const izracunajStavkePodloge = (otpremniceOdabrane, narudzba) => {
+// Stavke otpremnica tipskih projekata (po normativu) nemaju narudzbaStavkaId pa se stavka narudžbe traži: po id-u; preko
+// isporuke → stavke normativa → izNarudzbeId (uvoz iz narudžbe); po nazivu; po nazivu bez prefiksa "Pod — / Komplet — / Stranica — ".
+const nadjiStavkuNarudzbe = (s, stavkeNarudzbe, projekt) => {
+  const poId = (id) => stavkeNarudzbe.find((n) => n.id === id);
+  if (s.narudzbaStavkaId && poId(s.narudzbaStavkaId)) return poId(s.narudzbaStavkaId);
+  for (const isporukaId of s.isporukaIds || []) {
+    const isporuka = (projekt?.isporuke || []).find((i) => i.id === isporukaId);
+    const stavkaNormativa = [...(projekt?.stavkePod || []), ...(projekt?.stavkeKomplet || [])].find((x) => x.id === isporuka?.stavkaId);
+    if (stavkaNormativa?.izNarudzbeId && poId(stavkaNormativa.izNarudzbeId)) return poId(stavkaNormativa.izNarudzbeId);
+  }
+  const norm = (t) => String(t || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const naziv = norm(s.naziv);
+  const bezPrefiksa = naziv.replace(/^(pod|komplet|stranica)\s+[—–-]\s+/, "");
+  return stavkeNarudzbe.find((n) => norm(n.naziv) === naziv) || stavkeNarudzbe.find((n) => norm(n.naziv) === bezPrefiksa) || null;
+};
+const izracunajStavkePodloge = (otpremniceOdabrane, narudzba, projekt) => {
   const mapa = {};
   otpremniceOdabrane.forEach((o) => {
     o.stavke.forEach((s) => {
-      const nst = narudzba?.stavke?.find((n) => n.id === s.narudzbaStavkaId);
-      const key = s.narudzbaStavkaId || s.naziv;
+      const nst = nadjiStavkuNarudzbe(s, narudzba?.stavke || [], projekt) || undefined;
+      const key = nst?.id || s.narudzbaStavkaId || s.naziv;
       if (!mapa[key]) mapa[key] = { naziv: s.naziv, sifra: nst?.sifra || "", jm: s.jm, cijena: Number(nst?.cijena) || 0, nemaVezeSNarudzbom: !nst, kolicina: 0 };
       mapa[key].kolicina += Number(s.kolicina) || 0;
     });
@@ -11373,7 +11388,7 @@ function PodlogaZaFakturuFormModal({ db, update, showToast, onClose, pocetniProj
   const narudzba = narudzbeProjekta.length ? { id: narudzbeProjekta[0].id, stavke: narudzbeProjekta.flatMap((n) => n.stavke || []) } : undefined;
   const odabraneOtp = otpremniceZaProjekt.filter((o) => odabraneOtpId.includes(o.id));
   // Dodatne stavke koje nisu na narudžbi (npr. transport koji plaća kupac) upisuju se ručno i ulaze u podlogu kao obične stavke.
-  const stavkeOtpremnica = izracunajStavkePodloge(odabraneOtp, narudzba);
+  const stavkeOtpremnica = izracunajStavkePodloge(odabraneOtp, narudzba, projekt);
   const dodatneValjane = dodatneStavke.filter((d) => d.naziv.trim());
   const dodatneZaPodlogu = dodatneValjane.map((d) => { const kolicina = Number(d.kolicina) || 0, cijena = Number(d.cijena) || 0; return { naziv: d.naziv.trim(), sifra: "", jm: d.jm.trim(), cijena, kolicina, ukupno: kolicina * cijena, dodatna: true }; });
   const stavke = [...stavkeOtpremnica, ...dodatneZaPodlogu];
