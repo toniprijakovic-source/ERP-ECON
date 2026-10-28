@@ -1013,7 +1013,7 @@ const STATUS_TONE = {
   "Primljeno": "success", "Prevezeno": "success", "Završen": "success", "Prihvaćena": "success", "Plaćeno": "success",
   "Otkazan": "danger", "Odbijena": "danger", "Kasni": "danger",
   "Aktivan": "success", "Neaktivan": "muted",
-  "Čeka": "muted", "Obrada": "warning", "Valjano": "success", "Nevaljano": "danger", "Greška": "danger", "Otkazano": "muted",
+  "Čeka": "muted", "Obrada": "warning", "Valjano": "success", "Nevaljano": "danger", "Greška": "danger", "Otkazano": "muted", "Gotovo": "success",
 };
 const Badge = ({ status, label }) => <span className={`badge badge-${STATUS_TONE[status] || "muted"}`}>{label || status}</span>;
 
@@ -14227,6 +14227,28 @@ function ProjekcijaRasporedModal({ red, zapis, danas, onSpremi, onClose }) {
 // avansom i tablicu kumulativa), službeno ga provjeri i vrati rezultat. Postavke po projektu (e-adresa kupca za račune i
 // referenca kupca) pamte se u db.xrechnungPostavke.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Obrazac "Kumulativ" (avans / Abschlagsrechnungen) za projekte kojima XML iz Konplasta ne nosi iznos koji kupac stvarno plaća:
+// podaci se spremaju u kumulativ.json u mapi računa projekta (most), a svaki sljedeći račun most sam dopisuje u niz.
+const PRAZAN_KUM = { gesamtauftrag: "", vorauszahlung: "", pozicija: "", acontoBroj: "", acontoDatum: "", ulica: "", posta: "", grad: "", drzava: "DE", racuni: [], _napomena: "" };
+const kumIzCfg = (cfg) => {
+  const aconto = (cfg.racuni || []).find((r) => r.vrsta === "aconto");
+  const zarez = (v) => (v == null ? "" : String(v).replace(".", ","));
+  return {
+    gesamtauftrag: zarez(cfg.gesamtauftrag), vorauszahlung: zarez(cfg.vorauszahlung), pozicija: cfg.pozicija || "",
+    acontoBroj: aconto?.broj || "", acontoDatum: aconto?.datum || "",
+    ulica: cfg.isporuka?.ulica || "", posta: cfg.isporuka?.posta || "", grad: cfg.isporuka?.grad || "", drzava: cfg.isporuka?.drzava || "DE",
+    racuni: (cfg.racuni || []).filter((r) => r.vrsta !== "aconto").map((r) => ({ broj: r.broj, datum: r.datum, iznos: zarez(r.iznos), kumulativ: zarez(r.kumulativ) })),
+    _napomena: cfg._napomena || "",
+  };
+};
+const kumUCfg = (k) => ({
+  ...(k._napomena ? { _napomena: k._napomena } : {}), pozicija: k.pozicija, gesamtauftrag: k.gesamtauftrag, vorauszahlung: k.vorauszahlung || "0",
+  racuni: [
+    ...(k.acontoBroj.trim() ? [{ vrsta: "aconto", broj: k.acontoBroj, datum: k.acontoDatum, iznos: k.vorauszahlung || "0" }] : []),
+    ...k.racuni.map((r) => ({ vrsta: "racun", broj: r.broj, datum: r.datum, iznos: r.iznos, kumulativ: r.kumulativ })),
+  ],
+  isporuka: { ulica: k.ulica, posta: k.posta, grad: k.grad, drzava: k.drzava },
+});
 function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
   const postavke = db.xrechnungPostavke || {};
   const [projektId, setProjektId] = useState("");
@@ -14238,6 +14260,10 @@ function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
   const [otvoren, setOtvoren] = useState(null);
   const [salje, setSalje] = useState(false);
   const [greskaVeze, setGreskaVeze] = useState("");
+  const [kumOtvoren, setKumOtvoren] = useState(false);
+  const [kum, setKum] = useState(PRAZAN_KUM);
+  const [kumCekanje, setKumCekanje] = useState(null); // { id, vrsta } dok most obrađuje zahtjev za čitanje/spremanje kumulativa
+  const [kumInfo, setKumInfo] = useState("");
   const zaglavlje = () => ({ "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` });
 
   const projekti = useMemo(() => [...db.projekti].sort((a, b) => usporediPrirodno(b.sifra, a.sifra)), [db.projekti]);
@@ -14247,6 +14273,9 @@ function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
   // Kod odabira projekta: zapamćene postavke tog projekta, inače postavke drugog projekta istog kupca.
   const odaberiProjekt = (id) => {
     setProjektId(id);
+    setKum(PRAZAN_KUM);
+    setKumInfo("");
+    setKumCekanje(null);
     const p = db.projekti.find((q) => q.id === id);
     const kupcevo = p ? db.projekti.filter((q) => q.kupacId === p.kupacId && postavke[q.id]?.eAdresa).map((q) => postavke[q.id])[0] : null;
     setEAdresa(postavke[id]?.eAdresa || kupcevo?.eAdresa || "");
@@ -14295,6 +14324,46 @@ function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
     osvjezi();
   };
 
+  // Kumulativ: zahtjev mostu da pročita ili spremi kumulativ.json u mapu računa projekta. Odgovor stiže kroz popis zadataka (osvježava se svake 4 s).
+  const zadajKumulativ = async (vrsta) => {
+    if (!projekt) { showToast("Odaberi projekt."); return; }
+    if (!mozeMijenjati) { showToast("Nemaš ovlaštenje za izmjenu kumulativa."); return; }
+    if (aktivan || kumCekanje) { showToast("Za ovaj projekt već postoji zadatak koji čeka ili se obrađuje."); return; }
+    if (vrsta === "kumulativ-spremi" && !kum.gesamtauftrag.trim()) { showToast("Upiši ugovorenu vrijednost."); return; }
+    setSalje(true);
+    try {
+      const res = await fetch(`${API_URL}/api/xrechnung/zadaci`, { method: "POST", headers: zaglavlje(), body: JSON.stringify({ projektId, vrsta, ...(vrsta === "kumulativ-spremi" ? { kumulativ: { ...kumUCfg(kum), projekt: projekt.sifra } } : {}) }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { showToast(data.error || "Greška pri slanju zahtjeva."); return; }
+      setKumCekanje({ id: data.zadatak.id, vrsta });
+      setKumInfo(vrsta === "kumulativ-citaj" ? "Čitam kumulativ iz mape projekta…" : "Spremam kumulativ u mapu projekta…");
+      setOtvoren(data.zadatak.id);
+      osvjezi();
+    } catch { showToast("Greška pri slanju zahtjeva — provjeri internetsku vezu."); } finally { setSalje(false); }
+  };
+  useEffect(() => {
+    if (!kumCekanje) return;
+    const q = zadaci.find((x) => x.id === kumCekanje.id);
+    if (!q || q.status === "Čeka" || q.status === "Obrada") return;
+    setKumCekanje(null);
+    if (q.status !== "Gotovo") { setKumInfo(""); showToast(q.rezultat?.poruke?.[0] || "Kumulativ — greška."); return; }
+    const zadnji = q.rezultat?.zadnjiRacun;
+    if (kumCekanje.vrsta === "kumulativ-citaj") {
+      if (q.rezultat?.kumulativ) { setKum(kumIzCfg(q.rezultat.kumulativ)); setKumInfo(`Učitano iz mape projekta.${zadnji ? ` Zadnji račun u mapi: ${zadnji.broj} od ${fmtDate(zadnji.datum)}.` : ""}`); showToast("Kumulativ je učitan iz mape projekta."); }
+      else { setKum(PRAZAN_KUM); setKumInfo(`Za ovaj projekt još nema kumulativa — upiši podatke.${zadnji ? ` Zadnji račun u mapi: ${zadnji.broj} od ${fmtDate(zadnji.datum)}.` : ""}`); showToast("Za ovaj projekt još nema kumulativa."); }
+    } else {
+      if (q.rezultat?.kumulativ) setKum(kumIzCfg(q.rezultat.kumulativ));
+      setKumInfo(`Spremljeno u mapu projekta: ${q.rezultat?.mapaKumulativa || ""}`);
+      showToast("Kumulativ je spremljen u mapu projekta.");
+    }
+  }, [zadaci, kumCekanje]);
+  const urediRacun = (i, polje, vrijednost) => setKum((p) => ({ ...p, racuni: p.racuni.map((r, j) => (j === i ? { ...r, [polje]: vrijednost } : r)) }));
+  const kumPostotak = (() => {
+    const broj = (t) => { const s = String(t || "").trim().replace(/\s/g, ""); return parseFloat(s.includes(",") ? s.replace(/\./g, "").replace(",", ".") : s); };
+    const g = broj(kum.gesamtauftrag), v = broj(kum.vorauszahlung);
+    return g > 0 && v >= 0 ? Math.round((v / g) * 1000) / 10 : null;
+  })();
+
   const z = zadaci.find((q) => q.id === otvoren) || zadaci[0];
   const s = z?.rezultat?.sazetak;
   const vrijeme = (iso) => (iso ? new Date(iso).toLocaleString("hr-HR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
@@ -14336,11 +14405,67 @@ function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
         </div>
       </div>
 
+      <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <strong style={{ fontSize: 14 }}>Kumulativ (avans / Abschlagsrechnungen)</strong>
+          <Btn size="sm" onClick={() => setKumOtvoren((o) => !o)}>{kumOtvoren ? "Sakrij" : "Postavi / uredi"}</Btn>
+        </div>
+        <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 6 }}>
+          Za projekte s avansom: iznos za platiti u Konplastovom XML-u nije onaj koji kupac plaća (odbija se dio avansa). Ovdje se zapišu ugovor, avans i prijašnji računi, a most to sprema u <span className="f-mono">kumulativ.json</span> u mapu računa projekta i uz XRechnung dodaje tablicu kumulativa. Svaki sljedeći račun most sam dopisuje u niz.
+        </div>
+        {kumOtvoren && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+              <Btn onClick={() => zadajKumulativ("kumulativ-citaj")} disabled={salje || !!kumCekanje}>Učitaj iz mape projekta</Btn>
+              <Btn variant="primary" icon={Save} onClick={() => zadajKumulativ("kumulativ-spremi")} disabled={salje || !!kumCekanje}>Spremi u mapu projekta</Btn>
+              {!projekt && <span style={{ fontSize: 12.5, color: "var(--rust)" }}>Odaberi projekt.</span>}
+              {kumInfo && <span style={{ fontSize: 12.5, color: "var(--ink-soft)", wordBreak: "break-all" }}>{kumInfo}</span>}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12 }}>
+              <Field label="Ugovorena vrijednost, brutto (€)"><input className="input f-mono" inputMode="decimal" placeholder="npr. 176.411,76" value={kum.gesamtauftrag} onChange={(e) => setKum({ ...kum, gesamtauftrag: e.target.value })} /></Field>
+              <Field label={`Avans (€)${kumPostotak != null ? ` — ${kumPostotak} %` : ""}`}><input className="input f-mono" inputMode="decimal" placeholder="npr. 52.923,53" value={kum.vorauszahlung} onChange={(e) => setKum({ ...kum, vorauszahlung: e.target.value })} /></Field>
+              <Field label="Naziv pozicije u tablici"><input className="input" placeholder="npr. Balkonanlage" value={kum.pozicija} onChange={(e) => setKum({ ...kum, pozicija: e.target.value })} /></Field>
+              <Field label="A-Konto račun (avans): broj"><input className="input f-mono" placeholder="npr. 6/1/3" value={kum.acontoBroj} onChange={(e) => setKum({ ...kum, acontoBroj: e.target.value })} /></Field>
+              <Field label="A-Konto račun: datum"><input className="input" type="date" value={kum.acontoDatum} onChange={(e) => setKum({ ...kum, acontoDatum: e.target.value })} /></Field>
+            </div>
+            <div className="label" style={{ marginTop: 12, marginBottom: 6 }}>Adresa isporuke (neobavezno — ako nije upisana, uzima se adresa kupca)</div>
+            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 2fr 70px", gap: 10 }}>
+              <input className="input" placeholder="Ulica i broj" value={kum.ulica} onChange={(e) => setKum({ ...kum, ulica: e.target.value })} />
+              <input className="input" placeholder="Poštanski br." value={kum.posta} onChange={(e) => setKum({ ...kum, posta: e.target.value })} />
+              <input className="input" placeholder="Grad" value={kum.grad} onChange={(e) => setKum({ ...kum, grad: e.target.value })} />
+              <input className="input" placeholder="Država" maxLength={2} value={kum.drzava} onChange={(e) => setKum({ ...kum, drzava: e.target.value.toUpperCase() })} />
+            </div>
+            <div className="label" style={{ marginTop: 12, marginBottom: 6 }}>Prijašnji računi (osim A-Konto računa)</div>
+            {kum.racuni.length > 0 && (
+              <table className="erp-table">
+                <thead><tr><th>Broj računa</th><th>Datum</th><th style={{ textAlign: "right" }}>Plaćeno (€)</th><th style={{ textAlign: "right" }}>Kumulativ, Summe Netto (€)</th><th style={{ width: 40 }} /></tr></thead>
+                <tbody>
+                  {kum.racuni.map((r, i) => (
+                    <tr key={i}>
+                      <td><input className="input f-mono" placeholder="npr. 107/1/8" value={r.broj} onChange={(e) => urediRacun(i, "broj", e.target.value)} /></td>
+                      <td><input className="input" type="date" value={r.datum} onChange={(e) => urediRacun(i, "datum", e.target.value)} /></td>
+                      <td><input className="input f-mono" style={{ textAlign: "right" }} inputMode="decimal" value={r.iznos} onChange={(e) => urediRacun(i, "iznos", e.target.value)} /></td>
+                      <td><input className="input f-mono" style={{ textAlign: "right" }} inputMode="decimal" value={r.kumulativ} onChange={(e) => urediRacun(i, "kumulativ", e.target.value)} /></td>
+                      <td><button className="btn btn-icon btn-ghost" onClick={() => setKum((p) => ({ ...p, racuni: p.racuni.filter((_, j) => j !== i) }))}><Trash2 size={14} color="var(--rust)" /></button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <div style={{ marginTop: 8 }}><Btn size="sm" icon={Plus} onClick={() => setKum((p) => ({ ...p, racuni: [...p.racuni, { broj: "", datum: "", iznos: "", kumulativ: "" }] }))}>Dodaj račun</Btn></div>
+            <div style={{ fontSize: 12, color: "var(--ink-faint)", marginTop: 8 }}>
+              "Plaćeno" je iznos koji je kupac platio po tom računu (Rest zu Zahlen), a "Kumulativ" je Summe Netto s tog računa. Prvi Abschlag nema prijašnjih računa osim A-Konto računa. Novi račun (onaj za koji se radi XRechnung) ne upisuje se — most ga sam dopiše nakon valjanog XRechnunga. Ako datoteka već postoji, sprema se sigurnosna kopija.
+            </div>
+          </div>
+        )}
+      </div>
+
       {z && (
         <div className="card" style={{ padding: 14, marginBottom: 14 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
             <strong>{z.sifra}</strong>
             {s?.racun && <span>· račun <span className="f-mono">{s.racun}</span> od {fmtDate(s.datum)}</span>}
+            {z.vrsta && z.vrsta !== "xrechnung" && <span>· {z.vrsta === "kumulativ-citaj" ? "čitanje kumulativa" : "spremanje kumulativa"}</span>}
             <Badge status={z.status} />
             {z.rezultat?.probno && <span className="badge badge-warning">probni način — ništa nije spremljeno na Z:</span>}
             {z.status === "Čeka" && mozeMijenjati && <Btn size="sm" onClick={() => otkazi(z)}>Otkaži</Btn>}
@@ -14374,6 +14499,9 @@ function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
             </div>
           )}
           {(z.rezultat?.poruke || []).map((p, i) => <div key={i} style={{ fontSize: 12.5, color: z.status === "Greška" ? "var(--rust)" : "var(--ink-soft)" }}>{z.status === "Greška" ? "✗ " : "• "}{p}</div>)}
+          {z.status === "Greška" && z.vrsta !== "kumulativ-spremi" && (z.rezultat?.poruke || []).some((p) => /kumulativ\.json/.test(p)) && (
+            <div style={{ marginTop: 8 }}><Btn size="sm" onClick={() => { if (z.projektId !== projektId) odaberiProjekt(z.projektId); setKumOtvoren(true); }}>Postavi kumulativ za ovaj projekt</Btn></div>
+          )}
           {(z.rezultat?.datoteke || []).length > 0 && (
             <div style={{ marginTop: 10, fontSize: 12.5 }}>
               <div className="label" style={{ marginBottom: 4 }}>Spremljene datoteke</div>
@@ -14393,7 +14521,7 @@ function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
               <tr key={q.id} onClick={() => setOtvoren(q.id)} style={{ cursor: "pointer", background: q.id === z?.id ? "var(--surface-alt)" : undefined }}>
                 <td>{vrijeme(q.kreirano)}</td>
                 <td className="f-mono">{q.sifra}</td>
-                <td className="f-mono">{q.rezultat?.sazetak?.racun || "—"}</td>
+                <td className="f-mono">{q.rezultat?.sazetak?.racun || (q.vrsta === "kumulativ-citaj" ? "čitanje kumulativa" : q.vrsta === "kumulativ-spremi" ? "spremanje kumulativa" : "—")}</td>
                 <td><Badge status={q.status} /></td>
                 <td className="f-mono" style={{ textAlign: "right" }}>{q.rezultat?.sazetak?.zaPlatiti != null ? fmtCurDec(q.rezultat.sazetak.zaPlatiti) : "—"}</td>
                 <td>{q.kreiraoIme}</td>

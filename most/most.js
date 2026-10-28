@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Greska } from "./lib/pretvori.js";
 import { obradi } from "./lib/obradi.js";
+import { citajKumulativ, spremiKumulativ } from "./lib/kumulativ-zadaci.js";
 
 const mapaMosta = path.dirname(fileURLToPath(import.meta.url));
 try { process.loadEnvFile(path.join(mapaMosta, ".env")); } catch { /* .env nije obavezan ako su varijable već postavljene */ }
@@ -48,10 +49,13 @@ async function api(metoda, ruta, tijelo) {
 }
 
 async function obradiZadatak(z) {
-  log(`Zadatak ${z.id.slice(0, 8)}: ${z.sifra}${okolina.probno ? " [PROBNO — ništa se ne piše na Z:]" : ""}`);
+  const vrsta = z.vrsta || "xrechnung";
+  log(`Zadatak ${z.id.slice(0, 8)}: ${z.sifra} (${vrsta})${okolina.probno ? " [PROBNO — ništa se ne piše na Z:]" : ""}`);
   let rezultat;
   try {
-    rezultat = await obradi(z, okolina);
+    rezultat = vrsta === "kumulativ-citaj" ? await citajKumulativ(z, okolina)
+      : vrsta === "kumulativ-spremi" ? await spremiKumulativ(z, okolina)
+      : await obradi(z, okolina);
   } catch (e) {
     if (!(e instanceof Greska)) console.error(e);
     rezultat = { status: "Greška", poruke: [e instanceof Greska ? e.message : `Neočekivana greška: ${e.message}`] };

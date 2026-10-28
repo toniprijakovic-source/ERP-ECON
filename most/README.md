@@ -31,6 +31,9 @@ Planer zadataka → desni klik na zadatak → Run / End. Nakon promjene `.env` i
 Za pravi rad postavi `MOST_PROBNO=0`.
 
 ## kumulativ.json (samo za projekte s avansom / Abschlagsrechnungama)
+**Postavlja se iz ERP-a** (za bilo koji projekt): Financije → XRechnung → odabir projekta → odjeljak "Kumulativ" → "Postavi / uredi".
+"Učitaj iz mape projekta" pokazuje postojeće podatke, "Spremi u mapu projekta" ih zapisuje (stara datoteka se sačuva kao
+`kumulativ.json.bak-<vrijeme>`). Datoteka ide u mapu računa u kojoj je najnoviji XML račun (ili gdje već postoji).
 Datoteka u mapi `Fakture` projekta: `gesamtauftrag`, `vorauszahlung`, popis `racuni` (prvi je A-Konto račun, zatim
 redovni računi s `iznos` = što je kupac platio i `kumulativ` = "Summe Netto" tog računa) i neobavezno `isporuka`.
 Most nakon svakog valjanog XRechnunga sam upiše taj račun u niz. Primjer: `primjeri\kumulativ-RN-170-208.json`.
