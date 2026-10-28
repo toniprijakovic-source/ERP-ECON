@@ -1608,7 +1608,7 @@ const KARTICE_MODULA = {
   projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "potvrde", naziv: "Potvrde narudžbe" }, { key: "zavrseni", naziv: "Završeni projekti" }] },
   ponude: { kartice: [{ key: "ponude", naziv: "Ponude" }, { key: "laser", naziv: "Ponude - Laser" }] },
   otpremnice: { kartice: [{ key: "otpremnice", naziv: "Otpremnice" }, { key: "cmr", naziv: "CMR" }] },
-  fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "podloge", naziv: "Podloge za fakturu" }, { key: "nedovrsena", naziv: "Nedovršena proizvodnja" }, { key: "analiza", naziv: "Analiza projekata" }, { key: "produktivnost", naziv: "Produktivnost (kg/h)" }, { key: "projekcija", naziv: "Projekcija" }] },
+  fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "podloge", naziv: "Podloge za fakturu" }, { key: "fakturirano", naziv: "Fakturirano po mjesecima" }, { key: "nedovrsena", naziv: "Nedovršena proizvodnja" }, { key: "analiza", naziv: "Analiza projekata" }, { key: "produktivnost", naziv: "Produktivnost (kg/h)" }, { key: "projekcija", naziv: "Projekcija" }] },
   partneri: { kartice: [{ key: "kupci", naziv: "Kupci" }, { key: "dobavljaci", naziv: "Dobavljači" }] },
   evidencijasati: { kartice: [{ key: "evidencija", naziv: "Evidencija rada" }, { key: "satinalozi", naziv: "Sati po nalozima" }] },
   zaposlenici: { kartice: [{ key: "zaposlenici", naziv: "Zaposlenici" }, { key: "pozicije", naziv: "Pozicije" }, { key: "obracun", naziv: "Obračun plaća" }, { key: "godisnji", naziv: "Godišnji odmor" }] },
@@ -11698,6 +11698,33 @@ function FakturiranoPoMjesecima({ db, onOtvoriPodlogu }) {
   );
 }
 
+// Ispis podloge za fakturu — isti pregled iz popisa podloga i iz kartice "Fakturirano po mjesecima".
+function PodlogaZaFakturuPrikaz({ db, podloga, onClose }) {
+  const narudzba = db.narudzbe.find((n) => n.id === podloga.narudzbaId);
+  return (
+    <PodlogaZaFakturuPrintModal
+      podloga={podloga}
+      projekt={db.projekti.find((p) => p.id === podloga.projektId)}
+      narudzba={narudzba}
+      kupac={db.kupci.find((k) => k.id === narudzba?.kupacId)}
+      otpremnice={db.otpremnice.filter((o) => podloga.otpremniceIds.includes(o.id))}
+      postavkeTvrtke={db.postavkeTvrtke}
+      onClose={onClose}
+    />
+  );
+}
+
+// Kartica Financije → Fakturirano po mjesecima.
+function FakturiranoPoMjesecimaTab({ db }) {
+  const [printPodloga, setPrintPodloga] = useState(null);
+  return (
+    <div>
+      <FakturiranoPoMjesecima db={db} onOtvoriPodlogu={setPrintPodloga} />
+      {printPodloga && <PodlogaZaFakturuPrikaz db={db} podloga={printPodloga} onClose={() => setPrintPodloga(null)} />}
+    </div>
+  );
+}
+
 function PodlogeZaFakturuTab({ db, update, showToast, mozeMijenjati = true }) {
   const [formOpen, setFormOpen] = useState(false); // false | { projektId }
   const [printPodloga, setPrintPodloga] = useState(null);
@@ -11712,7 +11739,6 @@ function PodlogeZaFakturuTab({ db, update, showToast, mozeMijenjati = true }) {
           <Btn variant="primary" icon={Plus} onClick={() => setFormOpen({ projektId: "" })}>Nova podloga za fakturu</Btn>
         </div>
       )}
-      <FakturiranoPoMjesecima db={db} onOtvoriPodlogu={setPrintPodloga} />
       {db.podlogeZaFakturu.length === 0 ? <EmptyState text="Nema izrađenih podloga za fakturu." /> : (
         <table className="erp-table">
           <thead><tr><th>Broj</th><th>Projekt</th><th>Datum</th><th>Za platiti</th><th></th></tr></thead>
@@ -11733,17 +11759,7 @@ function PodlogeZaFakturuTab({ db, update, showToast, mozeMijenjati = true }) {
         </table>
       )}
       {formOpen && <PodlogaZaFakturuFormModal db={db} update={update} showToast={showToast} pocetniProjektId={formOpen.projektId} onClose={() => setFormOpen(false)} />}
-      {printPodloga && (
-        <PodlogaZaFakturuPrintModal
-          podloga={printPodloga}
-          projekt={projektInfo(printPodloga.projektId)}
-          narudzba={db.narudzbe.find((n) => n.id === printPodloga.narudzbaId)}
-          kupac={db.kupci.find((k) => k.id === db.narudzbe.find((n) => n.id === printPodloga.narudzbaId)?.kupacId)}
-          otpremnice={db.otpremnice.filter((o) => printPodloga.otpremniceIds.includes(o.id))}
-          postavkeTvrtke={db.postavkeTvrtke}
-          onClose={() => setPrintPodloga(null)}
-        />
-      )}
+      {printPodloga && <PodlogaZaFakturuPrikaz db={db} podloga={printPodloga} onClose={() => setPrintPodloga(null)} />}
       {del && <ConfirmDelete label={del.broj} onCancel={() => setDel(null)} onConfirm={() => { update("podlogeZaFakturu", db.podlogeZaFakturu.filter((p) => p.id !== del.id)); setDel(null); showToast("Podloga obrisana."); }} />}
     </div>
   );
@@ -14217,6 +14233,7 @@ function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, sh
       {tab === "otpremnice" && <OtpremniceTab db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeOtpremnice} />}
       {tab === "cmr" && <CmrTab db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeCmr} mojId={mojId} />}
       {tab === "podloge" && <PodlogeZaFakturuTab db={db} update={update} showToast={showToast} mozeMijenjati={mozePodloge} />}
+      {tab === "fakturirano" && <FakturiranoPoMjesecimaTab db={db} />}
       {tab === "nedovrsena" && <NedovrsenaProizvodnjaView db={db} update={update} showToast={showToast} mozeMijenjati={mozeNedovrsenu} mojId={mojId} />}
       {tab === "produktivnost" && <ProduktivnostView db={db} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeProduktivnost} />}
       {tab === "projekcija" && <ProjekcijaView db={db} update={update} showToast={showToast} mozeMijenjati={mozeProjekciju} mojId={mojId} />}

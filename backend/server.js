@@ -107,6 +107,8 @@ const KARTICE_MODULA = {
   fakturiranje: {
     fakture: { citanje: ["fakture", "kupci", "projekti"], pisanje: ["fakture"] },
     podloge: { citanje: ["podlogeZaFakturu", "projekti", "materijali", "otpremnice", "narudzbe", "kupci"], pisanje: ["podlogeZaFakturu", "otpremnice"] },
+    // Fakturirano po mjesecima: samo pregled zbroja podloga za fakturu (po mjesecu, kupcu) i ispis podloge.
+    fakturirano: { citanje: ["podlogeZaFakturu", "projekti", "otpremnice", "narudzbe", "kupci"], pisanje: [] },
     nedovrsena: { citanje: ["nedovrsenaProizvodnja", "projekti", "radniNalozi", "satiPoNalogu", "izdatnice", "materijali", "otpremnice", "narudzbe", "kupci", "dobavljaci", "narudzbeTransporta"], pisanje: ["nedovrsenaProizvodnja"] },
     analiza: { citanje: ["projekti", "radniNalozi", "ponude", "izdatnice", "materijali", "kupci", "cjenikRada", "katalogProfila", "kvaliteteMaterijala"], pisanje: [] },
     // Produktivnost (kg/h): po projektima masa ÷ sati upisani na naloge, po mjesecima isporučena masa ÷ sati
