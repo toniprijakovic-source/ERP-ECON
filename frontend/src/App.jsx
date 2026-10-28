@@ -14911,6 +14911,8 @@ function PartneriPage({ db, update, showToast, mojaPozicija }) {
 /* ============================== ZAPOSLENICI ============================== */
 // Provjera zahtjeva za lozinku — isto pravilo kao na backendu (server je taj koji ga stvarno provodi,
 // ovo je samo trenutna povratna informacija korisniku dok tipka).
+// Poslužitelj klijentu više ne šalje hash lozinke, nego samo imaJakuLozinku (stari zapisi bez tog polja: provjera po hashu).
+const imaJakuLozinku = (z) => z?.imaJakuLozinku ?? !!z?.lozinkaHash;
 const lozinkaZahtjevi = (lozinka) => ([
   { ok: lozinka.length >= 8, tekst: "najmanje 8 znakova" },
   { ok: /[A-Za-z]/.test(lozinka), tekst: "barem jedno slovo" },
@@ -15038,7 +15040,7 @@ function IzbornikPrijaveModal({ db, mojId, onClose, showToast, refetchKljuc }) {
                   <td>{z.prezime} {z.ime}{ja && <span style={{ fontSize: 11, color: "var(--ink-faint)" }}> (ti)</span>}</td>
                   <td>{pozNaziv(z.pozicijaId)}</td>
                   {zadnje && <td className="f-mono" style={{ fontSize: 12 }}>{zadnja ? fmtDate(zadnja) : "nikad"}</td>}
-                  <td style={{ fontSize: 11.5, color: z.lozinkaHash ? "var(--green)" : "var(--rust)" }}>{z.lozinkaHash ? "✓" : "nema"}</td>
+                  <td style={{ fontSize: 11.5, color: imaJakuLozinku(z) ? "var(--green)" : "var(--rust)" }}>{imaJakuLozinku(z) ? "✓" : "nema"}</td>
                 </tr>
               );
             })}
@@ -17271,10 +17273,10 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
 
       {tab === "zaposlenici" && (
         <>
-          {db.zaposlenici.some((z) => !z.lozinkaHash) && (
+          {db.zaposlenici.some((z) => !imaJakuLozinku(z)) && (
             <div className="card" style={{ padding: "10px 14px", marginBottom: 14, background: "#FDF6E3", borderColor: "#F0C36B", display: "flex", alignItems: "center", gap: 8 }}>
               <AlertTriangle size={15} color="#8A6100" />
-              <span style={{ fontSize: 12.5, color: "#6b5511" }}><strong>{db.zaposlenici.filter((z) => !z.lozinkaHash).length}</strong> zaposlenika još nema postavljenu jaku lozinku (koriste stari PIN ili nemaju nikakvu) — postavi im lozinku gumbom "Lozinka" u tablici.</span>
+              <span style={{ fontSize: 12.5, color: "#6b5511" }}><strong>{db.zaposlenici.filter((z) => !imaJakuLozinku(z)).length}</strong> zaposlenika još nema postavljenu jaku lozinku (koriste stari PIN ili nemaju nikakvu) — postavi im lozinku gumbom "Lozinka" u tablici.</span>
             </div>
           )}
           {mozeZaposlenici && (
@@ -17301,7 +17303,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
               { key: "telefon", label: "Telefon" },
               { key: "lozinka", label: "Lozinka", render: (r) => (
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 11.5, color: r.lozinkaHash ? "var(--green)" : "var(--rust)" }}>{r.lozinkaHash ? "✓ Postavljena" : "Stari/nema PIN"}</span>
+                  <span style={{ fontSize: 11.5, color: imaJakuLozinku(r) ? "var(--green)" : "var(--rust)" }}>{imaJakuLozinku(r) ? "✓ Postavljena" : "Stari/nema PIN"}</span>
                   <Btn variant="ghost" size="sm" onClick={() => setLozinkaZa(r)}>Lozinka</Btn>
                 </div>
               ) },
@@ -17413,7 +17415,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
             {zapForm.id && (
               <Field label="Lozinka za prijavu">
                 <div style={{ display: "flex", alignItems: "center", gap: 8, height: 36 }}>
-                  <span style={{ fontSize: 11.5, color: zapForm.lozinkaHash ? "var(--green)" : "var(--rust)" }}>{zapForm.lozinkaHash ? "✓ Postavljena" : "Stari/nema PIN"}</span>
+                  <span style={{ fontSize: 11.5, color: imaJakuLozinku(zapForm) ? "var(--green)" : "var(--rust)" }}>{imaJakuLozinku(zapForm) ? "✓ Postavljena" : "Stari/nema PIN"}</span>
                   <Btn variant="ghost" size="sm" onClick={() => setLozinkaZa(zapForm)}>Promijeni lozinku</Btn>
                 </div>
               </Field>

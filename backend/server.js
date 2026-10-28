@@ -360,6 +360,15 @@ async function autorizacijaPisanja(req, res, next) {
 // Oznaka zaposlenik.prijavaUAplikaciju (uređuje se u Zaposlenici → "Izbornik za prijavu", ruta PUT /api/zaposlenici/prijava):
 // false = nije u padajućem izborniku za prijavu i ne može se prijaviti. Bez oznake (stari zapisi) = dopušteno, da uvođenje
 // ne zaključa nikoga; novi zaposlenik dobiva false (vidi PUT /api/data/zaposlenici). Kiosk (kartica) na ovo ne utječe.
+// Što klijent smije vidjeti od zaposlenika: hashevi lozinki (i stari PIN) NIKAD — umjesto njih samo imaJakuLozinku; RFID kod je vjerodajnica
+// za kiosk (?rfid=KOD), pa ga vide samo oni koji smiju uređivati zaposlenike. Hasheve upravlja isključivo poslužitelj
+// (PUT /api/zaposlenici/:id/lozinka), a PUT /api/data/zaposlenici ih uvijek zadržava iz baze.
+const ZAPOSLENIK_TAJNA_POLJA = ["lozinkaHash", "pinHash", "pin"];
+const zaposleniciZaKlijenta = (popis, vidiKartice) => (Array.isArray(popis) ? popis : []).map((z) => {
+  if (!z || typeof z !== "object") return z;
+  const { lozinkaHash, pinHash, pin, rfidKod, ...ostalo } = z;
+  return { ...ostalo, imaJakuLozinku: !!lozinkaHash, ...(vidiKartice && rfidKod !== undefined ? { rfidKod } : {}) };
+});
 const smijeUAplikaciju = (z) => !!z && z.status !== "Neaktivan" && z.prijavaUAplikaciju !== false;
 const imaLozinku = (z) => !!(z.lozinkaHash || z.pinHash || (typeof z.pin === "string" && z.pin));
 
@@ -443,6 +452,7 @@ app.put("/api/zaposlenici/:id/lozinka", autentikacija, async (req, res) => {
     return { ...ostalo, lozinkaHash };
   });
   await spremiKljuc("zaposlenici", novi);
+  console.log(`Lozinka postavljena: zaposlenik ${req.params.id}, postavio ${req.zaposlenikId}`);
   res.json({ ok: true });
 });
 
@@ -1379,7 +1389,7 @@ app.put("/api/projekti/patch", autentikacija, async (req, res) => {
 // da frontend ne padne na db.<kljuc>.find/.filter — vidi izracunajDozvoljeneKljuceve().
 app.get("/api/data", autentikacija, async (req, res) => {
   const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
-  const { citljivo } = izracunajDozvoljeneKljuceve(pozicija);
+  const { citljivo, pisivo } = izracunajDozvoljeneKljuceve(pozicija);
 
   const r = await pool.query("SELECT key, value FROM app_data");
   const stvarno = {};
@@ -1392,6 +1402,7 @@ app.get("/api/data", autentikacija, async (req, res) => {
     rezultat[key] = citljivo.has(key) ? (stvarno[key] ?? (OBJEKT_KLJUCEVI.has(key) ? {} : [])) : (OBJEKT_KLJUCEVI.has(key) ? {} : []);
   });
   rezultat.slobodniZadaci = filtrirajSlobodneZadatke(rezultat.slobodniZadaci, pozicija, req.zaposlenikId);
+  rezultat.zaposlenici = zaposleniciZaKlijenta(rezultat.zaposlenici, pisivo.has("zaposlenici"));
   res.json(rezultat);
 });
 
@@ -1399,10 +1410,12 @@ app.get("/api/data/:key", autentikacija, async (req, res) => {
   const key = req.params.key;
   if (!DOZVOLJENI_KLJUCEVI.includes(key)) return res.status(400).json({ error: "Nepoznat ključ." });
   const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
-  const { citljivo } = izracunajDozvoljeneKljuceve(pozicija);
+  const { citljivo, pisivo } = izracunajDozvoljeneKljuceve(pozicija);
   if (!citljivo.has(key)) return res.status(403).json({ error: "Vaša pozicija nema pristup ovim podacima." });
   const vrijednost = await ucitajKljuc(key);
-  res.json(key === "slobodniZadaci" ? filtrirajSlobodneZadatke(vrijednost, pozicija, req.zaposlenikId) : vrijednost);
+  res.json(key === "slobodniZadaci" ? filtrirajSlobodneZadatke(vrijednost, pozicija, req.zaposlenikId)
+    : key === "zaposlenici" ? zaposleniciZaKlijenta(vrijednost, pisivo.has("zaposlenici"))
+    : vrijednost);
 });
 
 app.put("/api/data/:key", autentikacija, async (req, res, next) => {
@@ -1482,10 +1495,14 @@ app.put("/api/data/:key", autentikacija, async (req, res, next) => {
       const stari = new Map((r.rows[0]?.value || []).map((z) => [z.id, z]));
       const rezultat = req.body.map((z) => {
         if (!z || typeof z !== "object") return z;
-        const { prijavaUAplikaciju: _poslano, ...ostalo } = z;
+        // Klijent ne vidi (a time ni ne smije mijenjati) hasheve lozinki ni oznaku prijave: sve to ostaje onako kako je u bazi.
+        const { prijavaUAplikaciju: _poslano, imaJakuLozinku: _izvedeno, lozinkaHash: _h, pinHash: _ph, pin: _pin, ...ostalo } = z;
         const prije = stari.get(z.id);
         if (!prije) return { ...ostalo, prijavaUAplikaciju: false };
-        return prije.prijavaUAplikaciju === undefined ? ostalo : { ...ostalo, prijavaUAplikaciju: prije.prijavaUAplikaciju };
+        const zadrzano = {};
+        ZAPOSLENIK_TAJNA_POLJA.forEach((k) => { if (prije[k] !== undefined) zadrzano[k] = prije[k]; });
+        if (prije.prijavaUAplikaciju !== undefined) zadrzano.prijavaUAplikaciju = prije.prijavaUAplikaciju;
+        return { ...ostalo, ...zadrzano };
       });
       await client.query(
         `INSERT INTO app_data (key, value, updated_at) VALUES ('zaposlenici', $1, now())
