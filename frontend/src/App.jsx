@@ -4663,7 +4663,7 @@ function IzdatnicaPrintModal({ izdatnica, projekt, izdao, postavkeTvrtke, onClos
         <table style={{ fontSize: 11.5, marginBottom: 18, borderCollapse: "collapse" }}>
           <tbody>
             <tr><td style={{ paddingRight: 10, color: "#555" }}>Projekt:</td><td style={{ fontWeight: 600 }}>{projekt?.sifra}{projekt?.naziv ? ` — ${projekt.naziv}` : ""}</td></tr>
-            {izdatnica.napomena && <tr><td style={{ paddingRight: 10, color: "#555" }}>Napomena:</td><td>{izdatnica.napomena}</td></tr>}
+            {izdatnica.napomena && <tr><td style={{ paddingRight: 10, color: "#555", verticalAlign: "top" }}>Napomena:</td><td style={{ whiteSpace: "pre-line" }}>{izdatnica.napomena}</td></tr>}
           </tbody>
         </table>
 
@@ -9973,7 +9973,7 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
           <div style={{ fontSize: 10.5, marginBottom: 20, whiteSpace: "pre-line" }}>{ponuda.napomenaNjemacki}</div>
         )}
 
-        {ponuda.napomena && <div style={{ fontSize: 11, marginBottom: 16 }}><strong>{L.napomena}</strong> {ponuda.napomena}</div>}
+        {ponuda.napomena && <div style={{ fontSize: 11, marginBottom: 16 }}><strong>{L.napomena}</strong><div style={{ marginTop: 2, whiteSpace: "pre-line" }}>{ponuda.napomena}</div></div>}
 
         <div style={{ fontSize: 11, marginBottom: 20 }}>
           {jezik !== "de" && <div>{L.uvjeti}</div>}
@@ -10382,7 +10382,7 @@ function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
           </table>
         </div>
 
-        {ponuda.napomena && <div style={{ fontSize: 11, marginBottom: 16 }}><strong>Napomena:</strong> {ponuda.napomena}</div>}
+        {ponuda.napomena && <div style={{ fontSize: 11, marginBottom: 16 }}><strong>Napomena:</strong><div style={{ marginTop: 2, whiteSpace: "pre-line" }}>{ponuda.napomena}</div></div>}
 
         <div style={{ fontSize: 11, marginBottom: 20 }}>
           <div>Uvjeti plaćanja i rok isporuke definiraju se ugovorom/narudžbom po prihvaćanju ponude.</div>
