@@ -1,0 +1,15 @@
+{
+  "name": "econ-most",
+  "version": "1.0.0",
+  "description": "Lokalni most: ERP <-> mapa Fakture na Z: (izrada XRechnunga iz Konplastovog XML-a)",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node most.js",
+    "test": "node test/kumulativ.test.js && node test/pretvori.test.js"
+  },
+  "dependencies": {
+    "fast-xml-parser": "4.5.0",
+    "pdf-lib": "1.17.1"
+  }
+}

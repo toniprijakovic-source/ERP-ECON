@@ -10,6 +10,7 @@ const cors = require("cors");
 const { Pool } = require("pg");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 require("dotenv").config();
 
 const app = express();
@@ -54,7 +55,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada",
   "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
   "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca",
-  "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije", "maticnaKnjiga", "upitiTransporta", "narudzbeTransporta", "godisnjiOdmor",
+  "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije", "maticnaKnjiga", "upitiTransporta", "narudzbeTransporta", "godisnjiOdmor", "xrechnungPostavke",
 ];
 
 // Svaki modul (isti "moduli" popis kao u pozicijeZaposlenika) dijeli se na kartice — iste
@@ -110,6 +111,9 @@ const KARTICE_MODULA = {
     podloge: { citanje: ["podlogeZaFakturu", "projekti", "materijali", "otpremnice", "narudzbe", "kupci", "fakture"], pisanje: ["podlogeZaFakturu", "otpremnice"] },
     // Fakturirano po mjesecima: samo pregled zbroja podloga za fakturu (po mjesecu, kupcu), naplaćenosti (status vezane fakture) i ispis podloge.
     fakturirano: { citanje: ["podlogeZaFakturu", "projekti", "otpremnice", "narudzbe", "kupci", "fakture"], pisanje: [] },
+    // XRechnung: postavke po projektu (e-adresa kupca za račune, referenca kupca) u xrechnungPostavke. Zadaci za lokalni "most"
+    // idu posebnim rutama /api/xrechnung/* (dozvola = čitanje/pisanje xrechnungPostavke), a most se prijavljuje tajnom MOST_TOKEN.
+    xrechnung: { citanje: ["projekti", "kupci", "xrechnungPostavke"], pisanje: ["xrechnungPostavke"] },
     nedovrsena: { citanje: ["nedovrsenaProizvodnja", "projekti", "radniNalozi", "satiPoNalogu", "izdatnice", "materijali", "otpremnice", "narudzbe", "kupci", "dobavljaci", "narudzbeTransporta"], pisanje: ["nedovrsenaProizvodnja"] },
     analiza: { citanje: ["projekti", "radniNalozi", "ponude", "izdatnice", "materijali", "kupci", "cjenikRada", "katalogProfila", "kvaliteteMaterijala"], pisanje: [] },
     // Produktivnost (kg/h): po projektima masa ÷ sati upisani na naloge, po mjesecima isporučena masa ÷ sati
@@ -164,7 +168,7 @@ const filtrirajSlobodneZadatke = (zadaci, pozicija, zaposlenikId) => (Array.isAr
 const UVIJEK_CITLJIVO = ["zaposlenici", "pozicijeZaposlenika", "postavkeTvrtke"];
 
 // Ključevi čija je vrijednost objekt (ne niz) — koristi se za ispravan "prazan" placeholder.
-const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi", "postavkePlaca", "planProizvodnje", "nedovrsenaProizvodnja", "godisnjiOdmor"]);
+const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi", "postavkePlaca", "planProizvodnje", "nedovrsenaProizvodnja", "godisnjiOdmor", "xrechnungPostavke"]);
 
 async function ucitajPozicijuZaposlenika(zaposlenikId) {
   const [zaposlenici, pozicije] = await Promise.all([ucitajKljuc("zaposlenici"), ucitajKljuc("pozicijeZaposlenika")]);
@@ -769,6 +773,97 @@ app.get("/api/plan/podaci", autentikacija, async (req, res) => {
     odsutnosti,
     projektiPregled: Object.fromEntries((projekti || []).map((p) => [p.id, { kupac: nazivKupca.get(p.kupacId) || "", narudzbe: brojeviNarudzbi[p.id] || [] }])),
   });
+});
+
+// ---------- XRechnung: zadaci za lokalni "most" ----------
+// ERP je na internetu pa ne vidi mrežni disk Z:. Zato "Kreiraj XRechnung" u ERP-u samo upiše zadatak u red čekanja;
+// MOST (program na uredskom računalu s pristupom Z:) svakih par sekundi pita ima li zadataka, obradi ih lokalno (mapa Fakture
+// projekta, Konplastov XML, izrada i službena provjera XRechnunga) i vrati rezultat. Most se prijavljuje tajnom MOST_TOKEN
+// (zaglavlje X-Most-Token) i samo se javlja ovamo — ništa se ne otvara prema vani.
+// Red čekanja je u memoriji poslužitelja: zadaci su kratkotrajni, a rezultat (datoteke) ostaje na Z:. Restart poslužitelja
+// briše popis, a zadatak koji čeka/obrađuje se samo ponovno zada.
+const MOST_TOKEN = process.env.MOST_TOKEN || "";
+const xrZadaci = [];
+let mostZadnjiPut = null;
+const XR_STATUSI_ZAVRSNI = ["Valjano", "Nevaljano", "Greška"];
+
+const mostAutentikacija = (req, res, next) => {
+  if (MOST_TOKEN.length < 24) return res.status(503).json({ error: "Most nije podešen (MOST_TOKEN nije postavljen na poslužitelju)." });
+  const dan = Buffer.from(String(req.headers["x-most-token"] || ""));
+  const tajna = Buffer.from(MOST_TOKEN);
+  if (dan.length !== tajna.length || !crypto.timingSafeEqual(dan, tajna)) return res.status(401).json({ error: "Neispravan token mosta." });
+  next();
+};
+const xrDozvola = async (req) => izracunajDozvoljeneKljuceve(await ucitajPozicijuZaposlenika(req.zaposlenikId));
+const xrJavni = (z) => ({ id: z.id, projektId: z.projektId, sifra: z.sifra, naziv: z.naziv, eAdresa: z.eAdresa, referenca: z.referenca, status: z.status, kreiraoIme: z.kreiraoIme, kreirano: z.kreirano, zavrseno: z.zavrseno || null, rezultat: z.rezultat || null });
+const xrTekst = (v, max) => String(v ?? "").slice(0, max);
+
+app.get("/api/xrechnung/zadaci", autentikacija, async (req, res) => {
+  const { citljivo } = await xrDozvola(req);
+  if (!citljivo.has("xrechnungPostavke")) return res.status(403).json({ error: "Vaša pozicija nema pristup kartici XRechnung." });
+  res.json({ zadaci: xrZadaci.slice(0, 30).map(xrJavni), most: { povezan: !!mostZadnjiPut && Date.now() - mostZadnjiPut < 30000, zadnjiPut: mostZadnjiPut ? new Date(mostZadnjiPut).toISOString() : null } });
+});
+
+app.post("/api/xrechnung/zadaci", autentikacija, async (req, res) => {
+  const { pisivo } = await xrDozvola(req);
+  if (!pisivo.has("xrechnungPostavke")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za izradu XRechnunga." });
+  const { projektId, eAdresa, referenca, racunBroj } = req.body || {};
+  const [projekti, zaposlenici] = await Promise.all([ucitajKljuc("projekti"), ucitajKljuc("zaposlenici")]);
+  const projekt = (projekti || []).find((p) => p.id === projektId);
+  if (!projekt) return res.status(404).json({ error: "Projekt nije pronađen." });
+  const email = String(eAdresa || "").trim();
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "E-adresa kupca nije ispravna." });
+  if (xrZadaci.some((z) => z.projektId === projektId && (z.status === "Čeka" || z.status === "Obrada"))) return res.status(409).json({ error: "Za ovaj projekt već postoji zadatak koji čeka ili se obrađuje." });
+  const ja = (zaposlenici || []).find((z) => z.id === req.zaposlenikId);
+  const zadatak = {
+    id: crypto.randomUUID(), projektId, sifra: xrTekst(projekt.sifra, 60), naziv: xrTekst(projekt.naziv, 160), mapa: xrTekst(projekt.mapa, 400),
+    eAdresa: email, referenca: xrTekst(referenca, 100).trim(), racunBroj: xrTekst(racunBroj, 40).trim(),
+    status: "Čeka", kreirao: req.zaposlenikId, kreiraoIme: ja ? `${ja.ime} ${ja.prezime}` : "", kreirano: new Date().toISOString(),
+  };
+  xrZadaci.unshift(zadatak);
+  if (xrZadaci.length > 100) xrZadaci.length = 100;
+  res.json({ ok: true, zadatak: xrJavni(zadatak) });
+});
+
+app.delete("/api/xrechnung/zadaci/:id", autentikacija, async (req, res) => {
+  const { pisivo } = await xrDozvola(req);
+  if (!pisivo.has("xrechnungPostavke")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za izradu XRechnunga." });
+  const z = xrZadaci.find((q) => q.id === req.params.id);
+  if (!z) return res.status(404).json({ error: "Zadatak nije pronađen." });
+  if (z.status !== "Čeka") return res.status(409).json({ error: "Zadatak se već obrađuje ili je završen." });
+  z.status = "Otkazano";
+  z.zavrseno = new Date().toISOString();
+  res.json({ ok: true });
+});
+
+// Most: dohvaća i preuzima zadatke koji čekaju (svaki poziv je i "otkucaj" da je most živ).
+app.get("/api/most/zadaci", mostAutentikacija, (req, res) => {
+  mostZadnjiPut = Date.now();
+  xrZadaci.forEach((z) => { // zadatak koji most nije završio u 10 minuta (npr. prekinut rad) ne ostaje vječno "u obradi"
+    if (z.status === "Obrada" && Date.now() - z.preuzeto > 10 * 60 * 1000) { z.status = "Greška"; z.zavrseno = new Date().toISOString(); z.rezultat = { poruke: ["Most nije javio rezultat u 10 minuta. Pokušaj ponovno."] }; }
+  });
+  const cekaju = xrZadaci.filter((z) => z.status === "Čeka");
+  cekaju.forEach((z) => { z.status = "Obrada"; z.preuzeto = Date.now(); });
+  res.json({ zadaci: cekaju.map((z) => ({ id: z.id, sifra: z.sifra, naziv: z.naziv, mapa: z.mapa, eAdresa: z.eAdresa, referenca: z.referenca, racunBroj: z.racunBroj })) });
+});
+
+app.post("/api/most/zadaci/:id/rezultat", mostAutentikacija, (req, res) => {
+  const z = xrZadaci.find((q) => q.id === req.params.id);
+  if (!z) return res.status(404).json({ error: "Zadatak nije pronađen." });
+  const b = req.body || {};
+  const popis = (v, max, duljina) => (Array.isArray(v) ? v.slice(0, max).map((s) => xrTekst(s, duljina)) : []);
+  const pravila = (v) => (Array.isArray(v) ? v.slice(0, 30).map((g) => ({ id: xrTekst(g?.id, 60), tekst: xrTekst(g?.tekst, 400) })) : []);
+  z.status = XR_STATUSI_ZAVRSNI.includes(b.status) ? b.status : "Greška";
+  z.zavrseno = new Date().toISOString();
+  z.rezultat = {
+    poruke: popis(b.poruke, 20, 500),
+    sazetak: b.sazetak && typeof b.sazetak === "object" ? Object.fromEntries(Object.entries(b.sazetak).slice(0, 20).map(([k, v]) => [xrTekst(k, 40), typeof v === "number" ? v : xrTekst(v, 200)])) : null,
+    kontrole: Array.isArray(b.kontrole) ? b.kontrole.slice(0, 20).map((k) => ({ ok: !!k?.ok, opis: xrTekst(k?.opis, 300) })) : [],
+    validacija: b.validacija ? { ocjena: xrTekst(b.validacija.ocjena, 30), greske: pravila(b.validacija.greske), upozorenja: pravila(b.validacija.upozorenja) } : null,
+    datoteke: Array.isArray(b.datoteke) ? b.datoteke.slice(0, 10).map((d) => ({ naziv: xrTekst(d?.naziv, 200), putanja: xrTekst(d?.putanja, 500) })) : [],
+    izlaznaMapa: xrTekst(b.izlaznaMapa, 500), probno: !!b.probno,
+  };
+  res.json({ ok: true });
 });
 
 // ---------- Obavijesti o zadacima (zvonce u aplikaciji) ----------

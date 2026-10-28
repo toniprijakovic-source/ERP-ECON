@@ -1013,6 +1013,7 @@ const STATUS_TONE = {
   "Primljeno": "success", "Prevezeno": "success", "Završen": "success", "Prihvaćena": "success", "Plaćeno": "success",
   "Otkazan": "danger", "Odbijena": "danger", "Kasni": "danger",
   "Aktivan": "success", "Neaktivan": "muted",
+  "Čeka": "muted", "Obrada": "warning", "Valjano": "success", "Nevaljano": "danger", "Greška": "danger", "Otkazano": "muted",
 };
 const Badge = ({ status, label }) => <span className={`badge badge-${STATUS_TONE[status] || "muted"}`}>{label || status}</span>;
 
@@ -1608,7 +1609,7 @@ const KARTICE_MODULA = {
   projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "potvrde", naziv: "Potvrde narudžbe" }, { key: "zavrseni", naziv: "Završeni projekti" }] },
   ponude: { kartice: [{ key: "ponude", naziv: "Ponude" }, { key: "laser", naziv: "Ponude - Laser" }] },
   otpremnice: { kartice: [{ key: "otpremnice", naziv: "Otpremnice" }, { key: "cmr", naziv: "CMR" }] },
-  fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "podloge", naziv: "Podloge za fakturu" }, { key: "fakturirano", naziv: "Fakturirano po mjesecima" }, { key: "nedovrsena", naziv: "Nedovršena proizvodnja" }, { key: "analiza", naziv: "Analiza projekata" }, { key: "produktivnost", naziv: "Produktivnost (kg/h)" }, { key: "projekcija", naziv: "Projekcija" }] },
+  fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "podloge", naziv: "Podloge za fakturu" }, { key: "fakturirano", naziv: "Fakturirano po mjesecima" }, { key: "xrechnung", naziv: "XRechnung" }, { key: "nedovrsena", naziv: "Nedovršena proizvodnja" }, { key: "analiza", naziv: "Analiza projekata" }, { key: "produktivnost", naziv: "Produktivnost (kg/h)" }, { key: "projekcija", naziv: "Projekcija" }] },
   partneri: { kartice: [{ key: "kupci", naziv: "Kupci" }, { key: "dobavljaci", naziv: "Dobavljači" }] },
   evidencijasati: { kartice: [{ key: "evidencija", naziv: "Evidencija rada" }, { key: "satinalozi", naziv: "Sati po nalozima" }] },
   zaposlenici: { kartice: [{ key: "zaposlenici", naziv: "Zaposlenici" }, { key: "pozicije", naziv: "Pozicije" }, { key: "obracun", naziv: "Obračun plaća" }, { key: "godisnji", naziv: "Godišnji odmor" }] },
@@ -14220,6 +14221,183 @@ function ProjekcijaRasporedModal({ red, zapis, danas, onSpremi, onClose }) {
   );
 }
 
+/* ============================== XRECHNUNG ============================== */
+// Kartica Financije → XRechnung. ERP ne vidi mrežni disk Z:, pa "Kreiraj XRechnung" upiše zadatak koji preuzima lokalni "most"
+// (program na uredskom računalu): iz mape Fakture projekta uzme najnoviji Konplastov XML, napravi XRechnung (za projekte s
+// avansom i tablicu kumulativa), službeno ga provjeri i vrati rezultat. Postavke po projektu (e-adresa kupca za račune i
+// referenca kupca) pamte se u db.xrechnungPostavke.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
+  const postavke = db.xrechnungPostavke || {};
+  const [projektId, setProjektId] = useState("");
+  const [eAdresa, setEAdresa] = useState("");
+  const [referenca, setReferenca] = useState("");
+  const [zapamti, setZapamti] = useState(true);
+  const [zadaci, setZadaci] = useState([]);
+  const [most, setMost] = useState({ povezan: false, zadnjiPut: null });
+  const [otvoren, setOtvoren] = useState(null);
+  const [salje, setSalje] = useState(false);
+  const [greskaVeze, setGreskaVeze] = useState("");
+  const zaglavlje = () => ({ "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` });
+
+  const projekti = useMemo(() => [...db.projekti].sort((a, b) => usporediPrirodno(b.sifra, a.sifra)), [db.projekti]);
+  const projekt = db.projekti.find((p) => p.id === projektId);
+  const kupac = db.kupci.find((k) => k.id === projekt?.kupacId);
+
+  // Kod odabira projekta: zapamćene postavke tog projekta, inače postavke drugog projekta istog kupca.
+  const odaberiProjekt = (id) => {
+    setProjektId(id);
+    const p = db.projekti.find((q) => q.id === id);
+    const kupcevo = p ? db.projekti.filter((q) => q.kupacId === p.kupacId && postavke[q.id]?.eAdresa).map((q) => postavke[q.id])[0] : null;
+    setEAdresa(postavke[id]?.eAdresa || kupcevo?.eAdresa || "");
+    setReferenca(postavke[id]?.referenca || kupcevo?.referenca || "");
+  };
+
+  const osvjezi = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/xrechnung/zadaci`, { headers: zaglavlje() });
+      if (!res.ok) { setGreskaVeze((await res.json().catch(() => ({}))).error || "Greška pri učitavanju zadataka."); return; }
+      const data = await res.json();
+      setZadaci(data.zadaci);
+      setMost(data.most);
+      setGreskaVeze("");
+    } catch { setGreskaVeze("Nema veze s poslužiteljem."); }
+  };
+  useEffect(() => { osvjezi(); const t = setInterval(osvjezi, 4000); return () => clearInterval(t); }, []);
+
+  const emailOk = EMAIL_RE.test(eAdresa.trim());
+  const aktivan = zadaci.some((z) => z.projektId === projektId && (z.status === "Čeka" || z.status === "Obrada"));
+  const kreiraj = async () => {
+    if (!projekt || !emailOk) return;
+    setSalje(true);
+    try {
+      const res = await fetch(`${API_URL}/api/xrechnung/zadaci`, { method: "POST", headers: zaglavlje(), body: JSON.stringify({ projektId, eAdresa: eAdresa.trim(), referenca: referenca.trim() }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { showToast(data.error || "Greška pri izradi zadatka."); return; }
+      if (zapamti && (postavke[projektId]?.eAdresa !== eAdresa.trim() || (postavke[projektId]?.referenca || "") !== referenca.trim())) {
+        update("xrechnungPostavke", { ...postavke, [projektId]: { eAdresa: eAdresa.trim(), referenca: referenca.trim() } });
+      }
+      setOtvoren(data.zadatak.id);
+      osvjezi();
+      showToast(most.povezan ? "Zadatak je poslan mostu." : "Zadatak čeka — most trenutno nije povezan.");
+    } catch { showToast("Greška pri izradi zadatka — provjeri internetsku vezu."); } finally { setSalje(false); }
+  };
+  const otkazi = async (z) => {
+    const res = await fetch(`${API_URL}/api/xrechnung/zadaci/${z.id}`, { method: "DELETE", headers: zaglavlje() });
+    if (!res.ok) showToast((await res.json().catch(() => ({}))).error || "Zadatak se ne može otkazati.");
+    osvjezi();
+  };
+
+  const z = zadaci.find((q) => q.id === otvoren) || zadaci[0];
+  const s = z?.rezultat?.sazetak;
+  const vrijeme = (iso) => (iso ? new Date(iso).toLocaleString("hr-HR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
+  return (
+    <div>
+      <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
+          <strong style={{ fontSize: 14 }}>Kreiraj XRechnung iz računa u mapi Fakture</strong>
+          <span className={`badge badge-${most.povezan ? "success" : "danger"}`}>{most.povezan ? "Most je povezan" : "Most nije povezan"}</span>
+        </div>
+        <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 12 }}>
+          Most (program na uredskom računalu) uzme najnoviji Konplastov XML iz mape <span className="f-mono">Fakture</span> odabranog projekta, napravi XRechnung (za račune s avansom i tablicu kumulativa), službeno ga provjeri i spremi uz račun u podmapu <span className="f-mono">XRechnung</span>. Račun se ne šalje kupcu.
+        </div>
+        {!most.povezan && <div style={{ fontSize: 12.5, color: "var(--rust)", marginBottom: 10 }}>Most trenutno ne radi pa zadatak čeka dok se ne pokrene na uredskom računalu.</div>}
+        {greskaVeze && <div style={{ fontSize: 12.5, color: "var(--rust)", marginBottom: 10 }}>{greskaVeze}</div>}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+          <Field label="Projekt">
+            <select className="select" value={projektId} onChange={(e) => odaberiProjekt(e.target.value)}>
+              <option value="">— Odaberi —</option>
+              {projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
+            </select>
+            {projekt && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 3 }}>Kupac: {kupac?.naziv || "—"} · mapa: {projekt.mapa ? <span className="f-mono">{projekt.mapa}</span> : "traži se po šifri projekta"}</div>}
+          </Field>
+          <Field label="E-adresa kupca za račune">
+            <input className="input" type="email" placeholder="npr. e-rechnung@kupac.de" value={eAdresa} onChange={(e) => setEAdresa(e.target.value)} />
+            {eAdresa.trim() && !emailOk && <div style={{ fontSize: 11.5, color: "var(--rust)", marginTop: 3 }}>E-adresa nije ispravna.</div>}
+          </Field>
+          <Field label="Referenca kupca (Käuferreferenz)">
+            <input className="input" placeholder="npr. broj narudžbe ili projekta kupca" value={referenca} onChange={(e) => setReferenca(e.target.value)} />
+            <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 3 }}>Ako ostane prazno, uzima se broj projekta s računa.</div>
+          </Field>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginTop: 12 }}>
+          <Btn variant="primary" icon={FileText} onClick={kreiraj} disabled={!mozeMijenjati || !projekt || !emailOk || aktivan || salje}>{salje ? "Šaljem…" : "Kreiraj XRechnung"}</Btn>
+          <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 6 }}><input type="checkbox" checked={zapamti} onChange={(e) => setZapamti(e.target.checked)} /> Zapamti e-adresu i referencu za ovaj projekt</label>
+          {aktivan && <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Za ovaj projekt već postoji zadatak koji čeka ili se obrađuje.</span>}
+          {!mozeMijenjati && <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Nemaš ovlaštenje za izradu XRechnunga.</span>}
+        </div>
+      </div>
+
+      {z && (
+        <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+            <strong>{z.sifra}</strong>
+            {s?.racun && <span>· račun <span className="f-mono">{s.racun}</span> od {fmtDate(s.datum)}</span>}
+            <Badge status={z.status} />
+            {z.rezultat?.probno && <span className="badge badge-warning">probni način — ništa nije spremljeno na Z:</span>}
+            {z.status === "Čeka" && mozeMijenjati && <Btn size="sm" onClick={() => otkazi(z)}>Otkaži</Btn>}
+          </div>
+          {(z.status === "Čeka" || z.status === "Obrada") && <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}><Clock size={12} style={{ verticalAlign: "-1px" }} /> {z.status === "Čeka" ? "Čeka da most preuzme zadatak…" : "Most obrađuje račun…"}</div>}
+          {s && (
+            <table className="erp-table" style={{ maxWidth: 560, marginBottom: 10 }}>
+              <tbody>
+                <tr><td>Kupac</td><td>{s.kupac}</td></tr>
+                <tr><td>Način</td><td>{s.nacin}</td></tr>
+                <tr><td>Izvedba ovog računa</td><td className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(s.razdoblje)}</td></tr>
+                {s.kumulativ != null && <tr><td>Kumulativ (ukupno izvedeno)</td><td className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(s.kumulativ)}</td></tr>}
+                {s.avans != null && <tr><td>Odbijeni dio avansa na ovom računu</td><td className="f-mono" style={{ textAlign: "right" }}>− {fmtCurDec(s.avans)}</td></tr>}
+                <tr style={{ fontWeight: 700 }}><td>Za platiti (iznos u XRechnungu)</td><td className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(s.zaPlatiti)}</td></tr>
+              </tbody>
+            </table>
+          )}
+          {z.rezultat?.validacija && (
+            <div style={{ marginBottom: 10, fontSize: 13 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, color: z.rezultat.validacija.ocjena === "Valjano" ? "var(--moss, #2E7D4F)" : "var(--rust)" }}>
+                {z.rezultat.validacija.ocjena === "Valjano" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
+                Službena provjera (KoSIT, XRechnung 3.0.2): {z.rezultat.validacija.ocjena === "Valjano" ? "bez grešaka i upozorenja" : z.rezultat.validacija.ocjena}
+              </div>
+              {z.rezultat.validacija.greske.map((g, i) => <div key={i} style={{ fontSize: 12.5, color: "var(--rust)", marginLeft: 21 }}>{g.id}: {g.tekst}</div>)}
+              {z.rezultat.validacija.upozorenja.map((g, i) => <div key={i} style={{ fontSize: 12.5, color: "var(--ink-soft)", marginLeft: 21 }}>Upozorenje {g.id}: {g.tekst}</div>)}
+            </div>
+          )}
+          {(z.rezultat?.kontrole || []).length > 0 && (
+            <div style={{ fontSize: 12.5, marginBottom: 10 }}>
+              {z.rezultat.kontrole.map((k, i) => <div key={i} style={{ color: k.ok ? "var(--ink-soft)" : "var(--rust)" }}>{k.ok ? "✓" : "✗"} {k.opis}</div>)}
+            </div>
+          )}
+          {(z.rezultat?.poruke || []).map((p, i) => <div key={i} style={{ fontSize: 12.5, color: z.status === "Greška" ? "var(--rust)" : "var(--ink-soft)" }}>{z.status === "Greška" ? "✗ " : "• "}{p}</div>)}
+          {(z.rezultat?.datoteke || []).length > 0 && (
+            <div style={{ marginTop: 10, fontSize: 12.5 }}>
+              <div className="label" style={{ marginBottom: 4 }}>Spremljene datoteke</div>
+              {z.rezultat.datoteke.map((d) => <div key={d.putanja} className="f-mono" style={{ fontSize: 11.5 }}>{d.naziv}</div>)}
+              {z.rezultat.izlaznaMapa && <div style={{ marginTop: 4, wordBreak: "break-all" }}><span className="f-mono" style={{ fontSize: 11.5 }}>{z.rezultat.izlaznaMapa}</span> <MapaGumbi putanja={z.rezultat.izlaznaMapa} /></div>}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="label" style={{ marginBottom: 6 }}>Zadnji zadaci</div>
+      {zadaci.length === 0 ? <EmptyState text="Još nema zadataka (popis se briše kad se ERP poslužitelj ponovno pokrene)." /> : (
+        <table className="erp-table">
+          <thead><tr><th>Vrijeme</th><th>Projekt</th><th>Račun</th><th>Status</th><th style={{ textAlign: "right" }}>Za platiti</th><th>Zadao/la</th></tr></thead>
+          <tbody>
+            {zadaci.map((q) => (
+              <tr key={q.id} onClick={() => setOtvoren(q.id)} style={{ cursor: "pointer", background: q.id === z?.id ? "var(--surface-alt)" : undefined }}>
+                <td>{vrijeme(q.kreirano)}</td>
+                <td className="f-mono">{q.sifra}</td>
+                <td className="f-mono">{q.rezultat?.sazetak?.racun || "—"}</td>
+                <td><Badge status={q.status} /></td>
+                <td className="f-mono" style={{ textAlign: "right" }}>{q.rezultat?.sazetak?.zaPlatiti != null ? fmtCurDec(q.rezultat.sazetak.zaPlatiti) : "—"}</td>
+                <td>{q.kreiraoIme}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 // Jedna stranica za dva modula: "otpremnice" (Otpremnice i CMR) i "fakturiranje" (Financije:
 // fakture, podloge za fakturu, nedovršena proizvodnja, analiza projekata, produktivnost).
 function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, showToast, mojaPozicija, mojId }) {
@@ -14233,6 +14411,7 @@ function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, sh
   const mozeNedovrsenu = dozvolaZaKarticu(mojaPozicija, "fakturiranje", "nedovrsena").izmjene;
   const mozeProduktivnost = dozvolaZaKarticu(mojaPozicija, "fakturiranje", "produktivnost").izmjene;
   const mozeProjekciju = dozvolaZaKarticu(mojaPozicija, "fakturiranje", "projekcija").izmjene;
+  const mozeXrechnung = dozvolaZaKarticu(mojaPozicija, "fakturiranje", "xrechnung").izmjene;
   const [analiza, setAnaliza] = useState(null); // završeni projekt otvoren za analizu plan/stvarno
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
@@ -14280,6 +14459,7 @@ function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, sh
       {tab === "cmr" && <CmrTab db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeCmr} mojId={mojId} />}
       {tab === "podloge" && <PodlogeZaFakturuTab db={db} update={update} showToast={showToast} mozeMijenjati={mozePodloge} mozeFakture={mozeFakture} onNapraviFakturu={otvoriFakturuIzPodloge} />}
       {tab === "fakturirano" && <FakturiranoPoMjesecimaTab db={db} />}
+      {tab === "xrechnung" && <XRechnungTab db={db} update={update} showToast={showToast} mozeMijenjati={mozeXrechnung} />}
       {tab === "nedovrsena" && <NedovrsenaProizvodnjaView db={db} update={update} showToast={showToast} mozeMijenjati={mozeNedovrsenu} mojId={mojId} />}
       {tab === "produktivnost" && <ProduktivnostView db={db} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeProduktivnost} />}
       {tab === "projekcija" && <ProjekcijaView db={db} update={update} showToast={showToast} mozeMijenjati={mozeProjekciju} mojId={mojId} />}
