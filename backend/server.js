@@ -356,11 +356,18 @@ async function autorizacijaPisanja(req, res, next) {
   next();
 }
 
+// ---------- Tko se smije prijaviti u aplikaciju ----------
+// Oznaka zaposlenik.prijavaUAplikaciju (uređuje se u Zaposlenici → "Izbornik za prijavu", ruta PUT /api/zaposlenici/prijava):
+// false = nije u padajućem izborniku za prijavu i ne može se prijaviti. Bez oznake (stari zapisi) = dopušteno, da uvođenje
+// ne zaključa nikoga; novi zaposlenik dobiva false (vidi PUT /api/data/zaposlenici). Kiosk (kartica) na ovo ne utječe.
+const smijeUAplikaciju = (z) => !!z && z.status !== "Neaktivan" && z.prijavaUAplikaciju !== false;
+const imaLozinku = (z) => !!(z.lozinkaHash || z.pinHash || (typeof z.pin === "string" && z.pin));
+
 // ---------- Popis zaposlenika za login ekran (bez PIN-a/pinHash-a, ne treba token — koristi se za padajući izbornik prije prijave) ----------
 app.get("/api/auth/zaposlenici", async (req, res) => {
   const zaposlenici = (await ucitajKljuc("zaposlenici")) || [];
   const lista = zaposlenici
-    .filter((z) => z.status === "Aktivan")
+    .filter((z) => z.status === "Aktivan" && z.prijavaUAplikaciju !== false)
     .map((z) => ({ id: z.id, ime: z.ime, prezime: z.prezime })) // pozicija se ne otkriva prije prijave (izbornik je ne koristi)
     .sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr"));
   res.json(lista);
@@ -384,15 +391,15 @@ app.post("/api/auth/login", async (req, res) => {
   if (neuspjeliLogin.blokiran(ip)) return res.status(429).json({ error: "Previše neuspjelih pokušaja s ove adrese. Pokušaj ponovno za nekoliko minuta." });
   const zaposlenici = (await ucitajKljuc("zaposlenici")) || [];
   const zaposlenik = zaposlenici.find((z) => z.id === zaposlenikId);
-  if (!zaposlenik) { neuspjeliLogin.zabiljezi(ip); return res.status(401).json({ error: "Nepoznat zaposlenik." }); }
+  // Zaposlenik kojemu je prijava isključena odgovara kao da ne postoji (ne otkriva se da je to valjan račun).
+  if (!zaposlenik || zaposlenik.prijavaUAplikaciju === false) { neuspjeliLogin.zabiljezi(ip); return res.status(401).json({ error: "Nepoznat zaposlenik." }); }
 
   const sada = Date.now();
   const pokusaji = (pokusajiLogina.get(zaposlenikId) || []).filter((t) => sada - t < 5 * 60 * 1000);
   if (pokusaji.length >= 5) return res.status(429).json({ error: "Previše pokušaja. Pokušaj ponovno za 5 minuta." });
 
   // Račun bez ikakve lozinke se ne može prijaviti; neaktivan zaposlenik također ne (popis za prijavu ih već izostavlja).
-  const imaLozinku = !!(zaposlenik.lozinkaHash || zaposlenik.pinHash || (typeof zaposlenik.pin === "string" && zaposlenik.pin));
-  if (!imaLozinku) return res.status(401).json({ error: "Za ovaj račun lozinka još nije postavljena. Obratite se administratoru." });
+  if (!imaLozinku(zaposlenik)) return res.status(401).json({ error: "Za ovaj račun lozinka još nije postavljena. Obratite se administratoru." });
   if (zaposlenik.status === "Neaktivan") return res.status(403).json({ error: "Račun nije aktivan." });
   const ispravan = zaposlenik.lozinkaHash ? await bcrypt.compare(lozinka, zaposlenik.lozinkaHash)
     : zaposlenik.pinHash ? await bcrypt.compare(lozinka, zaposlenik.pinHash)
@@ -419,7 +426,8 @@ function lozinkaJeValjana(lozinka) {
 }
 app.put("/api/zaposlenici/:id/lozinka", autentikacija, async (req, res) => {
   const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
-  if (!dozvolaZaKarticu(pozicija, "zaposlenici", "zaposlenici").izmjene) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za promjenu lozinki." });
+  // pisivo uzima u obzir i je li modul Zaposlenici uopće dodijeljen poziciji (dozvolaZaKarticu sama po zadanom dopušta sve).
+  if (!izracunajDozvoljeneKljuceve(pozicija).pisivo.has("zaposlenici")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za promjenu lozinki." });
 
   const { lozinka } = req.body;
   if (!lozinkaJeValjana(lozinka)) {
@@ -436,6 +444,42 @@ app.put("/api/zaposlenici/:id/lozinka", autentikacija, async (req, res) => {
   });
   await spremiKljuc("zaposlenici", novi);
   res.json({ ok: true });
+});
+
+// ---------- Izbornik za prijavu: tko se smije prijaviti u aplikaciju ----------
+// Prima popis id-eva koji ostaju (svi ostali zaposlenici dobivaju false). Mijenja samo tu oznaku, na trenutnom zapisu u bazi
+// (zaključanom), pa ne može prepisati tuđe izmjene zaposlenika. Zaštita od zaključavanja: pozivatelj ostaje u popisu i barem
+// jedan aktivni glavni administrator s lozinkom mora ostati omogućen.
+app.put("/api/zaposlenici/prijava", autentikacija, async (req, res) => {
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  if (!izracunajDozvoljeneKljuceve(pozicija).pisivo.has("zaposlenici")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za promjenu izbornika za prijavu." });
+  const omoguceni = req.body?.omoguceni;
+  if (!Array.isArray(omoguceni) || omoguceni.length > 1000 || omoguceni.some((id) => typeof id !== "string")) return res.status(400).json({ error: "Neispravan popis zaposlenika." });
+  const skup = new Set(omoguceni);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query("SELECT value FROM app_data WHERE key = 'zaposlenici' FOR UPDATE");
+    const zaposlenici = r.rows[0]?.value || [];
+    const dopusteno = (z) => skup.has(z.id) && z.status !== "Neaktivan";
+    let poruka = null;
+    if (!zaposlenici.some((z) => z.id === req.zaposlenikId && dopusteno(z))) poruka = "Svoj račun ne možeš isključiti iz izbornika za prijavu.";
+    else if (!zaposlenici.some((z) => dopusteno(z) && z.pozicijaId === "poz-administrator" && imaLozinku(z))) poruka = "U izborniku za prijavu mora ostati barem jedan glavni administrator s lozinkom.";
+    if (poruka) { await client.query("ROLLBACK"); return res.status(400).json({ error: poruka }); }
+    const novi = zaposlenici.map((z) => ({ ...z, prijavaUAplikaciju: dopusteno(z) }));
+    await client.query(
+      `INSERT INTO app_data (key, value, updated_at) VALUES ('zaposlenici', $1, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [JSON.stringify(novi)]
+    );
+    await client.query("COMMIT");
+    res.json({ ok: true, omoguceno: novi.filter((z) => z.prijavaUAplikaciju).length });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 });
 
 // ---------- KIOSK prijava dolaska/odlaska (bez potrebe za login/PIN) ----------
@@ -1340,6 +1384,8 @@ app.get("/api/data", autentikacija, async (req, res) => {
   const r = await pool.query("SELECT key, value FROM app_data");
   const stvarno = {};
   r.rows.forEach((row) => { stvarno[row.key] = row.value; });
+  // Otvorena prijava (token vrijedi do 12 h) prestaje čim zaposleniku isključe prijavu ili ga deaktiviraju, najkasnije pri sljedećem učitavanju podataka.
+  if (!smijeUAplikaciju((stvarno.zaposlenici || []).find((z) => z.id === req.zaposlenikId))) return res.status(401).json({ error: "Prijava u aplikaciju nije omogućena za ovaj račun." });
 
   const rezultat = {};
   DOZVOLJENI_KLJUCEVI.forEach((key) => {
@@ -1419,6 +1465,37 @@ app.put("/api/data/:key", autentikacija, async (req, res, next) => {
       await client.query("ROLLBACK").catch(() => {});
       console.error("Greška kod spremanja sati po nalozima:", e);
       return res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+    } finally {
+      client.release();
+    }
+    return res.json({ ok: true });
+  }
+  // Oznaka "prijavaUAplikaciju" mijenja se samo preko PUT /api/zaposlenici/prijava (sa zaštitom od zaključavanja). Preglednik koji je
+  // otvoren odavno šalje cijeli popis bez te oznake (ili sa starom), pa se ovdje za postojeće zaposlenike zadržava ona u bazi, a novi
+  // zaposlenik počinje bez prava prijave dok ga administrator ne označi.
+  if (req.params.key === "zaposlenici") {
+    if (!Array.isArray(req.body)) return res.status(400).json({ error: "Neispravan popis zaposlenika." });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const r = await client.query("SELECT value FROM app_data WHERE key = 'zaposlenici' FOR UPDATE");
+      const stari = new Map((r.rows[0]?.value || []).map((z) => [z.id, z]));
+      const rezultat = req.body.map((z) => {
+        if (!z || typeof z !== "object") return z;
+        const { prijavaUAplikaciju: _poslano, ...ostalo } = z;
+        const prije = stari.get(z.id);
+        if (!prije) return { ...ostalo, prijavaUAplikaciju: false };
+        return prije.prijavaUAplikaciju === undefined ? ostalo : { ...ostalo, prijavaUAplikaciju: prije.prijavaUAplikaciju };
+      });
+      await client.query(
+        `INSERT INTO app_data (key, value, updated_at) VALUES ('zaposlenici', $1, now())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        [JSON.stringify(rezultat)]
+      );
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e;
     } finally {
       client.release();
     }

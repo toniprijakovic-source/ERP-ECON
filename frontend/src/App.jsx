@@ -2506,7 +2506,7 @@ export default function App() {
           {(aktivnaStranica === "projekti" || aktivnaStranica === "ponude") && <ProjektiPage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} patchProjekt={patchProjekt} patchProjekti={patchProjekti} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjektId={otvoriProjektId} ocistiOtvoriProjekt={() => setOtvoriProjektId(null)} otvoriKvalitetu={dopusteniKljucevi.includes("kontrola") ? (id) => { setKkProjektId(id); setPage("kontrola"); } : undefined} />}
           {(aktivnaStranica === "otpremnice" || aktivnaStranica === "fakturiranje") && <FakturiranjePage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} />}
           {aktivnaStranica === "partneri" && <PartneriPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
-          {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} mojaPozicija={mojaPozicija} />}
+          {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} mojaPozicija={mojaPozicija} mojId={prijavljenId} />}
           {aktivnaStranica === "evidencijasati" && <EvidencijaSatiPage db={db} update={update} showToast={showToast} patchEvidencija={patchEvidencija} mojaPozicija={mojaPozicija} pocetak={evidencijaSatiPocetak} ocistiPocetak={() => setEvidencijaSatiPocetak(null)} />}
         </div>
 
@@ -14963,6 +14963,94 @@ function PostaviLozinkuModal({ zaposlenik, onClose, showToast, refetchKljuc }) {
   );
 }
 
+// Izbornik za prijavu: označi koji se zaposlenici vide na ekranu za prijavu i smiju se prijaviti u aplikaciju (kiosk/kartica
+// ne ovisi o tome). Sprema se posebnom rutom PUT /api/zaposlenici/prijava koja mijenja samo tu oznaku.
+function IzbornikPrijaveModal({ db, mojId, onClose, showToast, refetchKljuc }) {
+  const aktivni = useMemo(() => [...db.zaposlenici].filter((z) => z.status === "Aktivan").sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")), [db.zaposlenici]);
+  const pocetno = useMemo(() => new Set(aktivni.filter((z) => z.prijavaUAplikaciju !== false).map((z) => z.id)), [aktivni]);
+  const [odabrani, setOdabrani] = useState(pocetno);
+  const [trazi, setTrazi] = useState("");
+  const [zadnje, setZadnje] = useState(null); // Map id -> zadnja uspješna prijava; vidi je samo glavni administrator
+  const [greska, setGreska] = useState("");
+  const [saljem, setSaljem] = useState(false);
+  useEffect(() => {
+    let aktivno = true;
+    fetch(`${API_URL}/api/aktivnost`, { headers: { Authorization: `Bearer ${localStorage.getItem("erp_token")}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (aktivno && d) setZadnje(new Map((d.zadnjePrijave || []).map((p) => [p.zaposlenik_id, p.zadnja]))); })
+      .catch(() => {});
+    return () => { aktivno = false; };
+  }, []);
+  const pozNaziv = (id) => db.pozicijeZaposlenika.find((p) => p.id === id)?.naziv || "—";
+  const vidljivi = aktivni.filter((z) => `${z.prezime} ${z.ime} ${pozNaziv(z.pozicijaId)}`.toLowerCase().includes(trazi.trim().toLowerCase()));
+  const promijenjeno = aktivni.some((z) => odabrani.has(z.id) !== pocetno.has(z.id));
+  const prebaci = (id) => {
+    if (id === mojId) return;
+    setOdabrani((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+    setGreska("");
+  };
+  const postaviPrikazane = (ukljuceno) => {
+    setOdabrani((s) => { const n = new Set(s); vidljivi.forEach((z) => { if (ukljuceno) n.add(z.id); else if (z.id !== mojId) n.delete(z.id); }); return n; });
+    setGreska("");
+  };
+  const spremi = async () => {
+    setSaljem(true);
+    setGreska("");
+    try {
+      const res = await fetch(`${API_URL}/api/zaposlenici/prijava`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` },
+        body: JSON.stringify({ omoguceni: [...odabrani] }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setGreska(data.error || "Greška pri spremanju."); return; }
+      await refetchKljuc("zaposlenici");
+      showToast(`Izbornik za prijavu spremljen — prijaviti se može ${data.omoguceno} od ${aktivni.length} aktivnih zaposlenika.`);
+      onClose();
+    } catch {
+      setGreska("Greška pri povezivanju s poslužiteljem.");
+    } finally {
+      setSaljem(false);
+    }
+  };
+  return (
+    <Modal wide title="Izbornik za prijavu" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi} disabled={saljem || !promijenjeno}>{saljem ? "Spremanje…" : "Spremi"}</Btn></>}>
+      <p style={{ margin: "0 0 10px", fontSize: 12.5, color: "var(--ink-soft)" }}>
+        Označeni zaposlenici vide se na ekranu za prijavu i mogu se prijaviti u aplikaciju. Ostali se ne prikazuju i ne mogu se prijaviti, a dolazak i odlazak karticom na kiosku radi za sve kao i prije.
+        Prijava isključenog zaposlenika prestaje najkasnije pri sljedećem učitavanju aplikacije. Novi zaposlenik je isključen dok ga ovdje ne označiš.
+      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+        <input className="input" placeholder="Traži ime ili poziciju…" value={trazi} onChange={(e) => setTrazi(e.target.value)} style={{ maxWidth: 240 }} />
+        <Btn size="sm" onClick={() => postaviPrikazane(true)}>Označi prikazane</Btn>
+        <Btn size="sm" onClick={() => postaviPrikazane(false)}>Poništi prikazane</Btn>
+        <span className="f-mono" style={{ fontSize: 12, marginLeft: "auto" }}>Označeno: <strong>{odabrani.size}</strong> od {aktivni.length}</span>
+      </div>
+      <div className="card" style={{ padding: 0, maxHeight: "48vh", overflow: "auto" }}>
+        <table className="erp-table">
+          <thead><tr><th style={{ width: 36 }} /><th>Prezime i ime</th><th>Pozicija</th>{zadnje && <th>Zadnja prijava</th>}<th>Lozinka</th></tr></thead>
+          <tbody>
+            {vidljivi.map((z) => {
+              const ja = z.id === mojId;
+              const zadnja = zadnje?.get(z.id);
+              return (
+                <tr key={z.id} onClick={() => prebaci(z.id)} style={{ cursor: ja ? "default" : "pointer", color: odabrani.has(z.id) ? undefined : "var(--ink-faint)" }}>
+                  <td><input type="checkbox" checked={odabrani.has(z.id)} disabled={ja} onChange={() => prebaci(z.id)} onClick={(e) => e.stopPropagation()} title={ja ? "Svoj račun ne možeš isključiti" : ""} /></td>
+                  <td>{z.prezime} {z.ime}{ja && <span style={{ fontSize: 11, color: "var(--ink-faint)" }}> (ti)</span>}</td>
+                  <td>{pozNaziv(z.pozicijaId)}</td>
+                  {zadnje && <td className="f-mono" style={{ fontSize: 12 }}>{zadnja ? fmtDate(zadnja) : "nikad"}</td>}
+                  <td style={{ fontSize: 11.5, color: z.lozinkaHash ? "var(--green)" : "var(--rust)" }}>{z.lozinkaHash ? "✓" : "nema"}</td>
+                </tr>
+              );
+            })}
+            {vidljivi.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-faint)" }}>Nema rezultata.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {greska && <div style={{ color: "var(--rust)", fontSize: 12.5, marginTop: 10 }}>{greska}</div>}
+    </Modal>
+  );
+}
+
 /* ============================== POSTAVKE PLAĆA ============================== */
 function PostavkePlacaModal({ db, update, showToast, onClose }) {
   const [form, setForm] = useState(db.postavkePlaca);
@@ -17116,7 +17204,7 @@ function EvidencijaSatiPage({ db, update, showToast, patchEvidencija, mojaPozici
   );
 }
 
-function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija }) {
+function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mojId }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "zaposlenici");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "zaposlenici");
   useEffect(() => { if (tab !== "aktivnost" && !dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "zaposlenici"); }, [dozvKartice, tab]);
@@ -17125,6 +17213,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija }) 
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
   const [lozinkaZa, setLozinkaZa] = useState(null);
+  const [izbornikPrijave, setIzbornikPrijave] = useState(false);
 
   const emptyZap = { ime: "", prezime: "", pozicijaId: db.pozicijeZaposlenika[0]?.id || "", email: "", telefon: "", status: "Aktivan", datumZaposlenja: todayISO(), kompetencije: [], rfidKod: "", bodovi: 0, udaljenostKm: 0, koristiPrehranuUTvrtki: false, satnicaKooperant: 0, fiksniMjesecniIznos: 0, naknadaPrijevoz: 0, maticniBroj: "", dodatniStazGodine: 0, radnoVrijeme: "puno" };
   const [zapForm, setZapForm] = useState(emptyZap);
@@ -17145,7 +17234,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija }) 
       const noviId = uid("zap");
       update("zaposlenici", [...db.zaposlenici, { ...zapForm, id: noviId }]);
       setModal(null);
-      showToast("Zaposlenik dodan — postavi mu lozinku za prijavu (gumb \"Lozinka\" u tablici).");
+      showToast("Zaposlenik dodan — za prijavu u aplikaciju postavi mu lozinku (gumb \"Lozinka\") i označi ga u \"Izborniku za prijavu\".");
     }
   };
   const savePoz = () => {
@@ -17186,6 +17275,14 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija }) 
             <div className="card" style={{ padding: "10px 14px", marginBottom: 14, background: "#FDF6E3", borderColor: "#F0C36B", display: "flex", alignItems: "center", gap: 8 }}>
               <AlertTriangle size={15} color="#8A6100" />
               <span style={{ fontSize: 12.5, color: "#6b5511" }}><strong>{db.zaposlenici.filter((z) => !z.lozinkaHash).length}</strong> zaposlenika još nema postavljenu jaku lozinku (koriste stari PIN ili nemaju nikakvu) — postavi im lozinku gumbom "Lozinka" u tablici.</span>
+            </div>
+          )}
+          {mozeZaposlenici && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+              <Btn icon={ShieldCheck} onClick={() => setIzbornikPrijave(true)}>Izbornik za prijavu</Btn>
+              <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
+                Na ekranu za prijavu prikazuje se <strong>{db.zaposlenici.filter((z) => z.status === "Aktivan" && z.prijavaUAplikaciju !== false).length}</strong> od {db.zaposlenici.filter((z) => z.status === "Aktivan").length} aktivnih zaposlenika.
+              </span>
             </div>
           )}
           <EntityPage
@@ -17432,6 +17529,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija }) 
         />
       )}
       {lozinkaZa && <PostaviLozinkuModal zaposlenik={lozinkaZa} showToast={showToast} refetchKljuc={refetchKljuc} onClose={() => setLozinkaZa(null)} />}
+      {izbornikPrijave && <IzbornikPrijaveModal db={db} mojId={mojId} showToast={showToast} refetchKljuc={refetchKljuc} onClose={() => setIzbornikPrijave(false)} />}
     </div>
   );
 }
