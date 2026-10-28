@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { procitajKonplast, izradi, Greska } from "../lib/pretvori.js";
 import { validirajXml } from "../lib/validator.js";
+import { PDFDocument } from "pdf-lib";
 import { napraviPrikazPdf, sigurno } from "../lib/prikaz.js";
 
 const mapa = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -39,6 +40,8 @@ provjeri(abschlag288.xml.includes("<cbc:BuyerReference>10326001-308900-0001</cbc
 const pdfAbschlag = await napraviPrikazPdf(abschlag288.xml);
 const pdfObican = await napraviPrikazPdf((await izradi(racun, { ...ctx, kumulativ: null })).xml);
 provjeri(Buffer.from(pdfAbschlag).subarray(0, 4).toString() === "%PDF" && Buffer.from(pdfObican).subarray(0, 4).toString() === "%PDF", "PDF prikaz: nastaje za Abschlag i za običan račun");
+const brojStranica = async (bajtovi) => (await PDFDocument.load(bajtovi)).getPageCount();
+provjeri((await brojStranica(pdfAbschlag)) === 2, `PDF prikaz Abschlaga ima 2 stranice: račun + tablica kumulativa (${await brojStranica(pdfAbschlag)})`);
 provjeri(sigurno("Čakovec, Đurđevac, Šupljika — ž") === "Cakovec, Djurdjevac, Šupljika — ž", `PDF prikaz: znakovi izvan WinAnsi zamijenjeni, š/ž/— ostaju (${sigurno("Čakovec, Đurđevac")})`);
 
 // 2) Običan račun (bez kumulativa): iznos za platiti je Konplastov

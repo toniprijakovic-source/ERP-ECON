@@ -154,8 +154,18 @@ export async function napraviPrikazPdf(xmlTekst) {
   const napomene = niz(inv.Note).map(tekst).filter(Boolean);
   if (napomene.length) { naslovOdjeljka("Bemerkung"); for (const n of napomene) blok(n, L + 3, SIRINA - 6); }
   if (prilozi.length) {
-    naslovOdjeljka("Anlagen (in der XML-Datei enthalten)");
+    naslovOdjeljka("Anlagen (in der XML-Datei enthalten; im Anschluss abgebildet)");
     for (const p of prilozi) blok(`${p.naziv}${p.opis ? ` — ${p.opis}` : ""}`, L + 3, SIRINA - 6);
+  }
+
+  // Priloženi PDF-ovi (npr. Zahlungsspezifikation s tablicom kumulativa) dodaju se kao sljedeće stranice, da se vidi sve što primatelj dobiva.
+  for (const r of niz(inv.AdditionalDocumentReference)) {
+    const objekt = r.Attachment?.EmbeddedDocumentBinaryObject;
+    if (!objekt || !/pdf/i.test(objekt["@_mimeCode"] || "")) continue;
+    try {
+      const prilog = await PDFDocument.load(Buffer.from(tekst(objekt).replace(/\s+/g, ""), "base64"));
+      (await pdf.copyPages(prilog, prilog.getPageIndices())).forEach((p) => pdf.addPage(p));
+    } catch { /* neispravan prilog se u prikazu preskače; XML ostaje mjerodavan */ }
   }
   return pdf.save();
 }
