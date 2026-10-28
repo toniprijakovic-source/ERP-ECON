@@ -799,7 +799,7 @@ const mostAutentikacija = (req, res, next) => {
   next();
 };
 const xrDozvola = async (req) => izracunajDozvoljeneKljuceve(await ucitajPozicijuZaposlenika(req.zaposlenikId));
-const xrJavni = (z) => ({ id: z.id, vrsta: z.vrsta, projektId: z.projektId, sifra: z.sifra, naziv: z.naziv, eAdresa: z.eAdresa, referenca: z.referenca, status: z.status, kreiraoIme: z.kreiraoIme, kreirano: z.kreirano, zavrseno: z.zavrseno || null, rezultat: z.rezultat || null });
+const xrJavni = (z) => ({ id: z.id, vrsta: z.vrsta, racunBroj: z.racunBroj, projektId: z.projektId, sifra: z.sifra, naziv: z.naziv, eAdresa: z.eAdresa, referenca: z.referenca, status: z.status, kreiraoIme: z.kreiraoIme, kreirano: z.kreirano, zavrseno: z.zavrseno || null, rezultat: z.rezultat || null });
 const xrTekst = (v, max) => String(v ?? "").slice(0, max);
 // Postavke kumulativa (ugovor, avans, prijašnji računi) — poslužitelj samo ograničava oblik i duljine; brojeve i smislenost provjerava most.
 const xrIznos = (v) => (typeof v === "number" && Number.isFinite(v) ? v : xrTekst(v, 30));

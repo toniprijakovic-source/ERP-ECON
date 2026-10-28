@@ -14264,6 +14264,10 @@ function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
   const [kum, setKum] = useState(PRAZAN_KUM);
   const [kumCekanje, setKumCekanje] = useState(null); // { id, vrsta } dok most obrađuje zahtjev za čitanje/spremanje kumulativa
   const [kumInfo, setKumInfo] = useState("");
+  const [popis, setPopis] = useState([]);                // izrađeni XRechnungi odabranog projekta
+  const [popisInfo, setPopisInfo] = useState("");
+  const [popisCekanje, setPopisCekanje] = useState(null); // { id, projektId } dok most čita popis
+  const [brisanje, setBrisanje] = useState(null);         // XRechnung za koji se traži potvrda brisanja
   const zaglavlje = () => ({ "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` });
 
   const projekti = useMemo(() => [...db.projekti].sort((a, b) => usporediPrirodno(b.sifra, a.sifra)), [db.projekti]);
@@ -14295,7 +14299,9 @@ function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
   useEffect(() => { osvjezi(); const t = setInterval(osvjezi, 4000); return () => clearInterval(t); }, []);
 
   const emailOk = EMAIL_RE.test(eAdresa.trim());
-  const aktivan = zadaci.some((z) => z.projektId === projektId && (z.status === "Čeka" || z.status === "Obrada"));
+  // Zadaci "popis izrađenih XRechnunga" samo čitaju: ne prikazuju se u tablici zadataka i ne blokiraju izradu.
+  const prikazani = zadaci.filter((q) => q.vrsta !== "xrechnung-popis");
+  const aktivan = prikazani.some((z) => z.projektId === projektId && (z.status === "Čeka" || z.status === "Obrada"));
   // Zašto zadatak za sada ne može nastati (prikazuje se uz gumb, a klik na gumb ga javi i kao poruku — gumb nikad nije "mrtav").
   const razlog = !projekt ? "Odaberi projekt."
     : !eAdresa.trim() ? "Upiši e-adresu kupca za račune."
@@ -14364,7 +14370,50 @@ function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
     return g > 0 && v >= 0 ? Math.round((v / g) * 1000) / 10 : null;
   })();
 
-  const z = zadaci.find((q) => q.id === otvoren) || zadaci[0];
+  // Izrađeni XRechnungi odabranog projekta: most ih čita s diska (zadatak "xrechnung-popis"); brisanje premješta datoteke u _obrisano.
+  const osvjeziPopis = async (pid) => {
+    if (!pid) return;
+    try {
+      const res = await fetch(`${API_URL}/api/xrechnung/zadaci`, { method: "POST", headers: zaglavlje(), body: JSON.stringify({ projektId: pid, vrsta: "xrechnung-popis" }) });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) { setPopisCekanje({ id: data.zadatak.id, projektId: pid }); setPopisInfo("Čitam popis izrađenih XRechnunga…"); } else setPopisInfo("");
+    } catch { setPopisInfo(""); }
+  };
+  useEffect(() => { setPopis([]); setPopisInfo(""); setPopisCekanje(null); if (projektId) osvjeziPopis(projektId); }, [projektId]);
+  useEffect(() => {
+    if (!popisCekanje) return;
+    const q = zadaci.find((x) => x.id === popisCekanje.id);
+    if (!q || q.status === "Čeka" || q.status === "Obrada") return;
+    setPopisCekanje(null);
+    if (q.status === "Gotovo" && popisCekanje.projektId === projektId) { setPopis(q.rezultat?.xrechnungi || []); setPopisInfo(""); }
+    else setPopisInfo(q.status === "Gotovo" ? "" : (q.rezultat?.poruke?.[0] || "Popis se nije mogao pročitati."));
+  }, [zadaci, popisCekanje]);
+  // Kad se završi izrada ili brisanje XRechnunga za odabrani projekt, popis se sam osvježi.
+  const vidjeniZavrseni = useRef(new Set());
+  useEffect(() => {
+    for (const q of zadaci) {
+      if (!["xrechnung", "xrechnung-obrisi"].includes(q.vrsta) || ["Čeka", "Obrada"].includes(q.status) || vidjeniZavrseni.current.has(q.id)) continue;
+      vidjeniZavrseni.current.add(q.id);
+      if (q.projektId === projektId) osvjeziPopis(projektId);
+    }
+  }, [zadaci]);
+  const potvrdiBrisanjeXr = async () => {
+    const x = brisanje;
+    setBrisanje(null);
+    if (!x || !projekt) return;
+    if (!mozeMijenjati) { showToast("Nemaš ovlaštenje za brisanje XRechnunga."); return; }
+    if (aktivan) { showToast("Za ovaj projekt već postoji zadatak koji čeka ili se obrađuje."); return; }
+    try {
+      const res = await fetch(`${API_URL}/api/xrechnung/zadaci`, { method: "POST", headers: zaglavlje(), body: JSON.stringify({ projektId, vrsta: "xrechnung-obrisi", racunBroj: x.broj }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { showToast(data.error || "Greška pri slanju zahtjeva za brisanje."); return; }
+      setOtvoren(data.zadatak.id);
+      showToast("Zahtjev za brisanje je poslan mostu.");
+      osvjezi();
+    } catch { showToast("Greška pri brisanju — provjeri internetsku vezu."); }
+  };
+
+  const z = prikazani.find((q) => q.id === otvoren) || prikazani[0];
   const s = z?.rezultat?.sazetak;
   const vrijeme = (iso) => (iso ? new Date(iso).toLocaleString("hr-HR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
   return (
@@ -14460,6 +14509,46 @@ function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
         )}
       </div>
 
+      {projekt && (
+        <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
+            <strong style={{ fontSize: 14 }}>Izrađeni XRechnungi — {projekt.sifra}</strong>
+            <Btn size="sm" onClick={() => osvjeziPopis(projektId)} disabled={!!popisCekanje}>Osvježi popis</Btn>
+            {popisInfo && <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>{popisInfo}</span>}
+          </div>
+          {popis.length === 0 && !popisCekanje ? (
+            <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Za ovaj projekt još nema izrađenih XRechnunga (ili most nije mogao pročitati mapu računa).</div>
+          ) : popis.length > 0 && (
+            <table className="erp-table">
+              <thead><tr><th>Račun</th><th>Datum</th><th>Kupac / e-adresa</th><th style={{ textAlign: "right" }}>Za platiti</th><th>Stanje</th><th>Datoteke</th><th style={{ width: 44 }} /></tr></thead>
+              <tbody>
+                {popis.map((x) => (
+                  <tr key={`${x.mapa}|${x.broj}`}>
+                    <td className="f-mono">{x.broj}</td>
+                    <td>{fmtDate(x.datum)}</td>
+                    <td>{x.kupac}<div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>{x.eAdresa}</div></td>
+                    <td className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(x.zaPlatiti)}</td>
+                    <td>{x.valjan ? <span className="badge badge-success">valjan</span> : <span className="badge badge-danger">nevaljan</span>}<div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>{x.promijenjeno ? new Date(x.promijenjeno).toLocaleString("hr-HR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""}</div></td>
+                    <td style={{ fontSize: 11.5 }}>{x.datoteke.length} {x.mapa && <MapaGumbi putanja={x.mapa} oznaka="Mapa" />}</td>
+                    <td>{mozeMijenjati && <button className="btn btn-icon btn-ghost" title="Obriši XRechnung" onClick={() => setBrisanje(x)}><Trash2 size={14} color="var(--rust)" /></button>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+      {brisanje && (
+        <Modal title="Brisanje XRechnunga" onClose={() => setBrisanje(null)} footer={<><Btn variant="ghost" onClick={() => setBrisanje(null)}>Odustani</Btn><Btn variant="danger" icon={Trash2} onClick={potvrdiBrisanjeXr}>Obriši</Btn></>}>
+          <p style={{ fontSize: 14, color: "var(--ink-soft)" }}>Obrisati XRechnung za račun <strong style={{ color: "var(--ink)" }}>{brisanje.broj}</strong> ({brisanje.kupac})?</p>
+          <ul style={{ fontSize: 13, color: "var(--ink-soft)", margin: "8px 0 0 18px" }}>
+            <li>Datoteke ({brisanje.datoteke.length}) se <strong>ne brišu trajno</strong>, nego premještaju u podmapu <span className="f-mono">_obrisano</span> pored njih.</li>
+            <li>Ako je to zadnji račun u kumulativu projekta, uklanja se iz niza (sigurnosna kopija ostaje), pa sljedeći račun računa od prethodnog.</li>
+            <li>Konplastov račun i PDF koji je već poslan kupcu ostaju netaknuti.</li>
+          </ul>
+        </Modal>
+      )}
+
       {z && (
         <div className="card" style={{ padding: 14, marginBottom: 14 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
@@ -14513,15 +14602,15 @@ function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
       )}
 
       <div className="label" style={{ marginBottom: 6 }}>Zadnji zadaci</div>
-      {zadaci.length === 0 ? <EmptyState text="Još nema zadataka (popis se briše kad se ERP poslužitelj ponovno pokrene)." /> : (
+      {prikazani.length === 0 ? <EmptyState text="Još nema zadataka (popis se briše kad se ERP poslužitelj ponovno pokrene)." /> : (
         <table className="erp-table">
           <thead><tr><th>Vrijeme</th><th>Projekt</th><th>Račun</th><th>Status</th><th style={{ textAlign: "right" }}>Za platiti</th><th>Zadao/la</th></tr></thead>
           <tbody>
-            {zadaci.map((q) => (
+            {prikazani.map((q) => (
               <tr key={q.id} onClick={() => setOtvoren(q.id)} style={{ cursor: "pointer", background: q.id === z?.id ? "var(--surface-alt)" : undefined }}>
                 <td>{vrijeme(q.kreirano)}</td>
                 <td className="f-mono">{q.sifra}</td>
-                <td className="f-mono">{q.rezultat?.sazetak?.racun || (q.vrsta === "kumulativ-citaj" ? "čitanje kumulativa" : q.vrsta === "kumulativ-spremi" ? "spremanje kumulativa" : "—")}</td>
+                <td className="f-mono">{q.rezultat?.sazetak?.racun || (q.vrsta === "kumulativ-citaj" ? "čitanje kumulativa" : q.vrsta === "kumulativ-spremi" ? "spremanje kumulativa" : q.vrsta === "xrechnung-obrisi" ? `brisanje ${q.racunBroj || ""}` : "—")}</td>
                 <td><Badge status={q.status} /></td>
                 <td className="f-mono" style={{ textAlign: "right" }}>{q.rezultat?.sazetak?.zaPlatiti != null ? fmtCurDec(q.rezultat.sazetak.zaPlatiti) : "—"}</td>
                 <td>{q.kreiraoIme}</td>
