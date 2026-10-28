@@ -14,8 +14,45 @@ const crypto = require("crypto");
 require("dotenv").config();
 
 const app = express();
+app.disable("x-powered-by");
+// Render (Cloudflare + balanser) stoji ispred poslužitelja; req.ip je tako adresa koju vidi prvi posrednik, a ne adresa balansera.
+app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
+app.use((req, res, next) => { res.setHeader("X-Content-Type-Options", "nosniff"); next(); });
+
+// Express 4 ne hvata greške iz async ruta: odbijeno obećanje (npr. bcrypt.compare bez lozinke) ostaje neuhvaćeno i u Nodeu 15+
+// RUŠI CIJELI PROCES — jedan neispravan zahtjev bez prijave bi spustio ERP i kiosk. Zato se svaka funkcija predana
+// app.get/post/put/patch/delete omota tako da greška ide u zajednički error handler na kraju (JSON 500) umjesto rušenja.
+["get", "post", "put", "patch", "delete"].forEach((metoda) => {
+  const izvorna = app[metoda].bind(app);
+  app[metoda] = (...args) => {
+    if (metoda === "get" && args.length === 1) return izvorna(...args); // app.get("postavka")
+    return izvorna(...args.map((a) => (typeof a !== "function" ? a : (req, res, next) => {
+      try {
+        const r = a(req, res, next);
+        if (r && typeof r.catch === "function") r.catch(next);
+      } catch (e) { next(e); }
+    })));
+  };
+});
+
+// Adresa klijenta za ograničenja pokušaja. Na Renderu svaki zahtjev prolazi kroz Cloudflare, koji CF-Connecting-IP uvijek
+// sam postavi (klijentova vrijednost se prepisuje); inače (lokalno) vrijedi req.ip. Prvi unos X-Forwarded-For se NE koristi
+// jer ga klijent može lažirati.
+const klijentIp = (req) => String(req.headers["cf-connecting-ip"] || req.ip || req.socket.remoteAddress || "nepoznat").trim();
+// Brojač NEUSPJELIH pokušaja po adresi u kliznom prozoru (u memoriji; restart ga briše, ali restart se više ne može izazvati zahtjevom).
+const brojacNeuspjelih = (maxPokusaja, prozorMs) => {
+  const mapa = new Map();
+  setInterval(() => { const sada = Date.now(); mapa.forEach((t, k) => { const ostaju = t.filter((x) => sada - x < prozorMs); if (ostaju.length) mapa.set(k, ostaju); else mapa.delete(k); }); }, prozorMs).unref();
+  const nedavni = (k) => (mapa.get(k) || []).filter((x) => Date.now() - x < prozorMs);
+  return {
+    blokiran: (k) => nedavni(k).length >= maxPokusaja,
+    zabiljezi: (k) => { if (mapa.size > 20000) mapa.clear(); mapa.set(k, [...nedavni(k), Date.now()]); },
+  };
+};
+const neuspjeliLogin = brojacNeuspjelih(30, 10 * 60 * 1000); // ukupno po adresi, preko svih računa (uz postojećih 5 po računu)
+const neuspjeliKiosk = brojacNeuspjelih(30, 10 * 60 * 1000); // neprepoznate kartice po adresi
 
 // ---------- Evidencija aktivnosti u aplikaciji (vidi tablicu aktivnost_dan; pregled samo za glavnog administratora) ----------
 // Izmjene: svaki uspješan upis (PUT/POST/DELETE) prijavljenog korisnika broji se po danu i po ključu podataka. Ne bilježe se
@@ -300,7 +337,7 @@ function autentikacija(req, res, next) {
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: "Nedostaje token." });
   try {
-    req.zaposlenikId = jwt.verify(token, JWT_SECRET).zaposlenikId;
+    req.zaposlenikId = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] }).zaposlenikId;
     next();
   } catch {
     return res.status(401).json({ error: "Token nije valjan ili je istekao." });
@@ -324,7 +361,7 @@ app.get("/api/auth/zaposlenici", async (req, res) => {
   const zaposlenici = (await ucitajKljuc("zaposlenici")) || [];
   const lista = zaposlenici
     .filter((z) => z.status === "Aktivan")
-    .map((z) => ({ id: z.id, ime: z.ime, prezime: z.prezime, pozicijaId: z.pozicijaId }))
+    .map((z) => ({ id: z.id, ime: z.ime, prezime: z.prezime })) // pozicija se ne otkriva prije prijave (izbornik je ne koristi)
     .sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr"));
   res.json(lista);
 });
@@ -336,16 +373,27 @@ app.get("/api/auth/zaposlenici", async (req, res) => {
 // zaključavanja svih dok im netko ne postavi novu lozinku (vidi PUT .../lozinka).
 const pokusajiLogina = new Map(); // zaposlenikId -> [timestamps]
 app.post("/api/auth/login", async (req, res) => {
-  const { zaposlenikId } = req.body;
-  const lozinka = req.body.lozinka ?? req.body.pin;
+  const zaposlenikId = req.body?.zaposlenikId;
+  const lozinka = req.body?.lozinka ?? req.body?.pin;
+  // Oba polja moraju biti tekst: bez lozinke se prije izvršavala usporedba undefined === undefined (račun bez lozinke je
+  // prihvaćao prijavu) odnosno bcrypt.compare bacao grešku koja je rušila poslužitelj.
+  if (typeof zaposlenikId !== "string" || zaposlenikId.length > 100 || typeof lozinka !== "string" || !lozinka || lozinka.length > 200) {
+    return res.status(400).json({ error: "Odaberite zaposlenika i unesite lozinku." });
+  }
+  const ip = klijentIp(req);
+  if (neuspjeliLogin.blokiran(ip)) return res.status(429).json({ error: "Previše neuspjelih pokušaja s ove adrese. Pokušaj ponovno za nekoliko minuta." });
   const zaposlenici = (await ucitajKljuc("zaposlenici")) || [];
   const zaposlenik = zaposlenici.find((z) => z.id === zaposlenikId);
-  if (!zaposlenik) return res.status(401).json({ error: "Nepoznat zaposlenik." });
+  if (!zaposlenik) { neuspjeliLogin.zabiljezi(ip); return res.status(401).json({ error: "Nepoznat zaposlenik." }); }
 
   const sada = Date.now();
   const pokusaji = (pokusajiLogina.get(zaposlenikId) || []).filter((t) => sada - t < 5 * 60 * 1000);
   if (pokusaji.length >= 5) return res.status(429).json({ error: "Previše pokušaja. Pokušaj ponovno za 5 minuta." });
 
+  // Račun bez ikakve lozinke se ne može prijaviti; neaktivan zaposlenik također ne (popis za prijavu ih već izostavlja).
+  const imaLozinku = !!(zaposlenik.lozinkaHash || zaposlenik.pinHash || (typeof zaposlenik.pin === "string" && zaposlenik.pin));
+  if (!imaLozinku) return res.status(401).json({ error: "Za ovaj račun lozinka još nije postavljena. Obratite se administratoru." });
+  if (zaposlenik.status === "Neaktivan") return res.status(403).json({ error: "Račun nije aktivan." });
   const ispravan = zaposlenik.lozinkaHash ? await bcrypt.compare(lozinka, zaposlenik.lozinkaHash)
     : zaposlenik.pinHash ? await bcrypt.compare(lozinka, zaposlenik.pinHash)
     : lozinka === zaposlenik.pin;
@@ -353,10 +401,11 @@ app.post("/api/auth/login", async (req, res) => {
   if (!ispravan) {
     pokusaji.push(sada);
     pokusajiLogina.set(zaposlenikId, pokusaji);
+    neuspjeliLogin.zabiljezi(ip);
     return res.status(401).json({ error: "Pogrešna lozinka." });
   }
   pokusajiLogina.delete(zaposlenikId);
-  const token = jwt.sign({ zaposlenikId }, JWT_SECRET, { expiresIn: "12h" });
+  const token = jwt.sign({ zaposlenikId }, JWT_SECRET, { expiresIn: "12h", algorithm: "HS256" });
   res.json({ token, zaposlenik: { id: zaposlenik.id, ime: zaposlenik.ime, prezime: zaposlenik.prezime, pozicijaId: zaposlenik.pozicijaId } });
 });
 
@@ -392,8 +441,14 @@ app.put("/api/zaposlenici/:id/lozinka", autentikacija, async (req, res) => {
 // ---------- KIOSK prijava dolaska/odlaska (bez potrebe za login/PIN) ----------
 const KIOSK_BLOKADA_MIN = 3;
 app.post("/api/kiosk/scan", async (req, res) => {
-  const kod = (req.body.rfidKod || "").trim().toUpperCase();
+  // rfidKod mora biti tekst (broj ili objekt je prije rušio poslužitelj); neprepoznate kartice se broje po adresi
+  // da se kodovi ne mogu pogađati.
+  const sirovi = req.body?.rfidKod;
+  if (sirovi != null && (typeof sirovi !== "string" || sirovi.length > 40)) return res.status(400).json({ error: "Kartica nije prepoznata." });
+  const kod = (sirovi || "").trim().toUpperCase();
   if (!kod) return res.status(404).json({ error: "Kartica nije prepoznata." });
+  const ipKiosk = klijentIp(req);
+  if (neuspjeliKiosk.blokiran(ipKiosk)) return res.status(429).json({ error: "Previše neprepoznatih kartica — pokušaj ponovno za nekoliko minuta." });
   // Brzina je bitna (osoba čeka ispred čitača), a svaki upit prema bazi košta mrežno putovanje —
   // zato su ovdje samo DVA upita i baza sama filtrira i mijenja samo potrebno (ne prenosi se cijela
   // evidencija ni popis zaposlenika):
@@ -412,7 +467,7 @@ app.post("/api/kiosk/scan", async (req, res) => {
         [kod]
       );
       const red = r.rows[0];
-      if (!red) return res.status(404).json({ error: "Kartica nije prepoznata." });
+      if (!red) { neuspjeliKiosk.zabiljezi(ipKiosk); return res.status(404).json({ error: "Kartica nije prepoznata." }); }
       const zaposlenik = red.zaposlenik;
       const moji = red.moji || [];
       const otvorena = moji.find((e) => !e.vrijemeOdlaska);
@@ -575,7 +630,7 @@ const dimenzijeMaticnog = (z, knjiga, narudzbenice, materijali) => {
   return lotovi.length === kand.length ? dim[lotovi.findIndex((x) => x.id === z.id)] || "" : "";
 };
 app.get("/api/javno/maticni/:broj", async (req, res) => {
-  const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim();
+  const ip = klijentIp(req); // ne prvi unos X-Forwarded-For: klijent ga može lažirati i tako zaobići ograničenje
   const sada = Date.now();
   const nedavni = (javniUpiti.get(ip) || []).filter((t) => sada - t < JAVNO_PROZOR_MS);
   if (nedavni.length >= JAVNO_UPITA) return res.status(429).json({ error: "Previše upita s ovog uređaja — pokušaj ponovno za nekoliko minuta." });
@@ -1560,6 +1615,18 @@ async function migrirajEvidencijaSati() {
     client.release();
   }
 }
+
+// Zajednički error handler: greške iz ruta (vidi omotač async ruta gore) i neispravan JSON u tijelu zahtjeva vraćaju se kao JSON,
+// a poslužitelj ostaje živ.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  const status = Number(err?.status || err?.statusCode);
+  if (status >= 400 && status < 500) return res.status(status).json({ error: status === 413 ? "Zahtjev je prevelik." : "Neispravan zahtjev." });
+  console.error("Greška u ruti:", req.method, req.path, err);
+  res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+});
+// Zadnja zaštita za pozadinske zadatke izvan ruta (satni poslovi): zabilježi i nastavi, ne ruši proces.
+process.on("unhandledRejection", (e) => console.error("Neuhvaćeno odbijeno obećanje:", e));
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
