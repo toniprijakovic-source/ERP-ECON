@@ -26,6 +26,14 @@ provjeri(abschlag.kontrole.every((k) => k.ok), "Abschlag: sve vlastite kontrole 
 provjeri(abschlag.xml.includes('<cbc:PayableAmount currencyID="EUR">24165.31</cbc:PayableAmount>') && abschlag.xml.includes("<cbc:PrepaidAmount currencyID=\"EUR\">10038.74"), "Abschlag: PayableAmount i PrepaidAmount u XML-u");
 provjeri(abschlag.xml.includes("<cbc:ID>K</cbc:ID>") && !abschlag.xml.includes("HRDE814925276") && abschlag.xml.includes("DE814925276"), "PDV oznaka K i ispravan PDV broj kupca");
 
+// 1b) RN 170-288: 1. Abschlagsrechnung s A-Konto avansom (30 %); PDF koji je otišao kupcu ima za platiti 104.692,00
+const racun288 = procitajKonplast(fs.readFileSync(path.join(mapa, "primjeri", "konplast-107-1-8.xml"), "utf8"));
+const cfg288 = JSON.parse(fs.readFileSync(path.join(mapa, "primjeri", "kumulativ-RN-170-288.json"), "utf8"));
+const ctx288 = { ...ctx, referenca: "", sifra: "RN 170-288", kumulativ: cfg288 };
+const abschlag288 = await izradi(racun288, ctx288);
+provjeri(abschlag288.sazetak.zaPlatiti === 104692 && abschlag288.sazetak.avans === 44868, "RN 170-288: za platiti 104.692,00, odbijeni avans 44.868,00 (kao u PDF-u kupcu)");
+provjeri(abschlag288.xml.includes("<cbc:BuyerReference>10326001-308900-0001</cbc:BuyerReference>"), "RN 170-288: referenca kupca iz \"Auftragsnummer\"");
+
 // 2) Običan račun (bez kumulativa): iznos za platiti je Konplastov
 const obican = await izradi(racun, { ...ctx, kumulativ: null });
 provjeri(obican.sazetak.zaPlatiti === 34204.05 && !obican.xml.includes("PrepaidAmount"), "Običan račun: za platiti 34.204,05, bez odbitka avansa");
@@ -43,9 +51,9 @@ try { await izradi(racun, { ...ctx, eAdresa: "", kumulativ: null }); provjeri(fa
 // 4) Službena provjera (preskače se ako nema Jave u mapi alati)
 const java = fs.readdirSync(path.join(mapa, "alati", "java")).map((d) => path.join(mapa, "alati", "java", d, "bin", "java.exe")).find((p) => fs.existsSync(p));
 if (java) {
-  for (const [naziv, ishod] of [["Abschlag", abschlag], ["Običan", obican]]) {
+  for (const [naziv, ishod] of [["Abschlag", abschlag], ["Abschlag 288", abschlag288], ["Običan", obican]]) {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "econ-test-"));
-    const xmlP = path.join(tmp, `XRechnung_test_${naziv}.xml`);
+    const xmlP = path.join(tmp, `XRechnung_test_${naziv.replace(/\s+/g, "-")}.xml`);
     fs.writeFileSync(xmlP, ishod.xml, "utf8");
     const v = await validirajXml({ java, jar: path.join(mapa, "alati", "validator.jar"), konfig: path.join(mapa, "alati", "konfig"), xmlPutanja: xmlP, izlaz: path.join(tmp, "izv") });
     provjeri(v.ocjena === "Valjano", `Službeni validator (${naziv}): ${v.ocjena}${v.greske.length ? " — " + v.greske.map((g) => `${g.id}: ${g.tekst}`).join(" | ") : ""}${v.pogreska ? " — " + v.pogreska : ""}`);

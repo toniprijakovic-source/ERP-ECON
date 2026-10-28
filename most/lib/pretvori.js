@@ -102,7 +102,7 @@ async function napraviPdf({ k, cfg, racun, razdoblje, projektBr }) {
   y -= 17;
   tk(`Anlage zur Rechnung Nr. ${racun.broj} vom ${datumDe(racun.datum)}  (${cfg.projekt || ""})`, L, y);
   y -= 12;
-  tk(`${racun.napomena.split("\n")[0].replace(/^BV:\s*/, "BV: ")}   |   Projekt-Nr.: ${projektBr}`, L, y, { size: 8 });
+  tk(`${racun.napomena.split("\n")[0].replace(/^BV:\s*/, "BV: ")}   |   Projekt-/Auftrags-Nr.: ${projektBr}`, L, y, { size: 8 });
   y -= 22;
 
   const cK = 345, cV = 445, cI = R - 4;
@@ -113,7 +113,9 @@ async function napraviPdf({ k, cfg, racun, razdoblje, projektBr }) {
   y -= 15;
   tk(`${Math.round((k.V / k.G) * 100)}% Materialvorauszahlung Gesamtauftrag`, L + 3, y); desno(iznosDe(k.V), cI, y);
   y -= 15;
-  tk("1 kpl  Metallbau", L + 3, y); desno(iznosDe(k.kumulativ), cK, y); desno(iznosDe(k.avansUkupno), cV, y); desno(iznosDe(k.neto), cI, y);
+  // Naziv pozicije u tablici: kumulativ.json → pozicija, inače naziv prve stavke računa bez "nach Abrechnungsblatt" (npr. "Balkonanlage").
+  const pozicija = cfg.pozicija || racun.linije[0].naziv.replace(/\s*nach Abrechnungsblatt.*$/i, "").trim() || "Leistung";
+  tk(`1 kpl  ${pozicija}`, L + 3, y); desno(iznosDe(k.kumulativ), cK, y); desno(iznosDe(k.avansUkupno), cV, y); desno(iznosDe(k.neto), cI, y);
   y -= 4; crta(y); y -= 13;
   tk("A: Anerkannte Leistung", cV - 120, y, { bold: true }); desno(iznosDe(k.A), cI, y, { bold: true });
   y -= 24;
@@ -173,7 +175,8 @@ export async function izradi(racun, ctx) {
   for (const l of racun.linije) if (!Number.isFinite(l.kolicina) || !Number.isFinite(l.cijena)) throw new Greska(`Stavka ${l.id}: količina ili cijena nisu brojevi.`);
 
   const razdoblje = r2(racun.linije.reduce((s, l) => s + l.iznos, 0));
-  const projektBr = (racun.napomena.match(/Projekt-Nr\.:\s*(\S+)/) || [])[1] || ctx.sifra;
+  // Projektni/narudžbeni broj kupca s računa: "Projekt-Nr.: ..." ili "Auftragsnummer.: ..." (B&O ga na nekim projektima piše tako).
+  const projektBr = (racun.napomena.match(/(?:Projekt-Nr|Auftragsnummer|Auftrags-Nr)\.*:\s*(\S+)/i) || [])[1] || ctx.sifra;
   const referenca = ctx.referenca || projektBr;
   const abschlag = !!ctx.kumulativ;
   let k = null, cfg = null, pdfBytes = null, pdfNaziv = "", napomena = racun.napomena;

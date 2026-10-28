@@ -14267,8 +14267,15 @@ function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
 
   const emailOk = EMAIL_RE.test(eAdresa.trim());
   const aktivan = zadaci.some((z) => z.projektId === projektId && (z.status === "Čeka" || z.status === "Obrada"));
+  // Zašto zadatak za sada ne može nastati (prikazuje se uz gumb, a klik na gumb ga javi i kao poruku — gumb nikad nije "mrtav").
+  const razlog = !projekt ? "Odaberi projekt."
+    : !eAdresa.trim() ? "Upiši e-adresu kupca za račune."
+    : !emailOk ? "E-adresa nije ispravna."
+    : !mozeMijenjati ? "Nemaš ovlaštenje za izradu XRechnunga."
+    : aktivan ? "Za ovaj projekt već postoji zadatak koji čeka ili se obrađuje."
+    : "";
   const kreiraj = async () => {
-    if (!projekt || !emailOk) return;
+    if (razlog) { showToast(razlog); return; }
     setSalje(true);
     try {
       const res = await fetch(`${API_URL}/api/xrechnung/zadaci`, { method: "POST", headers: zaglavlje(), body: JSON.stringify({ projektId, eAdresa: eAdresa.trim(), referenca: referenca.trim() }) });
@@ -14313,7 +14320,9 @@ function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
           </Field>
           <Field label="E-adresa kupca za račune">
             <input className="input" type="email" placeholder="npr. e-rechnung@kupac.de" value={eAdresa} onChange={(e) => setEAdresa(e.target.value)} />
-            {eAdresa.trim() && !emailOk && <div style={{ fontSize: 11.5, color: "var(--rust)", marginTop: 3 }}>E-adresa nije ispravna.</div>}
+            {eAdresa.trim() && !emailOk
+              ? <div style={{ fontSize: 11.5, color: "var(--rust)", marginTop: 3 }}>E-adresa nije ispravna.</div>
+              : <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 3 }}>Obavezno polje. Dok se prava adresa ne zna, upiši privremenu (npr. platzhalter@example.com) — XRechnung se ne šalje; prije slanja izradi ga ponovno s pravom adresom.</div>}
           </Field>
           <Field label="Referenca kupca (Käuferreferenz)">
             <input className="input" placeholder="npr. broj narudžbe ili projekta kupca" value={referenca} onChange={(e) => setReferenca(e.target.value)} />
@@ -14321,10 +14330,9 @@ function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
           </Field>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginTop: 12 }}>
-          <Btn variant="primary" icon={FileText} onClick={kreiraj} disabled={!mozeMijenjati || !projekt || !emailOk || aktivan || salje}>{salje ? "Šaljem…" : "Kreiraj XRechnung"}</Btn>
+          <Btn variant="primary" icon={FileText} onClick={kreiraj} disabled={salje}>{salje ? "Šaljem…" : "Kreiraj XRechnung"}</Btn>
           <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 6 }}><input type="checkbox" checked={zapamti} onChange={(e) => setZapamti(e.target.checked)} /> Zapamti e-adresu i referencu za ovaj projekt</label>
-          {aktivan && <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Za ovaj projekt već postoji zadatak koji čeka ili se obrađuje.</span>}
-          {!mozeMijenjati && <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Nemaš ovlaštenje za izradu XRechnunga.</span>}
+          {razlog && <span style={{ fontSize: 12.5, color: "var(--rust)" }}>{razlog}</span>}
         </div>
       </div>
 

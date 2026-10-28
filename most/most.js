@@ -31,7 +31,16 @@ const okolina = {
   postavke: JSON.parse(fs.readFileSync(path.join(mapaMosta, "postavke.json"), "utf8")),
 };
 
-const log = (...a) => console.log(new Date().toLocaleTimeString("hr-HR"), ...a);
+// Ispis ide na konzolu i u most-zapisnik.log (UTF-8; pri 1 MB se stari zapisnik premjesti u .old).
+const datotekaZapisnika = path.join(mapaMosta, "most-zapisnik.log");
+const log = (...a) => {
+  const redak = `${new Date().toLocaleString("hr-HR")} ${a.join(" ")}`;
+  console.log(redak);
+  try {
+    if (fs.existsSync(datotekaZapisnika) && fs.statSync(datotekaZapisnika).size > 1_000_000) fs.renameSync(datotekaZapisnika, `${datotekaZapisnika}.old`);
+    fs.appendFileSync(datotekaZapisnika, `${redak}\n`, "utf8");
+  } catch { /* zapisnik nije kritičan */ }
+};
 async function api(metoda, ruta, tijelo) {
   const res = await fetch(`${API}${ruta}`, { method: metoda, headers: { "Content-Type": "application/json", "X-Most-Token": TOKEN }, body: tijelo ? JSON.stringify(tijelo) : undefined });
   if (!res.ok) throw new Error(`${metoda} ${ruta} → ${res.status} ${(await res.text()).slice(0, 200)}`);

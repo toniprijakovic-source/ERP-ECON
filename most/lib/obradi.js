@@ -46,7 +46,7 @@ export async function obradi(zadatak, okolina) {
   poruke.push(...ishod.poruke);
 
   // Provjera se radi u privremenoj mapi; u mapu računa ide samo gotov rezultat.
-  const oznaka = racun.broj.replace(/[\\/:*?"<>|]/g, "-");
+  const oznaka = racun.broj.replace(/[\\/:*?"<>|\s]+/g, "-"); // bez razmaka i zabranjenih znakova (validator ne podnosi razmak u nazivu datoteke)
   const privremena = fs.mkdtempSync(path.join(os.tmpdir(), "econ-most-"));
   try {
     const xmlPrivremeni = path.join(privremena, `XRechnung_${oznaka}.xml`);
