@@ -6,7 +6,9 @@ ništa se ne otvara prema vani). Zadatak nastaje klikom na **Financije → XRech
 
 Što most radi za zadatak:
 1. nađe mapu projekta na Z: (ime mape počinje šifrom projekta, npr. `RN 170-208_...`, ili polje "Mapa projekta" u ERP-u),
-2. u njezinoj mapi `Fakture` nađe **najnoviji Konplastov XML** računa,
+2. u mapama računa projekta (nazivi u `postavke.json` → `mapeRacuna`: `Fakture`, `Rechnungen`, `Rechnung`; prihvaća se i naziv
+   koji počinje njima, npr. `Fakture 2026`; "Računi plaćeni preko B&O" se ne gleda) nađe **najnoviji Konplastov XML** računa
+   po datumu računa, bez obzira u kojoj je od tih mapa. `kumulativ.json` traži u mapi u kojoj je račun pronađen, pa u ostalima,
 3. napravi XRechnung 3.0 (UBL); ako uz račune postoji `Fakture\kumulativ.json`, računa kumulativ (avans, prijašnji računi)
    i dodaje tablicu "Zahlungsspezifikation" kao PDF prilog,
 4. službeno ga provjeri (KoSIT validator + XRechnung konfiguracija, Java u `alati\java`),

@@ -1,4 +1,5 @@
 {
+  "mapeRacuna": ["Fakture", "Rechnungen", "Rechnung"],
   "prodavatelj": {
     "telefon": "+385 40 646050",
     "bic": "RZBHHR2X"

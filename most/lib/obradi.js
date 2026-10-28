@@ -3,14 +3,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Greska, procitajKonplast, izradi } from "./pretvori.js";
-import { nadjiMapuProjekta, nadjiMapuFakture, nadjiRacune } from "./mapa.js";
+import { nadjiMapuProjekta, nadjiMapeRacuna, nadjiRacune } from "./mapa.js";
 import { validirajXml } from "./validator.js";
 
-// Postavke kumulativa (ugovor, avans, prijašnji računi) žive uz račune u Fakture/kumulativ.json. Ako je datoteke nema,
-// račun se pretvara kao običan (bez kumulativa). U probnom načinu postoji rezervni primjer iz mape primjeri.
-function ucitajKumulativ(mapaFakture, sifra, okolina) {
-  const datoteka = path.join(mapaFakture, "kumulativ.json");
-  if (fs.existsSync(datoteka)) return { cfg: JSON.parse(fs.readFileSync(datoteka, "utf8")), datoteka };
+// Postavke kumulativa (ugovor, avans, prijašnji računi) žive uz račune u kumulativ.json: prvo u mapi računa u kojoj je pronađen
+// račun, a ako je tamo nema, u drugoj mapi računa istog projekta. Ako datoteke nema, račun se pretvara kao običan (bez
+// kumulativa). U probnom načinu postoji rezervni primjer iz mape primjeri.
+function ucitajKumulativ(mapeRacuna, sifra, okolina) {
+  for (const mapa of mapeRacuna) {
+    const datoteka = path.join(mapa, "kumulativ.json");
+    if (fs.existsSync(datoteka)) return { cfg: JSON.parse(fs.readFileSync(datoteka, "utf8")), datoteka };
+  }
   const primjer = path.join(okolina.primjeri, `kumulativ-${sifra.replace(/\s+/g, "-")}.json`);
   if (okolina.probno && fs.existsSync(primjer)) return { cfg: JSON.parse(fs.readFileSync(primjer, "utf8")), datoteka: null };
   return null;
@@ -27,15 +30,15 @@ function nizDoRacuna(cfg, broj) {
 export async function obradi(zadatak, okolina) {
   const poruke = [];
   const mapaProjekta = nadjiMapuProjekta(okolina.korijen, zadatak.sifra, zadatak.mapa);
-  const mapaFakture = nadjiMapuFakture(mapaProjekta);
-  const racuni = nadjiRacune(mapaFakture);
-  if (!racuni.length) throw new Greska(`U mapi Fakture nema XML računa (Konplast izvoz): ${mapaFakture}`);
+  const mapeRacuna = nadjiMapeRacuna(mapaProjekta, okolina.postavke.mapeRacuna || ["Fakture"]);
+  const racuni = nadjiRacune(mapeRacuna);
+  if (!racuni.length) throw new Greska(`U mapama računa nema XML računa (Konplast izvoz): ${mapeRacuna.map((m) => path.basename(m)).join(", ")}`);
   const odabran = zadatak.racunBroj ? racuni.find((r) => r.broj === zadatak.racunBroj) : racuni[0];
-  if (!odabran) throw new Greska(`Račun ${zadatak.racunBroj} nije pronađen u mapi Fakture.`);
-  poruke.push(`Račun: ${odabran.broj} od ${odabran.datum} (${path.relative(mapaFakture, odabran.putanja)})`);
+  if (!odabran) throw new Greska(`Račun ${zadatak.racunBroj} nije pronađen u mapama računa (${mapeRacuna.map((m) => path.basename(m)).join(", ")}).`);
+  poruke.push(`Račun: ${odabran.broj} od ${odabran.datum} (${path.relative(mapaProjekta, odabran.putanja)})`);
 
   const racun = procitajKonplast(fs.readFileSync(odabran.putanja, "utf8"));
-  const kum = ucitajKumulativ(mapaFakture, zadatak.sifra, okolina);
+  const kum = ucitajKumulativ([odabran.mapaRacuna, ...mapeRacuna.filter((m) => m !== odabran.mapaRacuna)], zadatak.sifra, okolina);
   const cfg = kum ? nizDoRacuna(kum.cfg, racun.broj) : null;
   poruke.push(cfg ? "Način: Abschlag s kumulativom (kumulativ.json)" : "Način: običan račun (nema kumulativ.json)");
 

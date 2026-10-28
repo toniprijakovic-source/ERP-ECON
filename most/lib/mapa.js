@@ -21,26 +21,34 @@ export function nadjiMapuProjekta(korijen, sifra, zadanaMapa) {
   return path.join(korijen, pogodci[0].name);
 }
 
-export function nadjiMapuFakture(mapaProjekta) {
-  const d = fs.readdirSync(mapaProjekta, { withFileTypes: true }).find((e) => e.isDirectory() && e.name.toLowerCase() === "fakture");
-  if (!d) throw new Greska(`U mapi projekta nema mape "Fakture": ${mapaProjekta}`);
-  return path.join(mapaProjekta, d.name);
+// Mape izlaznih računa u mapi projekta: svaka čije ime je jedno od zadanih (postavke.json → mapeRacuna, npr. Fakture, Rechnungen,
+// Rechnung) ili počinje njime uz razmak/_/- (npr. "Fakture 2026"). Mape poput "Računi plaćeni preko B&O" nisu na popisu pa se ne gledaju.
+export function nadjiMapeRacuna(mapaProjekta, imena) {
+  const osnove = imena.map((i) => i.toLowerCase());
+  const mape = fs.readdirSync(mapaProjekta, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && osnove.some((o) => { const n = e.name.toLowerCase(); return n === o || (n.startsWith(o) && /[\s_-]/.test(n[o.length])); }))
+    .map((e) => path.join(mapaProjekta, e.name));
+  if (!mape.length) throw new Greska(`U mapi projekta nema mape računa (traži se: ${imena.join(", ")}): ${mapaProjekta}`);
+  return mape;
 }
 
-// Svi XML računi ispod Fakture (do 4 razine), osim izlaznih mapa "XRechnung*". Najnoviji je onaj s najkasnijim datumom računa.
-export function nadjiRacune(mapaFakture) {
+// Svi XML računi ispod zadanih mapa (do 4 razine), osim izlaznih mapa "XRechnung*". Najnoviji je onaj s najkasnijim datumom računa.
+// Svaki zapis pamti i mapu računa (mapaRacuna) u kojoj je pronađen — uz nju stoji kumulativ.json.
+export function nadjiRacune(mapeRacuna) {
   const rezultat = [];
-  const obidi = (dir, dubina) => {
-    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-      const p = path.join(dir, e.name);
-      if (e.isDirectory()) { if (dubina < 4 && !/^xrechnung/i.test(e.name)) obidi(p, dubina + 1); continue; }
-      if (!/\.xml$/i.test(e.name)) continue;
-      try {
-        const r = procitajKonplast(fs.readFileSync(p, "utf8"));
-        if (r.broj && r.datum && r.linije.length) rezultat.push({ putanja: p, broj: r.broj, datum: r.datum, vrijeme: r.vrijeme, mtime: fs.statSync(p).mtimeMs });
-      } catch { /* nije račun — preskoči */ }
-    }
-  };
-  obidi(mapaFakture, 0);
+  for (const mapaRacuna of mapeRacuna) {
+    const obidi = (dir, dubina) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) { if (dubina < 4 && !/^xrechnung/i.test(e.name)) obidi(p, dubina + 1); continue; }
+        if (!/\.xml$/i.test(e.name)) continue;
+        try {
+          const r = procitajKonplast(fs.readFileSync(p, "utf8"));
+          if (r.broj && r.datum && r.linije.length) rezultat.push({ putanja: p, mapaRacuna, broj: r.broj, datum: r.datum, vrijeme: r.vrijeme, mtime: fs.statSync(p).mtimeMs });
+        } catch { /* nije račun — preskoči */ }
+      }
+    };
+    obidi(mapaRacuna, 0);
+  }
   return rezultat.sort((a, b) => `${b.datum}${b.vrijeme}`.localeCompare(`${a.datum}${a.vrijeme}`) || b.mtime - a.mtime);
 }
