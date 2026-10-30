@@ -4,7 +4,7 @@
 const CRLF = "\r\n";
 
 let pdfMakePromise = null;
-const ucitajPdfMake = () => {
+export const ucitajPdfMake = () => {
   if (!pdfMakePromise) {
     pdfMakePromise = (async () => {
       const modul = await import("pdfmake/build/pdfmake");

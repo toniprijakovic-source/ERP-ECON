@@ -4,7 +4,7 @@ import {
   Plus, Pencil, Trash2, X, Search, AlertTriangle, CheckCircle2, ArrowRight,
   Clock, ChevronRight, Save, PackageCheck, PackageMinus, Settings, Layers,
   ChevronDown, ChevronUp, ChevronLeft, FolderInput, Eye, UserCog, CalendarRange,
-  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors, Printer, Bell, Menu, ShieldCheck, Container, Mail
+  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors, Printer, Bell, Menu, ShieldCheck, Container, Mail, HistoryIcon
 } from "lucide-react";
 import logoEcon from "./assets/logo-econ.jpg";
 import QRCode from "qrcode";
@@ -761,6 +761,34 @@ const grupaEvidencije = (zaposlenik, pozicije) => {
   if (naziv === "praktikant") return "praktikant";
   if (RADIONA_POZICIJE.includes(naziv)) return "radiona";
   return "ostalo";
+};
+
+// Popis bodova za ispis (PDF "Popis zaposlenih - BODOVI"): "sa stažem" se računa kao u obračunu — dodatak na staž po danu
+// (godine staža na zadnji dan mjeseca × dodatak po godini) × radni dani (pon-pet) u mjesecu. Satnica = (bodovi × bod + staž) / fond sati;
+// plaća (ured) = bodovi × bod (pola ako je pola radnog vremena, osim kad bodovi već daju iznos za pola), plaća sa stažem = plaća + staž.
+// vrsta "radiona" = pozicije radione; "ured" = tehnički ured i administracija. Kooperanti, vanjski suradnici i praktikanti se ne plaćaju
+// po bodovima pa nisu na popisu. "novi" = zaposlen u odabranom mjesecu.
+const popisBodovaPodaci = (db, mjesec, vrsta) => {
+  const postavke = db.postavkePlaca || {};
+  const [g, m] = mjesec.split("-").map(Number);
+  const kraj = `${mjesec}-${String(new Date(g, m, 0).getDate()).padStart(2, "0")}`;
+  const radniDani = radniDaniUMjesecu(mjesec);
+  const fond = Number(postavke.fondSatiMjesec) || 0;
+  const pozicije = db.pozicijeZaposlenika;
+  const redovi = db.zaposlenici
+    .filter((z) => z.status === "Aktivan" && (!z.datumZaposlenja || z.datumZaposlenja <= kraj))
+    .filter((z) => (vrsta === "radiona" ? grupaEvidencije(z, pozicije) === "radiona" : grupaEvidencije(z, pozicije) === "ostalo" && !jeVanjskiSuradnik(z, pozicije)))
+    .sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr"))
+    .map((z) => {
+      const o = satnicaZaposlenika(z, postavke, kraj);
+      const staz = o.stazPoDanu * radniDani;
+      const placa = o.osnovica * (z.radnoVrijeme === "pola" && !z.fiksnaPlacaBezPolovice ? 0.5 : 1);
+      return {
+        id: z.id, ime: `${z.prezime} ${z.ime}`, bodovi: o.bodovi, satnicaSaStazom: fond > 0 ? (o.osnovica + staz) / fond : 0,
+        placa, placaSaStazom: placa + staz, pola: z.radnoVrijeme === "pola", novi: !!z.datumZaposlenja && z.datumZaposlenja.slice(0, 7) === mjesec,
+      };
+    });
+  return { redovi, radniDani, fond, bod: Number(postavke.vrijednostBoda) || 0 };
 };
 
 const obracunMjesecaKooperant = (zaposlenik, mjesec, db) => {
@@ -2176,12 +2204,13 @@ export default function App() {
     }
   };
 
-  const update = (key, newArr) => {
+  // dodatnaZaglavlja: npr. razlog korekcije za povijest korekcija (X-Korekcija-Razlog, X-Korekcija-Zaposlenik — vidi poslužitelj).
+  const update = (key, newArr, dodatnaZaglavlja = {}) => {
     if (key === "otpremnice" || key === "cmr" || key === "slobodniZadaci" || key === "radniNalozi" || key === "materijali" || key === "rezervacije" || key === "maticnaKnjiga" || key === "upitiTransporta" || key === "narudzbeTransporta" || key === "narudzbenice" || key === "satiPoNalogu" || key === "ponude" || key === "ponudeLasera") { patchOtpremnice(newArr, key); return; }
     setDb((prev) => ({ ...prev, [key]: newArr }));
     fetch(`${API_URL}/api/data/${key}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}`, ...dodatnaZaglavlja },
       body: JSON.stringify(newArr),
     }).catch(() => showToast("Greška pri spremanju — provjeri internetsku vezu."));
   };
@@ -15053,9 +15082,207 @@ function IzbornikPrijaveModal({ db, mojId, onClose, showToast, refetchKljuc }) {
   );
 }
 
+// Popis bodova (PDF) za radionu ili ured i odabrani mjesec — prazni stupci "Novo BOD" i "Napomena" služe za ručne korekcije na papiru.
+// Izračun je u popisBodovaPodaci (isti kao u obračunu); izgled u pdfBodovi.js.
+function PopisBodovaModal({ db, mojId, onClose, showToast }) {
+  const [mjesec, setMjesec] = useState(todayISO().slice(0, 7));
+  const [vrsta, setVrsta] = useState("radiona");
+  const [izrada, setIzrada] = useState(false);
+  const jeUred = vrsta === "ured";
+  const podaci = useMemo(() => popisBodovaPodaci(db, mjesec, vrsta), [db, mjesec, vrsta]);
+  const [g, m] = mjesec.split("-").map(Number);
+  const mjesecTekst = `${NAZIVI_MJESECI_HR[m - 1][0].toUpperCase()}${NAZIVI_MJESECI_HR[m - 1].slice(1)} ${g}`;
+  const dec = (v) => (Number(v) || 0).toLocaleString("hr-HR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const izradi = async () => {
+    setIzrada(true);
+    try {
+      const { napraviPdfPopisaBodova } = await import("./pdfBodovi.js");
+      const izradio = db.zaposlenici.find((z) => z.id === mojId);
+      const bajtovi = await napraviPdfPopisaBodova({
+        vrsta, mjesecTekst, ...podaci, tvrtka: db.postavkeTvrtke || {},
+        izradio: izradio ? `${izradio.ime} ${izradio.prezime}` : "", izradeno: new Date().toLocaleString("hr-HR"),
+      });
+      preuzmiDatoteku(new Blob([bajtovi], { type: "application/pdf" }), `Popis zaposlenih - BODOVI ${mjesec} ${jeUred ? "ured" : "radiona"}.pdf`);
+    } catch (e) {
+      console.error(e);
+      showToast("Greška pri izradi PDF-a.");
+    } finally {
+      setIzrada(false);
+    }
+  };
+  return (
+    <Modal wide title="Popis bodova (PDF)" onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={FileText} onClick={izradi} disabled={izrada || !podaci.redovi.length}>{izrada ? "Izrada…" : `Izradi PDF — ${jeUred ? "ured" : "radiona"}`}</Btn></>}>
+      <p style={{ margin: "0 0 10px", fontSize: 12.5, color: "var(--ink-soft)" }}>
+        Ispis za ručne korekcije na papiru: stupci "Novo BOD" i "Napomena" ostaju prazni. Satnica i plaća "sa stažem" računaju se kao u obračunu plaća, na zadnji dan odabranog mjeseca.
+        Kooperanti, vanjski suradnici i praktikanti nisu na popisu. Svaka promjena bodova koju kasnije spremiš u aplikaciji sama se bilježi u "Povijest korekcija".
+      </p>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+        <Field label="Mjesec"><input className="input" type="month" value={mjesec} onChange={(e) => e.target.value && setMjesec(e.target.value)} style={{ maxWidth: 170 }} /></Field>
+        <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+          <Btn variant={!jeUred ? "primary" : "ghost"} onClick={() => setVrsta("radiona")}>Radiona</Btn>
+          <Btn variant={jeUred ? "primary" : "ghost"} onClick={() => setVrsta("ured")}>Ured</Btn>
+        </div>
+        <span className="f-mono" style={{ fontSize: 12, marginLeft: "auto", marginBottom: 18 }}>
+          {podaci.redovi.length} zaposlenika · radnih dana {podaci.radniDani} · BOD = {(podaci.bod).toLocaleString("hr-HR", { maximumFractionDigits: 4 })} € · fond {podaci.fond} h
+        </span>
+      </div>
+      <div className="card" style={{ padding: 0, maxHeight: "44vh", overflow: "auto" }}>
+        <table className="erp-table">
+          <thead><tr>
+            <th style={{ width: 44 }}>R-br.</th><th>Prezime i ime</th><th style={{ textAlign: "right" }}>Postojeće BOD</th>
+            {jeUred ? <><th style={{ textAlign: "right" }}>Plaća</th><th style={{ textAlign: "right" }}>Plaća (sa stažem)</th></> : <th style={{ textAlign: "right" }}>Satnica (sa stažem)</th>}
+          </tr></thead>
+          <tbody>
+            {podaci.redovi.map((r, i) => (
+              <tr key={r.id} style={r.novi ? { background: "#E2F0D9" } : undefined}>
+                <td className="f-mono">{i + 1}.</td>
+                <td>{r.ime}{r.pola && <span style={{ fontSize: 11, color: "var(--ink-faint)" }}> (pola RV)</span>}{r.novi && <span style={{ fontSize: 11, color: "var(--ink-faint)" }}> · novi</span>}</td>
+                <td className="f-mono" style={{ textAlign: "right" }}>{r.bodovi}</td>
+                {jeUred ? <><td className="f-mono" style={{ textAlign: "right" }}>{dec(r.placa)}</td><td className="f-mono" style={{ textAlign: "right" }}>{dec(r.placaSaStazom)}</td></> : <td className="f-mono" style={{ textAlign: "right" }}>{dec(r.satnicaSaStazom)}</td>}
+              </tr>
+            ))}
+            {podaci.redovi.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--ink-faint)" }}>Nema zaposlenika.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </Modal>
+  );
+}
+
+// Povijest korekcija: bodovi, radno vrijeme, plaće i vrijednost boda. Zapisi nastaju sami na poslužitelju pri svakoj promjeni (PUT
+// /api/data/zaposlenici i postavkePlaca); ovdje se pregledavaju, ispisuju i dopunjuju razlogom ondje gdje ga nema.
+const formatKorekcije = (k, v) => (k.tip === "broj" ? (v === "" || v == null ? "—" : (Number(v) || 0).toLocaleString("hr-HR", { maximumFractionDigits: 2 })) : k.tip === "datum" ? (v ? fmtDate(v) : "—") : (v || "—"));
+const razlikaKorekcije = (k) => {
+  if (k.tip !== "broj") return "";
+  const r = Number(k.novo) - Number(k.staro);
+  return !isFinite(r) || r === 0 ? "" : `${r > 0 ? "+" : "−"}${Math.abs(r).toLocaleString("hr-HR", { maximumFractionDigits: 2 })}`;
+};
+const vrijemeKorekcije = (v) => new Date(v).toLocaleString("hr-HR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+function KorekcijeBodovaModal({ db, mojId, mozeMijenjati, onClose, showToast }) {
+  const [korekcije, setKorekcije] = useState(null); // null = učitavanje
+  const [greska, setGreska] = useState("");
+  const [zaposlenikId, setZaposlenikId] = useState("");
+  const [od, setOd] = useState("");
+  const [doDatuma, setDoDatuma] = useState("");
+  const [trazi, setTrazi] = useState("");
+  const [razlog, setRazlog] = useState(null); // { id, tekst } dok se upisuje razlog
+  const [izrada, setIzrada] = useState(false);
+  const zaglavlja = () => ({ Authorization: `Bearer ${localStorage.getItem("erp_token")}` });
+  const ucitaj = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/korekcije-bodova`, { headers: zaglavlja() });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setGreska(d.error || "Greška pri učitavanju."); setKorekcije([]); return; }
+      setKorekcije(d.korekcije);
+      setGreska("");
+    } catch {
+      setGreska("Greška pri povezivanju s poslužiteljem.");
+      setKorekcije([]);
+    }
+  };
+  useEffect(() => { ucitaj(); }, []);
+  const zaposlenici = useMemo(() => {
+    const m = new Map();
+    (korekcije || []).forEach((k) => m.set(k.zaposlenikId || "_svi", k.zaposlenik));
+    return [...m.entries()].sort((a, b) => a[1].localeCompare(b[1], "hr"));
+  }, [korekcije]);
+  const prikaz = useMemo(() => (korekcije || []).filter((k) => {
+    if (zaposlenikId && (k.zaposlenikId || "_svi") !== zaposlenikId) return false;
+    const dan = new Date(k.vrijeme).toLocaleDateString("sv-SE");
+    if (od && dan < od) return false;
+    if (doDatuma && dan > doDatuma) return false;
+    const t = trazi.trim().toLowerCase();
+    return !t || `${k.zaposlenik} ${k.naziv} ${k.razlog} ${k.korisnik}`.toLowerCase().includes(t);
+  }), [korekcije, zaposlenikId, od, doDatuma, trazi]);
+  const spremiRazlog = async () => {
+    const tekst = razlog.tekst.trim();
+    if (!tekst) return;
+    try {
+      const res = await fetch(`${API_URL}/api/korekcije-bodova/${razlog.id}/razlog`, { method: "PUT", headers: { "Content-Type": "application/json", ...zaglavlja() }, body: JSON.stringify({ razlog: tekst }) });
+      if (res.ok) {
+        setKorekcije((s) => s.map((k) => (k.id === razlog.id ? { ...k, razlog: tekst } : k)));
+      } else {
+        const d = await res.json().catch(() => ({}));
+        showToast(d.error || "Greška pri spremanju razloga.");
+        if (res.status === 409) ucitaj();
+      }
+    } catch {
+      showToast("Greška pri spremanju — provjeri internetsku vezu.");
+    }
+    setRazlog(null);
+  };
+  const izradiPdf = async () => {
+    setIzrada(true);
+    try {
+      const { napraviPdfKorekcija } = await import("./pdfBodovi.js");
+      const izradio = db.zaposlenici.find((z) => z.id === mojId);
+      const filtri = [zaposlenikId && `zaposlenik: ${zaposlenici.find(([id]) => id === zaposlenikId)?.[1] || ""}`, od && `od ${fmtDate(od)}`, doDatuma && `do ${fmtDate(doDatuma)}`, trazi.trim() && `pretraga: "${trazi.trim()}"`].filter(Boolean);
+      const bajtovi = await napraviPdfKorekcija({
+        redovi: prikaz.map((k) => ({ vrijeme: vrijemeKorekcije(k.vrijeme), zaposlenik: k.zaposlenik, naziv: k.naziv, staro: formatKorekcije(k, k.staro), novo: formatKorekcije(k, k.novo), razlika: razlikaKorekcije(k), razlog: k.razlog, korisnik: k.korisnik })),
+        filtarTekst: filtri.length ? `Filtar: ${filtri.join(", ")}` : "Svi zapisi", tvrtka: db.postavkeTvrtke || {},
+        izradio: izradio ? `${izradio.ime} ${izradio.prezime}` : "", izradeno: new Date().toLocaleString("hr-HR"),
+      });
+      preuzmiDatoteku(new Blob([bajtovi], { type: "application/pdf" }), `Povijest korekcija ${todayISO()}.pdf`);
+    } catch (e) {
+      console.error(e);
+      showToast("Greška pri izradi PDF-a.");
+    } finally {
+      setIzrada(false);
+    }
+  };
+  return (
+    <Modal xwide title="Povijest korekcija" onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={FileText} onClick={izradiPdf} disabled={izrada || !korekcije}>{izrada ? "Izrada…" : "Ispis PDF"}</Btn></>}>
+      <p style={{ margin: "0 0 10px", fontSize: 12.5, color: "var(--ink-soft)" }}>
+        Svaka promjena bodova, radnog vremena, staža, plaće i vrijednosti boda bilježi se sama kad se spremi (tko, kada, staro i novo). Zapisi se ne mogu brisati ni mijenjati; razlog se može naknadno upisati gdje ga nema.
+      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+        <select className="select" value={zaposlenikId} onChange={(e) => setZaposlenikId(e.target.value)} style={{ maxWidth: 220 }}>
+          <option value="">Svi zaposlenici</option>
+          {zaposlenici.map(([id, ime]) => <option key={id} value={id}>{ime}</option>)}
+        </select>
+        <label style={{ fontSize: 12, color: "var(--ink-soft)" }}>od <input className="input" type="date" value={od} onChange={(e) => setOd(e.target.value)} style={{ width: 150 }} /></label>
+        <label style={{ fontSize: 12, color: "var(--ink-soft)" }}>do <input className="input" type="date" value={doDatuma} onChange={(e) => setDoDatuma(e.target.value)} style={{ width: 150 }} /></label>
+        <input className="input" placeholder="Traži…" value={trazi} onChange={(e) => setTrazi(e.target.value)} style={{ maxWidth: 180 }} />
+        <span className="f-mono" style={{ fontSize: 12, marginLeft: "auto" }}>{korekcije ? `${prikaz.length} od ${korekcije.length} zapisa` : ""}</span>
+      </div>
+      {greska && <div style={{ color: "var(--rust)", fontSize: 12.5, marginBottom: 10 }}>{greska}</div>}
+      <div className="card" style={{ padding: 0, maxHeight: "50vh", overflow: "auto" }}>
+        <table className="erp-table">
+          <thead><tr><th>Datum i vrijeme</th><th>Zaposlenik</th><th>Što je promijenjeno</th><th>Staro</th><th>Novo</th><th style={{ textAlign: "right" }}>Razlika</th><th>Razlog</th><th>Promijenio</th></tr></thead>
+          <tbody>
+            {prikaz.map((k) => (
+              <tr key={k.id}>
+                <td className="f-mono" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{vrijemeKorekcije(k.vrijeme)}</td>
+                <td><strong>{k.zaposlenik}</strong></td>
+                <td>{k.naziv}</td>
+                <td className="f-mono">{formatKorekcije(k, k.staro)}</td>
+                <td className="f-mono"><strong>{formatKorekcije(k, k.novo)}</strong></td>
+                <td className="f-mono" style={{ textAlign: "right" }}>{razlikaKorekcije(k)}</td>
+                <td style={{ fontSize: 12.5 }}>
+                  {razlog?.id === k.id ? (
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input className="input" autoFocus maxLength={300} value={razlog.tekst} onChange={(e) => setRazlog({ ...razlog, tekst: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") spremiRazlog(); if (e.key === "Escape") setRazlog(null); }} style={{ minWidth: 180 }} />
+                      <Btn size="sm" variant="primary" onClick={spremiRazlog}>Spremi</Btn>
+                      <Btn size="sm" onClick={() => setRazlog(null)}>Odustani</Btn>
+                    </div>
+                  ) : k.razlog ? k.razlog : mozeMijenjati ? <button type="button" onClick={() => setRazlog({ id: k.id, tekst: "" })} style={STIL_LINK_GUMBA}>+ razlog</button> : <span style={{ color: "var(--ink-faint)" }}>—</span>}
+                </td>
+                <td style={{ fontSize: 12.5 }}>{k.korisnik}</td>
+              </tr>
+            ))}
+            {korekcije === null && <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--ink-faint)" }}>Učitavanje…</td></tr>}
+            {korekcije && prikaz.length === 0 && <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--ink-faint)" }}>{korekcije.length === 0 ? "Još nema zabilježenih korekcija — bilježe se automatski od uvođenja ove funkcije." : "Nema zapisa za odabrani filtar."}</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </Modal>
+  );
+}
+
 /* ============================== POSTAVKE PLAĆA ============================== */
 function PostavkePlacaModal({ db, update, showToast, onClose }) {
   const [form, setForm] = useState(db.postavkePlaca);
+  const [razlogKorekcije, setRazlogKorekcije] = useState("");
   const [praznici, setPraznici] = useState(db.praznici || []);
   const [noviPraznik, setNoviPraznik] = useState({ datum: "", naziv: "" });
 
@@ -15074,7 +15301,7 @@ function PostavkePlacaModal({ db, update, showToast, onClose }) {
   ];
 
   const spremi = () => {
-    update("postavkePlaca", form);
+    update("postavkePlaca", form, razlogKorekcije.trim() ? { "X-Korekcija-Razlog": encodeURIComponent(razlogKorekcije.trim()) } : {});
     update("praznici", praznici);
     showToast("Postavke plaća spremljene.");
     onClose();
@@ -15097,6 +15324,11 @@ function PostavkePlacaModal({ db, update, showToast, onClose }) {
         <Field label="Granica prijave (upozorenje računovodstvu)">
           <input className="input f-mono" type="time" value={form.granicaPrijaveSat || "08:00"} onChange={(e) => setForm({ ...form, granicaPrijaveSat: e.target.value })} />
         </Field>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <Field label="Razlog promjene (neobavezno) — upisuje se u Povijest korekcija ako se promijeni vrijednost boda, dodatak na staž ili fond sati">
+            <input className="input" maxLength={300} value={razlogKorekcije} onChange={(e) => setRazlogKorekcije(e.target.value)} />
+          </Field>
+        </div>
       </div>
 
       <div className="label" style={{ marginBottom: 6 }}>Smjene</div>
@@ -17216,6 +17448,10 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
   const [del, setDel] = useState(null);
   const [lozinkaZa, setLozinkaZa] = useState(null);
   const [izbornikPrijave, setIzbornikPrijave] = useState(false);
+  const [popisBodova, setPopisBodova] = useState(false);
+  const [povijestKorekcija, setPovijestKorekcija] = useState(false);
+  const imaObracun = dozvKartice.some((k) => k.key === "obracun"); // bodovi i ostali podaci o plaći pojedinca, popis bodova i povijest korekcija: samo uz karticu Obračun plaća
+  const mozeObracunMijenjati = dozvolaZaKarticu(mojaPozicija, "zaposlenici", "obracun").izmjene;
 
   const emptyZap = { ime: "", prezime: "", pozicijaId: db.pozicijeZaposlenika[0]?.id || "", email: "", telefon: "", status: "Aktivan", datumZaposlenja: todayISO(), kompetencije: [], rfidKod: "", bodovi: 0, udaljenostKm: 0, koristiPrehranuUTvrtki: false, satnicaKooperant: 0, fiksniMjesecniIznos: 0, naknadaPrijevoz: 0, maticniBroj: "", dodatniStazGodine: 0, radnoVrijeme: "puno" };
   const [zapForm, setZapForm] = useState(emptyZap);
@@ -17229,7 +17465,9 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
   const saveZap = () => {
     if (!zapForm.ime.trim() || !zapForm.prezime.trim()) return;
     if (zapForm.id) {
-      update("zaposlenici", db.zaposlenici.map((z) => (z.id === zapForm.id ? zapForm : z)));
+      // razlogKorekcije nije polje zaposlenika: ide poslužitelju u zaglavlju i upisuje se uz zapis u Povijest korekcija.
+      const { razlogKorekcije, ...zaSpremanje } = zapForm;
+      update("zaposlenici", db.zaposlenici.map((z) => (z.id === zapForm.id ? zaSpremanje : z)), razlogKorekcije?.trim() ? { "X-Korekcija-Zaposlenik": zapForm.id, "X-Korekcija-Razlog": encodeURIComponent(razlogKorekcije.trim()) } : {});
       setModal(null);
       showToast("Zaposlenik spremljen.");
     } else {
@@ -17279,12 +17517,16 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
               <span style={{ fontSize: 12.5, color: "#6b5511" }}><strong>{db.zaposlenici.filter((z) => !imaJakuLozinku(z)).length}</strong> zaposlenika još nema postavljenu jaku lozinku (koriste stari PIN ili nemaju nikakvu) — postavi im lozinku gumbom "Lozinka" u tablici.</span>
             </div>
           )}
-          {mozeZaposlenici && (
+          {(mozeZaposlenici || imaObracun) && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-              <Btn icon={ShieldCheck} onClick={() => setIzbornikPrijave(true)}>Izbornik za prijavu</Btn>
-              <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
-                Na ekranu za prijavu prikazuje se <strong>{db.zaposlenici.filter((z) => z.status === "Aktivan" && z.prijavaUAplikaciju !== false).length}</strong> od {db.zaposlenici.filter((z) => z.status === "Aktivan").length} aktivnih zaposlenika.
-              </span>
+              {mozeZaposlenici && <Btn icon={ShieldCheck} onClick={() => setIzbornikPrijave(true)}>Izbornik za prijavu</Btn>}
+              {imaObracun && <Btn icon={FileText} onClick={() => setPopisBodova(true)}>Popis bodova (PDF)</Btn>}
+              {imaObracun && <Btn icon={HistoryIcon} onClick={() => setPovijestKorekcija(true)}>Povijest korekcija</Btn>}
+              {mozeZaposlenici && (
+                <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
+                  Na ekranu za prijavu prikazuje se <strong>{db.zaposlenici.filter((z) => z.status === "Aktivan" && z.prijavaUAplikaciju !== false).length}</strong> od {db.zaposlenici.filter((z) => z.status === "Aktivan").length} aktivnih zaposlenika.
+                </span>
+              )}
             </div>
           )}
           <EntityPage
@@ -17395,16 +17637,16 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
                 </label>
               </Field>
             )}
-            {db.pozicijeZaposlenika.find((p) => p.id === zapForm.pozicijaId)?.naziv?.trim().toLowerCase() === "kooperant" ? (
-              <Field label="Satnica kooperanta (€/h)"><input className="input f-mono" type="number" min="0" step="0.5" value={zapForm.satnicaKooperant ?? 0} onChange={(e) => setZapForm({ ...zapForm, satnicaKooperant: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
+            {imaObracun && (db.pozicijeZaposlenika.find((p) => p.id === zapForm.pozicijaId)?.naziv?.trim().toLowerCase() === "kooperant" ? (
+              <Field label="Satnica kooperanta (€/h)"><input className="input f-mono" type="number" min="0" step="0.5" disabled={!mozeObracunMijenjati} value={zapForm.satnicaKooperant ?? 0} onChange={(e) => setZapForm({ ...zapForm, satnicaKooperant: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
             ) : db.pozicijeZaposlenika.find((p) => p.id === zapForm.pozicijaId)?.naziv?.trim().toLowerCase() === "vanjski suradnik" ? (
               <>
-                <Field label="Fiksni mjesečni iznos (€)"><input className="input f-mono" type="number" min="0" step="1" value={zapForm.fiksniMjesecniIznos ?? 0} onChange={(e) => setZapForm({ ...zapForm, fiksniMjesecniIznos: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
-                <Field label="Naknada za prijevoz (€, fiksno mjesečno)"><input className="input f-mono" type="number" min="0" step="1" value={zapForm.naknadaPrijevoz ?? 0} onChange={(e) => setZapForm({ ...zapForm, naknadaPrijevoz: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
+                <Field label="Fiksni mjesečni iznos (€)"><input className="input f-mono" type="number" min="0" step="1" disabled={!mozeObracunMijenjati} value={zapForm.fiksniMjesecniIznos ?? 0} onChange={(e) => setZapForm({ ...zapForm, fiksniMjesecniIznos: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
+                <Field label="Naknada za prijevoz (€, fiksno mjesečno)"><input className="input f-mono" type="number" min="0" step="1" disabled={!mozeObracunMijenjati} value={zapForm.naknadaPrijevoz ?? 0} onChange={(e) => setZapForm({ ...zapForm, naknadaPrijevoz: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
               </>
             ) : (
-              <Field label="Bodovi (za satnicu)"><input className="input f-mono" type="number" min="0" value={zapForm.bodovi ?? 0} onChange={(e) => setZapForm({ ...zapForm, bodovi: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
-            )}
+              <Field label="Bodovi (za satnicu)"><input className="input f-mono" type="number" min="0" disabled={!mozeObracunMijenjati} value={zapForm.bodovi ?? 0} onChange={(e) => setZapForm({ ...zapForm, bodovi: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
+            ))}
             <Field label="Udaljenost do posla (km, jedan smjer)"><input className="input f-mono" type="number" min="0" value={zapForm.udaljenostKm ?? 0} onChange={(e) => setZapForm({ ...zapForm, udaljenostKm: e.target.value === "" ? 0 : Number(e.target.value) })} /></Field>
             <Field label="Prehrana">
               <label style={{ display: "flex", alignItems: "center", gap: 8, height: 36, cursor: "pointer" }}>
@@ -17427,6 +17669,11 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
               </div>
             </Field>
           </div>
+          {zapForm.id && imaObracun && (
+            <Field label="Razlog korekcije (neobavezno)">
+              <input className="input" maxLength={300} placeholder="npr. povišica nakon razgovora — upisuje se u Povijest korekcija ako se bodovi, radno vrijeme ili plaća promijene" value={zapForm.razlogKorekcije || ""} onChange={(e) => setZapForm({ ...zapForm, razlogKorekcije: e.target.value })} />
+            </Field>
+          )}
           {zapForm.rfidKod && (
             <div className="card" style={{ padding: 10, marginBottom: 14, background: "var(--surface-alt)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
               <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>
@@ -17531,6 +17778,8 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
         />
       )}
       {lozinkaZa && <PostaviLozinkuModal zaposlenik={lozinkaZa} showToast={showToast} refetchKljuc={refetchKljuc} onClose={() => setLozinkaZa(null)} />}
+      {popisBodova && <PopisBodovaModal db={db} mojId={mojId} showToast={showToast} onClose={() => setPopisBodova(false)} />}
+      {povijestKorekcija && <KorekcijeBodovaModal db={db} mojId={mojId} showToast={showToast} mozeMijenjati={mozeObracunMijenjati} onClose={() => setPovijestKorekcija(false)} />}
       {izbornikPrijave && <IzbornikPrijaveModal db={db} mojId={mojId} showToast={showToast} refetchKljuc={refetchKljuc} onClose={() => setIzbornikPrijave(false)} />}
     </div>
   );

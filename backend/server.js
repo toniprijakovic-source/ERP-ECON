@@ -364,13 +364,110 @@ async function autorizacijaPisanja(req, res, next) {
 // za kiosk (?rfid=KOD), pa ga vide samo oni koji smiju uređivati zaposlenike. Hasheve upravlja isključivo poslužitelj
 // (PUT /api/zaposlenici/:id/lozinka), a PUT /api/data/zaposlenici ih uvijek zadržava iz baze.
 const ZAPOSLENIK_TAJNA_POLJA = ["lozinkaHash", "pinHash", "pin"];
-const zaposleniciZaKlijenta = (popis, vidiKartice) => (Array.isArray(popis) ? popis : []).map((z) => {
+// Podaci o plaći pojedinca (bodovi, satnica kooperanta, fiksni iznos, naknada za prijevoz) idu samo pozicijama s karticom Obračun plaća
+// (vidiPlace, vidi smijeObracun); ostali ih ne dobivaju, a PUT /api/data/zaposlenici im ih ne dopušta mijenjati (zadržava se vrijednost iz baze).
+const ZAPOSLENIK_PLACNA_POLJA = ["bodovi", "satnicaKooperant", "fiksniMjesecniIznos", "naknadaPrijevoz"];
+const zaposleniciZaKlijenta = (popis, vidiKartice, vidiPlace = false) => (Array.isArray(popis) ? popis : []).map((z) => {
   if (!z || typeof z !== "object") return z;
   const { lozinkaHash, pinHash, pin, rfidKod, ...ostalo } = z;
+  if (!vidiPlace) ZAPOSLENIK_PLACNA_POLJA.forEach((k) => { delete ostalo[k]; });
   return { ...ostalo, imaJakuLozinku: !!lozinkaHash, ...(vidiKartice && rfidKod !== undefined ? { rfidKod } : {}) };
 });
 const smijeUAplikaciju = (z) => !!z && z.status !== "Neaktivan" && z.prijavaUAplikaciju !== false;
 const imaLozinku = (z) => !!(z.lozinkaHash || z.pinHash || (typeof z.pin === "string" && z.pin));
+
+// ---------- Povijest korekcija (bodovi, radno vrijeme, plaće) ----------
+// Tablica korekcije_bodova (stvara je pripremiKorekcije pri pokretanju). Zapis nastaje SAM na poslužitelju kad se spremi promjena
+// praćenog polja zaposlenika (PUT /api/data/zaposlenici) ili vrijednosti boda (PUT /api/data/postavkePlaca), pa ne ovisi o tome
+// hoće li netko zapamtiti da je nešto ispravio. Zapisi se ne brišu ni mijenjaju; jedino se naknadno upisuje razlog gdje ga nema.
+// Razlog (neobavezan) dolazi u zaglavlju X-Korekcija-Razlog (URL-kodiran), a za zaposlenike uz X-Korekcija-Zaposlenik (čiji je zapis).
+// Čitaju je samo pozicije s karticom Obračun plaća (u njoj su plaće). Greška pri bilježenju nikad ne smije spriječiti spremanje.
+const PRACENA_POLJA_ZAPOSLENIKA = [
+  { polje: "bodovi", naziv: "Bodovi", tip: "broj" },
+  { polje: "radnoVrijeme", naziv: "Radno vrijeme", tip: "tekst" },
+  { polje: "polaRadnoVrijemeOd", naziv: "Pola radnog vremena od", tip: "datum" },
+  { polje: "fiksnaPlacaBezPolovice", naziv: "Bodovi su već iznos za pola radnog vremena", tip: "logicko" },
+  { polje: "dodatniStazGodine", naziv: "Dodatni staž (godine)", tip: "broj" },
+  { polje: "datumZaposlenja", naziv: "Zaposlen od", tip: "datum" },
+  { polje: "satnicaKooperant", naziv: "Satnica kooperanta (€/h)", tip: "broj" },
+  { polje: "fiksniMjesecniIznos", naziv: "Fiksni mjesečni iznos (€)", tip: "broj" },
+  { polje: "naknadaPrijevoz", naziv: "Naknada za prijevoz (€)", tip: "broj" },
+  { polje: "pozicijaId", naziv: "Pozicija", tip: "tekst" },
+  { polje: "status", naziv: "Status", tip: "tekst" },
+];
+const PRACENA_POLJA_POSTAVKI = [
+  { polje: "vrijednostBoda", naziv: "Vrijednost boda (€)", tip: "broj" },
+  { polje: "dodatakStazPoGodini", naziv: "Dodatak na staž (€ po godini staža)", tip: "broj" },
+  { polje: "fondSatiMjesec", naziv: "Godišnji fond sati (prosjek mjesečno)", tip: "broj" },
+];
+const tekstKorekcije = ({ polje, tip }, v, pozicije) => {
+  if (polje === "radnoVrijeme") return v === "pola" ? "Pola radnog vremena" : "Puno radno vrijeme";
+  if (polje === "status") return v === "Neaktivan" ? "Neaktivan" : "Aktivan";
+  if (polje === "pozicijaId") return (pozicije.find((p) => p.id === v)?.naziv) || "";
+  if (tip === "broj") return String(Number(v) || 0);
+  if (tip === "logicko") return v ? "Da" : "Ne";
+  return v == null ? "" : String(v);
+};
+const imeZaposlenika = (z) => `${z?.prezime || ""} ${z?.ime || ""}`.trim();
+function korekcijeZaposlenika(stari, novi, pozicije) {
+  const redovi = [];
+  const nazivPozicije = (z) => pozicije.find((p) => p.id === z.pozicijaId)?.naziv || "";
+  const vidjeni = new Set();
+  novi.forEach((z) => {
+    if (!z || typeof z !== "object") return;
+    vidjeni.add(z.id);
+    const prije = stari.get(z.id);
+    if (!prije) {
+      const bodovi = Number(z.bodovi) || 0;
+      redovi.push({ zaposlenikId: z.id, zaposlenik: imeZaposlenika(z), polje: "novi", naziv: "Novi zaposlenik", tip: "tekst", staro: "", novo: `${nazivPozicije(z)}${bodovi > 0 ? `, ${bodovi} bodova` : ""}` });
+      return;
+    }
+    PRACENA_POLJA_ZAPOSLENIKA.forEach((def) => {
+      const staro = tekstKorekcije(def, prije[def.polje], pozicije), novo = tekstKorekcije(def, z[def.polje], pozicije);
+      if (staro !== novo) redovi.push({ zaposlenikId: z.id, zaposlenik: imeZaposlenika(z), polje: def.polje, naziv: def.naziv, tip: def.tip, staro, novo });
+    });
+  });
+  stari.forEach((prije, id) => {
+    if (vidjeni.has(id)) return;
+    const bodovi = Number(prije.bodovi) || 0;
+    redovi.push({ zaposlenikId: id, zaposlenik: imeZaposlenika(prije), polje: "uklonjen", naziv: "Zaposlenik uklonjen", tip: "tekst", staro: `${nazivPozicije(prije)}${bodovi > 0 ? `, ${bodovi} bodova` : ""}`, novo: "" });
+  });
+  return redovi;
+}
+function korekcijePostavki(stare, nove) {
+  return PRACENA_POLJA_POSTAVKI.flatMap((def) => {
+    const staro = tekstKorekcije(def, stare[def.polje], []), novo = tekstKorekcije(def, nove[def.polje], []);
+    return staro !== novo ? [{ zaposlenikId: null, zaposlenik: "Svi zaposlenici", polje: def.polje, naziv: def.naziv, tip: def.tip, staro, novo }] : [];
+  });
+}
+const razlogIzZaglavlja = (req) => {
+  try { return decodeURIComponent(String(req.get("x-korekcija-razlog") || "")).trim().slice(0, 300) || null; } catch { return null; }
+};
+// Upis unutar transakcije klijenta; SAVEPOINT osigurava da neuspjeh bilježenja ne poništi samo spremanje podataka.
+async function zapisiKorekcije(client, redovi, korisnik) {
+  if (!redovi.length) return;
+  try {
+    await client.query("SAVEPOINT korekcije");
+    const polja = 10;
+    const params = [];
+    const vrijednosti = redovi.map((r, i) => {
+      params.push(r.zaposlenikId || null, r.zaposlenik || "", r.polje, r.naziv, r.tip, r.staro ?? "", r.novo ?? "", korisnik?.id || null, imeZaposlenika(korisnik), r.razlog || null);
+      return `(${Array.from({ length: polja }, (_, k) => `$${i * polja + k + 1}`).join(",")})`;
+    });
+    await client.query(`INSERT INTO korekcije_bodova (zaposlenik_id, zaposlenik, polje, naziv, tip, staro, novo, korisnik_id, korisnik, razlog) VALUES ${vrijednosti.join(",")}`, params);
+    await client.query("RELEASE SAVEPOINT korekcije");
+    console.log(`Korekcije: ${redovi.length} zapisa (${redovi.map((r) => `${r.zaposlenik}: ${r.naziv} ${r.staro} → ${r.novo}`).join("; ")}), promijenio ${korisnik?.id}`);
+  } catch (e) {
+    console.error("Greška kod bilježenja korekcija (spremanje podataka nije ometeno):", e);
+    await client.query("ROLLBACK TO SAVEPOINT korekcije").catch(() => {});
+  }
+}
+// Kartica Obračun plaća modula Zaposlenici: pristup (čitanje) ili i izmjene.
+const smijeObracun = (pozicija, zaIzmjene = false) => {
+  if (!(pozicija?.moduli || []).includes("zaposlenici")) return false;
+  const d = dozvolaZaKarticu(pozicija, "zaposlenici", "obracun");
+  return d.pristup && (!zaIzmjene || d.izmjene);
+};
 
 // ---------- Popis zaposlenika za login ekran (bez PIN-a/pinHash-a, ne treba token — koristi se za padajući izbornik prije prijave) ----------
 app.get("/api/auth/zaposlenici", async (req, res) => {
@@ -1402,7 +1499,7 @@ app.get("/api/data", autentikacija, async (req, res) => {
     rezultat[key] = citljivo.has(key) ? (stvarno[key] ?? (OBJEKT_KLJUCEVI.has(key) ? {} : [])) : (OBJEKT_KLJUCEVI.has(key) ? {} : []);
   });
   rezultat.slobodniZadaci = filtrirajSlobodneZadatke(rezultat.slobodniZadaci, pozicija, req.zaposlenikId);
-  rezultat.zaposlenici = zaposleniciZaKlijenta(rezultat.zaposlenici, pisivo.has("zaposlenici"));
+  rezultat.zaposlenici = zaposleniciZaKlijenta(rezultat.zaposlenici, pisivo.has("zaposlenici"), smijeObracun(pozicija));
   res.json(rezultat);
 });
 
@@ -1414,7 +1511,7 @@ app.get("/api/data/:key", autentikacija, async (req, res) => {
   if (!citljivo.has(key)) return res.status(403).json({ error: "Vaša pozicija nema pristup ovim podacima." });
   const vrijednost = await ucitajKljuc(key);
   res.json(key === "slobodniZadaci" ? filtrirajSlobodneZadatke(vrijednost, pozicija, req.zaposlenikId)
-    : key === "zaposlenici" ? zaposleniciZaKlijenta(vrijednost, pisivo.has("zaposlenici"))
+    : key === "zaposlenici" ? zaposleniciZaKlijenta(vrijednost, pisivo.has("zaposlenici"), smijeObracun(pozicija))
     : vrijednost);
 });
 
@@ -1488,6 +1585,8 @@ app.put("/api/data/:key", autentikacija, async (req, res, next) => {
   // zaposlenik počinje bez prava prijave dok ga administrator ne označi.
   if (req.params.key === "zaposlenici") {
     if (!Array.isArray(req.body)) return res.status(400).json({ error: "Neispravan popis zaposlenika." });
+    // Podatke o plaći (bodovi i sl.) smije mijenjati samo tko smije mijenjati karticu Obračun plaća; za ostale ostaje vrijednost iz baze.
+    const smijePlace = smijeObracun(await ucitajPozicijuZaposlenika(req.zaposlenikId), true);
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -1498,6 +1597,7 @@ app.put("/api/data/:key", autentikacija, async (req, res, next) => {
         // Klijent ne vidi (a time ni ne smije mijenjati) hasheve lozinki ni oznaku prijave: sve to ostaje onako kako je u bazi.
         const { prijavaUAplikaciju: _poslano, imaJakuLozinku: _izvedeno, lozinkaHash: _h, pinHash: _ph, pin: _pin, ...ostalo } = z;
         const prije = stari.get(z.id);
+        if (!smijePlace) ZAPOSLENIK_PLACNA_POLJA.forEach((k) => { if (prije?.[k] !== undefined) ostalo[k] = prije[k]; else delete ostalo[k]; });
         if (!prije) return { ...ostalo, prijavaUAplikaciju: false };
         const zadrzano = {};
         ZAPOSLENIK_TAJNA_POLJA.forEach((k) => { if (prije[k] !== undefined) zadrzano[k] = prije[k]; });
@@ -1509,6 +1609,38 @@ app.put("/api/data/:key", autentikacija, async (req, res, next) => {
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
         [JSON.stringify(rezultat)]
       );
+      // Povijest korekcija: što se razlikuje od onoga što je do sada bilo u bazi (vidi korekcijeZaposlenika).
+      const pozicije = (await client.query("SELECT value FROM app_data WHERE key = 'pozicijeZaposlenika'")).rows[0]?.value || [];
+      const razlog = razlogIzZaglavlja(req), razlogZaposlenik = String(req.get("x-korekcija-zaposlenik") || "");
+      const korekcije = korekcijeZaposlenika(stari, rezultat, Array.isArray(pozicije) ? pozicije : [])
+        .map((k) => (razlog && k.zaposlenikId === razlogZaposlenik ? { ...k, razlog } : k));
+      await zapisiKorekcije(client, korekcije, stari.get(req.zaposlenikId) || { id: req.zaposlenikId });
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+    return res.json({ ok: true });
+  }
+  // Vrijednost boda, dodatak na staž i fond sati utječu na sve plaće — svaka promjena ide u povijest korekcija.
+  if (req.params.key === "postavkePlaca" && req.body && typeof req.body === "object" && !Array.isArray(req.body)) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const r = await client.query("SELECT value FROM app_data WHERE key = 'postavkePlaca' FOR UPDATE");
+      const stare = r.rows[0]?.value;
+      await client.query(
+        `INSERT INTO app_data (key, value, updated_at) VALUES ('postavkePlaca', $1, now())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        [JSON.stringify(req.body)]
+      );
+      if (stare && typeof stare === "object") {
+        const razlog = razlogIzZaglavlja(req);
+        const korisnik = ((await client.query("SELECT value FROM app_data WHERE key = 'zaposlenici'")).rows[0]?.value || []).find((z) => z.id === req.zaposlenikId) || { id: req.zaposlenikId };
+        await zapisiKorekcije(client, korekcijePostavki(stare, req.body).map((k) => (razlog ? { ...k, razlog } : k)), korisnik);
+      }
       await client.query("COMMIT");
     } catch (e) {
       await client.query("ROLLBACK").catch(() => {});
@@ -1519,6 +1651,22 @@ app.put("/api/data/:key", autentikacija, async (req, res, next) => {
     return res.json({ ok: true });
   }
   await spremiKljuc(req.params.key, req.body);
+  res.json({ ok: true });
+});
+
+// ---------- Povijest korekcija: pregled i naknadni upis razloga ----------
+app.get("/api/korekcije-bodova", autentikacija, async (req, res) => {
+  if (!smijeObracun(await ucitajPozicijuZaposlenika(req.zaposlenikId))) return res.status(403).json({ error: "Vaša pozicija nema pristup obračunu plaća." });
+  const r = await pool.query("SELECT id, vrijeme, zaposlenik_id, zaposlenik, polje, naziv, tip, staro, novo, korisnik, razlog FROM korekcije_bodova ORDER BY vrijeme DESC, id DESC LIMIT 5000");
+  res.json({ korekcije: r.rows.map((k) => ({ id: String(k.id), vrijeme: k.vrijeme, zaposlenikId: k.zaposlenik_id, zaposlenik: k.zaposlenik, polje: k.polje, naziv: k.naziv, tip: k.tip, staro: k.staro, novo: k.novo, korisnik: k.korisnik, razlog: k.razlog || "" })) });
+});
+// Razlog se može upisati samo ondje gdje ga još nema — postojeći zapisi se ne prepisuju.
+app.put("/api/korekcije-bodova/:id/razlog", autentikacija, async (req, res) => {
+  if (!smijeObracun(await ucitajPozicijuZaposlenika(req.zaposlenikId), true)) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za izmjene obračuna plaća." });
+  const razlog = typeof req.body?.razlog === "string" ? req.body.razlog.trim().slice(0, 300) : "";
+  if (!razlog || !/^\d{1,18}$/.test(req.params.id)) return res.status(400).json({ error: "Neispravan zahtjev." });
+  const r = await pool.query("UPDATE korekcije_bodova SET razlog = $1 WHERE id = $2 AND (razlog IS NULL OR razlog = '')", [razlog, req.params.id]);
+  if (!r.rowCount) return res.status(409).json({ error: "Razlog je već upisan ili zapis ne postoji." });
   res.json({ ok: true });
 });
 
@@ -1674,6 +1822,21 @@ async function pripremiAktivnost() {
   }
 }
 
+// Tablica povijesti korekcija (vidi PRACENA_POLJA_ZAPOSLENIKA): zaključana za Supabase Data API kao i aktivnost_dan, zapisi se ne brišu.
+async function pripremiKorekcije() {
+  try {
+    await pool.query(`CREATE TABLE IF NOT EXISTS korekcije_bodova (
+      id bigserial PRIMARY KEY, vrijeme timestamptz NOT NULL DEFAULT now(),
+      zaposlenik_id text, zaposlenik text NOT NULL DEFAULT '', polje text NOT NULL, naziv text NOT NULL, tip text NOT NULL DEFAULT 'tekst',
+      staro text NOT NULL DEFAULT '', novo text NOT NULL DEFAULT '', korisnik_id text, korisnik text NOT NULL DEFAULT '', razlog text)`);
+    await pool.query("CREATE INDEX IF NOT EXISTS idx_korekcije_bodova_vrijeme ON korekcije_bodova (vrijeme DESC)");
+    await pool.query("ALTER TABLE korekcije_bodova ENABLE ROW LEVEL SECURITY");
+    await pool.query("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN REVOKE ALL ON korekcije_bodova FROM anon; END IF; IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN REVOKE ALL ON korekcije_bodova FROM authenticated; END IF; END $$");
+  } catch (e) {
+    console.error("Greška kod pripreme tablice korekcija:", e);
+  }
+}
+
 // Jednokratna (idempotentna) migracija: kartice Evidencija rada i Sati po nalozima prešle su iz modula Zaposlenici u novi modul
 // Evidencija sati. Svaka pozicija koja ima modul Zaposlenici dobije i novi modul, a postavke tih kartica (pristup, izmjene,
 // ograničenje po grupama) kopiraju se, pa nitko ne gubi ni dobiva pristup. Ako pozicija nema pristup ni jednoj od dvije kartice,
@@ -1726,6 +1889,7 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`ERP backend sluša na portu ${PORT}`);
   migrirajEvidencijaSati();
+  pripremiKorekcije();
   pripremiAktivnost();
   setInterval(pripremiAktivnost, 6 * 60 * 60 * 1000);
   provjeriAutoOdjavu();

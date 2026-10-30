@@ -28,3 +28,20 @@ CREATE TABLE IF NOT EXISTS login_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_login_log_zaposlenik ON login_log (zaposlenik_id, vrijeme DESC);
+
+-- Povijest korekcija bodova/plaća (puni se automatski na poslužitelju; stvara je i server pri pokretanju)
+CREATE TABLE IF NOT EXISTS korekcije_bodova (
+  id            BIGSERIAL PRIMARY KEY,
+  vrijeme       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  zaposlenik_id TEXT,
+  zaposlenik    TEXT NOT NULL DEFAULT '',
+  polje         TEXT NOT NULL,
+  naziv         TEXT NOT NULL,
+  tip           TEXT NOT NULL DEFAULT 'tekst',
+  staro         TEXT NOT NULL DEFAULT '',
+  novo          TEXT NOT NULL DEFAULT '',
+  korisnik_id   TEXT,
+  korisnik      TEXT NOT NULL DEFAULT '',
+  razlog        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_korekcije_bodova_vrijeme ON korekcije_bodova (vrijeme DESC);
