@@ -15117,7 +15117,7 @@ function PopisBodovaModal({ db, mojId, onClose, showToast }) {
         Kooperanti, vanjski suradnici i praktikanti nisu na popisu. Svaka promjena bodova koju kasnije spremiš u aplikaciji sama se bilježi u "Povijest korekcija".
       </p>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-        <Field label="Mjesec"><input className="input" type="month" value={mjesec} onChange={(e) => e.target.value && setMjesec(e.target.value)} style={{ maxWidth: 170 }} /></Field>
+        <Field label="Mjesec"><MjesecOdabir value={mjesec} onChange={setMjesec} /></Field>
         <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
           <Btn variant={!jeUred ? "primary" : "ghost"} onClick={() => setVrsta("radiona")}>Radiona</Btn>
           <Btn variant={jeUred ? "primary" : "ghost"} onClick={() => setVrsta("ured")}>Ured</Btn>
