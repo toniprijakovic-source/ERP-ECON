@@ -1660,7 +1660,16 @@ const KARTICE_MODULA = {
   fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "podloge", naziv: "Podloge za fakturu" }, { key: "fakturirano", naziv: "Fakturirano po mjesecima" }, { key: "xrechnung", naziv: "XRechnung" }, { key: "nedovrsena", naziv: "Nedovršena proizvodnja" }, { key: "analiza", naziv: "Analiza projekata" }, { key: "produktivnost", naziv: "Produktivnost (kg/h)" }, { key: "projekcija", naziv: "Projekcija" }] },
   partneri: { kartice: [{ key: "kupci", naziv: "Kupci" }, { key: "dobavljaci", naziv: "Dobavljači" }] },
   evidencijasati: { kartice: [{ key: "evidencija", naziv: "Evidencija rada" }, { key: "satinalozi", naziv: "Sati po nalozima" }] },
-  zaposlenici: { kartice: [{ key: "zaposlenici", naziv: "Zaposlenici" }, { key: "pozicije", naziv: "Pozicije" }, { key: "obracun", naziv: "Obračun plaća" }, { key: "godisnji", naziv: "Godišnji odmor" }] },
+  // funkcije = gumbi na kartici Zaposlenici s vlastitom kvačicom u Pozicije (karticeDozvole.zaposlenici.<key>.pristup, isto kao kartice, ali nisu tabovi).
+  // uvjet = pravo koje funkcija ionako traži; kvačica ga samo sužava (po zadanom je uključena). Provjera na poslužitelju: smijeFunkciju u server.js.
+  zaposlenici: {
+    kartice: [{ key: "zaposlenici", naziv: "Zaposlenici" }, { key: "pozicije", naziv: "Pozicije" }, { key: "obracun", naziv: "Obračun plaća" }, { key: "godisnji", naziv: "Godišnji odmor" }],
+    funkcije: [
+      { key: "izbornikprijave", naziv: "Izbornik za prijavu", uvjet: { kartica: "zaposlenici", polje: "izmjene", opis: "izmjene kartice Zaposlenici" } },
+      { key: "popisbodova", naziv: "Popis bodova (PDF)", uvjet: { kartica: "obracun", polje: "pristup", opis: "pristup kartici Obračun plaća" } },
+      { key: "povijestkorekcija", naziv: "Povijest korekcija", uvjet: { kartica: "obracun", polje: "pristup", opis: "pristup kartici Obračun plaća" } },
+    ],
+  },
 };
 
 // Dozvola za jednu karticu — po zadanom TRUE (naslijeđeno od dodjele modula), osim ako je
@@ -17452,6 +17461,10 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
   const [povijestKorekcija, setPovijestKorekcija] = useState(false);
   const imaObracun = dozvKartice.some((k) => k.key === "obracun"); // bodovi i ostali podaci o plaći pojedinca, popis bodova i povijest korekcija: samo uz karticu Obračun plaća
   const mozeObracunMijenjati = dozvolaZaKarticu(mojaPozicija, "zaposlenici", "obracun").izmjene;
+  // gumbi iznad popisa: pravo koje inače trebaju + kvačica te pozicije u Pozicije (vidi KARTICE_MODULA.zaposlenici.funkcije)
+  const vidiIzbornikPrijave = mozeZaposlenici && dozvolaZaKarticu(mojaPozicija, "zaposlenici", "izbornikprijave").pristup;
+  const vidiPopisBodova = imaObracun && dozvolaZaKarticu(mojaPozicija, "zaposlenici", "popisbodova").pristup;
+  const vidiPovijestKorekcija = imaObracun && dozvolaZaKarticu(mojaPozicija, "zaposlenici", "povijestkorekcija").pristup;
 
   const emptyZap = { ime: "", prezime: "", pozicijaId: db.pozicijeZaposlenika[0]?.id || "", email: "", telefon: "", status: "Aktivan", datumZaposlenja: todayISO(), kompetencije: [], rfidKod: "", bodovi: 0, udaljenostKm: 0, koristiPrehranuUTvrtki: false, satnicaKooperant: 0, fiksniMjesecniIznos: 0, naknadaPrijevoz: 0, maticniBroj: "", dodatniStazGodine: 0, radnoVrijeme: "puno" };
   const [zapForm, setZapForm] = useState(emptyZap);
@@ -17517,12 +17530,12 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
               <span style={{ fontSize: 12.5, color: "#6b5511" }}><strong>{db.zaposlenici.filter((z) => !imaJakuLozinku(z)).length}</strong> zaposlenika još nema postavljenu jaku lozinku (koriste stari PIN ili nemaju nikakvu) — postavi im lozinku gumbom "Lozinka" u tablici.</span>
             </div>
           )}
-          {(mozeZaposlenici || imaObracun) && (
+          {(vidiIzbornikPrijave || vidiPopisBodova || vidiPovijestKorekcija) && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-              {mozeZaposlenici && <Btn icon={ShieldCheck} onClick={() => setIzbornikPrijave(true)}>Izbornik za prijavu</Btn>}
-              {imaObracun && <Btn icon={FileText} onClick={() => setPopisBodova(true)}>Popis bodova (PDF)</Btn>}
-              {imaObracun && <Btn icon={HistoryIcon} onClick={() => setPovijestKorekcija(true)}>Povijest korekcija</Btn>}
-              {mozeZaposlenici && (
+              {vidiIzbornikPrijave && <Btn icon={ShieldCheck} onClick={() => setIzbornikPrijave(true)}>Izbornik za prijavu</Btn>}
+              {vidiPopisBodova && <Btn icon={FileText} onClick={() => setPopisBodova(true)}>Popis bodova (PDF)</Btn>}
+              {vidiPovijestKorekcija && <Btn icon={HistoryIcon} onClick={() => setPovijestKorekcija(true)}>Povijest korekcija</Btn>}
+              {vidiIzbornikPrijave && (
                 <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
                   Na ekranu za prijavu prikazuje se <strong>{db.zaposlenici.filter((z) => z.status === "Aktivan" && z.prijavaUAplikaciju !== false).length}</strong> od {db.zaposlenici.filter((z) => z.status === "Aktivan").length} aktivnih zaposlenika.
                 </span>
@@ -17755,6 +17768,21 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
                             </div>
                           );
                         })}
+                        {(KARTICE_MODULA[m.key]?.funkcije || []).length > 0 && (
+                          <div style={{ marginTop: 6, paddingTop: 8, borderTop: "1px dashed var(--line)" }}>
+                            <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 6 }}>Gumbi na kartici {MODULI_APLIKACIJE.find((x) => x.key === m.key)?.label} — tko ih vidi (uz pravo koje inače trebaju):</div>
+                            {KARTICE_MODULA[m.key].funkcije.map((f) => {
+                              const imaOsnovu = dozvolaZaKarticu(pozForm, m.key, f.uvjet.kartica)[f.uvjet.polje];
+                              return (
+                                <label key={f.key} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, cursor: "pointer", marginBottom: 4 }}>
+                                  <input type="checkbox" checked={dozvolaZaKarticu(pozForm, m.key, f.key).pristup} onChange={(e) => postaviKarticu(m.key, f.key, "pristup", e.target.checked)} />
+                                  <span style={{ color: "var(--ink-soft)" }}>{f.naziv}</span>
+                                  <span style={{ fontSize: 11, color: imaOsnovu ? "var(--ink-faint)" : "var(--rust)" }}>— traži {f.uvjet.opis}{imaOsnovu ? "" : " (ova pozicija ga nema)"}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

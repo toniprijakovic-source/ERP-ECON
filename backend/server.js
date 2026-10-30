@@ -468,6 +468,9 @@ const smijeObracun = (pozicija, zaIzmjene = false) => {
   const d = dozvolaZaKarticu(pozicija, "zaposlenici", "obracun");
   return d.pristup && (!zaIzmjene || d.izmjene);
 };
+// Gumbi na kartici Zaposlenici (izbornikprijave, popisbodova, povijestkorekcija) imaju zasebnu kvačicu u Pozicije (karticeDozvole.zaposlenici.<ključ>.pristup).
+// Po zadanom su dopušteni (kao i kartice) i vrijede UZ pravo koje inače trebaju: oznaka ih samo sužava, nikad ne proširuje.
+const smijeFunkciju = (pozicija, kljuc) => dozvolaZaKarticu(pozicija, "zaposlenici", kljuc).pristup;
 
 // ---------- Popis zaposlenika za login ekran (bez PIN-a/pinHash-a, ne treba token — koristi se za padajući izbornik prije prijave) ----------
 app.get("/api/auth/zaposlenici", async (req, res) => {
@@ -559,7 +562,7 @@ app.put("/api/zaposlenici/:id/lozinka", autentikacija, async (req, res) => {
 // jedan aktivni glavni administrator s lozinkom mora ostati omogućen.
 app.put("/api/zaposlenici/prijava", autentikacija, async (req, res) => {
   const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
-  if (!izracunajDozvoljeneKljuceve(pozicija).pisivo.has("zaposlenici")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za promjenu izbornika za prijavu." });
+  if (!izracunajDozvoljeneKljuceve(pozicija).pisivo.has("zaposlenici") || !smijeFunkciju(pozicija, "izbornikprijave")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za promjenu izbornika za prijavu." });
   const omoguceni = req.body?.omoguceni;
   if (!Array.isArray(omoguceni) || omoguceni.length > 1000 || omoguceni.some((id) => typeof id !== "string")) return res.status(400).json({ error: "Neispravan popis zaposlenika." });
   const skup = new Set(omoguceni);
@@ -1656,13 +1659,15 @@ app.put("/api/data/:key", autentikacija, async (req, res, next) => {
 
 // ---------- Povijest korekcija: pregled i naknadni upis razloga ----------
 app.get("/api/korekcije-bodova", autentikacija, async (req, res) => {
-  if (!smijeObracun(await ucitajPozicijuZaposlenika(req.zaposlenikId))) return res.status(403).json({ error: "Vaša pozicija nema pristup obračunu plaća." });
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  if (!smijeObracun(pozicija) || !smijeFunkciju(pozicija, "povijestkorekcija")) return res.status(403).json({ error: "Vaša pozicija nema pristup povijesti korekcija." });
   const r = await pool.query("SELECT id, vrijeme, zaposlenik_id, zaposlenik, polje, naziv, tip, staro, novo, korisnik, razlog FROM korekcije_bodova ORDER BY vrijeme DESC, id DESC LIMIT 5000");
   res.json({ korekcije: r.rows.map((k) => ({ id: String(k.id), vrijeme: k.vrijeme, zaposlenikId: k.zaposlenik_id, zaposlenik: k.zaposlenik, polje: k.polje, naziv: k.naziv, tip: k.tip, staro: k.staro, novo: k.novo, korisnik: k.korisnik, razlog: k.razlog || "" })) });
 });
 // Razlog se može upisati samo ondje gdje ga još nema — postojeći zapisi se ne prepisuju.
 app.put("/api/korekcije-bodova/:id/razlog", autentikacija, async (req, res) => {
-  if (!smijeObracun(await ucitajPozicijuZaposlenika(req.zaposlenikId), true)) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za izmjene obračuna plaća." });
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  if (!smijeObracun(pozicija, true) || !smijeFunkciju(pozicija, "povijestkorekcija")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za izmjene obračuna plaća." });
   const razlog = typeof req.body?.razlog === "string" ? req.body.razlog.trim().slice(0, 300) : "";
   if (!razlog || !/^\d{1,18}$/.test(req.params.id)) return res.status(400).json({ error: "Neispravan zahtjev." });
   const r = await pool.query("UPDATE korekcije_bodova SET razlog = $1 WHERE id = $2 AND (razlog IS NULL OR razlog = '')", [razlog, req.params.id]);
