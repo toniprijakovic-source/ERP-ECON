@@ -1173,9 +1173,10 @@ app.put("/api/obavijesti/potvrdi", autentikacija, async (req, res) => {
 });
 
 // ---------- Zadaci na nadzornoj ploči koji nisu vezani uz projekt ("slobodniZadaci") ----------
-// Svaki zaposlenik smije dodati zadatak sebi i označiti svoje zadatke izvršenima (bez obzira na
-// module), a tko ima pravo mijenjati projekte smije ih zadavati i drugima te uređivati/brisati
-// bilo čiji. Isti oblik kao ostali patch endpointi (upsert po id-u + remove), primijenjen na
+// Svaki zaposlenik smije dodati zadatak sebi ili bilo kome drugome i označiti svoje zadatke izvršenima
+// (bez obzira na module); promijeniti kome je zadatak dodijeljen smije onaj tko ga je dodao. Tko ima
+// pravo mijenjati projekte (i voditelj proizvodnje) smije uređivati/brisati bilo čiji zadatak.
+// Isti oblik kao ostali patch endpointi (upsert po id-u + remove), primijenjen na
 // trenutni zaključani popis u bazi, da istodobne izmjene ne prepišu jedna drugu.
 app.put("/api/slobodniZadaci/patch", autentikacija, async (req, res) => {
   const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
@@ -1194,14 +1195,14 @@ app.put("/api/slobodniZadaci/patch", autentikacija, async (req, res) => {
 
     for (const u of upsert) {
       const staro = postojeci.get(u.id);
-      if (!upravitelj) {
-        if (staro ? !mojeJe(staro) : u.dodijeljenoId !== req.zaposlenikId) {
+      if (!upravitelj && staro) {
+        if (!mojeJe(staro)) {
           await client.query("ROLLBACK");
-          return res.status(403).json({ error: "Zadatak možeš dodati samo sebi, a mijenjati samo svoje zadatke." });
+          return res.status(403).json({ error: "Mijenjati možeš samo zadatke koje si dodao ili koji su dodijeljeni tebi." });
         }
-        if (u.dodijeljenoId !== req.zaposlenikId && u.dodijeljenoId !== staro?.dodijeljenoId) {
+        if (u.dodijeljenoId !== staro.dodijeljenoId && staro.kreiraoId !== req.zaposlenikId) {
           await client.query("ROLLBACK");
-          return res.status(403).json({ error: "Zadatke drugima mogu zadavati samo korisnici s pristupom projektima." });
+          return res.status(403).json({ error: "Zadatak može nekome drugome dodijeliti samo osoba koja ga je dodala." });
         }
       }
     }
@@ -1215,7 +1216,8 @@ app.put("/api/slobodniZadaci/patch", autentikacija, async (req, res) => {
     const removeSet = new Set(remove);
     const upsertMap = new Map(upsert.map((u) => [u.id, u]));
     const obradi = (u, staro) => {
-      const z = { ...u, kreiraoId: staro?.kreiraoId || u.kreiraoId || req.zaposlenikId };
+      // novi zadatak uvijek pripada onome tko ga sprema (osim upravitelja), da se tuđe ime ne može podmetnuti kao autor
+      const z = { ...u, kreiraoId: staro?.kreiraoId || (upravitelj ? u.kreiraoId : null) || req.zaposlenikId };
       // tko je zadao zadatak: kod novog zadatka uvijek onaj tko ga sprema (ako je zadao), kasnije se ne mijenja
       z.zadaoId = staro ? (staro.zadaoId || null) : (u.zadaoId ? req.zaposlenikId : null);
       z.dodjelaVidjena = !!(staro?.dodjelaVidjena || u.dodjelaVidjena);

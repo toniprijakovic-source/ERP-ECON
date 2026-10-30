@@ -2737,9 +2737,10 @@ function Dashboard({ db, update, showToast, setPage, otvoriProjekt, mojId, mojaP
   // Tko ima pristup projektima može izabrati i zadatke bilo koje druge osobe (samo pregled).
   // Zadatke svih zaposlenika vide samo direktor i glavni administrator; ostali vide samo svoje.
   const mozeVidjetiTudje = ["poz-direktor", "poz-administrator"].includes(mojaPozicija?.id);
-  // Zadavati zadatke drugoj osobi (i brisati tuđe) smiju još i korisnici s pristupom projektima.
-  // Voditelj proizvodnje ih smije zadavati i bez modula Projekti (isto pravilo kao na poslužitelju: POZICIJE_ZADAVANJE_ZADATAKA).
-  const mozeZadavatiDrugima = mozeVidjetiTudje || mojaPozicija?.id === "poz-voditelj-proizvodnje" || ((mojaPozicija?.moduli || []).includes("projekti") && dozvolaZaKarticu(mojaPozicija, "projekti", "projekti").pristup);
+  // Zadatak drugoj osobi smije zadati svatko (u "Novi zadatak" bira kome), a uređivati i brisati TUĐE zadatke
+  // smiju samo direktor, administrator, voditelj proizvodnje i korisnici s pristupom projektima (isto pravilo kao
+  // na poslužitelju: POZICIJE_ZADAVANJE_ZADATAKA).
+  const mozeUredjivatiTudje = mozeVidjetiTudje || mojaPozicija?.id === "poz-voditelj-proizvodnje" || ((mojaPozicija?.moduli || []).includes("projekti") && dozvolaZaKarticu(mojaPozicija, "projekti", "projekti").pristup);
   const imeZaposlenika = (id) => { const z = db.zaposlenici.find((x) => x.id === id); return z ? `${z.prezime} ${z.ime}` : "—"; };
   const sviOtvoreniZadaci = [];
   db.projekti.forEach((p) => {
@@ -2755,7 +2756,7 @@ function Dashboard({ db, update, showToast, setPage, otvoriProjekt, mojId, mojaP
   const dodajSlobodniZadatak = () => {
     const naziv = noviSlobodni.naziv.trim();
     if (!naziv) return;
-    const kome = mozeZadavatiDrugima && noviSlobodni.kome ? noviSlobodni.kome : mojId;
+    const kome = noviSlobodni.kome || mojId;
     update("slobodniZadaci", [...slobodniZadaci, { id: uid("sz"), naziv, dodijeljenoId: kome, planiraniDatum: noviSlobodni.datum || null, izvrseno: false, izvrsioId: null, datumIzvrsenja: null, kreiraoId: mojId, zadaoId: mojId, zadanoDatum: sadaISO(), dodjelaVidjena: kome === mojId }]);
     setNoviSlobodni({ naziv: "", datum: "", kome: "" });
   };
@@ -2849,12 +2850,10 @@ function Dashboard({ db, update, showToast, setPage, otvoriProjekt, mojId, mojaP
           {dodajZadatakOtvoreno && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10, padding: 8, background: "var(--surface-alt)", borderRadius: 3 }}>
               <input className="input" style={{ flex: "1 1 200px" }} autoFocus placeholder="Zadatak (nije vezan uz projekt)…" value={noviSlobodni.naziv} onChange={(e) => setNoviSlobodni({ ...noviSlobodni, naziv: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") dodajSlobodniZadatak(); }} />
-              {mozeZadavatiDrugima && (
-                <select className="select" style={{ width: 170 }} value={noviSlobodni.kome} onChange={(e) => setNoviSlobodni({ ...noviSlobodni, kome: e.target.value })}>
-                  <option value="">Meni</option>
-                  {[...db.zaposlenici].filter((z) => z.id !== mojId).sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
-                </select>
-              )}
+              <select className="select" style={{ width: 170 }} aria-label="Kome se zadatak dodjeljuje" value={noviSlobodni.kome} onChange={(e) => setNoviSlobodni({ ...noviSlobodni, kome: e.target.value })}>
+                <option value="">Meni</option>
+                {[...db.zaposlenici].filter((z) => z.id !== mojId).sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+              </select>
               <input type="date" className="input" style={{ width: 150 }} value={noviSlobodni.datum} onChange={(e) => setNoviSlobodni({ ...noviSlobodni, datum: e.target.value })} title="Rok izvršenja (nije obavezan)" />
               <Btn variant="primary" size="sm" icon={Plus} onClick={dodajSlobodniZadatak}>Dodaj</Btn>
             </div>
@@ -2888,13 +2887,13 @@ function Dashboard({ db, update, showToast, setPage, otvoriProjekt, mojId, mojaP
                       <NapomenaZadatka
                         zadatak={z}
                         imeZaposlenika={imeZaposlenika}
-                        mozeUredjivati={z.slobodan ? (z.kreiraoId === mojId || mozeZadavatiDrugima) : mozeMijenjatiProjekte}
+                        mozeUredjivati={z.slobodan ? (z.kreiraoId === mojId || mozeUredjivatiTudje) : mozeMijenjatiProjekte}
                         onSpremi={(tekst) => (z.slobodan ? spremiNapomenuSlobodnog(z.id, tekst) : patchZadatakNapomena(z.projektId, z.id, tekst))}
                       />
                       {z.upitnik && <div style={{ marginTop: 4 }}><Btn size="sm" variant={z.dodijeljenoId === mojId && !z.izvrseno ? "primary" : "ghost"} onClick={() => setUpitnikId(z.id)}>Pogledaj odgovore ({odgovorenoUpitnik(z)}/{z.upitnik.pitanja.length})</Btn></div>}
                     </div>
                     {z.planiraniDatum && <span className="f-mono" style={{ fontSize: 11.5, color: kasni ? "var(--rust)" : "var(--ink-soft)", flexShrink: 0, whiteSpace: "nowrap" }}>{fmtDate(z.planiraniDatum)}</span>}
-                    {z.slobodan && (mozeZadavatiDrugima || z.kreiraoId === mojId) && <button type="button" onClick={() => obrisiSlobodni(z.id)} title="Obriši zadatak" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-faint)", padding: 0, flexShrink: 0 }}><Trash2 size={13} /></button>}
+                    {z.slobodan && (mozeUredjivatiTudje || z.kreiraoId === mojId) && <button type="button" onClick={() => obrisiSlobodni(z.id)} title="Obriši zadatak" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-faint)", padding: 0, flexShrink: 0 }}><Trash2 size={13} /></button>}
                   </div>
                 );
               })}
@@ -2915,13 +2914,13 @@ function Dashboard({ db, update, showToast, setPage, otvoriProjekt, mojId, mojaP
                       <NapomenaZadatka
                         zadatak={z}
                         imeZaposlenika={imeZaposlenika}
-                        mozeUredjivati={z.slobodan ? (z.dodijeljenoId === mojId || z.kreiraoId === mojId || mozeZadavatiDrugima) : (z.dodijeljenoId === mojId || mozeMijenjatiProjekte)}
+                        mozeUredjivati={z.slobodan ? (z.dodijeljenoId === mojId || z.kreiraoId === mojId || mozeUredjivatiTudje) : (z.dodijeljenoId === mojId || mozeMijenjatiProjekte)}
                         onSpremi={(tekst) => (z.slobodan ? spremiNapomenuSlobodnog(z.id, tekst) : patchZadatakNapomena(z.projektId, z.id, tekst))}
                       />
                       {z.upitnik && <div style={{ marginTop: 4 }}><Btn size="sm" variant={z.dodijeljenoId === mojId && !z.izvrseno ? "primary" : "ghost"} onClick={() => setUpitnikId(z.id)}>{z.dodijeljenoId === mojId ? "Otvori upitnik" : "Pogledaj odgovore"} ({odgovorenoUpitnik(z)}/{z.upitnik.pitanja.length})</Btn></div>}
                     </div>
                     {z.planiraniDatum && <span className="f-mono" style={{ fontSize: 11.5, color: kasni ? "var(--rust)" : "var(--ink-soft)", flexShrink: 0, whiteSpace: "nowrap" }}>{fmtDate(z.planiraniDatum)}</span>}
-                    {z.slobodan && (mozeZadavatiDrugima || z.kreiraoId === mojId) && <button type="button" onClick={() => obrisiSlobodni(z.id)} title="Obriši zadatak" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-faint)", padding: 0, flexShrink: 0 }}><Trash2 size={13} /></button>}
+                    {z.slobodan && (mozeUredjivatiTudje || z.kreiraoId === mojId) && <button type="button" onClick={() => obrisiSlobodni(z.id)} title="Obriši zadatak" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-faint)", padding: 0, flexShrink: 0 }}><Trash2 size={13} /></button>}
                   </div>
                 );
               })}
