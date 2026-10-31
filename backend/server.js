@@ -141,6 +141,8 @@ const KARTICE_MODULA = {
   otpremnice: {
     otpremnice: { citanje: ["otpremnice", "projekti", "kupci", "narudzbe", "podlogeZaFakturu"], pisanje: ["otpremnice"] },
     cmr: { citanje: ["cmr", "otpremnice", "projekti", "kupci", "dobavljaci", "narudzbe", "postavkeTvrtke"], pisanje: ["cmr"] },
+    // Statistika isporuka (kg inozemstvo/tuzemstvo po mjesecu): samo pregled postojećih otpremnica i CMR-ova.
+    statistika: { citanje: ["otpremnice", "cmr", "narudzbe", "kupci", "postavkeTvrtke"], pisanje: [] },
   },
   // Financije (ključ ostaje "fakturiranje" zbog postojećih pozicija).
   fakturiranje: {
