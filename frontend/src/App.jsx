@@ -9,7 +9,7 @@ import {
 import logoEcon from "./assets/logo-econ.jpg";
 import QRCode from "qrcode";
 import { napraviPdfUpitaMaterijala, napraviPdfPonude, napraviEml, preuzmiDatoteku, potpisEmail } from "./pdfNabave";
-import { statistikaIsporuka } from "./statistikaIsporuka";
+import { statistikaIsporuka, tezinaOtpremnice as tezinaOtpremniceLogika } from "./statistikaIsporuka";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu } from "./zastitaNaRadu";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
@@ -12174,20 +12174,9 @@ const sljedeciBrojCmr = (lista, datumISO) => {
   return `${prefiks}${(brojevi.length ? Math.max(...brojevi) : 0) + 1}${sufiks}`;
 };
 
-// Težina otpremnice: po stavci uzima masu upisanu na otpremnici (masaKg), a ako nje nema, masu iz
-// narudžbe kupca (masa po jedinici × količina). Stavke bez ijednog podatka se broje u "nedostaje".
-const tezinaOtpremnice = (otpremnica, db) => {
-  const narudzba = db.narudzbe.find((n) => n.id === otpremnica.narudzbaId);
-  let ukupno = 0, nedostaje = 0;
-  (otpremnica.stavke || []).forEach((s) => {
-    const upisana = Number(s.masaKg);
-    if (upisana > 0) { ukupno += upisana; return; }
-    const nst = narudzba?.stavke?.find((x) => x.id === s.narudzbaStavkaId);
-    const izNarudzbe = (Number(nst?.masaJed) || 0) * (Number(s.kolicina) || 0);
-    if (izNarudzbe > 0) ukupno += izNarudzbe; else nedostaje += 1;
-  });
-  return { ukupno, nedostaje };
-};
+// Težina otpremnice (vidi tezinaOtpremnice u statistikaIsporuka.js): masa upisana na otpremnici, inače iz narudžbe kupca,
+// a za kupaonice (isporuke po normativu) iz projekta. Stavke bez ijednog podatka se broje u "nedostaje".
+const tezinaOtpremnice = (otpremnica, db) => tezinaOtpremniceLogika(otpremnica, db);
 
 const CMR_STATUSI = ["Izdan", "Potpisao prijevoznik", "Isporučeno (potpisao primatelj)"];
 
@@ -14715,7 +14704,7 @@ function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
 // Mjesec po datumu otpremnice; otpremnice kooperantima (dorade) se ne ubrajaju. Samo pregled, ništa se ne sprema.
 function StatistikaIsporukaTab({ db, showToast }) {
   const [mjesec, setMjesec] = useState(todayISO().slice(0, 7));
-  const r = useMemo(() => statistikaIsporuka({ otpremnice: db.otpremnice || [], cmr: db.cmr || [] }, mjesec, (o) => tezinaOtpremnice(o, db)), [db.otpremnice, db.cmr, db.narudzbe, mjesec]);
+  const r = useMemo(() => statistikaIsporuka({ otpremnice: db.otpremnice || [], cmr: db.cmr || [] }, mjesec, (o) => tezinaOtpremnice(o, db)), [db.otpremnice, db.cmr, db.narudzbe, db.projekti, mjesec]);
   const kg = (n) => `${(Number(n) || 0).toLocaleString("hr-HR", { maximumFractionDigits: 1 })} kg`;
   const kupac = (o) => db.kupci.find((k) => k.id === o.kupacId)?.naziv || "—";
   const projekt = (o) => db.projekti.find((p) => p.id === o.projektId)?.sifra || "";

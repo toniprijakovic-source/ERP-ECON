@@ -5,6 +5,33 @@
 const uMjesecu = (datum, mjesec) => String(datum || "").slice(0, 7) === mjesec;
 const zaokruzi = (n) => Math.round((Number(n) || 0) * 10) / 10;
 
+// Težina otpremnice, po stavci redom: masa upisana na otpremnici (masaKg); masa iz narudžbe kupca (masaJed × količina);
+// za kupaonice po normativu (stavka ima isporukaIds) masa iz projekta: masaJed stavke Pod/Stranica × količina na otpremnici.
+// Stavke bez ijednog podatka broje se u "nedostaje".
+export function tezinaOtpremnice(otpremnica, { narudzbe = [], projekti = [] } = {}) {
+  const narudzba = narudzbe.find((n) => n.id === otpremnica.narudzbaId);
+  const projekt = projekti.find((p) => p.id === otpremnica.projektId);
+  let ukupno = 0, nedostaje = 0;
+  (otpremnica.stavke || []).forEach((s) => {
+    const kolicina = Number(s.kolicina) || 0;
+    const upisana = Number(s.masaKg);
+    if (upisana > 0) { ukupno += upisana; return; }
+    const nst = narudzba?.stavke?.find((x) => x.id === s.narudzbaStavkaId);
+    const izNarudzbe = (Number(nst?.masaJed) || 0) * kolicina;
+    if (izNarudzbe > 0) { ukupno += izNarudzbe; return; }
+    // grupirane isporuke iste stavke dijele masu jedinice; uzima se prva isporuka čija stavka ima masu
+    let masaJed = 0;
+    (s.isporukaIds || []).some((iid) => {
+      const i = (projekt?.isporuke || []).find((x) => x.id === iid);
+      const st = (i?.grupa === "stavkePod" ? projekt?.stavkePod : projekt?.stavkeKomplet || [])?.find((x) => x.id === i?.stavkaId);
+      masaJed = Number(st?.masaJed) || 0;
+      return masaJed > 0;
+    });
+    if (masaJed * kolicina > 0) ukupno += masaJed * kolicina; else nedostaje += 1;
+  });
+  return { ukupno, nedostaje };
+}
+
 // tezina(otpremnica) -> { ukupno, nedostaje } (nedostaje = broj stavki bez poznate težine)
 export function statistikaIsporuka({ otpremnice = [], cmr = [] }, mjesec, tezina) {
   const cmrZaOtpremnicu = new Map();

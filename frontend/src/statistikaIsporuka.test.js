@@ -1,7 +1,7 @@
 // Provjere statistike isporuka (kg inozemstvo / tuzemstvo po mjesecu). Pokretanje: `npm test` u mapi frontend. Svi podaci su izmišljeni.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { statistikaIsporuka } from "./statistikaIsporuka.js";
+import { statistikaIsporuka, tezinaOtpremnice } from "./statistikaIsporuka.js";
 
 const tezina = (o) => ({ ukupno: (o.stavke || []).reduce((s, x) => s + (Number(x.masaKg) || 0), 0), nedostaje: (o.stavke || []).filter((x) => !(Number(x.masaKg) > 0)).length });
 const otp = (id, datum, kg, extra = {}) => ({ id, broj: `OTP-${id}`, datum, vrsta: "kupac", stavke: [{ masaKg: kg }], ...extra });
@@ -47,4 +47,20 @@ test("CMR s više otpremnica broji se jednom u bruto težini; stariji zapisi bez
   assert.equal(r.cmrBroj, 1);
   assert.equal(r.cmrBruto, 310);
   assert.equal(r.inozemstvo.kg, 300);
+});
+
+test("težina otpremnice: upisana masa, pa narudžba, pa projekt kupaonica (masa jedinice × količina na otpremnici)", () => {
+  const projekti = [{ id: "p1", stavkePod: [{ id: "sp1", masaJed: 200 }], stavkeKomplet: [{ id: "sk1", masaJed: 100 }, { id: "sk2" }], isporuke: [
+    { id: "i1", grupa: "stavkePod", stavkaId: "sp1", komada: 1 }, { id: "i2", grupa: "stavkePod", stavkaId: "sp1", komada: 1 },
+    { id: "i3", grupa: "stavkeKomplet", stavkaId: "sk1", komada: 1 }, { id: "i4", grupa: "stavkeKomplet", stavkaId: "sk2", komada: 1 }] }];
+  const narudzbe = [{ id: "n1", stavke: [{ id: "ns1", masaJed: 5 }] }];
+  const otpremnica = { id: "o", projektId: "p1", narudzbaId: "n1", stavke: [
+    { kolicina: 2, isporukaIds: ["i1", "i2"] },
+    { kolicina: 3, isporukaIds: ["i3"] },
+    { kolicina: 1, isporukaIds: ["i4"] },
+    { kolicina: 4, narudzbaStavkaId: "ns1" },
+    { kolicina: 9, masaKg: 50, isporukaIds: ["i1"] },
+  ] };
+  assert.deepEqual(tezinaOtpremnice(otpremnica, { narudzbe, projekti }), { ukupno: 400 + 300 + 20 + 50, nedostaje: 1 });
+  assert.deepEqual(tezinaOtpremnice({ id: "x", stavke: [{ kolicina: 1 }] }, {}), { ukupno: 0, nedostaje: 1 });
 });
