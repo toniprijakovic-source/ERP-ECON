@@ -93,6 +93,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
   "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca",
   "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije", "maticnaKnjiga", "upitiTransporta", "narudzbeTransporta", "godisnjiOdmor", "xrechnungPostavke",
+  "kadrovskiPodaci", "radnaMjesta", "uputnice", "pregledi", "zastitaPostavke", "prijedlozi",
 ];
 
 // Svaki modul (isti "moduli" popis kao u pozicijeZaposlenika) dijeli se na kartice — iste
@@ -188,6 +189,12 @@ const KARTICE_MODULA = {
     // dani iz evidencije rada (godišnji i detašman - godišnji), uz praznike i pozicije za skupine radiona / režija.
     godisnji: { citanje: ["godisnjiOdmor", "evidencijaRada", "praznici", "zaposlenici", "pozicijeZaposlenika", "postavkeTvrtke"], pisanje: ["godisnjiOdmor"] },
   },
+  // Zaštita na radu. Liječnički pregledi (uputnice RA-1): kadrovski podaci radnika (OIB, datum rođenja… uz id zaposlenika), predlošci radnih
+  // mjesta iz Procjene rizika, izdane uputnice, rezultati pregleda i postavke. To su osobni i zdravstveni podaci, pa ih ne dobiva nitko tko nema ovaj
+  // modul (a modul se dodjeljuje izričito, po poziciji). Staž prije dolaska čita se iz Godišnjeg odmora. Kasnije: kartica Zaštitna oprema.
+  zastita: {
+    lijecnicki: { citanje: ["kadrovskiPodaci", "radnaMjesta", "uputnice", "pregledi", "zastitaPostavke", "zaposlenici", "pozicijeZaposlenika", "postavkeTvrtke", "godisnjiOdmor"], pisanje: ["kadrovskiPodaci", "radnaMjesta", "uputnice", "pregledi", "zastitaPostavke"] },
+  },
 };
 
 // Ključevi koje App.jsx čita na najvišoj razini (zaglavlje, navigacija, prijava) —
@@ -202,10 +209,20 @@ const filtrirajSlobodneZadatke = (zadaci, pozicija, zaposlenikId) => (Array.isAr
   ? zadaci.filter((z) => z.dodijeljenoId === zaposlenikId || z.kreiraoId === zaposlenikId)
   : zadaci);
 
-const UVIJEK_CITLJIVO = ["zaposlenici", "pozicijeZaposlenika", "postavkeTvrtke"];
+// Prijedlozi korisnika (poboljšanja aplikacije): svatko šalje svoje i vidi samo svoje; direktor i glavni administrator vide sve i odgovaraju.
+// Dodaje ih samo PUT /api/prijedlozi/patch (autora, vrijeme i status postavlja poslužitelj), nikad cijeli popis.
+const PRIJEDLOG_STATUSI = ["Novo", "U razmatranju", "Planirano", "Gotovo", "Odbijeno"];
+const filtrirajPrijedloge = (prijedlozi, pozicija, zaposlenikId) => (Array.isArray(prijedlozi) && !POZICIJE_SVI_ZADACI.includes(pozicija?.id)
+  ? prijedlozi.filter((p) => p.kreiraoId === zaposlenikId)
+  : prijedlozi);
+
+const UVIJEK_CITLJIVO = ["zaposlenici", "pozicijeZaposlenika", "postavkeTvrtke", "prijedlozi"];
 
 // Ključevi čija je vrijednost objekt (ne niz) — koristi se za ispravan "prazan" placeholder.
-const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi", "postavkePlaca", "planProizvodnje", "nedovrsenaProizvodnja", "godisnjiOdmor", "xrechnungPostavke"]);
+const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi", "postavkePlaca", "planProizvodnje", "nedovrsenaProizvodnja", "godisnjiOdmor", "xrechnungPostavke", "zastitaPostavke"]);
+// Popisi koji se spremaju SAMO ciljano (PUT /api/<ključ>/patch): zastarjeli preglednik ne smije cijelim popisom prepisati uputnice (brojevi, snimke
+// izdanih uputnica) ni osobne podatke radnika. Ostalo (zastitaPostavke) se sprema kao cijeli objekt.
+const SAMO_CILJANO = new Set(["kadrovskiPodaci", "radnaMjesta", "uputnice", "pregledi", "prijedlozi"]);
 
 async function ucitajPozicijuZaposlenika(zaposlenikId) {
   const [zaposlenici, pozicije] = await Promise.all([ucitajKljuc("zaposlenici"), ucitajKljuc("pozicijeZaposlenika")]);
@@ -1385,6 +1402,8 @@ const patchPoIdHandler = (kljuc, brojRegex, naziv, prilagodiUpsert = (upsert) =>
     res.json({ ok: true, [kljuc]: rezultat, promijenjeniBrojevi });
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
+    // Provjere u prilagodiUpsert (npr. Zaštita na radu) vraćaju razumljivu poruku umjesto opće greške poslužitelja.
+    if (e?.httpStatus) return res.status(e.httpStatus).json({ error: e.message });
     console.error(`Greška kod izmjene (${kljuc}):`, e);
     res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
   } finally {
@@ -1504,6 +1523,7 @@ app.get("/api/data", autentikacija, async (req, res) => {
     rezultat[key] = citljivo.has(key) ? (stvarno[key] ?? (OBJEKT_KLJUCEVI.has(key) ? {} : [])) : (OBJEKT_KLJUCEVI.has(key) ? {} : []);
   });
   rezultat.slobodniZadaci = filtrirajSlobodneZadatke(rezultat.slobodniZadaci, pozicija, req.zaposlenikId);
+  rezultat.prijedlozi = filtrirajPrijedloge(rezultat.prijedlozi, pozicija, req.zaposlenikId);
   rezultat.zaposlenici = zaposleniciZaKlijenta(rezultat.zaposlenici, pisivo.has("zaposlenici"), smijeObracun(pozicija));
   res.json(rezultat);
 });
@@ -1516,12 +1536,14 @@ app.get("/api/data/:key", autentikacija, async (req, res) => {
   if (!citljivo.has(key)) return res.status(403).json({ error: "Vaša pozicija nema pristup ovim podacima." });
   const vrijednost = await ucitajKljuc(key);
   res.json(key === "slobodniZadaci" ? filtrirajSlobodneZadatke(vrijednost, pozicija, req.zaposlenikId)
+    : key === "prijedlozi" ? filtrirajPrijedloge(vrijednost, pozicija, req.zaposlenikId)
     : key === "zaposlenici" ? zaposleniciZaKlijenta(vrijednost, pisivo.has("zaposlenici"), smijeObracun(pozicija))
     : vrijednost);
 });
 
 app.put("/api/data/:key", autentikacija, async (req, res, next) => {
   if (!DOZVOLJENI_KLJUCEVI.includes(req.params.key)) return res.status(400).json({ error: "Nepoznat ključ." });
+  if (SAMO_CILJANO.has(req.params.key)) return res.status(400).json({ error: "Ovaj popis se sprema ciljano (PUT /api/<ključ>/patch), ne cijeli." });
   next();
 }, autorizacijaPisanja, async (req, res) => {
   if (req.params.key === "radniNalozi") {
@@ -1880,6 +1902,263 @@ async function migrirajEvidencijaSati() {
   }
 }
 
+// ---------- Zaštita na radu: liječnički pregledi (uputnice RA-1) ----------
+// Pravila koja ne smiju ovisiti o pregledniku: broj uputnice (dodjeljuje se ovdje, pod zaključavanjem popisa — bez rupa i ponavljanja, od 1 svake
+// godine), ispravan OIB, odobren predložak radnog mjesta i nepromjenjivost izdane uputnice. Oblik podataka je isti kao u frontend/src/zastitaNaRadu.js.
+// Ključevi kadrovskiPodaci, radnaMjesta, uputnice i pregledi spremaju se samo ciljano (po id-u); vidi SAMO_CILJANO i KARTICE_MODULA.zastita.
+const ZNR_VRSTE = ["prethodni", "periodicki", "izvanredni"];
+const RADNO_MJESTO_SADRZAJ = ["sifra", "naziv", "proces", "posebniUvjeti", "clanak", "tocke", "podtocke", "drugiPropis", "povecaniStaz", "kratakOpis", "strojevi", "predmetRada", "mjestoRada", "organizacija", "polozaj", "tereti", "vazno", "uvjeti", "kemijskeTvari", "biolosteStetnosti", "rokPeriodickogMjeseci"];
+const greskaZahtjeva = (status, poruka) => Object.assign(new Error(poruka), { httpStatus: status });
+const znrTekst = (v, max) => String(v ?? "").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "").trim().slice(0, max);
+const znrDatum = (v) => { const s = String(v ?? "").slice(0, 10); return /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(`${s}T12:00:00Z`)) ? s : ""; };
+const znrBroj = (v, max) => { const s = String(v ?? "").trim().replace(",", "."); if (s === "") return ""; const n = Number(s); return Number.isFinite(n) && n >= 0 ? Math.min(n, max) : ""; };
+const znrPopis = (v, max = 30) => (Array.isArray(v) ? v.map((x) => znrTekst(x, 40)).filter(Boolean).slice(0, max) : []);
+const znrBrojevi = (v) => (Array.isArray(v) ? [...new Set(v.map(Number).filter((n) => Number.isInteger(n) && n > 0 && n < 1000))].sort((a, b) => a - b) : []);
+const znrTereti = (t) => Object.fromEntries(["dizanje", "prenosenje", "guranje"].map((k) => [k, { oznaceno: !!t?.[k]?.oznaceno, kg: znrBroj(t?.[k]?.kg, 1000) }]));
+const znrOib = (v) => String(v ?? "").replace(/\D/g, "").slice(0, 11);
+// Kontrolna znamenka OIB-a (ISO 7064, MOD 11,10).
+const oibIspravan = (v) => {
+  const o = String(v ?? "").replace(/\D/g, "");
+  if (o.length !== 11) return false;
+  let a = 10;
+  for (let i = 0; i < 10; i++) { a = (a + Number(o[i])) % 10; if (a === 0) a = 10; a = (a * 2) % 11; }
+  let k = 11 - a;
+  if (k === 10) k = 0;
+  return k === Number(o[10]);
+};
+const ucitajKljucKlijent = async (client, key) => (await client.query("SELECT value FROM app_data WHERE key = $1", [key])).rows[0]?.value;
+const znrIdZapisa = (u) => { if (!u || typeof u.id !== "string" || !u.id.trim()) throw greskaZahtjeva(400, "Neispravan zapis."); };
+
+// Kadrovski podaci radnika (id zapisa = id zaposlenika): samo poznata polja, OIB s ispravnom kontrolnom znamenkom i jedinstven.
+const prilagodiKadrovske = async (upsert, trenutno, client) => {
+  const poznati = new Set(((await ucitajKljucKlijent(client, "zaposlenici")) || []).map((z) => z.id));
+  const oibovi = new Map(trenutno.map((k) => [k.id, k.oib || ""]));
+  const rezultat = upsert.map((u) => {
+    znrIdZapisa(u);
+    if (!poznati.has(u.id)) throw greskaZahtjeva(400, "Zaposlenik nije pronađen.");
+    const oib = znrOib(u.oib);
+    if (oib && !oibIspravan(oib)) throw greskaZahtjeva(400, "OIB nije ispravan (11 znamenki s ispravnom kontrolnom znamenkom).");
+    oibovi.set(u.id, oib);
+    return {
+      id: u.id, oib, datumRodjenja: znrDatum(u.datumRodjenja), mjestoRodjenja: znrTekst(u.mjestoRodjenja, 80), imeRoditelja: znrTekst(u.imeRoditelja, 80),
+      zanimanje: znrTekst(u.zanimanje, 80), skolskaSprema: znrTekst(u.skolskaSprema, 10), stazPrijeGodine: znrBroj(u.stazPrijeGodine, 60), stazPrijeMjeseci: znrBroj(u.stazPrijeMjeseci, 11),
+      radnoMjestoId: znrTekst(u.radnoMjestoId, 40), dodatniPoslovi: znrPopis(u.dodatniPoslovi, 10), datumPocetkaNaRadnomMjestu: znrDatum(u.datumPocetkaNaRadnomMjestu), napomena: znrTekst(u.napomena, 500),
+    };
+  });
+  const vidjeni = new Map();
+  for (const [id, oib] of oibovi) {
+    if (!oib) continue;
+    if (vidjeni.has(oib) && vidjeni.get(oib) !== id) throw greskaZahtjeva(400, "Taj OIB već ima drugi zaposlenik.");
+    vidjeni.set(oib, id);
+  }
+  return rezultat;
+};
+
+// Predlošci radnih mjesta. Odobrenje (osoba + datum) postavlja poslužitelj kad preglednik pošalje odobreno: true; svaka izmjena sadržaja
+// poništava prijašnje odobrenje, a uputnica se može izdati samo s odobrenim predloškom.
+const prilagodiRadnaMjesta = (zaposlenikId) => async (upsert, trenutno) => {
+  const stara = new Map(trenutno.map((r) => [r.id, r]));
+  const sada = new Date().toISOString();
+  return upsert.map((u) => {
+    znrIdZapisa(u);
+    const novi = {
+      id: znrTekst(u.id, 40), sifra: znrTekst(u.sifra, 20), naziv: znrTekst(u.naziv, 120), proces: znrTekst(u.proces, 60), posebniUvjeti: u.posebniUvjeti !== false,
+      clanak: znrTekst(u.clanak, 20), tocke: znrBrojevi(u.tocke), podtocke: znrBrojevi(u.podtocke), drugiPropis: znrTekst(u.drugiPropis, 300), povecaniStaz: znrTekst(u.povecaniStaz, 300),
+      kratakOpis: znrTekst(u.kratakOpis, 400), strojevi: znrTekst(u.strojevi, 400), predmetRada: znrTekst(u.predmetRada, 300),
+      mjestoRada: znrPopis(u.mjestoRada), organizacija: znrPopis(u.organizacija), polozaj: znrPopis(u.polozaj), tereti: znrTereti(u.tereti), vazno: znrPopis(u.vazno), uvjeti: znrPopis(u.uvjeti),
+      kemijskeTvari: znrTekst(u.kemijskeTvari, 300), biolosteStetnosti: znrTekst(u.biolosteStetnosti, 300), rokPeriodickogMjeseci: znrBroj(u.rokPeriodickogMjeseci, 120),
+      izvor: znrTekst(u.izvor, 200), napomenaProvjere: znrTekst(u.napomenaProvjere, 1500),
+    };
+    if (!novi.naziv) throw greskaZahtjeva(400, "Radno mjesto mora imati naziv.");
+    const staro = stara.get(novi.id);
+    const sadrzajIsti = !!staro && RADNO_MJESTO_SADRZAJ.every((k) => JSON.stringify(staro[k]) === JSON.stringify(novi[k]));
+    novi.odobreno = u.odobreno === true ? { osobaId: zaposlenikId, datum: sada } : sadrzajIsti && staro.odobreno ? staro.odobreno : null;
+    return novi;
+  });
+};
+
+// Polja uputnice kakva se ispisuju (snimka) — poslužitelj sprema samo poznata polja, a kod prethodnog pregleda uvijek prazni blok o posljednjem pregledu.
+const ocistiPoljaUputnice = (p, vrsta) => {
+  const o = p || {};
+  const pr = o.posljednjiPregled;
+  return {
+    poslodavac: { naziv: znrTekst(o.poslodavac?.naziv, 120), adresa1: znrTekst(o.poslodavac?.adresa1, 120), adresa2: znrTekst(o.poslodavac?.adresa2, 120), oib: znrOib(o.poslodavac?.oib) },
+    ime: znrTekst(o.ime, 80), prezime: znrTekst(o.prezime, 80), imeRoditelja: znrTekst(o.imeRoditelja, 80),
+    datumRodjenja: znrDatum(o.datumRodjenja), mjestoRodjenja: znrTekst(o.mjestoRodjenja, 80), oib: znrOib(o.oib),
+    zanimanje: znrTekst(o.zanimanje, 80), skolskaSprema: znrTekst(o.skolskaSprema, 10),
+    posloviNaziv: znrTekst(o.posloviNaziv, 200), clanak: znrTekst(o.clanak, 20), tocke: znrTekst(o.tocke, 200), drugiPropis: znrTekst(o.drugiPropis, 300), povecaniStaz: znrTekst(o.povecaniStaz, 300),
+    ukupniStaz: znrTekst(o.ukupniStaz, 20), stazNaPoslovima: vrsta === "prethodni" ? "" : znrTekst(o.stazNaPoslovima, 20),
+    posljednjiPregled: vrsta === "prethodni" || !pr ? null : { datum: znrDatum(pr.datum), clanak: znrTekst(pr.clanak, 20), tocke: znrTekst(pr.tocke, 200), drugiPropis: znrTekst(pr.drugiPropis, 300), ocjena: znrTekst(pr.ocjena, 400) },
+    kratakOpis: znrTekst(o.kratakOpis, 400), strojevi: znrTekst(o.strojevi, 400), predmetRada: znrTekst(o.predmetRada, 300),
+    mjestoRada: znrPopis(o.mjestoRada), organizacija: znrPopis(o.organizacija), polozaj: znrPopis(o.polozaj), tereti: znrTereti(o.tereti), vazno: znrPopis(o.vazno), uvjeti: znrPopis(o.uvjeti),
+    kemijskeTvari: znrTekst(o.kemijskeTvari, 300), biolosteStetnosti: znrTekst(o.biolosteStetnosti, 300),
+  };
+};
+// Izdana uputnica se ne mijenja: smije se samo upisati da je rezultat stigao (Obavljeno), to vratiti ili uputnicu poništiti. Poništena je konačna.
+const promijeniUputnicu = (staro, u, zaposlenikId, sada) => {
+  if (staro.status === "Poništena") return staro;
+  if (u.status === "Obavljeno" && staro.status === "Čeka rezultat") return { ...staro, status: "Obavljeno", pregledId: znrTekst(u.pregledId, 60) || null };
+  if (u.status === "Čeka rezultat" && staro.status === "Obavljeno") return { ...staro, status: "Čeka rezultat", pregledId: null };
+  if (u.status === "Poništena") return { ...staro, status: "Poništena", ponistenaRazlog: znrTekst(u.ponistenaRazlog, 300), ponistenaDatum: sada, ponistioId: zaposlenikId };
+  return staro;
+};
+// Nova uputnica: provjere, pa broj = (najveći broj te godine ili početni broj iz postavki) + 1. Povratni pokušaj istog id-a ne stvara drugu uputnicu.
+const prilagodiUputnice = (req) => async (upsert, trenutno, client) => {
+  if (Array.isArray(req.body.remove) && req.body.remove.length) throw greskaZahtjeva(400, "Izdana uputnica se ne briše — poništi je (broj se ne smije ponoviti).");
+  const sada = new Date().toISOString();
+  const stara = new Map(trenutno.map((u) => [u.id, u]));
+  let kontekst = null;
+  const brojaci = new Map();
+  const rezultat = [];
+  for (const u of upsert) {
+    znrIdZapisa(u);
+    const staro = stara.get(u.id);
+    if (staro) { rezultat.push(promijeniUputnicu(staro, u, req.zaposlenikId, sada)); continue; }
+    if (!kontekst) {
+      kontekst = { zaposlenici: (await ucitajKljucKlijent(client, "zaposlenici")) || [], radnaMjesta: (await ucitajKljucKlijent(client, "radnaMjesta")) || [], postavke: (await ucitajKljucKlijent(client, "zastitaPostavke")) || {} };
+    }
+    const datum = znrDatum(u.datum);
+    const godina = Number(datum.slice(0, 4));
+    const polja = ocistiPoljaUputnice(u.polja, u.vrsta);
+    if (!ZNR_VRSTE.includes(u.vrsta)) throw greskaZahtjeva(400, "Odaberite vrstu pregleda.");
+    if (!datum || godina < 2000 || godina > 2100) throw greskaZahtjeva(400, "Nedostaje datum uputnice.");
+    if (!kontekst.zaposlenici.some((z) => z.id === u.zaposlenikId)) throw greskaZahtjeva(400, "Zaposlenik nije pronađen.");
+    if (!`${polja.ime}${polja.prezime}`.trim()) throw greskaZahtjeva(400, "Nedostaje ime i prezime.");
+    if (!oibIspravan(polja.oib)) throw greskaZahtjeva(400, "OIB radnika nije ispravan.");
+    if (!polja.datumRodjenja) throw greskaZahtjeva(400, "Nedostaje datum rođenja.");
+    if (!polja.posloviNaziv) throw greskaZahtjeva(400, "Nedostaje radno mjesto.");
+    const radnoMjestoId = znrTekst(u.radnoMjestoId, 40);
+    const dodatnaIds = znrPopis(u.dodatnaRadnaMjestaIds, 10);
+    const predlosci = [radnoMjestoId, ...dodatnaIds].map((id) => kontekst.radnaMjesta.find((r) => r.id === id));
+    if (!radnoMjestoId || predlosci.some((r) => !r)) throw greskaZahtjeva(400, "Radno mjesto nije pronađeno.");
+    if (predlosci.some((r) => !r.odobreno)) throw greskaZahtjeva(400, "Predložak radnog mjesta još nije odobren — odobri ga u kartici Radna mjesta.");
+    if (predlosci[0].posebniUvjeti === false && u.izricitoZatrazeno !== true) throw greskaZahtjeva(400, "Radno mjesto nije među poslovima s posebnim uvjetima rada — uputnica se za njega izrađuje samo na izričit zahtjev.");
+    if (!brojaci.has(godina)) {
+      if (trenutno.length === 0 && Object.keys(kontekst.postavke.pocetniBrojevi || {}).length === 0) throw greskaZahtjeva(400, "Prije prve uputnice upišite zadnji već izdani broj uputnice u postavkama (inače bi se brojevi ponovili).");
+      brojaci.set(godina, Math.max(Number(kontekst.postavke.pocetniBrojevi?.[godina]) || 0, 0, ...trenutno.filter((x) => Number(x.godina) === godina).map((x) => Number(x.redniBroj) || 0)));
+    }
+    const redniBroj = brojaci.get(godina) + 1;
+    brojaci.set(godina, redniBroj);
+    rezultat.push({
+      id: u.id, broj: `${redniBroj}/${godina}`, redniBroj, godina, datum, izradenoU: sada, izradioId: req.zaposlenikId, zaposlenikId: u.zaposlenikId, vrsta: u.vrsta,
+      radnoMjestoId, dodatnaRadnaMjestaIds: dodatnaIds, prosliPregledId: znrTekst(u.prosliPregledId, 60) || null, izricitoZatrazeno: u.izricitoZatrazeno === true,
+      polja, status: "Čeka rezultat", pregledId: null,
+    });
+  }
+  return rezultat;
+};
+// Rezultati pregleda (uz uputnicu ili ručno upisani raniji pregledi): datum i ocjena su obavezni, autora i vrijeme upisa postavlja poslužitelj.
+const prilagodiPregledi = (zaposlenikId) => async (upsert, trenutno, client) => {
+  const poznati = new Set(((await ucitajKljucKlijent(client, "zaposlenici")) || []).map((z) => z.id));
+  const stara = new Map(trenutno.map((p) => [p.id, p]));
+  const sada = new Date().toISOString();
+  return upsert.map((u) => {
+    znrIdZapisa(u);
+    if (!poznati.has(u.zaposlenikId)) throw greskaZahtjeva(400, "Zaposlenik nije pronađen.");
+    const datumPregleda = znrDatum(u.datumPregleda);
+    if (!datumPregleda) throw greskaZahtjeva(400, "Upišite datum pregleda.");
+    const ocjena = znrTekst(u.ocjena, 400);
+    if (!ocjena) throw greskaZahtjeva(400, "Upišite ocjenu zdravstvene sposobnosti.");
+    const staro = stara.get(u.id);
+    const uputnicaId = znrTekst(u.uputnicaId, 60) || null;
+    return {
+      id: u.id, zaposlenikId: u.zaposlenikId, uputnicaId, datumPregleda, clanak: znrTekst(u.clanak, 20), tocke: znrTekst(u.tocke, 200), drugiPropis: znrTekst(u.drugiPropis, 300),
+      ocjena, datumSljedeceg: znrDatum(u.datumSljedeceg), izvor: uputnicaId ? "uputnica" : "rucno", unioId: staro?.unioId || zaposlenikId, unesenoU: staro?.unesenoU || sada,
+    };
+  });
+};
+app.put("/api/kadrovskiPodaci/patch", autentikacija, (req, res) => patchPoIdHandler("kadrovskiPodaci", /^(?!)$/, "kadrovskih podataka", prilagodiKadrovske)(req, res));
+app.put("/api/radnaMjesta/patch", autentikacija, (req, res) => patchPoIdHandler("radnaMjesta", /^(?!)$/, "radnih mjesta", prilagodiRadnaMjesta(req.zaposlenikId))(req, res));
+app.put("/api/uputnice/patch", autentikacija, (req, res) => patchPoIdHandler("uputnice", /^(?!)$/, "uputnica", prilagodiUputnice(req))(req, res));
+app.put("/api/pregledi/patch", autentikacija, (req, res) => patchPoIdHandler("pregledi", /^(?!)$/, "pregleda", prilagodiPregledi(req.zaposlenikId))(req, res));
+
+// ---------- Prijedlozi korisnika ----------
+// Svaki prijavljeni zaposlenik smije poslati prijedlog (uvijek na svoje ime), dok je status "Novo" smije ga ispraviti ili povući; direktor i glavni
+// administrator vide sve, mijenjaju status i pišu odgovor. Autora, vrijeme i početni status postavlja poslužitelj.
+app.put("/api/prijedlozi/patch", autentikacija, async (req, res) => {
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  const upravitelj = POZICIJE_SVI_ZADACI.includes(pozicija?.id);
+  const upsert = Array.isArray(req.body.upsert) ? req.body.upsert.slice(0, 20) : [];
+  const remove = Array.isArray(req.body.remove) ? req.body.remove.slice(0, 50) : [];
+  const sada = new Date().toISOString();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query("SELECT value FROM app_data WHERE key = 'prijedlozi' FOR UPDATE");
+    const trenutno = r.rows[0]?.value || [];
+    const postojeci = new Map(trenutno.map((p) => [p.id, p]));
+    const mojNovi = (p) => p.kreiraoId === req.zaposlenikId && p.status === "Novo";
+    for (const id of remove) {
+      const p = postojeci.get(id);
+      if (p && !upravitelj && !mojNovi(p)) throw greskaZahtjeva(403, "Prijedlog možeš povući samo dok je u statusu Novo.");
+    }
+    const izmjene = new Map();
+    let dodano = 0;
+    for (const u of upsert) {
+      znrIdZapisa(u);
+      const staro = postojeci.get(u.id);
+      if (!staro) {
+        const tekst = znrTekst(u.tekst, 2000);
+        if (!tekst) throw greskaZahtjeva(400, "Upiši prijedlog.");
+        izmjene.set(u.id, { id: u.id, kreiraoId: req.zaposlenikId, datum: sada, modul: znrTekst(u.modul, 40).replace(/[^a-zA-Z0-9_-]/g, ""), tekst, status: "Novo", odgovor: "", odgovorioId: null, odgovorDatum: null });
+        dodano++;
+        continue;
+      }
+      if (upravitelj) {
+        const novi = { ...staro };
+        if (PRIJEDLOG_STATUSI.includes(u.status) && u.status !== staro.status) { novi.status = u.status; novi.statusDatum = sada; novi.statusPromijenioId = req.zaposlenikId; }
+        if (typeof u.odgovor === "string" && znrTekst(u.odgovor, 2000) !== (staro.odgovor || "")) { novi.odgovor = znrTekst(u.odgovor, 2000); novi.odgovorioId = req.zaposlenikId; novi.odgovorDatum = sada; }
+        izmjene.set(u.id, novi);
+      } else if (mojNovi(staro)) {
+        const tekst = znrTekst(u.tekst, 2000);
+        if (!tekst) throw greskaZahtjeva(400, "Upiši prijedlog.");
+        izmjene.set(u.id, { ...staro, tekst, modul: znrTekst(u.modul, 40).replace(/[^a-zA-Z0-9_-]/g, "") });
+      } else {
+        throw greskaZahtjeva(403, "Prijedlog možeš mijenjati samo dok je u statusu Novo.");
+      }
+    }
+    if (dodano && trenutno.filter((p) => p.kreiraoId === req.zaposlenikId && Date.parse(p.datum) > Date.now() - 24 * 3600 * 1000).length + dodano > 20) throw greskaZahtjeva(429, "Previše prijedloga u jednom danu — pokušaj sutra.");
+    const uklonjeni = new Set(remove);
+    const rezultat = trenutno.filter((p) => !uklonjeni.has(p.id)).map((p) => izmjene.get(p.id) || p);
+    izmjene.forEach((p, id) => { if (!postojeci.has(id) && !uklonjeni.has(id)) rezultat.push(p); });
+    await client.query(
+      `INSERT INTO app_data (key, value, updated_at) VALUES ('prijedlozi', $1, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [JSON.stringify(rezultat)]
+    );
+    await client.query("COMMIT");
+    res.json({ ok: true, prijedlozi: filtrirajPrijedloge(rezultat, pozicija, req.zaposlenikId) });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    if (e?.httpStatus) return res.status(e.httpStatus).json({ error: e.message });
+    console.error("Greška kod izmjene prijedloga:", e);
+    res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+  } finally {
+    client.release();
+  }
+});
+
+// Jednokratna (idempotentna) migracija: modul Zaštita na radu dobiva samo Glavni administrator — ostalima ga izričito dodjeljuje u Zaposlenici → Pozicije
+// (osobni i zdravstveni podaci). Provodi se samo dok nijedna pozicija nema modul, da ponovno pokretanje ne vrati modul onome kome je namjerno oduzet.
+async function migrirajZastituNaRadu() {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query("SELECT value FROM app_data WHERE key = 'pozicijeZaposlenika' FOR UPDATE");
+    const pozicije = r.rows[0]?.value;
+    if (!Array.isArray(pozicije) || pozicije.some((p) => (p.moduli || []).includes("zastita")) || !pozicije.some((p) => p.id === "poz-administrator")) { await client.query("ROLLBACK"); return; }
+    const nove = pozicije.map((p) => (p.id === "poz-administrator" ? { ...p, moduli: [...(p.moduli || []), "zastita"] } : p));
+    await client.query("UPDATE app_data SET value = $1, updated_at = now() WHERE key = 'pozicijeZaposlenika'", [JSON.stringify(nove)]);
+    await client.query("COMMIT");
+    console.log("Migracija: modul Zaštita na radu dodan poziciji Glavni administrator.");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Greška kod migracije modula Zaštita na radu:", e);
+  } finally {
+    client.release();
+  }
+}
+
 // Zajednički error handler: greške iz ruta (vidi omotač async ruta gore) i neispravan JSON u tijelu zahtjeva vraćaju se kao JSON,
 // a poslužitelj ostaje živ.
 app.use((err, req, res, next) => {
@@ -1896,6 +2175,7 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`ERP backend sluša na portu ${PORT}`);
   migrirajEvidencijaSati();
+  migrirajZastituNaRadu();
   pripremiKorekcije();
   pripremiAktivnost();
   setInterval(pripremiAktivnost, 6 * 60 * 60 * 1000);

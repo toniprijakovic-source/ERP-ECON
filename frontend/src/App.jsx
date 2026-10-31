@@ -4,11 +4,12 @@ import {
   Plus, Pencil, Trash2, X, Search, AlertTriangle, CheckCircle2, ArrowRight,
   Clock, ChevronRight, Save, PackageCheck, PackageMinus, Settings, Layers,
   ChevronDown, ChevronUp, ChevronLeft, FolderInput, Eye, UserCog, CalendarRange,
-  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors, Printer, Bell, Menu, ShieldCheck, Container, Mail, HistoryIcon
+  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors, Printer, Bell, Menu, ShieldCheck, Container, Mail, HistoryIcon, HardHat, Lightbulb
 } from "lucide-react";
 import logoEcon from "./assets/logo-econ.jpg";
 import QRCode from "qrcode";
 import { napraviPdfUpitaMaterijala, napraviPdfPonude, napraviEml, preuzmiDatoteku, potpisEmail } from "./pdfNabave";
+import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu } from "./zastitaNaRadu";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
@@ -1062,6 +1063,8 @@ const STATUS_TONE = {
   "Otkazan": "danger", "Odbijena": "danger", "Kasni": "danger",
   "Aktivan": "success", "Neaktivan": "muted",
   "Čeka": "muted", "Obrada": "warning", "Valjano": "success", "Nevaljano": "danger", "Greška": "danger", "Otkazano": "muted", "Gotovo": "success",
+  "Novo": "info", "U razmatranju": "warning", "Planirano": "info", "Odbijeno": "danger",
+  "Čeka rezultat": "warning", "Obavljeno": "success", "Poništena": "muted", "Odobreno": "success",
 };
 const Badge = ({ status, label }) => <span className={`badge badge-${STATUS_TONE[status] || "muted"}`}>{label || status}</span>;
 
@@ -1155,6 +1158,7 @@ const generirajRfidKod = (ime, prezime, postojeciKodovi) => {
   return kod;
 };
 
+// Namjerno nema ključeva Zaštite na radu (osobni i zdravstveni podaci) ni prijedloga — ne idu u ručni izvoz; pokrivaju ih sigurnosne kopije poslužitelja.
 const STORAGE_KEYS = ["kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude", "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika", "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana", "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada", "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi", "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca", "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije", "maticnaKnjiga", "upitiTransporta", "narudzbeTransporta", "godisnjiOdmor"];
 
 /* ============================== SMALL UI PRIMITIVES ============================== */
@@ -1641,6 +1645,7 @@ const MODULI_APLIKACIJE = [
   { key: "partneri", label: "Kupci i dobavljači", icon: Users },
   { key: "evidencijasati", label: "Evidencija sati", icon: Clock },
   { key: "zaposlenici", label: "Zaposlenici", icon: UserCog },
+  { key: "zastita", label: "Zaštita na radu", icon: HardHat },
 ];
 
 // Kartice (tabovi) unutar svakog modula — isti popis kao stvarni nav-tabovi svake stranice.
@@ -1670,6 +1675,8 @@ const KARTICE_MODULA = {
       { key: "povijestkorekcija", naziv: "Povijest korekcija", uvjet: { kartica: "obracun", polje: "pristup", opis: "pristup kartici Obračun plaća" } },
     ],
   },
+  // Osobni i zdravstveni podaci (OIB, ocjene sposobnosti): modul se dodjeljuje izričito, po poziciji. Kasnije: kartica Zaštitna oprema.
+  zastita: { kartice: [{ key: "lijecnicki", naziv: "Liječnički pregledi" }] },
 };
 
 // Dozvola za jednu karticu — po zadanom TRUE (naslijeđeno od dodjele modula), osim ako je
@@ -2059,6 +2066,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [mbKartica, setMbKartica] = useState(() => new URLSearchParams(window.location.search).get("mb") || ""); // matični broj iz skenirane naljepnice
   const [backupOpen, setBackupOpen] = useState(false);
+  const [prijedloziOtvoreno, setPrijedloziOtvoreno] = useState(false);
   const [potrebnaPrijava, setPotrebnaPrijava] = useState(false);
   const [prijavljenId, setPrijavljenIdInternal] = useState(() => {
     const token = localStorage.getItem("erp_token");
@@ -2379,6 +2387,24 @@ export default function App() {
     setDb((prev) => ({ ...prev, [key]: vrijednost }));
   };
 
+  // Ciljano spremanje popisa koje poslužitelj sam provjerava i numerira (Zaštita na radu, prijedlozi korisnika): čeka odgovor poslužitelja i vraća
+  // { ok, greska } — obrazac tako može pokazati razlog odbijanja (npr. neispravan OIB) umjesto opće greške. Nema optimističnog prikaza.
+  const spremiCiljano = async (kljuc, upsert = [], remove = []) => {
+    try {
+      const res = await fetch(`${API_URL}/api/${kljuc}/patch`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` },
+        body: JSON.stringify({ upsert, remove }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, greska: data.error || "Greška pri spremanju — pokušaj ponovno." };
+      setDb((prev) => ({ ...prev, [kljuc]: data[kljuc] }));
+      return { ok: true, popis: data[kljuc] };
+    } catch {
+      return { ok: false, greska: "Greška pri spremanju — provjeri internetsku vezu." };
+    }
+  };
+
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2600); };
 
   const urlParametri = new URLSearchParams(window.location.search);
@@ -2492,6 +2518,7 @@ export default function App() {
                 />
               )}
             </div>
+            <Btn variant="ghost" size="sm" icon={Lightbulb} className="samo-racunalo" title="Pošalji prijedlog za poboljšanje aplikacije" onClick={() => setPrijedloziOtvoreno(true)}>Prijedlog</Btn>
             {mojaPozicija?.id === "poz-administrator" && <Btn variant="ghost" size="sm" icon={Database} className="samo-racunalo" onClick={() => setBackupOpen(true)}>Backup</Btn>}
             <Btn variant="ghost" size="sm" className="samo-racunalo" onClick={odjava}>Odjava</Btn>
           </div>
@@ -2519,6 +2546,7 @@ export default function App() {
                 <div style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{zaposlenik?.ime} {zaposlenik?.prezime}</div>
                 <div style={{ fontSize: 11.5, marginBottom: 10 }}>{mojaPozicija?.naziv || "—"}</div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <Btn variant="primary" size="sm" icon={Lightbulb} onClick={() => { setIzbornikOtvoren(false); setPrijedloziOtvoreno(true); }}>Prijedlog</Btn>
                   {mojaPozicija?.id === "poz-administrator" && <Btn variant="primary" size="sm" icon={Database} onClick={() => { setIzbornikOtvoren(false); setBackupOpen(true); }}>Backup</Btn>}
                   <Btn variant="primary" size="sm" onClick={() => { setIzbornikOtvoren(false); odjava(); }}>Odjava</Btn>
                 </div>
@@ -2546,12 +2574,14 @@ export default function App() {
           {aktivnaStranica === "partneri" && <PartneriPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} mojaPozicija={mojaPozicija} mojId={prijavljenId} />}
           {aktivnaStranica === "evidencijasati" && <EvidencijaSatiPage db={db} update={update} showToast={showToast} patchEvidencija={patchEvidencija} mojaPozicija={mojaPozicija} pocetak={evidencijaSatiPocetak} ocistiPocetak={() => setEvidencijaSatiPocetak(null)} />}
+          {aktivnaStranica === "zastita" && <ZastitaNaRaduPage db={db} update={update} spremi={spremiCiljano} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} />}
         </div>
 
       </div>
 
       {cekaBrisanje && <ConfirmDelete label={cekaBrisanje.naziv} onCancel={() => setCekaBrisanje(null)} onConfirm={() => { const akcija = cekaBrisanje.akcija; setCekaBrisanje(null); akcija(); }} />}
       {backupOpen && <BackupModal db={db} update={update} showToast={showToast} onClose={() => setBackupOpen(false)} />}
+      {prijedloziOtvoreno && <PrijedloziModal db={db} mojId={zaposlenik?.id} jeUpravitelj={["poz-direktor", "poz-administrator"].includes(mojaPozicija?.id)} moduli={NAV} aktivniModul={aktivnaStranica} spremi={spremiCiljano} showToast={showToast} onClose={() => setPrijedloziOtvoreno(false)} />}
       {mbKartica && <MaticniBrojKarticaModal broj={mbKartica} db={db} onClose={() => { setMbKartica(""); window.history.replaceState(null, "", window.location.pathname); }} />}
 
       {toast && (
@@ -17809,5 +17839,856 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
       {povijestKorekcija && <KorekcijeBodovaModal db={db} mojId={mojId} showToast={showToast} mozeMijenjati={mozeObracunMijenjati} onClose={() => setPovijestKorekcija(false)} />}
       {izbornikPrijave && <IzbornikPrijaveModal db={db} mojId={mojId} showToast={showToast} refetchKljuc={refetchKljuc} onClose={() => setIzbornikPrijave(false)} />}
     </div>
+  );
+}
+
+/* ============================== ZAŠTITA NA RADU ============================== */
+// Modul Zaštita na radu. Kartica Liječnički pregledi: uputnice RA-1 (Uputnica za utvrđivanje zdravstvene sposobnosti radnika) — radnici i njihovi
+// kadrovski podaci, radna mjesta (predlošci iz Procjene rizika), izdane uputnice i rezultati pregleda. Kasnije kartica Zaštitna oprema.
+// Sve se sprema ciljano preko spremi(ključ, upsert, remove): poslužitelj dodjeljuje broj uputnice (bez rupa i ponavljanja), provjerava OIB i odobrenje
+// predloška i ne dopušta izmjenu izdane uputnice. Logika je u zastitaNaRadu.js, izgled obrasca u pdfUputnica.js.
+const znrRadnici = (db) => (db.zaposlenici || [])
+  .filter((z) => z.status === "Aktivan" && grupaEvidencije(z, db.pozicijeZaposlenika) !== "kooperant" && !jeVanjskiSuradnik(z, db.pozicijeZaposlenika))
+  .sort((a, b) => `${a.prezime} ${a.ime}`.localeCompare(`${b.prezime} ${b.ime}`, "hr"));
+const znrPostavke = (db) => (db.zastitaPostavke && !Array.isArray(db.zastitaPostavke) ? db.zastitaPostavke : {});
+const znrPreuzmiPdf = async (uputnice, naziv) => {
+  const { napraviPdfUputnica } = await import("./pdfUputnica"); // pdfmake je velik pa se učitava tek kad zatreba
+  const pdf = await napraviPdfUputnica(uputnice);
+  preuzmiDatoteku(new Blob([pdf], { type: "application/pdf" }), naziv);
+};
+const ZNR_ROK = { isteklo: ["Kasni", "Isteklo"], uskoro: ["U tijeku", "Uskoro"], uredu: ["Valjano", "U redu"], nema: ["Čeka", "Nema podatka"] };
+const ZnrRokBadge = ({ status }) => <Badge status={ZNR_ROK[status][0]} label={ZNR_ROK[status][1]} />;
+const ZNR_REDOSLIJED_ROKA = { isteklo: 0, uskoro: 1, uredu: 2, nema: 3 };
+
+function ZastitaNaRaduPage({ db, update, spremi, showToast, mojaPozicija, mojId }) {
+  const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "zastita");
+  const [tab, setTab] = useState(dozvKartice[0]?.key || "lijecnicki");
+  useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "lijecnicki"); }, [dozvKartice, tab]);
+  return (
+    <div>
+      <PageHeader title="Zaštita na radu" icon={HardHat} subtitle="Liječnički pregledi radnika i uputnice RA-1" />
+      {dozvKartice.length === 0 && <EmptyState text="Nemate pristup ni jednoj kartici ovog modula." />}
+      <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
+        {dozvKartice.map((k) => <div key={k.key} className={`nav-tab ${tab === k.key ? "active" : ""}`} onClick={() => setTab(k.key)}>{k.naziv}</div>)}
+      </div>
+      {tab === "lijecnicki" && dozvKartice.some((k) => k.key === "lijecnicki") && (
+        <LijecnickiPreglediTab db={db} update={update} spremi={spremi} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zastita", "lijecnicki").izmjene} />
+      )}
+    </div>
+  );
+}
+
+function LijecnickiPreglediTab({ db, update, spremi, showToast, mozeMijenjati }) {
+  const [prikaz, setPrikaz] = useState("pregled");
+  const [modal, setModal] = useState(null); // { tip: "uputnica" | "skupna" | "rezultat" | "ponisti" | "radnik" | "mjesto", ... }
+  const [prikaziSve, setPrikaziSve] = useState(false);
+  const [odabrani, setOdabrani] = useState([]);
+  const [filtar, setFiltar] = useState({ godina: "", vrsta: "", status: "" });
+  const [trazi, setTrazi] = useState("");
+  const danas = todayISO();
+  const godina = Number(danas.slice(0, 4));
+  const postavke = znrPostavke(db);
+  const uputnice = db.uputnice || [];
+  const pregledi = db.pregledi || [];
+  const mjesta = db.radnaMjesta || [];
+  const radnici = useMemo(() => znrRadnici(db), [db.zaposlenici, db.pozicijeZaposlenika]); // eslint-disable-line react-hooks/exhaustive-deps
+  const hrPo = useMemo(() => new Map((db.kadrovskiPodaci || []).map((k) => [k.id, k])), [db.kadrovskiPodaci]);
+  const mjestoPo = useMemo(() => new Map((db.radnaMjesta || []).map((m) => [m.id, m])), [db.radnaMjesta]);
+  const redovi = useMemo(() => radnici.map((z) => {
+    const hr = hrPo.get(z.id) || null;
+    const rm = hr ? mjestoPo.get(hr.radnoMjestoId) || null : null;
+    const zadnji = zadnjiPregled(db.pregledi || [], z.id);
+    const sljedeci = sljedeciPregled(zadnji, rm, postavke.zadaniRokMjeseci);
+    return { z, hr, rm, zadnji, sljedeci, status: statusRoka(sljedeci, danas), nedostaje: nedostajuciPodaci(hr) };
+  }), [radnici, hrPo, mjestoPo, db.pregledi, postavke.zadaniRokMjeseci, danas]);
+  const imeRadnika = (id) => { const z = (db.zaposlenici || []).find((x) => x.id === id); return z ? `${z.prezime} ${z.ime}` : "—"; };
+  const odobrenih = mjesta.filter((m) => m.odobreno).length;
+  const nepotpunih = redovi.filter((r) => r.nedostaje.length > 0).length;
+  const trebaBroj = trebaPocetniBroj(uputnice, postavke);
+
+  const ucitajRadnaMjesta = async () => {
+    const postojeci = new Set(mjesta.map((m) => m.id));
+    const novi = predlosciIzProcjene().filter((p) => !postojeci.has(p.id));
+    if (!novi.length) { showToast("Sva radna mjesta iz Procjene rizika već su učitana."); return; }
+    const r = await spremi("radnaMjesta", novi);
+    showToast(r.ok ? `Učitano ${novi.length} radnih mjesta — pregledajte ih i odobrite prije prve uputnice.` : r.greska);
+  };
+  const ispisi = async (u) => {
+    try { await znrPreuzmiPdf([u], nazivDatotekeUputnice(u)); } catch { showToast("Greška pri izradi PDF-a."); }
+  };
+
+  const korak = (ok, tekst, akcija) => (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", fontSize: 13 }}>
+      {ok ? <CheckCircle2 size={15} color="var(--green)" /> : <AlertTriangle size={15} color="#8A6100" />}
+      <span style={{ flex: 1, color: ok ? "var(--ink-soft)" : "var(--ink)" }}>{tekst}</span>
+      {!ok && akcija}
+    </div>
+  );
+  const potrebnaPriprema = mjesta.length === 0 || odobrenih === 0 || trebaBroj || nepotpunih > 0;
+
+  /* ---------- Pregled (rokovi) ---------- */
+  const rokovi = redovi.filter((r) => prikaziSve || r.status === "isteklo" || r.status === "uskoro")
+    .sort((a, b) => ZNR_REDOSLIJED_ROKA[a.status] - ZNR_REDOSLIJED_ROKA[b.status] || String(a.sljedeci).localeCompare(String(b.sljedeci)));
+  const bezPodatka = redovi.filter((r) => r.status === "nema").length;
+  const cekaju = uputnice.filter((u) => u.status === "Čeka rezultat").sort((a, b) => String(b.datum).localeCompare(String(a.datum)));
+  const prikazPregled = (
+    <>
+      {potrebnaPriprema && (
+        <div className="card" style={{ padding: "10px 14px", marginBottom: 14, background: "#FDF6E3", borderColor: "#F0C36B" }}>
+          <div className="label" style={{ marginBottom: 4 }}>Prije prve uputnice</div>
+          {korak(mjesta.length > 0, mjesta.length ? `Radna mjesta učitana (${mjesta.length})` : "Radna mjesta iz Procjene rizika još nisu učitana", <Btn size="sm" variant="primary" disabled={!mozeMijenjati} onClick={ucitajRadnaMjesta}>Učitaj radna mjesta</Btn>)}
+          {korak(odobrenih > 0, odobrenih ? `Odobreno predložaka: ${odobrenih}` : "Nijedan predložak radnog mjesta nije odobren — uputnica se može izdati samo s odobrenim", <Btn size="sm" onClick={() => setPrikaz("mjesta")}>Radna mjesta</Btn>)}
+          {korak(!trebaBroj, !trebaBroj ? "Brojanje uputnica je postavljeno" : "Upišite zadnji već izdani broj uputnice ove godine (inače bi se brojevi ponovili)", <Btn size="sm" onClick={() => setPrikaz("postavke")}>Postavke</Btn>)}
+          {korak(nepotpunih === 0, nepotpunih === 0 ? "Podaci radnika su potpuni" : `Podaci radnika nepotpuni: ${nepotpunih} od ${redovi.length} (OIB, datum rođenja, radno mjesto…)`, <Btn size="sm" onClick={() => setPrikaz("radnici")}>Radnici</Btn>)}
+        </div>
+      )}
+      <div className="card" style={{ padding: 16, marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+          <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600 }}>Rokovi pregleda</h3>
+          <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}><input type="checkbox" checked={prikaziSve} onChange={(e) => setPrikaziSve(e.target.checked)} /> prikaži sve radnike</label>
+          <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            {odabrani.length > 0 && <Btn variant="primary" size="sm" icon={FileText} disabled={!mozeMijenjati} onClick={() => setModal({ tip: "skupna", ids: odabrani })}>Izradi periodičke uputnice ({odabrani.length})</Btn>}
+            <Btn size="sm" icon={Plus} disabled={!mozeMijenjati} onClick={() => setModal({ tip: "uputnica" })}>Nova uputnica</Btn>
+          </span>
+        </div>
+        {rokovi.length === 0 ? <EmptyState text={redovi.length === 0 ? "Nema radnika." : "Nikome ne ističe pregled u idućih 30 dana."} /> : (
+          <table className="erp-table">
+            <thead><tr><th style={{ width: 30 }} /><th>Prezime i ime</th><th>Radno mjesto</th><th>Zadnji pregled</th><th>Sljedeći pregled</th><th>Status</th><th style={{ width: 110 }} /></tr></thead>
+            <tbody>
+              {rokovi.map((r) => (
+                <tr key={r.z.id}>
+                  <td><input type="checkbox" aria-label={`Odaberi ${r.z.prezime} ${r.z.ime}`} checked={odabrani.includes(r.z.id)} onChange={(e) => setOdabrani((o) => (e.target.checked ? [...o, r.z.id] : o.filter((x) => x !== r.z.id)))} /></td>
+                  <td><strong>{r.z.prezime} {r.z.ime}</strong></td>
+                  <td>{r.rm?.naziv || <span style={{ color: "var(--ink-faint)" }}>—</span>}</td>
+                  <td>{r.zadnji ? fmtDate(r.zadnji.datumPregleda) : "—"}</td>
+                  <td>{r.sljedeci ? fmtDate(r.sljedeci) : "—"}</td>
+                  <td><ZnrRokBadge status={r.status} /></td>
+                  <td><Btn size="sm" disabled={!mozeMijenjati} onClick={() => setModal({ tip: "uputnica", zaposlenikId: r.z.id, vrsta: "periodicki" })}>Uputnica</Btn></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {!prikaziSve && bezPodatka > 0 && <div style={{ marginTop: 8, fontSize: 12.5, color: "var(--ink-soft)" }}>Bez podatka o zadnjem pregledu ili roku: {bezPodatka} radnika — upišite ih u kartici Radnici (raniji pregled).</div>}
+      </div>
+      <div className="card" style={{ padding: 16 }}>
+        <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600, marginBottom: 10 }}>Čekaju rezultat pregleda ({cekaju.length})</h3>
+        {cekaju.length === 0 ? <EmptyState text="Nema uputnica koje čekaju rezultat." /> : (
+          <table className="erp-table">
+            <thead><tr><th>Broj</th><th>Datum</th><th>Radnik</th><th>Vrsta</th><th style={{ width: 200 }} /></tr></thead>
+            <tbody>
+              {cekaju.map((u) => (
+                <tr key={u.id}>
+                  <td className="f-mono"><strong>{u.broj}</strong></td><td>{fmtDate(u.datum)}</td><td>{imeRadnika(u.zaposlenikId)}</td><td>{nazivVrste(u.vrsta)}</td>
+                  <td style={{ display: "flex", gap: 6 }}><Btn size="sm" variant="primary" disabled={!mozeMijenjati} onClick={() => setModal({ tip: "rezultat", uputnica: u })}>Upiši rezultat</Btn><Btn size="sm" icon={Printer} onClick={() => ispisi(u)}>PDF</Btn></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </>
+  );
+
+  /* ---------- Uputnice ---------- */
+  const godineUputnica = [...new Set(uputnice.map((u) => u.godina))].sort((a, b) => b - a);
+  const filtrirane = uputnice
+    .filter((u) => (!filtar.godina || String(u.godina) === filtar.godina) && (!filtar.vrsta || u.vrsta === filtar.vrsta) && (!filtar.status || u.status === filtar.status))
+    .sort((a, b) => b.godina - a.godina || b.redniBroj - a.redniBroj);
+  const prikazUputnice = (
+    <div className="card" style={{ padding: 16 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+        <select className="select" style={{ width: 110 }} aria-label="Godina" value={filtar.godina} onChange={(e) => setFiltar({ ...filtar, godina: e.target.value })}><option value="">Sve godine</option>{godineUputnica.map((g) => <option key={g} value={g}>{g}.</option>)}</select>
+        <select className="select" style={{ width: 130 }} aria-label="Vrsta pregleda" value={filtar.vrsta} onChange={(e) => setFiltar({ ...filtar, vrsta: e.target.value })}><option value="">Sve vrste</option>{VRSTE_PREGLEDA.map((v) => <option key={v.key} value={v.key}>{v.naziv}</option>)}</select>
+        <select className="select" style={{ width: 150 }} aria-label="Status" value={filtar.status} onChange={(e) => setFiltar({ ...filtar, status: e.target.value })}><option value="">Svi statusi</option>{["Čeka rezultat", "Obavljeno", "Poništena"].map((s) => <option key={s}>{s}</option>)}</select>
+        <Btn variant="primary" size="sm" icon={Plus} disabled={!mozeMijenjati} style={{ marginLeft: "auto" }} onClick={() => setModal({ tip: "uputnica" })}>Nova uputnica</Btn>
+      </div>
+      {filtrirane.length === 0 ? <EmptyState text="Nema uputnica." /> : (
+        <table className="erp-table">
+          <thead><tr><th>Broj</th><th>Datum</th><th>Radnik</th><th>Vrsta</th><th>Status</th><th style={{ width: 250 }} /></tr></thead>
+          <tbody>
+            {filtrirane.map((u) => {
+              const pg = u.pregledId ? pregledi.find((p) => p.id === u.pregledId) : null;
+              return (
+                <tr key={u.id} style={u.status === "Poništena" ? { opacity: 0.6 } : undefined}>
+                  <td className="f-mono"><strong>{u.broj}</strong></td><td>{fmtDate(u.datum)}</td><td>{imeRadnika(u.zaposlenikId)}</td><td>{nazivVrste(u.vrsta)}</td>
+                  <td><Badge status={u.status} />{pg && <span style={{ fontSize: 11.5, color: "var(--ink-soft)", marginLeft: 6 }}>pregled {fmtDate(pg.datumPregleda)}</span>}{u.status === "Poništena" && u.ponistenaRazlog && <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{u.ponistenaRazlog}</div>}</td>
+                  <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <Btn size="sm" icon={Printer} onClick={() => ispisi(u)}>PDF</Btn>
+                    {u.status !== "Poništena" && <Btn size="sm" disabled={!mozeMijenjati} onClick={() => setModal({ tip: "rezultat", uputnica: u, pregled: pg })}>{u.status === "Obavljeno" ? "Rezultat" : "Upiši rezultat"}</Btn>}
+                    {u.status !== "Poništena" && <Btn size="sm" variant="ghost" disabled={!mozeMijenjati} onClick={() => setModal({ tip: "ponisti", uputnica: u })}>Poništi</Btn>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+
+  /* ---------- Radnici ---------- */
+  const radniciFiltrirani = redovi.filter((r) => !trazi.trim() || `${r.z.prezime} ${r.z.ime}`.toLowerCase().includes(trazi.trim().toLowerCase()));
+  const prikazRadnici = (
+    <div className="card" style={{ padding: 16 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+        <input className="input" style={{ maxWidth: 260 }} placeholder="Traži radnika…" value={trazi} onChange={(e) => setTrazi(e.target.value)} />
+        <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>{nepotpunih > 0 ? `Podaci nepotpuni: ${nepotpunih} od ${redovi.length}` : "Podaci su potpuni."} Kooperanti i vanjski suradnici nisu na popisu.</span>
+      </div>
+      <table className="erp-table">
+        <thead><tr><th>Prezime i ime</th><th>Radno mjesto</th><th>OIB</th><th>Zadnji pregled</th><th>Podaci</th><th style={{ width: 90 }} /></tr></thead>
+        <tbody>
+          {radniciFiltrirani.map((r) => (
+            <tr key={r.z.id}>
+              <td><strong>{r.z.prezime} {r.z.ime}</strong></td>
+              <td>{r.rm?.naziv || <span style={{ color: "var(--ink-faint)" }}>—</span>}</td>
+              <td className="f-mono">{r.hr?.oib || "—"}</td>
+              <td>{r.zadnji ? fmtDate(r.zadnji.datumPregleda) : "—"}</td>
+              <td>{r.nedostaje.length === 0 ? <Badge status="Valjano" label="Potpuno" /> : <span style={{ fontSize: 11.5, color: "var(--rust)" }} title={r.nedostaje.join(", ")}>nedostaje: {r.nedostaje.slice(0, 3).join(", ")}{r.nedostaje.length > 3 ? ` +${r.nedostaje.length - 3}` : ""}</span>}</td>
+              <td><Btn size="sm" icon={Pencil} onClick={() => setModal({ tip: "radnik", zaposlenik: r.z })}>Uredi</Btn></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  /* ---------- Radna mjesta ---------- */
+  const prikazMjesta = (
+    <div className="card" style={{ padding: 16 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12.5, color: "var(--ink-soft)", flex: 1 }}>Predlošci iz Procjene rizika. Uputnica se može izdati samo s odobrenim predloškom; svaka izmjena sadržaja poništava odobrenje.</span>
+        <Btn size="sm" icon={Download} disabled={!mozeMijenjati} onClick={ucitajRadnaMjesta}>Učitaj iz Procjene rizika 2025</Btn>
+        <Btn variant="primary" size="sm" icon={Plus} disabled={!mozeMijenjati} onClick={() => setModal({ tip: "mjesto", mjesto: null })}>Novo radno mjesto</Btn>
+      </div>
+      {mjesta.length === 0 ? <EmptyState text="Nema radnih mjesta. Učitajte ih iz Procjene rizika 2025." /> : (
+        <table className="erp-table">
+          <thead><tr><th>Šifra</th><th>Naziv</th><th>Proces</th><th>Točke Pravilnika</th><th>Rok (mj.)</th><th>Odobrenje</th><th style={{ width: 90 }} /></tr></thead>
+          <tbody>
+            {[...mjesta].sort((a, b) => String(a.sifra).localeCompare(String(b.sifra))).map((m) => (
+              <tr key={m.id}>
+                <td className="f-mono">{m.sifra}</td><td><strong>{m.naziv}</strong></td><td>{m.proces}</td>
+                <td className="f-mono" style={{ fontSize: 12 }}>{m.posebniUvjeti === false ? <span style={{ color: "var(--ink-faint)" }}>nije u F.6</span> : `čl. ${m.clanak || "3."} t. ${formatirajTocke(m)}`}</td>
+                <td className="f-mono">{m.rokPeriodickogMjeseci || "—"}</td>
+                <td>{m.odobreno ? <><Badge status="Odobreno" /><span style={{ fontSize: 11, color: "var(--ink-faint)", marginLeft: 4 }}>{fmtDate(m.odobreno.datum)}</span></> : <Badge status="Nacrt" />}</td>
+                <td><Btn size="sm" icon={Pencil} onClick={() => setModal({ tip: "mjesto", mjesto: m })}>{mozeMijenjati ? "Uredi" : "Pogledaj"}</Btn></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+
+  /* ---------- Postavke ---------- */
+  const prikazPostavke = <ZnrPostavke db={db} postavke={postavke} uputnice={uputnice} godina={godina} update={update} showToast={showToast} mozeMijenjati={mozeMijenjati} />;
+
+  const TABOVI = [["pregled", "Pregled"], ["uputnice", "Uputnice"], ["radnici", "Radnici"], ["mjesta", "Radna mjesta"], ["postavke", "Postavke"]];
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
+        {TABOVI.map(([k, naziv]) => <div key={k} className={`nav-tab ${prikaz === k ? "active" : ""}`} onClick={() => setPrikaz(k)}>{naziv}{k === "pregled" && cekaju.length > 0 ? ` (${cekaju.length})` : ""}</div>)}
+      </div>
+      {prikaz === "pregled" && prikazPregled}
+      {prikaz === "uputnice" && prikazUputnice}
+      {prikaz === "radnici" && prikazRadnici}
+      {prikaz === "mjesta" && prikazMjesta}
+      {prikaz === "postavke" && prikazPostavke}
+      {modal?.tip === "uputnica" && <NovaUputnicaModal db={db} radnici={radnici} hrPo={hrPo} mjestoPo={mjestoPo} postavke={postavke} preselect={modal} spremi={spremi} showToast={showToast} onClose={() => setModal(null)} />}
+      {modal?.tip === "skupna" && <SkupnaIzradaModal db={db} ids={modal.ids} hrPo={hrPo} mjestoPo={mjestoPo} postavke={postavke} spremi={spremi} showToast={showToast} onClose={(gotovo) => { setModal(null); if (gotovo) setOdabrani([]); }} />}
+      {modal?.tip === "rezultat" && <RezultatPregledaModal uputnica={modal.uputnica} pregled={modal.pregled} zaposlenikId={modal.uputnica?.zaposlenikId || modal.zaposlenikId} imeRadnika={imeRadnika} pregledi={pregledi} spremi={spremi} showToast={showToast} onClose={() => setModal(null)} />}
+      {modal?.tip === "ponisti" && <PonistiUputnicuModal uputnica={modal.uputnica} imeRadnika={imeRadnika} spremi={spremi} showToast={showToast} onClose={() => setModal(null)} />}
+      {modal?.tip === "radnik" && <RadnikZnrModal db={db} zaposlenik={modal.zaposlenik} hr={hrPo.get(modal.zaposlenik.id)} mjesta={mjesta} pregledi={pregledi} uputnice={uputnice} mozeMijenjati={mozeMijenjati} spremi={spremi} showToast={showToast} onDodajPregled={() => setModal({ tip: "rezultat", zaposlenikId: modal.zaposlenik.id })} onClose={() => setModal(null)} />}
+      {modal?.tip === "mjesto" && <RadnoMjestoModal mjesto={modal.mjesto} mozeMijenjati={mozeMijenjati} spremi={spremi} showToast={showToast} onClose={() => setModal(null)} />}
+    </div>
+  );
+}
+
+// Postavke kartice: početni broj uputnica (zadnji ručno izdani), naziv poslodavca na obrascu i zadani rok periodičkog pregleda.
+function ZnrPostavke({ db, postavke, uputnice, godina, update, showToast, mozeMijenjati }) {
+  const [pocetni, setPocetni] = useState(postavke.pocetniBrojevi?.[godina] ?? "");
+  const [naziv, setNaziv] = useState(postavke.nazivPoslodavca || "");
+  const [rok, setRok] = useState(postavke.zadaniRokMjeseci || "");
+  const t = db.postavkeTvrtke || {};
+  const izdanoOveGodine = uputnice.filter((u) => Number(u.godina) === godina);
+  const spremi = () => {
+    const pocetniBrojevi = { ...(postavke.pocetniBrojevi || {}) };
+    if (String(pocetni).trim() !== "") pocetniBrojevi[godina] = Math.max(0, Math.floor(Number(pocetni) || 0));
+    update("zastitaPostavke", { ...postavke, pocetniBrojevi, nazivPoslodavca: naziv.trim(), zadaniRokMjeseci: rok === "" ? "" : Math.max(0, Math.floor(Number(rok) || 0)) });
+    showToast("Postavke spremljene.");
+  };
+  return (
+    <div className="card" style={{ padding: 16, maxWidth: 720 }}>
+      <Field label={`Zadnji broj uputnice izdan izvan aplikacije u ${godina}. (npr. u Wordu)`}>
+        <input className="input f-mono" style={{ maxWidth: 140 }} type="number" min="0" disabled={!mozeMijenjati} value={pocetni} onChange={(e) => setPocetni(e.target.value)} placeholder="npr. 65" />
+        <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 4 }}>
+          Aplikacija nastavlja od sljedećeg broja, a broj se nikad ne ponavlja i ne preskače. Upišite 0 ako ove godine još nije izdana nijedna uputnica. Svake nove godine brojanje kreće od 1.
+          {izdanoOveGodine.length > 0 && ` U aplikaciji je ove godine već izdano ${izdanoOveGodine.length} uputnica (zadnji broj ${Math.max(...izdanoOveGodine.map((u) => u.redniBroj))}).`}
+        </div>
+      </Field>
+      <Field label="Naziv poslodavca na obrascu">
+        <input className="input" disabled={!mozeMijenjati} value={naziv} onChange={(e) => setNaziv(e.target.value)} placeholder={t.naziv || "ECON d.o.o."} />
+        <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 4 }}>Prazno = naziv iz Postavki tvrtke ({t.naziv || "—"}). Adresa i OIB uvijek dolaze iz Postavki tvrtke ({t.adresa || "—"}).</div>
+      </Field>
+      <Field label="Zadani rok periodičkog pregleda (mjeseci)">
+        <input className="input f-mono" style={{ maxWidth: 140 }} type="number" min="0" disabled={!mozeMijenjati} value={rok} onChange={(e) => setRok(e.target.value)} placeholder="npr. 12" />
+        <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 4 }}>Koristi se za radna mjesta kojima rok nije upisan, kad liječnik nije napisao datum sljedećeg pregleda.</div>
+      </Field>
+      {mozeMijenjati && <Btn variant="primary" icon={Save} onClick={spremi}>Spremi postavke</Btn>}
+    </div>
+  );
+}
+
+const ZnrUnos = ({ label, value, onChange, type = "text", mono, disabled, placeholder, maxLength }) => (
+  <Field label={label}><input className={`input ${mono ? "f-mono" : ""}`} type={type} value={value ?? ""} disabled={disabled} placeholder={placeholder} maxLength={maxLength} onChange={(e) => onChange(e.target.value)} /></Field>
+);
+const ZnrGreska = ({ tekst }) => (tekst ? <div role="alert" className="card" style={{ padding: "8px 12px", marginBottom: 10, background: "#FBEAE6", borderColor: "#E4A89B", color: "#8C2F1B", fontSize: 12.5 }}>{tekst}</div> : null);
+
+// Kućice obrasca (mjesto rada, organizacija, položaj, važno, uvjeti) i tereti uz položaj tijela. vrijednost = objekt s popisima ključeva
+// označenih kućica i objektom tereti; onChange dobiva cijeli novi objekt.
+function KuciceUredjivac({ vrijednost, onChange, disabled }) {
+  const prebaci = (skupina, kljuc) => { const popis = vrijednost[skupina] || []; onChange({ ...vrijednost, [skupina]: popis.includes(kljuc) ? popis.filter((k) => k !== kljuc) : [...popis, kljuc] }); };
+  const tereti = { ...prazniTereti(), ...(vrijednost.tereti || {}) };
+  const postaviTeret = (k, dio) => onChange({ ...vrijednost, tereti: { ...tereti, [k]: { ...tereti[k], ...dio } } });
+  return (
+    <div>
+      {KUCICE.map((s) => (
+        <div key={s.key} style={{ marginBottom: 10 }}>
+          <div className="label" style={{ marginBottom: 4 }}>{s.naziv}</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px" }}>
+            {s.opcije.map(([k, naziv]) => (
+              <label key={k} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12.5, cursor: disabled ? "default" : "pointer" }}>
+                <input type="checkbox" disabled={disabled} checked={(vrijednost[s.key] || []).includes(k)} onChange={() => prebaci(s.key, k)} /> {naziv}
+              </label>
+            ))}
+          </div>
+          {s.key === "polozaj" && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 18px", marginTop: 6 }}>
+              {TERETI.map(([k, naziv]) => (
+                <span key={k} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12.5 }}>
+                  <input type="checkbox" disabled={disabled} checked={!!tereti[k].oznaceno} onChange={(e) => postaviTeret(k, { oznaceno: e.target.checked })} /> {naziv} &gt;
+                  <input className="input f-mono" style={{ width: 64, padding: "3px 6px" }} type="number" min="0" aria-label={`${naziv} u kg`} disabled={disabled || !tereti[k].oznaceno} value={tereti[k].kg ?? ""} onChange={(e) => postaviTeret(k, { kg: e.target.value === "" ? "" : Number(e.target.value) })} /> kg
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Nova uputnica: radnik + vrsta pregleda, sve ostalo se popuni samo (radnik, radno mjesto, staž, posljednji pregled), a svako polje se na ovoj uputnici
+// smije promijeniti (ne mijenja predložak ni radnika). Broj dodjeljuje poslužitelj pri spremanju; PDF se izrađuje iz spremljene uputnice.
+function NovaUputnicaModal({ db, radnici, hrPo, mjestoPo, postavke, preselect, spremi, showToast, onClose }) {
+  const [zaposlenikId, setZaposlenikId] = useState(preselect?.zaposlenikId || "");
+  const [vrsta, setVrsta] = useState(preselect?.vrsta || "");
+  const [datum, setDatum] = useState(todayISO());
+  const [radnoMjestoId, setRadnoMjestoId] = useState("");
+  const [dodatnaIds, setDodatnaIds] = useState([]);
+  const [izricito, setIzricito] = useState(false);
+  const [polja, setPolja] = useState(null);
+  const [spremiRaniji, setSpremiRaniji] = useState(true);
+  const [greska, setGreska] = useState("");
+  const [radi, setRadi] = useState(false);
+  const mjesta = [...mjestoPo.values()].sort((a, b) => String(a.sifra).localeCompare(String(b.sifra)));
+  const zadnji = zaposlenikId ? zadnjiPregled(db.pregledi || [], zaposlenikId) : null;
+  const kljucDodatna = dodatnaIds.join(",");
+  useEffect(() => {
+    const k = hrPo.get(zaposlenikId);
+    setRadnoMjestoId(k?.radnoMjestoId || ""); setDodatnaIds(k?.dodatniPoslovi || []); setIzricito(false); setGreska("");
+  }, [zaposlenikId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!zaposlenikId || !vrsta) { setPolja(null); return; }
+    const z = (db.zaposlenici || []).find((x) => x.id === zaposlenikId);
+    setPolja(izradiPoljaUputnice({ zaposlenik: z, radnik: hrPo.get(zaposlenikId), radnoMjesto: mjestoPo.get(radnoMjestoId), dodatnaRadnaMjesta: dodatnaIds.map((id) => mjestoPo.get(id)).filter(Boolean), vrsta, datum, posljednjiPregled: zadnji, tvrtka: db.postavkeTvrtke, nazivPoslodavca: postavke.nazivPoslodavca }));
+  }, [zaposlenikId, vrsta, datum, radnoMjestoId, kljucDodatna]); // eslint-disable-line react-hooks/exhaustive-deps
+  const rm = mjestoPo.get(radnoMjestoId);
+  const nijeF6 = !!rm && rm.posebniUvjeti === false;
+  const godinaUputnice = Number(String(datum).slice(0, 4));
+  const sljedeciBroj = sljedeciRedniBroj(db.uputnice || [], postavke, godinaUputnice);
+  const problemi = [
+    ...(polja ? provjeriUputnicu({ polja, vrsta, datum }) : []),
+    ...(zaposlenikId && !radnoMjestoId ? ["Radniku nije dodijeljeno radno mjesto — odaberite ga ispod ili ga upišite u kartici Radnici."] : []),
+    ...(rm && !rm.odobreno ? ["Predložak radnog mjesta nije odobren (kartica Radna mjesta)."] : []),
+    ...(dodatnaIds.some((id) => !mjestoPo.get(id)?.odobreno) ? ["Neki dodatni posao nema odobren predložak."] : []),
+    ...(nijeF6 && !izricito ? ["Radno mjesto nije među poslovima s posebnim uvjetima rada — potvrdite da je uputnica izričito zatražena."] : []),
+    ...(trebaPocetniBroj(db.uputnice || [], postavke) ? ["Prije prve uputnice upišite zadnji već izdani broj u Postavkama."] : []),
+  ];
+  const pol = (k, v) => setPolja((p) => ({ ...p, [k]: v }));
+  const prosli = (k, v) => setPolja((p) => ({ ...p, posljednjiPregled: { datum: "", clanak: "", tocke: "", drugiPropis: "", ocjena: "", ...(p.posljednjiPregled || {}), [k]: v } }));
+  const prethodni = vrsta === "prethodni";
+  const nemaProsli = !prethodni && !!polja && !zadnji;
+
+  const spremiUputnicu = async () => {
+    setGreska("");
+    if (problemi.length) { setGreska(problemi[0]); return; }
+    setRadi(true);
+    try {
+      let prosliId = zadnji?.id || null;
+      const pr = polja.posljednjiPregled;
+      if (nemaProsli && spremiRaniji && pr?.datum && String(pr.ocjena || "").trim()) {
+        const pg = { id: uid("pg"), zaposlenikId, uputnicaId: null, datumPregleda: pr.datum, clanak: pr.clanak || "", tocke: pr.tocke || "", drugiPropis: pr.drugiPropis || "", ocjena: pr.ocjena, datumSljedeceg: "" };
+        const rp = await spremi("pregledi", [pg]);
+        if (!rp.ok) { setGreska(rp.greska); return; }
+        prosliId = pg.id;
+      }
+      const zapis = { id: uid("upt"), zaposlenikId, vrsta, datum, radnoMjestoId, dodatnaRadnaMjestaIds: dodatnaIds, prosliPregledId: prosliId, izricitoZatrazeno: nijeF6 && izricito, polja };
+      const r = await spremi("uputnice", [zapis]);
+      if (!r.ok) { setGreska(r.greska); return; }
+      const spremljena = r.popis.find((u) => u.id === zapis.id);
+      try { await znrPreuzmiPdf([spremljena], nazivDatotekeUputnice(spremljena)); showToast(`Uputnica ${spremljena.broj} spremljena i izrađena.`); }
+      catch { showToast(`Uputnica ${spremljena.broj} je spremljena, ali PDF nije izrađen — ispišite je iz popisa Uputnice.`); }
+      onClose();
+    } finally { setRadi(false); }
+  };
+
+  return (
+    <Modal wide title="Nova uputnica RA-1" onClose={onClose} footer={<>
+      <span style={{ marginRight: "auto", fontSize: 12, color: "var(--ink-soft)" }}>Broj se dodjeljuje pri spremanju (sljedeći: <strong className="f-mono">{sljedeciBroj}/{godinaUputnice || "—"}</strong>)</span>
+      <Btn onClick={onClose}>Odustani</Btn>
+      <Btn variant="primary" icon={Printer} disabled={!polja || radi} onClick={spremiUputnicu}>{radi ? "Spremam…" : "Spremi i ispiši (PDF)"}</Btn>
+    </>}>
+      <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1.3fr 150px", gap: 12 }}>
+        <Field label="Radnik">
+          <select className="select" value={zaposlenikId} onChange={(e) => setZaposlenikId(e.target.value)}>
+            <option value="">Odaberite radnika…</option>
+            {radnici.map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+          </select>
+        </Field>
+        <Field label="Vrsta pregleda">
+          <div style={{ display: "flex", gap: 12, paddingTop: 8, flexWrap: "wrap" }}>
+            {VRSTE_PREGLEDA.map((v) => <label key={v.key} title={v.opis} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 13, cursor: "pointer" }}><input type="radio" name="znr-vrsta" checked={vrsta === v.key} onChange={() => setVrsta(v.key)} /> {v.naziv}</label>)}
+          </div>
+        </Field>
+        <Field label="Datum uputnice"><input className="input" type="date" value={datum} onChange={(e) => setDatum(e.target.value)} /></Field>
+      </div>
+      {zaposlenikId && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <Field label="Radno mjesto (predložak)">
+            <select className="select" value={radnoMjestoId} onChange={(e) => setRadnoMjestoId(e.target.value)}>
+              <option value="">—</option>
+              {mjesta.map((m) => <option key={m.id} value={m.id}>{m.sifra} {m.naziv}{m.odobreno ? "" : " (nije odobreno)"}</option>)}
+            </select>
+          </Field>
+          <Field label="Dodatni poslovi (spajaju se točke Pravilnika)">
+            <select className="select" multiple size={3} value={dodatnaIds} onChange={(e) => setDodatnaIds([...e.target.selectedOptions].map((o) => o.value))}>
+              {mjesta.filter((m) => m.id !== radnoMjestoId).map((m) => <option key={m.id} value={m.id}>{m.sifra} {m.naziv}</option>)}
+            </select>
+          </Field>
+        </div>
+      )}
+      {nijeF6 && <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, marginBottom: 12 }}><input type="checkbox" checked={izricito} onChange={(e) => setIzricito(e.target.checked)} /> Uputnica je izričito zatražena (posao nije među poslovima s posebnim uvjetima rada)</label>}
+      <ZnrGreska tekst={greska || (polja && problemi.length ? problemi[0] : "")} />
+      {polja && (
+        <>
+          <div className="label" style={{ margin: "6px 0 8px" }}>Radnik</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
+            <ZnrUnos label="Ime" value={polja.ime} onChange={(v) => pol("ime", v)} />
+            <ZnrUnos label="Prezime" value={polja.prezime} onChange={(v) => pol("prezime", v)} />
+            <ZnrUnos label="Ime oca – majke" value={polja.imeRoditelja} onChange={(v) => pol("imeRoditelja", v)} />
+            <ZnrUnos label="Datum rođenja" type="date" value={polja.datumRodjenja} onChange={(v) => pol("datumRodjenja", v)} />
+            <ZnrUnos label="Mjesto rođenja" value={polja.mjestoRodjenja} onChange={(v) => pol("mjestoRodjenja", v)} />
+            <ZnrUnos label="OIB" mono maxLength={11} value={polja.oib} onChange={(v) => pol("oib", ocistiOib(v))} />
+            <ZnrUnos label="Zanimanje" value={polja.zanimanje} onChange={(v) => pol("zanimanje", v)} />
+            <Field label="Školska sprema"><select className="select" value={polja.skolskaSprema} onChange={(e) => pol("skolskaSprema", e.target.value)}><option value="">—</option>{SKOLSKE_SPREME.map((s) => <option key={s}>{s}</option>)}</select></Field>
+          </div>
+          <div className="label" style={{ margin: "6px 0 8px" }}>Poslovi i staž</div>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 2fr", gap: "0 12px" }}>
+            <ZnrUnos label="Poslovi za koje se utvrđuje zdravstvena sposobnost" value={polja.posloviNaziv} onChange={(v) => pol("posloviNaziv", v)} />
+            <ZnrUnos label="Članak Pravilnika" value={polja.clanak} onChange={(v) => pol("clanak", v)} />
+            <ZnrUnos label="Točke Pravilnika" mono value={polja.tocke} onChange={(v) => pol("tocke", v)} />
+            <ZnrUnos label="Poslovi prema drugim zakonima, propisima ili kolektivnom ugovoru" value={polja.drugiPropis} onChange={(v) => pol("drugiPropis", v)} />
+            <ZnrUnos label="Ukupni radni staž" mono value={polja.ukupniStaz} onChange={(v) => pol("ukupniStaz", v)} />
+            <ZnrUnos label="Staž na poslovima za koje se utvrđuje sposobnost" mono disabled={prethodni} value={polja.stazNaPoslovima} onChange={(v) => pol("stazNaPoslovima", v)} />
+          </div>
+          {!prethodni && (
+            <>
+              <div className="label" style={{ margin: "6px 0 8px" }}>Posljednji zdravstveni pregled</div>
+              {nemaProsli && <div className="card" style={{ padding: "8px 12px", marginBottom: 10, background: "#FDF6E3", borderColor: "#F0C36B", fontSize: 12.5 }}>Nema podataka o posljednjem pregledu ovog radnika. Upišite ih ručno — mogu se spremiti kao raniji pregled, pa idući put ne treba ponovno upisivati.</div>}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: "0 12px" }}>
+                <ZnrUnos label="Datum pregleda" type="date" value={polja.posljednjiPregled?.datum} onChange={(v) => prosli("datum", v)} />
+                <ZnrUnos label="Članak" value={polja.posljednjiPregled?.clanak} onChange={(v) => prosli("clanak", v)} />
+                <ZnrUnos label="Točke" mono value={polja.posljednjiPregled?.tocke} onChange={(v) => prosli("tocke", v)} />
+                <ZnrUnos label="Ili zakon, propis, kolektivni ugovor" value={polja.posljednjiPregled?.drugiPropis} onChange={(v) => prosli("drugiPropis", v)} />
+                <div style={{ gridColumn: "span 2" }}><ZnrUnos label="Ocjena zdravstvene sposobnosti" value={polja.posljednjiPregled?.ocjena} onChange={(v) => prosli("ocjena", v)} /></div>
+              </div>
+              {nemaProsli && <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, marginBottom: 12 }}><input type="checkbox" checked={spremiRaniji} onChange={(e) => setSpremiRaniji(e.target.checked)} /> Spremi ovo kao raniji pregled radnika (ako su upisani datum i ocjena)</label>}
+            </>
+          )}
+          <div className="label" style={{ margin: "6px 0 8px" }}>Opis posla</div>
+          <ZnrUnos label="Kratak opis poslova" value={polja.kratakOpis} onChange={(v) => pol("kratakOpis", v)} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+            <ZnrUnos label="Strojevi, alati, aparati" value={polja.strojevi} onChange={(v) => pol("strojevi", v)} />
+            <ZnrUnos label="Predmet rada (radne tvari)" value={polja.predmetRada} onChange={(v) => pol("predmetRada", v)} />
+          </div>
+          <KuciceUredjivac vrijednost={polja} onChange={(n) => setPolja(n)} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+            <ZnrUnos label="Kemijske tvari" value={polja.kemijskeTvari} onChange={(v) => pol("kemijskeTvari", v)} />
+            <ZnrUnos label="Biološke štetnosti" value={polja.biolosteStetnosti} onChange={(v) => pol("biolosteStetnosti", v)} />
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+// Skupna izrada periodičkih uputnica: za odabrane radnike jedna uputnica sa uzastopnim brojevima i svi u jednom PDF-u. Radnici kojima nešto nedostaje
+// (podaci, odobren predložak, posljednji pregled) preskaču se i ispisuju s razlogom — za njih se uputnica izrađuje pojedinačno.
+function SkupnaIzradaModal({ db, ids, hrPo, mjestoPo, postavke, spremi, showToast, onClose }) {
+  const [datum, setDatum] = useState(todayISO());
+  const [radi, setRadi] = useState(false);
+  const [greska, setGreska] = useState("");
+  const stavke = ids.map((id) => {
+    const z = (db.zaposlenici || []).find((x) => x.id === id);
+    const hr = hrPo.get(id) || null;
+    const rm = hr ? mjestoPo.get(hr.radnoMjestoId) || null : null;
+    const dodatna = (hr?.dodatniPoslovi || []).map((x) => mjestoPo.get(x)).filter(Boolean);
+    const zadnji = zadnjiPregled(db.pregledi || [], id);
+    const polja = z ? izradiPoljaUputnice({ zaposlenik: z, radnik: hr, radnoMjesto: rm, dodatnaRadnaMjesta: dodatna, vrsta: "periodicki", datum, posljednjiPregled: zadnji, tvrtka: db.postavkeTvrtke, nazivPoslodavca: postavke.nazivPoslodavca }) : null;
+    const problemi = [
+      ...(polja ? provjeriUputnicu({ polja, vrsta: "periodicki", datum }) : ["radnik nije pronađen"]),
+      ...(!rm ? ["nema radnog mjesta"] : !rm.odobreno ? ["predložak radnog mjesta nije odobren"] : rm.posebniUvjeti === false ? ["radno mjesto nije među poslovima s posebnim uvjetima (izdaje se pojedinačno)"] : []),
+      ...(dodatna.some((x) => !x.odobreno) ? ["dodatni posao nema odobren predložak"] : []),
+      ...(!zadnji ? ["nema podataka o posljednjem pregledu"] : []),
+    ];
+    return { id, z, hr, zadnji, polja, problemi };
+  });
+  const spremne = stavke.filter((s) => s.problemi.length === 0);
+  const preskocene = stavke.filter((s) => s.problemi.length > 0);
+  const izradi = async () => {
+    setGreska("");
+    if (trebaPocetniBroj(db.uputnice || [], postavke)) { setGreska("Prije prve uputnice upišite zadnji već izdani broj u Postavkama."); return; }
+    setRadi(true);
+    try {
+      const zapisi = spremne.map((s) => ({ id: uid("upt"), zaposlenikId: s.id, vrsta: "periodicki", datum, radnoMjestoId: s.hr.radnoMjestoId, dodatnaRadnaMjestaIds: s.hr.dodatniPoslovi || [], prosliPregledId: s.zadnji.id, polja: s.polja }));
+      const r = await spremi("uputnice", zapisi);
+      if (!r.ok) { setGreska(r.greska); return; }
+      const idjevi = new Set(zapisi.map((z) => z.id));
+      const spremljene = r.popis.filter((u) => idjevi.has(u.id)).sort((a, b) => a.redniBroj - b.redniBroj);
+      try { await znrPreuzmiPdf(spremljene, `RA-1_periodicki_${datum}_${spremljene.length}-uputnica.pdf`); showToast(`Izrađeno ${spremljene.length} uputnica (${spremljene[0].broj} – ${spremljene[spremljene.length - 1].broj}).`); }
+      catch { showToast("Uputnice su spremljene, ali PDF nije izrađen — ispišite ih iz popisa Uputnice."); }
+      onClose(true);
+    } finally { setRadi(false); }
+  };
+  return (
+    <Modal title="Izradi periodičke uputnice" onClose={() => onClose(false)} footer={<><Btn onClick={() => onClose(false)}>Odustani</Btn><Btn variant="primary" icon={Printer} disabled={!spremne.length || radi} onClick={izradi}>{radi ? "Izrađujem…" : `Izradi ${spremne.length} uputnica (jedan PDF)`}</Btn></>}>
+      <Field label="Datum uputnica"><input className="input" style={{ maxWidth: 170 }} type="date" value={datum} onChange={(e) => setDatum(e.target.value)} /></Field>
+      <ZnrGreska tekst={greska} />
+      <div className="label" style={{ marginBottom: 4 }}>Bit će izrađene ({spremne.length})</div>
+      <div style={{ fontSize: 13, marginBottom: 12 }}>{spremne.length ? spremne.map((s) => `${s.z.prezime} ${s.z.ime}`).join(", ") : "Nijedan odabrani radnik nema sve potrebne podatke."}</div>
+      {preskocene.length > 0 && (
+        <>
+          <div className="label" style={{ marginBottom: 4 }}>Preskočeno ({preskocene.length}) — izradite pojedinačno</div>
+          {preskocene.map((s) => <div key={s.id} style={{ fontSize: 12.5, marginBottom: 3 }}><strong>{s.z ? `${s.z.prezime} ${s.z.ime}` : s.id}</strong> <span style={{ color: "var(--rust)" }}>— {s.problemi[0]}</span></div>)}
+        </>
+      )}
+    </Modal>
+  );
+}
+
+// Rezultat pregleda (kad radnik donese nalaz) ili raniji pregled upisan ručno (bez uputnice). Članak i točke se preuzimaju s uputnice; sljedeći pregled
+// je neobavezan (ako ga liječnik nije napisao, računa se iz roka radnog mjesta).
+function RezultatPregledaModal({ uputnica, pregled, zaposlenikId, imeRadnika, pregledi, spremi, showToast, onClose }) {
+  const p = uputnica?.polja || {};
+  const [f, setF] = useState(() => ({ datumPregleda: pregled?.datumPregleda || todayISO(), clanak: pregled?.clanak ?? p.clanak ?? "3.", tocke: pregled?.tocke ?? p.tocke ?? "", drugiPropis: pregled?.drugiPropis ?? p.drugiPropis ?? "", ocjena: pregled?.ocjena || "", datumSljedeceg: pregled?.datumSljedeceg || "" }));
+  const [greska, setGreska] = useState("");
+  const [radi, setRadi] = useState(false);
+  const ocjene = [...new Set([OCJENA_ZADANO, ...pregledi.map((x) => x.ocjena).filter(Boolean)])];
+  const spremiRezultat = async () => {
+    setGreska("");
+    if (!f.datumPregleda) { setGreska("Upišite datum pregleda."); return; }
+    if (!String(f.ocjena).trim()) { setGreska("Upišite ocjenu zdravstvene sposobnosti."); return; }
+    setRadi(true);
+    try {
+      const pg = { id: pregled?.id || uid("pg"), zaposlenikId, uputnicaId: uputnica?.id || null, ...f, ocjena: f.ocjena.trim() };
+      const r1 = await spremi("pregledi", [pg]);
+      if (!r1.ok) { setGreska(r1.greska); return; }
+      if (uputnica && !(uputnica.status === "Obavljeno" && uputnica.pregledId === pg.id)) {
+        const r2 = await spremi("uputnice", [{ id: uputnica.id, status: "Obavljeno", pregledId: pg.id }]);
+        if (!r2.ok) { setGreska(r2.greska); return; }
+      }
+      showToast("Rezultat pregleda spremljen.");
+      onClose();
+    } finally { setRadi(false); }
+  };
+  return (
+    <Modal title={uputnica ? `Rezultat pregleda — uputnica ${uputnica.broj}` : "Raniji pregled radnika"} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} disabled={radi} onClick={spremiRezultat}>Spremi rezultat</Btn></>}>
+      <div style={{ fontSize: 13, marginBottom: 12 }}><strong>{imeRadnika(zaposlenikId)}</strong>{uputnica ? ` · ${nazivVrste(uputnica.vrsta)} pregled, uputnica od ${fmtDate(uputnica.datum)}` : " · pregled koji je obavljen prije uvođenja aplikacije (ili bez uputnice)"}</div>
+      <ZnrGreska tekst={greska} />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+        <ZnrUnos label="Datum pregleda" type="date" value={f.datumPregleda} onChange={(v) => setF({ ...f, datumPregleda: v })} />
+        <ZnrUnos label="Datum sljedećeg pregleda (ako ga je liječnik napisao)" type="date" value={f.datumSljedeceg} onChange={(v) => setF({ ...f, datumSljedeceg: v })} />
+        <ZnrUnos label="Članak Pravilnika" value={f.clanak} onChange={(v) => setF({ ...f, clanak: v })} />
+        <ZnrUnos label="Točke" mono value={f.tocke} onChange={(v) => setF({ ...f, tocke: v })} />
+      </div>
+      <ZnrUnos label="Ili zakon, propis, kolektivni ugovor (neobavezno)" value={f.drugiPropis} onChange={(v) => setF({ ...f, drugiPropis: v })} />
+      <Field label="Ocjena zdravstvene sposobnosti">
+        <input className="input" list="znr-ocjene" value={f.ocjena} onChange={(e) => setF({ ...f, ocjena: e.target.value })} placeholder="Odaberite ili upišite ocjenu…" />
+        <datalist id="znr-ocjene">{ocjene.map((o) => <option key={o} value={o} />)}</datalist>
+      </Field>
+    </Modal>
+  );
+}
+
+function PonistiUputnicuModal({ uputnica, imeRadnika, spremi, showToast, onClose }) {
+  const [razlog, setRazlog] = useState("");
+  const [greska, setGreska] = useState("");
+  const ponisti = async () => {
+    const r = await spremi("uputnice", [{ id: uputnica.id, status: "Poništena", ponistenaRazlog: razlog.trim() }]);
+    if (!r.ok) { setGreska(r.greska); return; }
+    showToast(`Uputnica ${uputnica.broj} je poništena.`); onClose();
+  };
+  return (
+    <Modal title={`Poništi uputnicu ${uputnica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="danger" onClick={ponisti}>Poništi uputnicu</Btn></>}>
+      <p style={{ fontSize: 13.5, color: "var(--ink-soft)", marginTop: 0 }}>Uputnica <strong style={{ color: "var(--ink)" }}>{uputnica.broj}</strong> ({imeRadnika(uputnica.zaposlenikId)}, {nazivVrste(uputnica.vrsta)}) ostaje u popisu kao poništena, a njezin broj se više neće koristiti. Poništenje se ne može poništiti.</p>
+      <ZnrGreska tekst={greska} />
+      <Field label="Razlog (neobavezno)"><input className="input" value={razlog} onChange={(e) => setRazlog(e.target.value)} placeholder="npr. pogrešan radnik" /></Field>
+    </Modal>
+  );
+}
+
+// Kadrovski podaci radnika za uputnicu (OIB, rođenje, zanimanje, radno mjesto, staž prije dolaska) — unose se jednom. Staž prije dolaska = sav staž prije
+// datuma zaposlenja kod nas (i raniji staž u Econu); može se preuzeti iz Godišnjeg odmora ("staž izvan Econa").
+function RadnikZnrModal({ db, zaposlenik, hr, mjesta, pregledi, uputnice, mozeMijenjati, spremi, showToast, onDodajPregled, onClose }) {
+  const [f, setF] = useState(() => ({ oib: hr?.oib || "", datumRodjenja: hr?.datumRodjenja || "", mjestoRodjenja: hr?.mjestoRodjenja || "", imeRoditelja: hr?.imeRoditelja || "", zanimanje: hr?.zanimanje || "", skolskaSprema: hr?.skolskaSprema || "", stazPrijeGodine: hr?.stazPrijeGodine ?? "", stazPrijeMjeseci: hr?.stazPrijeMjeseci ?? "", radnoMjestoId: hr?.radnoMjestoId || "", dodatniPoslovi: hr?.dodatniPoslovi || [], datumPocetkaNaRadnomMjestu: hr?.datumPocetkaNaRadnomMjestu || "", napomena: hr?.napomena || "" }));
+  const [greska, setGreska] = useState("");
+  const [radi, setRadi] = useState(false);
+  const go = db.godisnjiOdmor && !Array.isArray(db.godisnjiOdmor) ? db.godisnjiOdmor : {};
+  let stazIzGO = null;
+  Object.keys(go.godine || {}).sort().reverse().forEach((g) => { const v = go.godine[g]?.zaposlenici?.[zaposlenik.id]?.stazIzvan; if (!stazIzGO && v !== undefined && v !== null && String(v).trim() !== "") stazIzGO = { godina: g, vrijednost: v }; });
+  const preuzmiStaz = () => { const { godine, mjeseci } = godineUGodineMjesece(stazIzGO.vrijednost); setF({ ...f, stazPrijeGodine: godine, stazPrijeMjeseci: mjeseci }); };
+  const oibGreska = f.oib && !provjeriOib(f.oib) ? "OIB nije ispravan (11 znamenki s ispravnom kontrolnom znamenkom)." : "";
+  const mojiPregledi = pregledi.filter((p) => p.zaposlenikId === zaposlenik.id).sort((a, b) => String(b.datumPregleda).localeCompare(String(a.datumPregleda)));
+  const mojeUputnice = uputnice.filter((u) => u.zaposlenikId === zaposlenik.id).sort((a, b) => b.godina - a.godina || b.redniBroj - a.redniBroj);
+  const spremiHR = async () => {
+    if (oibGreska) { setGreska(oibGreska); return; }
+    setRadi(true);
+    try {
+      const r = await spremi("kadrovskiPodaci", [{ id: zaposlenik.id, ...f, oib: ocistiOib(f.oib) }]);
+      if (!r.ok) { setGreska(r.greska); return; }
+      showToast("Podaci radnika spremljeni."); onClose();
+    } finally { setRadi(false); }
+  };
+  return (
+    <Modal wide title={`Radnik: ${zaposlenik.prezime} ${zaposlenik.ime}`} onClose={onClose} footer={<><Btn onClick={onClose}>{mozeMijenjati ? "Odustani" : "Zatvori"}</Btn>{mozeMijenjati && <Btn variant="primary" icon={Save} disabled={radi} onClick={spremiHR}>Spremi podatke</Btn>}</>}>
+      <ZnrGreska tekst={greska} />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
+        <Field label="OIB"><input className="input f-mono" maxLength={11} disabled={!mozeMijenjati} value={f.oib} onChange={(e) => setF({ ...f, oib: ocistiOib(e.target.value) })} />{oibGreska && <div style={{ fontSize: 11, color: "var(--rust)", marginTop: 3 }}>{oibGreska}</div>}</Field>
+        <ZnrUnos label="Datum rođenja" type="date" disabled={!mozeMijenjati} value={f.datumRodjenja} onChange={(v) => setF({ ...f, datumRodjenja: v })} />
+        <ZnrUnos label="Mjesto rođenja" disabled={!mozeMijenjati} value={f.mjestoRodjenja} onChange={(v) => setF({ ...f, mjestoRodjenja: v })} />
+        <ZnrUnos label="Ime oca – majke" disabled={!mozeMijenjati} value={f.imeRoditelja} onChange={(v) => setF({ ...f, imeRoditelja: v })} />
+        <ZnrUnos label="Zanimanje" disabled={!mozeMijenjati} value={f.zanimanje} onChange={(v) => setF({ ...f, zanimanje: v })} />
+        <Field label="Školska sprema"><select className="select" disabled={!mozeMijenjati} value={f.skolskaSprema} onChange={(e) => setF({ ...f, skolskaSprema: e.target.value })}><option value="">—</option>{SKOLSKE_SPREME.map((s) => <option key={s}>{s}</option>)}</select></Field>
+        <Field label="Radno mjesto">
+          <select className="select" disabled={!mozeMijenjati} value={f.radnoMjestoId} onChange={(e) => setF({ ...f, radnoMjestoId: e.target.value })}>
+            <option value="">—</option>
+            {[...mjesta].sort((a, b) => String(a.sifra).localeCompare(String(b.sifra))).map((m) => <option key={m.id} value={m.id}>{m.sifra} {m.naziv}</option>)}
+          </select>
+        </Field>
+        <ZnrUnos label={`Radi na tom mjestu od (zaposlen ${zaposlenik.datumZaposlenja ? fmtDate(zaposlenik.datumZaposlenja) : "—"})`} type="date" disabled={!mozeMijenjati} value={f.datumPocetkaNaRadnomMjestu} onChange={(v) => setF({ ...f, datumPocetkaNaRadnomMjestu: v })} />
+        <div />
+      </div>
+      <Field label="Dodatni poslovi (npr. monter koji radi i s platformom — točke se spajaju na uputnici)">
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px" }}>
+          {[...mjesta].sort((a, b) => String(a.sifra).localeCompare(String(b.sifra))).filter((m) => m.id !== f.radnoMjestoId).map((m) => (
+            <label key={m.id} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12.5 }}><input type="checkbox" disabled={!mozeMijenjati} checked={f.dodatniPoslovi.includes(m.id)} onChange={(e) => setF({ ...f, dodatniPoslovi: e.target.checked ? [...f.dodatniPoslovi, m.id] : f.dodatniPoslovi.filter((x) => x !== m.id) })} /> {m.naziv}</label>
+          ))}
+        </div>
+      </Field>
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <Field label="Staž prije dolaska u Econ — godine"><input className="input f-mono" style={{ width: 110 }} type="number" min="0" disabled={!mozeMijenjati} value={f.stazPrijeGodine} onChange={(e) => setF({ ...f, stazPrijeGodine: e.target.value === "" ? "" : Number(e.target.value) })} /></Field>
+        <Field label="mjeseci"><input className="input f-mono" style={{ width: 90 }} type="number" min="0" max="11" disabled={!mozeMijenjati} value={f.stazPrijeMjeseci} onChange={(e) => setF({ ...f, stazPrijeMjeseci: e.target.value === "" ? "" : Number(e.target.value) })} /></Field>
+        {mozeMijenjati && stazIzGO && <div style={{ marginBottom: 14 }}><Btn size="sm" onClick={preuzmiStaz}>Preuzmi iz Godišnjeg odmora ({String(stazIzGO.vrijednost).replace(".", ",")} god., {stazIzGO.godina}.)</Btn></div>}
+      </div>
+      <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: -6, marginBottom: 12 }}>Sav staž prije datuma zaposlenja kod nas (i raniji staž u Econu). Ukupni staž na uputnici = ovo + vrijeme od zaposlenja do datuma uputnice.</div>
+      <ZnrUnos label="Napomena (neobavezno)" disabled={!mozeMijenjati} value={f.napomena} onChange={(v) => setF({ ...f, napomena: v })} />
+      <div className="label" style={{ margin: "10px 0 6px", display: "flex", alignItems: "center", gap: 10 }}>Pregledi i uputnice{mozeMijenjati && <Btn size="sm" icon={Plus} onClick={onDodajPregled}>Dodaj raniji pregled</Btn>}</div>
+      {mojiPregledi.length === 0 && mojeUputnice.length === 0 ? <div style={{ fontSize: 12.5, color: "var(--ink-faint)" }}>Još nema zapisa.</div> : (
+        <table className="erp-table">
+          <tbody>
+            {mojiPregledi.map((p) => <tr key={p.id}><td style={{ width: 110 }}>{fmtDate(p.datumPregleda)}</td><td>Pregled{p.uputnicaId ? "" : " (ručno upisan)"} — {p.ocjena}</td><td style={{ width: 150 }}>{p.datumSljedeceg ? `sljedeći: ${fmtDate(p.datumSljedeceg)}` : ""}</td></tr>)}
+            {mojeUputnice.map((u) => <tr key={u.id}><td className="f-mono" style={{ width: 110 }}>{u.broj}</td><td>Uputnica — {nazivVrste(u.vrsta)}, {fmtDate(u.datum)}</td><td style={{ width: 150 }}><Badge status={u.status} /></td></tr>)}
+          </tbody>
+        </table>
+      )}
+    </Modal>
+  );
+}
+
+// Predložak radnog mjesta iz Procjene rizika. Odobrenje (osoba + datum) bilježi poslužitelj; svaka izmjena sadržaja poništava odobrenje.
+function RadnoMjestoModal({ mjesto, mozeMijenjati, spremi, showToast, onClose }) {
+  const [f, setF] = useState(() => { const m = mjesto || prazanPredlozak(); return { ...prazanPredlozak(), ...m, tockeTekst: formatirajTocke(m), tereti: { ...prazniTereti(), ...(m.tereti || {}) } }; });
+  const [greska, setGreska] = useState("");
+  const [radi, setRadi] = useState(false);
+  const spremiMjesto = async (odobri) => {
+    setGreska("");
+    if (!String(f.naziv).trim()) { setGreska("Upišite naziv radnog mjesta."); return; }
+    const { tockeTekst, ...ostalo } = f;
+    const { tocke, podtocke } = parsirajTocke(tockeTekst);
+    setRadi(true);
+    try {
+      const r = await spremi("radnaMjesta", [{ ...ostalo, id: mjesto?.id || uid("rm"), tocke, podtocke, odobreno: odobri ? true : ostalo.odobreno }]);
+      if (!r.ok) { setGreska(r.greska); return; }
+      showToast(odobri ? "Radno mjesto spremljeno i odobreno." : "Radno mjesto spremljeno."); onClose();
+    } finally { setRadi(false); }
+  };
+  const t = (k) => ({ value: f[k], onChange: (v) => setF({ ...f, [k]: v }), disabled: !mozeMijenjati });
+  const pregledTocaka = formatirajTocke(parsirajTocke(f.tockeTekst));
+  return (
+    <Modal wide title={mjesto ? `Radno mjesto: ${mjesto.naziv}` : "Novo radno mjesto"} onClose={onClose} footer={<>
+      <Btn onClick={onClose}>{mozeMijenjati ? "Odustani" : "Zatvori"}</Btn>
+      {mozeMijenjati && <Btn icon={Save} disabled={radi} onClick={() => spremiMjesto(false)}>Spremi</Btn>}
+      {mozeMijenjati && <Btn variant="primary" icon={CheckCircle2} disabled={radi} onClick={() => spremiMjesto(true)}>Spremi i odobri</Btn>}
+    </>}>
+      <ZnrGreska tekst={greska} />
+      {mjesto?.odobreno && <div className="card" style={{ padding: "8px 12px", marginBottom: 10, background: "#E8F3EC", borderColor: "#B7D9C2", fontSize: 12.5 }}>Odobreno {fmtDate(mjesto.odobreno.datum)}. Izmjena sadržaja poništava odobrenje — nakon izmjene predložak treba ponovno odobriti.</div>}
+      {mjesto && !mjesto.odobreno && <div className="card" style={{ padding: "8px 12px", marginBottom: 10, background: "#FDF6E3", borderColor: "#F0C36B", fontSize: 12.5 }}>Nacrt: uputnica se s ovim predloškom ne može izdati dok ga odgovorna osoba ne odobri.</div>}
+      {f.napomenaProvjere && <div className="card" style={{ padding: "8px 12px", marginBottom: 10, fontSize: 12.5, whiteSpace: "pre-wrap" }}><strong>Za provjeru prema Procjeni rizika:</strong> {f.napomenaProvjere}</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "90px 2fr 1fr", gap: "0 12px" }}>
+        <ZnrUnos label="Šifra" mono {...t("sifra")} />
+        <ZnrUnos label="Naziv (poslovi za koje se utvrđuje sposobnost)" {...t("naziv")} />
+        <ZnrUnos label="Proces" {...t("proces")} />
+      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, marginBottom: 12 }}><input type="checkbox" disabled={!mozeMijenjati} checked={f.posebniUvjeti !== false} onChange={(e) => setF({ ...f, posebniUvjeti: e.target.checked })} /> Posao s posebnim uvjetima rada (točke čl. 3. Pravilnika, poglavlje F.6 Procjene)</label>
+      {f.posebniUvjeti !== false && (
+        <div style={{ display: "grid", gridTemplateColumns: "100px 2fr 1fr", gap: "0 12px" }}>
+          <ZnrUnos label="Članak" {...t("clanak")} />
+          <Field label="Točke (npr. 16., 17., 18. (pp 18., 19.))">
+            <input className="input f-mono" disabled={!mozeMijenjati} value={f.tockeTekst} onChange={(e) => setF({ ...f, tockeTekst: e.target.value })} />
+            <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 3 }}>Na uputnici: <span className="f-mono">{pregledTocaka || "—"}</span></div>
+          </Field>
+          <ZnrUnos label="Rok periodičkog pregleda (mjeseci)" type="number" mono {...t("rokPeriodickogMjeseci")} />
+        </div>
+      )}
+      <ZnrUnos label="Poslovi prema drugim zakonima, propisima ili kolektivnom ugovoru (obično prazno)" {...t("drugiPropis")} />
+      <ZnrUnos label="Poslovi s povećanim trajanjem staža osiguranja (obično prazno)" {...t("povecaniStaz")} />
+      <ZnrUnos label="Kratak opis poslova" {...t("kratakOpis")} />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+        <ZnrUnos label="Strojevi, alati, aparati" {...t("strojevi")} />
+        <ZnrUnos label="Predmet rada (radne tvari)" {...t("predmetRada")} />
+      </div>
+      <KuciceUredjivac vrijednost={f} onChange={(n) => setF({ ...f, ...n })} disabled={!mozeMijenjati} />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+        <ZnrUnos label="Kemijske tvari" {...t("kemijskeTvari")} />
+        <ZnrUnos label="Biološke štetnosti" {...t("biolosteStetnosti")} />
+      </div>
+      <ZnrUnos label="Izvor podataka" {...t("izvor")} />
+      <Field label="Napomena za provjeru (neobavezno)"><textarea className="textarea" rows={2} disabled={!mozeMijenjati} value={f.napomenaProvjere || ""} onChange={(e) => setF({ ...f, napomenaProvjere: e.target.value })} /></Field>
+    </Modal>
+  );
+}
+
+/* ============================== PRIJEDLOZI KORISNIKA ============================== */
+// Svaki korisnik može poslati prijedlog za poboljšanje aplikacije (gumb "Prijedlog" gore) i vidi svoje prijedloge sa statusom i odgovorom. Direktor i
+// glavni administrator vide sve prijedloge, mijenjaju status i pišu odgovor. Autora, vrijeme i početni status postavlja poslužitelj (ključ prijedlozi).
+// Svakog ponedjeljka prijedlozi se pregledavaju i radi se izvještaj s prijedlogom implementacije.
+const PRIJEDLOG_STATUSI = ["Novo", "U razmatranju", "Planirano", "Gotovo", "Odbijeno"];
+const nazivModulaPrijedloga = (k) => (k ? (MODULI_APLIKACIJE.find((m) => m.key === k)?.label || k) : "Općenito");
+
+function PrijedlogKartica({ p, autor, jeUpravitelj, mojId, spremi, showToast }) {
+  const [status, setStatus] = useState(p.status);
+  const [odgovor, setOdgovor] = useState(p.odgovor || "");
+  const [tekst, setTekst] = useState(p.tekst);
+  const [uredi, setUredi] = useState(false);
+  const [radi, setRadi] = useState(false);
+  useEffect(() => { setStatus(p.status); setOdgovor(p.odgovor || ""); setTekst(p.tekst); }, [p.status, p.odgovor, p.tekst]);
+  const mogaUrediti = p.kreiraoId === mojId && p.status === "Novo";
+  const pokreni = async (akcija, poruka) => { setRadi(true); const r = await akcija(); setRadi(false); showToast(r.ok ? poruka : r.greska); return r.ok; };
+  const spremiUpravitelj = () => pokreni(() => spremi("prijedlozi", [{ id: p.id, status, odgovor }]), "Prijedlog je ažuriran.");
+  const spremiTekst = async () => { if (await pokreni(() => spremi("prijedlozi", [{ id: p.id, tekst, modul: p.modul }]), "Prijedlog je ispravljen.")) setUredi(false); };
+  const povuci = () => potvrdiBrisanje(() => pokreni(() => spremi("prijedlozi", [], [p.id]), "Prijedlog je povučen."), "ovaj prijedlog");
+  const promijenjeno = status !== p.status || odgovor.trim() !== (p.odgovor || "");
+  return (
+    <div className="card" style={{ padding: 12, marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6, fontSize: 11.5, color: "var(--ink-soft)" }}>
+        <Badge status={p.status} />
+        <span>{fmtDate(p.datum)}</span>
+        {(jeUpravitelj || p.kreiraoId !== mojId) && <span>· <strong>{autor}</strong></span>}
+        <span>· {nazivModulaPrijedloga(p.modul)}</span>
+      </div>
+      {uredi ? (
+        <>
+          <textarea className="textarea" rows={4} aria-label="Tekst prijedloga" value={tekst} onChange={(e) => setTekst(e.target.value)} />
+          <div style={{ display: "flex", gap: 6, marginTop: 6 }}><Btn size="sm" variant="primary" disabled={radi || !tekst.trim()} onClick={spremiTekst}>Spremi</Btn><Btn size="sm" onClick={() => { setUredi(false); setTekst(p.tekst); }}>Odustani</Btn></div>
+        </>
+      ) : <div style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{p.tekst}</div>}
+      {p.odgovor && !jeUpravitelj && <div style={{ marginTop: 8, padding: "6px 10px", background: "var(--surface-alt)", borderRadius: 3, fontSize: 12.5, whiteSpace: "pre-wrap" }}><strong>Odgovor:</strong> {p.odgovor}</div>}
+      {!jeUpravitelj && mogaUrediti && !uredi && (
+        <div style={{ display: "flex", gap: 6, marginTop: 8 }}><Btn size="sm" icon={Pencil} onClick={() => setUredi(true)}>Ispravi</Btn><Btn size="sm" variant="ghost" icon={Trash2} onClick={povuci}>Povuci</Btn></div>
+      )}
+      {jeUpravitelj && (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}>
+            <select className="select" style={{ width: 160 }} aria-label="Status prijedloga" value={status} onChange={(e) => setStatus(e.target.value)}>{PRIJEDLOG_STATUSI.map((s) => <option key={s}>{s}</option>)}</select>
+            <textarea className="textarea" rows={2} style={{ flex: "1 1 260px" }} aria-label="Odgovor na prijedlog" placeholder="Odgovor autoru (vidi ga on/ona uz prijedlog)…" value={odgovor} onChange={(e) => setOdgovor(e.target.value)} />
+            <Btn size="sm" variant="primary" icon={Save} disabled={radi || !promijenjeno} onClick={spremiUpravitelj}>Spremi</Btn>
+            <Btn size="sm" variant="ghost" icon={Trash2} onClick={povuci} title="Ukloni prijedlog" />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PrijedloziModal({ db, mojId, jeUpravitelj, moduli, aktivniModul, spremi, showToast, onClose }) {
+  const [tab, setTab] = useState("novi");
+  const [modul, setModul] = useState(moduli.some((m) => m.key === aktivniModul) ? aktivniModul : "");
+  const [tekst, setTekst] = useState("");
+  const [greska, setGreska] = useState("");
+  const [radi, setRadi] = useState(false);
+  const [filtarStatusa, setFiltarStatusa] = useState("");
+  const svi = db.prijedlozi || [];
+  const prikazani = [...svi].filter((p) => !filtarStatusa || p.status === filtarStatusa).sort((a, b) => String(b.datum).localeCompare(String(a.datum)));
+  const imeAutora = (id) => { const z = (db.zaposlenici || []).find((x) => x.id === id); return z ? `${z.ime} ${z.prezime}` : "—"; };
+  const posalji = async () => {
+    setGreska("");
+    if (!tekst.trim()) { setGreska("Upišite prijedlog."); return; }
+    setRadi(true);
+    const r = await spremi("prijedlozi", [{ id: uid("prj"), modul, tekst: tekst.trim() }]);
+    setRadi(false);
+    if (!r.ok) { setGreska(r.greska); return; }
+    showToast("Hvala! Prijedlog je poslan.");
+    setTekst(""); setTab("moji");
+  };
+  return (
+    <Modal wide title="Prijedlozi za poboljšanje aplikacije" onClose={onClose}>
+      <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 14 }}>
+        <div className={`nav-tab ${tab === "novi" ? "active" : ""}`} onClick={() => setTab("novi")}>Novi prijedlog</div>
+        <div className={`nav-tab ${tab === "moji" ? "active" : ""}`} onClick={() => setTab("moji")}>{jeUpravitelj ? "Svi prijedlozi" : "Moji prijedlozi"} ({svi.length})</div>
+      </div>
+      {tab === "novi" && (
+        <>
+          <p style={{ fontSize: 13, color: "var(--ink-soft)", marginTop: 0 }}>Što bi u aplikaciji trebalo biti drukčije, lakše ili što vam nedostaje? Opišite što ste htjeli napraviti i što vas je u tome zasmetalo ili što biste željeli. Prijedloge pregledava uprava svakog ponedjeljka, a ovdje ćete vidjeti status i odgovor.</p>
+          <ZnrGreska tekst={greska} />
+          <Field label="Gdje u aplikaciji?">
+            <select className="select" style={{ maxWidth: 280 }} value={modul} onChange={(e) => setModul(e.target.value)}>
+              <option value="">Općenito / ne znam</option>
+              {moduli.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
+            </select>
+          </Field>
+          <Field label="Vaš prijedlog">
+            <textarea className="textarea" rows={6} maxLength={2000} autoFocus placeholder="npr. U tablici naloga bi trebao postojati gumb za ispis odabranih redaka…" value={tekst} onChange={(e) => setTekst(e.target.value)} />
+            <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 3, textAlign: "right" }}>{tekst.length} / 2000</div>
+          </Field>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Lightbulb} disabled={radi || !tekst.trim()} onClick={posalji}>{radi ? "Šaljem…" : "Pošalji prijedlog"}</Btn></div>
+        </>
+      )}
+      {tab === "moji" && (
+        <>
+          {jeUpravitelj && (
+            <div style={{ marginBottom: 10 }}>
+              <select className="select" style={{ width: 190 }} aria-label="Filtar statusa" value={filtarStatusa} onChange={(e) => setFiltarStatusa(e.target.value)}>
+                <option value="">Svi statusi</option>
+                {PRIJEDLOG_STATUSI.map((s) => <option key={s} value={s}>{s} ({svi.filter((p) => p.status === s).length})</option>)}
+              </select>
+            </div>
+          )}
+          {prikazani.length === 0 ? <EmptyState text={jeUpravitelj ? "Nema prijedloga." : "Još niste poslali nijedan prijedlog."} /> : prikazani.map((p) => (
+            <PrijedlogKartica key={p.id} p={p} autor={imeAutora(p.kreiraoId)} jeUpravitelj={jeUpravitelj} mojId={mojId} spremi={spremi} showToast={showToast} />
+          ))}
+        </>
+      )}
+    </Modal>
   );
 }
