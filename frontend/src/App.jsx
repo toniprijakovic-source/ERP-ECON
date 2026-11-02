@@ -10414,9 +10414,6 @@ function PonudaLaseraModal({ form, setForm, db, onSave, onClose }) {
 function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
   const t = db.postavkeTvrtke || {};
   const calc = izracunPonudeLasera(ponuda, db.kvaliteteMaterijala);
-  const pdvStopa = Number(t.pdvStopa ?? 25);
-  const pdvIznos = calc.cijenaKonacna * (pdvStopa / 100);
-  const ukupnoSPdv = calc.cijenaKonacna + pdvIznos;
   // Dodatak se ne navodi kao posebna stavka na ispisu — uračunat je izravno u cijenu svake
   // stavke rezanja (isto kao uvećanje kod standardnih ponuda).
   const faktorDodatka = 1 + (calc.dodatakPct || 0) / 100;
@@ -10481,9 +10478,7 @@ function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
             <tbody>
               {calc.trosakSavijanja > 0 && <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Savijanje:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(calc.trosakSavijanja)}</td></tr>}
               {calc.trosakOstalo > 0 && <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Ostalo:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(calc.trosakOstalo)}</td></tr>}
-              <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Osnovica:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(calc.cijenaKonacna)}</td></tr>
-              <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>PDV ({pdvStopa}%):</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(pdvIznos)}</td></tr>
-              <tr style={{ borderTop: "1px solid #333" }}><td style={{ padding: "6px 14px 0 0", fontWeight: 700 }}>UKUPNO:</td><td style={{ textAlign: "right", fontWeight: 700, paddingTop: 6, fontSize: 14 }}>{fmtCurDec(ukupnoSPdv)}</td></tr>
+              <tr style={{ borderTop: "1px solid #333" }}><td style={{ padding: "6px 14px 0 0", fontWeight: 700 }}>UKUPNO (bez PDV-a):</td><td style={{ textAlign: "right", fontWeight: 700, paddingTop: 6, fontSize: 14 }}>{fmtCurDec(calc.cijenaKonacna)}</td></tr>
             </tbody>
           </table>
         </div>
