@@ -17787,10 +17787,10 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
 
       {tab === "zaposlenici" && (
         <>
-          {db.zaposlenici.some((z) => !imaJakuLozinku(z)) && (
+          {db.zaposlenici.some((z) => z.prijavaUAplikaciju !== false && !imaJakuLozinku(z)) && (
             <div className="card" style={{ padding: "10px 14px", marginBottom: 14, background: "#FDF6E3", borderColor: "#F0C36B", display: "flex", alignItems: "center", gap: 8 }}>
               <AlertTriangle size={15} color="#8A6100" />
-              <span style={{ fontSize: 12.5, color: "#6b5511" }}><strong>{db.zaposlenici.filter((z) => !imaJakuLozinku(z)).length}</strong> zaposlenika još nema postavljenu jaku lozinku (koriste stari PIN ili nemaju nikakvu) — postavi im lozinku gumbom "Lozinka" u tablici.</span>
+              <span style={{ fontSize: 12.5, color: "#6b5511" }}><strong>{db.zaposlenici.filter((z) => z.prijavaUAplikaciju !== false && !imaJakuLozinku(z)).length}</strong> zaposlenika još nema postavljenu jaku lozinku (koriste stari PIN ili nemaju nikakvu) — postavi im lozinku gumbom "Lozinka" u tablici.</span>
             </div>
           )}
           {(vidiIzbornikPrijave || vidiPopisBodova || vidiPovijestKorekcija) && (
@@ -17808,8 +17808,8 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
           <EntityPage
             title="" data={[...db.zaposlenici].sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr"))}
             grupiraj={(z) => grupaEvidencije(z, db.pozicijeZaposlenika)}
-            redoslijedGrupa={["radiona", "praktikant", "ostalo", "kooperant"]}
-            nazivGrupe={(k) => ({ radiona: "Radiona", praktikant: "Praktikanti", ostalo: "Tehnički ured i administracija", kooperant: "Kooperanti" }[k])}
+            redoslijedGrupa={["radiona", "praktikant", "ostalo", "kooperant", "montazaDE"]}
+            nazivGrupe={(k) => ({ radiona: "Radiona", praktikant: "Praktikanti", ostalo: "Tehnički ured i administracija", kooperant: "Kooperanti", montazaDE: "Montaža DE" }[k])}
             onAdd={() => { setZapForm(emptyZap); setModal("zap"); }}
             onEdit={(row) => { setZapForm({ ...emptyZap, ...row, kompetencije: row.kompetencije || [], rfidKod: row.rfidKod || "" }); setModal("zap"); }}
             onDelete={(r) => setDel({ type: "zap", row: r })}
