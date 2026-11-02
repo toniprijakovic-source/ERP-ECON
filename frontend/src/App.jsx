@@ -750,6 +750,22 @@ const jeKooperant = (zaposlenik, pozicije) => (pozicije || []).find((p) => p.id 
 // normalno, ali se NE plaća po satu nego fiksnim dogovorenim mjesečnim iznosom + fiksnom
 // naknadom za prijevoz (oba sa zapisa zaposlenika), bez obzira na broj odrađenih sati tog mjeseca.
 const jeVanjskiSuradnik = (zaposlenik, pozicije) => (pozicije || []).find((p) => p.id === zaposlenik?.pozicijaId)?.naziv?.trim().toLowerCase() === "vanjski suradnik";
+// Montaža DE — radnici izaslani na montažu u Njemačku, plaća im se isplaćuje u DE. Evidencija i obračun idu zasebno (grupa "montazaDE"):
+// svaki mjesec se odabere jesu li bili u DE (nema isplate kod nas) ili u HR (sati po danima + neto iznos koji ide u isplatu).
+// Lokacija i neto iznos pamte se u doplaciPlaca (lokacijaDE, netoDE), isto kao ostali ručni mjesečni unosi.
+const jeMontazaDE = (zaposlenik, pozicije) => (pozicije || []).find((p) => p.id === zaposlenik?.pozicijaId)?.naziv?.trim().toLowerCase() === "montaža de";
+// Popisi za izbor osobe (izdao, potpisuje, zadatak…) ne nude radnike Montaže DE.
+const izborZaposlenika = (db) => (db.zaposlenici || []).filter((z) => !jeMontazaDE(z, db.pozicijeZaposlenika));
+const obracunMjesecaMontazaDE = (zaposlenik, mjesec, db) => {
+  const postavke = db.postavkePlaca;
+  const doplatak = (db.doplaciPlaca || []).find((d) => d.zaposlenikId === zaposlenik.id && d.mjesec === mjesec) || {};
+  const zapisi = (db.evidencijaRada || []).filter((e) => e.zaposlenikId === zaposlenik.id && e.vrijemeDolaska.slice(0, 7) === mjesec && (e.vrsta || "rad") === "rad" && e.vrijemeOdlaska);
+  const dani = zapisi.map((z) => ({ datum: z.vrijemeDolaska.slice(0, 10), odradjeniSati: obracunskiSati(z.vrijemeDolaska, z.vrijemeOdlaska, odrediSmjenu(z.vrijemeDolaska, postavke), postavke) }));
+  const sati = dani.reduce((s, d) => s + d.odradjeniSati, 0);
+  const uHR = doplatak.lokacijaDE === "HR";
+  const neto = Number(doplatak.netoDE) || 0;
+  return { zaposlenik, uHR, sati, neto, isplata: uHR ? neto : 0, brojDana: dani.length, dani };
+};
 // Operater na laseru ima svedeni prikaz (samo Plan rezanja) i ne vidi administrativne alate poput Backupa.
 const jeOperaterLasera = (pozicija) => (pozicija?.naziv || "").trim().toLowerCase() === "operater na laseru";
 
@@ -760,6 +776,7 @@ const RADIONA_POZICIJE = ["voditelj proizvodnje", "skladištar", "zaposlenik", "
 const grupaEvidencije = (zaposlenik, pozicije) => {
   const naziv = (pozicije || []).find((p) => p.id === zaposlenik?.pozicijaId)?.naziv?.trim().toLowerCase() || "";
   if (naziv === "kooperant") return "kooperant";
+  if (naziv === "montaža de") return "montazaDE";
   if (naziv === "praktikant") return "praktikant";
   if (RADIONA_POZICIJE.includes(naziv)) return "radiona";
   return "ostalo";
@@ -837,7 +854,7 @@ const upozorenjaEvidencije = (db) => {
   const radniDanDanas = danUTjednu >= 1 && danUTjednu <= 5 && !jePraznik(danas, db.praznici);
 
   const neprijavljeni = (radniDanDanas && proslaGranica)
-    ? db.zaposlenici.filter((z) => z.status === "Aktivan" && !db.evidencijaRada.some((e) => e.zaposlenikId === z.id && e.vrijemeDolaska.slice(0, 10) === danas))
+    ? db.zaposlenici.filter((z) => z.status === "Aktivan" && !jeMontazaDE(z, db.pozicijeZaposlenika) && !db.evidencijaRada.some((e) => e.zaposlenikId === z.id && e.vrijemeDolaska.slice(0, 10) === danas))
     : [];
 
   const neodjavljeni = db.evidencijaRada.filter((e) => e.autoOdjava && !e.potvrdenoRacunovodstvo && e.vrijemeDolaska.slice(0, 10) < danas);
@@ -2883,7 +2900,7 @@ function Dashboard({ db, update, showToast, setPage, otvoriProjekt, mojId, mojaP
               <input className="input" style={{ flex: "1 1 200px" }} autoFocus placeholder="Zadatak (nije vezan uz projekt)…" value={noviSlobodni.naziv} onChange={(e) => setNoviSlobodni({ ...noviSlobodni, naziv: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") dodajSlobodniZadatak(); }} />
               <select className="select" style={{ width: 170 }} aria-label="Kome se zadatak dodjeljuje" value={noviSlobodni.kome} onChange={(e) => setNoviSlobodni({ ...noviSlobodni, kome: e.target.value })}>
                 <option value="">Meni</option>
-                {[...db.zaposlenici].filter((z) => z.id !== mojId).sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+                {izborZaposlenika(db).filter((z) => z.id !== mojId).sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
               </select>
               <input type="date" className="input" style={{ width: 150 }} value={noviSlobodni.datum} onChange={(e) => setNoviSlobodni({ ...noviSlobodni, datum: e.target.value })} title="Rok izvršenja (nije obavezan)" />
               <Btn variant="primary" size="sm" icon={Plus} onClick={dodajSlobodniZadatak}>Dodaj</Btn>
@@ -4678,7 +4695,7 @@ function IzdatnicaModal({ db, update, showToast, initialMaterijalId, onClose, on
         <Field label="Izdao (zaposlenik)">
           <select className="select" value={izdaoId} onChange={(e) => setIzdaoId(e.target.value)}>
             <option value="">—</option>
-            {[...db.zaposlenici].sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+            {izborZaposlenika(db).sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
           </select>
         </Field>
       </div>
@@ -7812,7 +7829,7 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, patchProjekt, show
       <Field label="Izdao (zaposlenik)">
         <select className="select" value={form.izdaoId} onChange={(e) => setForm({ ...form, izdaoId: e.target.value })}>
           <option value="">—</option>
-          {[...db.zaposlenici].sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+          {izborZaposlenika(db).sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
         </select>
       </Field>
 
@@ -9782,13 +9799,13 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
                   <label style={{ fontSize: 11, color: "var(--ink-faint)" }}>Dodijeljeno:</label>
                   <select className="select" style={{ maxWidth: 175, fontSize: 12, padding: "4px 8px" }} value={z.dodijeljenoId || ""} onChange={(e) => postaviDodjelu(z.id, e.target.value)}>
                     <option value="">Nije dodijeljeno…</option>
-                    {[...db.zaposlenici].sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((zz) => <option key={zz.id} value={zz.id}>{zz.prezime} {zz.ime}</option>)}
+                    {izborZaposlenika(db).sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((zz) => <option key={zz.id} value={zz.id}>{zz.prezime} {zz.ime}</option>)}
                   </select>
                   <label style={{ fontSize: 11, color: "var(--ink-faint)" }}>Planirano do:</label>
                   <input type="date" className="input f-mono" style={{ width: 145, fontSize: 12, padding: "4px 8px", borderColor: zakasnio ? "var(--rust)" : undefined }} value={z.planiraniDatum || ""} onChange={(e) => postaviPlaniraniDatum(z.id, e.target.value)} />
                   <select className="select" style={{ maxWidth: 175, fontSize: 12, padding: "4px 8px" }} value={z.izvrsioId || ""} onChange={(e) => postaviIzvrsitelja(z.id, e.target.value)}>
                     <option value="">Izvršio…</option>
-                    {[...db.zaposlenici].sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((zz) => <option key={zz.id} value={zz.id}>{zz.prezime} {zz.ime}</option>)}
+                    {izborZaposlenika(db).sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((zz) => <option key={zz.id} value={zz.id}>{zz.prezime} {zz.ime}</option>)}
                   </select>
                   {z.izvrseno && z.datumIzvrsenja && <span style={{ fontSize: 11.5, color: "var(--green)" }}>✓ Izvršeno {fmtDate(z.datumIzvrsenja)}</span>}
                   {z.zadaoId && z.dodijeljenoId && <span style={{ fontSize: 11, color: "var(--ink-faint)" }}>zadano od: {imeZaposlenikaZadatka(z.zadaoId)}{z.zadanoDatum ? ` · ${fmtDate(z.zadanoDatum)}` : ""}</span>}
@@ -9802,7 +9819,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
           <input className="input" placeholder="Dodaj novi zadatak za ovaj projekt…" value={noviZadatak} onChange={(e) => setNoviZadatak(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") dodajZadatak(); }} />
           <select className="select" style={{ width: 170 }} value={noviZadatakKome} onChange={(e) => setNoviZadatakKome(e.target.value)}>
             <option value="">Dodijeli…</option>
-            {[...db.zaposlenici].sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((zz) => <option key={zz.id} value={zz.id}>{zz.prezime} {zz.ime}</option>)}
+            {izborZaposlenika(db).sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((zz) => <option key={zz.id} value={zz.id}>{zz.prezime} {zz.ime}</option>)}
           </select>
           <input type="date" className="input" style={{ width: 150 }} value={noviZadatakDatum} onChange={(e) => setNoviZadatakDatum(e.target.value)} title="Planirani datum izvršenja" />
           <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajZadatak}>Dodaj</Btn>
@@ -11044,7 +11061,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
           <Field label="Voditelj projekta">
             <select className="select" value={projForm.voditeljId || ""} onChange={(e) => setProjForm({ ...projForm, voditeljId: e.target.value })}>
               <option value="">— Nije dodijeljen —</option>
-              {[...db.zaposlenici].filter((z) => z.status === "Aktivan").sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+              {izborZaposlenika(db).filter((z) => z.status === "Aktivan").sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
             </select>
           </Field>
           <div className="label" style={{ marginTop: 6 }}>Kontakt i isporuka</div>
@@ -11130,7 +11147,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
               <Field label="Izradio (potpis na ponudi)">
                 <select className="select" value={ponForm.izradioId || ""} onChange={(e) => setPonForm({ ...ponForm, izradioId: e.target.value })}>
                   <option value="">— odaberi —</option>
-                  {[...db.zaposlenici].filter((z) => z.status === "Aktivan").sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+                  {izborZaposlenika(db).filter((z) => z.status === "Aktivan").sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
                 </select>
               </Field>
               <Field label="Kontakt osoba (pozdrav u njem. ponudi)">
@@ -12133,7 +12150,7 @@ function OtpremnicaKooperantuModal({ db, update, showToast, onClose }) {
         <Field label="Izdao (zaposlenik)">
           <select className="select" value={izdaoId} onChange={(e) => setIzdaoId(e.target.value)}>
             <option value="">—</option>
-            {[...db.zaposlenici].sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+            {izborZaposlenika(db).sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
           </select>
         </Field>
       </div>
@@ -12492,7 +12509,7 @@ function CmrFormModal({ db, pocetni, onSpremi, onClose }) {
             <Field label="22 — Izradio (ime i prezime u polju pošiljatelja)">
               <select className="select" value={f.izradioId || ""} onChange={(e) => set({ izradioId: e.target.value })}>
                 <option value="">—</option>
-                {[...db.zaposlenici].filter((z) => z.status === "Aktivan" || z.id === f.izradioId).sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+                {izborZaposlenika(db).filter((z) => z.status === "Aktivan" || z.id === f.izradioId).sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
               </select>
             </Field>
           </div>
@@ -15684,6 +15701,8 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true, d
   const praktikantiSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "praktikant" && smijeGrupu("praktikant")), [aktivniSort, db.pozicijeZaposlenika, dozvoljeneGrupe]);
   const tehnickiSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "ostalo" && smijeGrupu("ostalo")), [aktivniSort, db.pozicijeZaposlenika, dozvoljeneGrupe]);
   const kooperantiSort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "kooperant" && smijeGrupu("kooperant")), [aktivniSort, db.pozicijeZaposlenika, dozvoljeneGrupe]);
+  const montazaDESort = useMemo(() => aktivniSort.filter((z) => grupaEvidencije(z, db.pozicijeZaposlenika) === "montazaDE" && smijeGrupu("montazaDE")), [aktivniSort, db.pozicijeZaposlenika, dozvoljeneGrupe]);
+  const [popuniRadnik, setPopuniRadnik] = useState("");
 
   // Mjesečni zbrojevi za desne stupce mreže (i ispis) — isti izračun kao obračun plaće.
   const sazetci = useMemo(() => new Map(aktivniSort.map((z) => [z.id, zbrojeviEvidencije(z, mjesec, db)])), [aktivniSort, mjesec, db]);
@@ -15692,7 +15711,20 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true, d
     { naziv: "Praktikanti", zaposlenici: praktikantiSort },
     { naziv: "Tehnički ured i administracija", zaposlenici: tehnickiSort },
     { naziv: "Kooperanti", zaposlenici: kooperantiSort },
-  ], [radionaSort, praktikantiSort, tehnickiSort, kooperantiSort]);
+    { naziv: "Montaža DE", zaposlenici: montazaDESort },
+  ], [radionaSort, praktikantiSort, tehnickiSort, kooperantiSort, montazaDESort]);
+
+  // Montaža DE: radnik je taj mjesec u HR (na čekanju) → jednim klikom radni dani (pon–pet, bez praznika) dobivaju 8 sati; postojeći unosi ostaju.
+  const popuniRadneDane = async () => {
+    const z = montazaDESort.find((x) => x.id === popuniRadnik);
+    if (!z) { showToast("Odaberi radnika."); return; }
+    const novi = dani.filter((d) => !d.vikend && !d.praznik && !(zapisiMapa.get(`${z.id}|${d.datum}`) || []).length)
+      .map((d) => ({ id: uid("evr"), zaposlenikId: z.id, vrijemeDolaska: `${d.datum}T06:00:00`, vrijemeOdlaska: `${d.datum}T14:00:00`, vrsta: "rad", autoOdjava: false, potvrdenoRacunovodstvo: true, unioRucnoId: "racunovodstvo" }));
+    if (novi.length === 0) { showToast("Svi radni dani tog mjeseca već imaju unos."); return; }
+    if (!window.confirm(`Upisati 8 sati za ${novi.length} radnih dana (${z.prezime} ${z.ime}, ${mjesec})?`)) return;
+    const ok = await patchEvidencija(novi, []);
+    if (ok) showToast(`Upisano ${novi.length} radnih dana po 8 h.`);
+  };
 
   const otvoriCeliju = (zaposlenikId, datum) => {
     if (!mozeMijenjati) return;
@@ -15895,7 +15927,7 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true, d
         );
         return (
           <>
-            {dozvoljeneGrupe && <p style={{ fontSize: 11.5, color: "var(--ink-faint)", margin: "0 0 10px" }}>Tvoja pozicija vidi samo: {[["radiona", "Radiona"], ["praktikant", "Praktikanti"], ["ostalo", "Tehnički ured i administracija"], ["kooperant", "Kooperanti"]].filter(([g]) => smijeGrupu(g)).map(([, n]) => n).join(", ") || "ništa"}.</p>}
+            {dozvoljeneGrupe && <p style={{ fontSize: 11.5, color: "var(--ink-faint)", margin: "0 0 10px" }}>Tvoja pozicija vidi samo: {[["radiona", "Radiona"], ["praktikant", "Praktikanti"], ["ostalo", "Tehnički ured i administracija"], ["kooperant", "Kooperanti"], ["montazaDE", "Montaža DE"]].filter(([g]) => smijeGrupu(g)).map(([, n]) => n).join(", ") || "ništa"}.</p>}
             {smijeGrupu("radiona") && (<>
               <div className="label" style={{ marginBottom: 6 }}>Radiona ({radionaSort.length})</div>
               {radionaSort.length === 0 ? <EmptyState text="Nema aktivnih zaposlenika u radioni." /> : <TablicaEvidencije lista={radionaSort} />}
@@ -15914,6 +15946,21 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true, d
             {smijeGrupu("kooperant") && (<>
               <div className="label" style={{ marginTop: 20, marginBottom: 6 }}>Kooperanti ({kooperantiSort.length})</div>
               {kooperantiSort.length === 0 ? <EmptyState text="Nema aktivnih kooperanata." /> : <TablicaEvidencije lista={kooperantiSort} />}
+            </>)}
+
+            {smijeGrupu("montazaDE") && (<>
+              <div className="label" style={{ marginTop: 20, marginBottom: 6 }}>Montaža DE ({montazaDESort.length})</div>
+              {montazaDESort.length > 0 && mozeMijenjati && (
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+                  <select className="select" style={{ maxWidth: 240 }} value={popuniRadnik} onChange={(e) => setPopuniRadnik(e.target.value)}>
+                    <option value="">— radnik koji je u HR —</option>
+                    {montazaDESort.map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+                  </select>
+                  <Btn size="sm" onClick={popuniRadneDane} disabled={!popuniRadnik}>Popuni radne dane s 8 h</Btn>
+                  <span style={{ fontSize: 11, color: "var(--ink-faint)" }}>Upisuje samo dane bez unosa; sati po danima mogu se i ručno mijenjati klikom na ćeliju.</span>
+                </div>
+              )}
+              {montazaDESort.length === 0 ? <EmptyState text="Nema aktivnih radnika na Montaži DE." /> : <TablicaEvidencije lista={montazaDESort} />}
             </>)}
           </>
         );
@@ -15988,10 +16035,10 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
   const [detalj, setDetalj] = useState(null);
   const [detaljKoop, setDetaljKoop] = useState(null);
   const [detaljVanjski, setDetaljVanjski] = useState(null);
-  const [printGrupa, setPrintGrupa] = useState(null); // "radiona" | "praktikant" | "ostalo" | "kooperant" | "vanjski"
+  const [printGrupa, setPrintGrupa] = useState(null); // "radiona" | "praktikant" | "ostalo" | "kooperant" | "vanjski" | "montazaDE"
 
   const redovi = useMemo(() => db.zaposlenici
-    .filter((z) => z.status === "Aktivan" && !jeKooperant(z, db.pozicijeZaposlenika) && !jeVanjskiSuradnik(z, db.pozicijeZaposlenika))
+    .filter((z) => z.status === "Aktivan" && !jeKooperant(z, db.pozicijeZaposlenika) && !jeVanjskiSuradnik(z, db.pozicijeZaposlenika) && !jeMontazaDE(z, db.pozicijeZaposlenika))
     .map((z) => obracunMjeseca(z, mjesec, db))
     .filter((r) => r.brojDana > 0)
     .sort((a, b) => (a.zaposlenik.prezime + a.zaposlenik.ime).localeCompare(b.zaposlenik.prezime + b.zaposlenik.ime, "hr")),
@@ -16040,6 +16087,14 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
     .sort((a, b) => (a.zaposlenik.prezime + a.zaposlenik.ime).localeCompare(b.zaposlenik.prezime + b.zaposlenik.ime, "hr")),
     [db, mjesec]);
   const ukVanjski = redoviVanjski.reduce((s, r) => ({ sati: s.sati + r.sati, iznos: s.iznos + r.iznos, naknadaPrijevoz: s.naknadaPrijevoz + r.naknadaPrijevoz, ukupno: s.ukupno + r.ukupno }), { sati: 0, iznos: 0, naknadaPrijevoz: 0, ukupno: 0 });
+
+  // Montaža DE: svaki mjesec se vide svi aktivni radnici; U DE = isplata u Njemačkoj (kod nas 0), U HR = neto iznos ide u isplatu.
+  const redoviMontazaDE = useMemo(() => db.zaposlenici
+    .filter((z) => z.status === "Aktivan" && jeMontazaDE(z, db.pozicijeZaposlenika))
+    .map((z) => obracunMjesecaMontazaDE(z, mjesec, db))
+    .sort((a, b) => (a.zaposlenik.prezime + a.zaposlenik.ime).localeCompare(b.zaposlenik.prezime + b.zaposlenik.ime, "hr")),
+    [db, mjesec]);
+  const ukMontazaDE = redoviMontazaDE.reduce((s, r) => ({ sati: s.sati + (r.uHR ? r.sati : 0), isplata: s.isplata + r.isplata, uHR: s.uHR + (r.uHR ? 1 : 0) }), { sati: 0, isplata: 0, uHR: 0 });
 
   const imaBolovanje = redovi.some((r) => r.dani.some((d) => d.vrsta === "bolovanje"));
 
@@ -16228,6 +16283,54 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
         </>
       )}
 
+      <div style={{ marginTop: 24 }}><NaslovSaPdf naslov="Montaža DE (izaslani radnici)" broj={redoviMontazaDE.length} grupa="montazaDE" /></div>
+      {redoviMontazaDE.length === 0 ? <EmptyState text="Nema aktivnih radnika na Montaži DE." /> : (
+        <>
+          <table className="erp-table">
+            <thead>
+              <tr>
+                <th>Radnik</th>
+                <th style={{ width: 150 }}>Ovaj mjesec</th>
+                <th style={{ width: 90 }}>Sati (evidencija)</th>
+                <th style={{ width: 130 }}>Neto iznos (€)</th>
+                <th style={{ width: 120 }}>Za isplatu</th>
+              </tr>
+            </thead>
+            <tbody>
+              {redoviMontazaDE.map((r) => (
+                <tr key={r.zaposlenik.id}>
+                  <td><strong>{r.zaposlenik.prezime} {r.zaposlenik.ime}</strong></td>
+                  <td>
+                    <select className="select" disabled={!mozeMijenjati} value={r.uHR ? "HR" : "DE"} onChange={(e) => spremiDoplatak(r.zaposlenik.id, { lokacijaDE: e.target.value })}>
+                      <option value="DE">U DE (plaća u DE)</option>
+                      <option value="HR">U HR</option>
+                    </select>
+                  </td>
+                  <td className="f-mono">{r.uHR ? `${r.sati.toFixed(1)} h` : "—"}</td>
+                  <td>
+                    {r.uHR
+                      ? <input className="input f-mono" type="number" min="0" step="0.01" disabled={!mozeMijenjati} style={{ padding: "5px 8px" }} key={`${r.zaposlenik.id}-${mjesec}-${r.neto}`} defaultValue={r.neto || ""}
+                          onBlur={(e) => { const v = e.target.value === "" ? 0 : Math.max(0, Number(e.target.value) || 0); if (v !== r.neto) spremiDoplatak(r.zaposlenik.id, { netoDE: v }); }} />
+                      : <span style={{ color: "var(--ink-faint)", fontSize: 12 }}>isplaćuje se u DE</span>}
+                  </td>
+                  <td className="f-mono" style={{ fontWeight: 700 }}>{r.uHR ? fmtCurDec(r.isplata) : "—"}</td>
+                </tr>
+              ))}
+              <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
+                <td>UKUPNO ({redoviMontazaDE.length}, u HR: {ukMontazaDE.uHR})</td>
+                <td></td>
+                <td className="f-mono">{ukMontazaDE.sati.toFixed(1)} h</td>
+                <td></td>
+                <td className="f-mono">{fmtCurDec(ukMontazaDE.isplata)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 10 }}>
+            Radnicima na Montaži DE plaća se isplaćuje u Njemačkoj. Kad su neki mjesec kod kuće (u HR), odaberi „U HR“, upiši sate po danima u Evidenciji rada (grupa Montaža DE) i neto iznos koji se isplaćuje — taj iznos ide u isplatu. Bez bodova, staža i toplog obroka.
+          </p>
+        </>
+      )}
+
       {detaljVanjski && (
         <Modal title={`Evidencija — ${detaljVanjski.zaposlenik.prezime} ${detaljVanjski.zaposlenik.ime} (${mjesec})`} onClose={() => setDetaljVanjski(null)} footer={<Btn onClick={() => setDetaljVanjski(null)}>Zatvori</Btn>}>
           <table className="erp-table">
@@ -16355,7 +16458,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
       )}
 
       {postavkeOtvorene && <PostavkePlacaModal db={db} update={update} showToast={showToast} onClose={() => setPostavkeOtvorene(false)} />}
-      {printGrupa && printGrupa !== "kooperant" && printGrupa !== "vanjski" && (
+      {printGrupa && printGrupa !== "kooperant" && printGrupa !== "vanjski" && printGrupa !== "montazaDE" && (
         <ObracunPlacaPrintModal
           redovi={printGrupa === "radiona" ? radionaRedovi : printGrupa === "praktikant" ? praktikantiRedovi : tehnickiRedovi}
           naslovGrupe={printGrupa === "radiona" ? "Radiona" : printGrupa === "praktikant" ? "Praktikanti" : "Tehnički ured i administracija"}
@@ -16364,6 +16467,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
       )}
       {printGrupa === "kooperant" && <ObracunKooperantiPrintModal redovi={redoviKooperanti} mjesec={mjesec} db={db} onClose={() => setPrintGrupa(null)} />}
       {printGrupa === "vanjski" && <ObracunVanjskiPrintModal redovi={redoviVanjski} mjesec={mjesec} db={db} onClose={() => setPrintGrupa(null)} />}
+      {printGrupa === "montazaDE" && <ObracunMontazaDEPrintModal redovi={redoviMontazaDE} mjesec={mjesec} db={db} onClose={() => setPrintGrupa(null)} />}
     </div>
   );
 }
@@ -16646,6 +16750,48 @@ function ObracunVanjskiPrintModal({ redovi, mjesec, db, onClose }) {
                 <td style={tdS}>{fmtCurDec(r.iznos)}</td>
                 <td style={tdS}>{fmtCurDec(r.naknadaPrijevoz)}</td>
                 <td style={{ ...tdS, fontWeight: 700 }}>{fmtCurDec(r.ukupno)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{ textAlign: "right", fontWeight: 700, fontSize: 11, marginTop: 6, paddingRight: 4 }}>{fmtCurDec(ukupnaIsplata)}</div>
+      </div>
+    </Modal>
+  );
+}
+
+function ObracunMontazaDEPrintModal({ redovi, mjesec, db, onClose }) {
+  const t = db.postavkeTvrtke || {};
+  const [gmesec, gg] = mjesec.split("-");
+  const tdS = { padding: "3px 4px", fontSize: 9, whiteSpace: "nowrap", height: 24 };
+  const thS = { ...tdS, fontWeight: 700, background: "#f0f0f0", height: "auto" };
+  const ukupnaIsplata = redovi.reduce((s, r) => s + r.isplata, 0);
+  return (
+    <Modal title={`Pregled za ispis — Obračun Montaža DE ${mjesec}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(`Placa_Montaza-DE_${gg}${gmesec}`)}>Ispis / Spremi kao PDF</Btn></>}>
+      <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 12, marginBottom: 8 }}>
+          <span>{t.naziv || "ECON d.o.o."}</span>
+          <span>OBRAČUN MONTAŽA DE</span>
+          <span>Mjesec obračuna: {gg}/{gmesec}</span>
+        </div>
+        <table style={{ borderCollapse: "collapse", width: "100%" }}>
+          <thead>
+            <tr>
+              <th style={thS}>Red. broj</th>
+              <th style={thS}>Ime i prezime</th>
+              <th style={thS}>Ovaj mjesec</th>
+              <th style={thS}>Sati</th>
+              <th style={thS}>Neto iznos za isplatu</th>
+            </tr>
+          </thead>
+          <tbody>
+            {redovi.map((r, i) => (
+              <tr key={r.zaposlenik.id}>
+                <td style={tdS}>{i + 1}</td>
+                <td style={tdS}>{r.zaposlenik.prezime} {r.zaposlenik.ime}</td>
+                <td style={tdS}>{r.uHR ? "U HR" : "U DE — isplaćuje se u DE"}</td>
+                <td style={tdS}>{r.uHR ? r.sati.toFixed(1) : ""}</td>
+                <td style={{ ...tdS, fontWeight: 700 }}>{r.uHR ? fmtCurDec(r.isplata) : ""}</td>
               </tr>
             ))}
           </tbody>
@@ -17846,7 +17992,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
                           const { pristup, izmjene, grupe } = dozvolaZaKarticu(pozForm, m.key, k.key);
                           // Evidencija rada: pozicija može vidjeti samo neke grupe zaposlenika (po zadanom sve)
                           const ogranicivaGrupe = m.key === "evidencijasati" && k.key === "evidencija";
-                          const GRUPE_EVIDENCIJE = [["radiona", "Radiona"], ["praktikant", "Praktikanti"], ["ostalo", "Tehnički ured i administracija"], ["kooperant", "Kooperanti"]];
+                          const GRUPE_EVIDENCIJE = [["radiona", "Radiona"], ["praktikant", "Praktikanti"], ["ostalo", "Tehnički ured i administracija"], ["kooperant", "Kooperanti"], ["montazaDE", "Montaža DE"]];
                           const promijeniGrupu = (g, uklj) => {
                             const trenutne = grupe || GRUPE_EVIDENCIJE.map(([x]) => x);
                             const nove = uklj ? [...new Set([...trenutne, g])] : trenutne.filter((x) => x !== g);
