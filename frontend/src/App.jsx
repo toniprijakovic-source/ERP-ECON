@@ -10278,7 +10278,13 @@ function PonudaLaseraModal({ form, setForm, db, onSave, onClose }) {
         <Field label="Kupac"><select className="select" value={form.kupacId} onChange={(e) => setForm({ ...form, kupacId: e.target.value })}>{db.kupci.map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}</select></Field>
         <Field label="Datum"><input className="input" type="date" value={form.datum} onChange={(e) => setForm({ ...form, datum: e.target.value })} /></Field>
       </div>
-      <Field label="Status"><select className="select" style={{ maxWidth: 220 }} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{["U izradi", "Poslana", "Prihvaćena", "Odbijena"].map((s) => <option key={s}>{s}</option>)}</select></Field>
+      <div style={{ display: "flex", gap: 24, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <Field label="Status"><select className="select" style={{ maxWidth: 220 }} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{["U izradi", "Poslana", "Prihvaćena", "Odbijena"].map((s) => <option key={s}>{s}</option>)}</select></Field>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, paddingBottom: 14, cursor: "pointer" }}>
+          <input type="checkbox" checked={!!form.sPdv} onChange={(e) => setForm({ ...form, sPdv: e.target.checked })} />
+          Na ispisu obračunaj PDV
+        </label>
+      </div>
 
       <div className="label" style={{ marginTop: 6 }}>Satnice i dodatak (vrijede za ovu ponudu)</div>
       <div className="card" style={{ padding: 14, background: "var(--surface-alt)", marginBottom: 14 }}>
@@ -10414,6 +10420,9 @@ function PonudaLaseraModal({ form, setForm, db, onSave, onClose }) {
 function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
   const t = db.postavkeTvrtke || {};
   const calc = izracunPonudeLasera(ponuda, db.kvaliteteMaterijala);
+  // PDV se na ispisu obračunava samo kad je na ponudi označena kvačica (zadano: bez PDV-a).
+  const pdvStopa = Number(t.pdvStopa ?? 25);
+  const pdvIznos = ponuda.sPdv ? calc.cijenaKonacna * (pdvStopa / 100) : 0;
   // Dodatak se ne navodi kao posebna stavka na ispisu — uračunat je izravno u cijenu svake
   // stavke rezanja (isto kao uvećanje kod standardnih ponuda).
   const faktorDodatka = 1 + (calc.dodatakPct || 0) / 100;
@@ -10478,7 +10487,9 @@ function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
             <tbody>
               {calc.trosakSavijanja > 0 && <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Savijanje:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(calc.trosakSavijanja)}</td></tr>}
               {calc.trosakOstalo > 0 && <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Ostalo:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(calc.trosakOstalo)}</td></tr>}
-              <tr style={{ borderTop: "1px solid #333" }}><td style={{ padding: "6px 14px 0 0", fontWeight: 700 }}>UKUPNO (bez PDV-a):</td><td style={{ textAlign: "right", fontWeight: 700, paddingTop: 6, fontSize: 14 }}>{fmtCurDec(calc.cijenaKonacna)}</td></tr>
+              {ponuda.sPdv && <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>Osnovica:</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(calc.cijenaKonacna)}</td></tr>}
+              {ponuda.sPdv && <tr><td style={{ padding: "3px 14px 3px 0", color: "#555" }}>PDV ({pdvStopa}%):</td><td style={{ textAlign: "right", fontWeight: 600 }}>{fmtCurDec(pdvIznos)}</td></tr>}
+              <tr style={{ borderTop: "1px solid #333" }}><td style={{ padding: "6px 14px 0 0", fontWeight: 700 }}>{ponuda.sPdv ? "UKUPNO:" : "UKUPNO (bez PDV-a):"}</td><td style={{ textAlign: "right", fontWeight: 700, paddingTop: 6, fontSize: 14 }}>{fmtCurDec(calc.cijenaKonacna + pdvIznos)}</td></tr>
             </tbody>
           </table>
         </div>
