@@ -11050,6 +11050,8 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
             { key: "kupac", label: "Kupac", render: (r) => kupacNaziv(r.kupacId) },
             { key: "vrijednost", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCur(r.vrijednost)}</span> },
             { key: "rokZavrsetka", label: "Rok završetka", render: (r) => fmtDate(r.rokZavrsetka) },
+            { key: "detalji", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setDetalj(r)}>Detalji</Btn> },
+            { key: "mapa", label: "", render: (r) => (r.mapa ? <MapaGumbi putanja={r.mapa} oznaka="Mapa" /> : null) },
             { key: "vrati", label: "", render: (r) => mozeProjekti && <Btn size="sm" variant="ghost" onClick={() => vratiUAktivne(r)}>Vrati u aktivne</Btn> },
             ...(mozeKopiratiProjekt ? [{ key: "kopiraj", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Copy} onClick={() => otvoriKopiju(r)}>Kopiraj</Btn> }] : []),
           ]}
