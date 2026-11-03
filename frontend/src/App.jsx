@@ -365,6 +365,7 @@ const VRSTE_DANA = [
   { key: "detasmanGodisnji", label: "Detašman - Godišnji" },
   { key: "placeniDopust", label: "Plaćeni dopust" },
   { key: "sluzbeniPut", label: "Službeni put" },
+  { key: "montazaHR", label: "Montaža HR" },
 ];
 // Kratke oznake za ćelije evidencije i legendu — boja + slovna kratica po vrsti dana (osim "rad").
 const OZNAKA_VRSTE_DANA = {
@@ -376,6 +377,7 @@ const OZNAKA_VRSTE_DANA = {
   detasmanGodisnji: { kratica: "DG", boja: "#2F5D50", bg: "#E4F0EC", naziv: "Detašman - godišnji" },
   placeniDopust: { kratica: "PD", boja: "#6B3FA0", bg: "#F1EAF7", naziv: "Plaćeni dopust" },
   sluzbeniPut: { kratica: "SP", boja: "#1B6B78", bg: "#E5F2F3", naziv: "Službeni put" },
+  montazaHR: { kratica: "MH", boja: "#3D4A8A", bg: "#E8EAF6", naziv: "Montaža HR" },
 };
 
 // Pune godine staža na zadani datum, uvećane za ručno uneseni staž iz prijašnjeg zaposlenja u
@@ -476,7 +478,7 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
   // isti ukupni "placeniNerad" ostaje zbroj svih plaćenih (bolovanje se evidentira, ali NE
   // plaća, pa se ne zbraja u placeniNerad — pravilo obračuna bolovanja još nije definirano).
   let redovni = 0, prekovremeni = 0, placeniNerad = 0;
-  let praznikSati = 0, godisnjiSati = 0, dopustSati = 0, detasmanSati = 0, bolovanjeSati = 0, ocinskiSati = 0, roditeljskiSati = 0;
+  let praznikSati = 0, godisnjiSati = 0, dopustSati = 0, detasmanSati = 0, bolovanjeSati = 0, ocinskiSati = 0, roditeljskiSati = 0, montazaHRSati = 0;
   if (praznik) {
     placeniNerad = normaDana;
     praznikSati = normaDana;
@@ -499,6 +501,8 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
   } else if (vrsta === "roditeljski") {
     placeniNerad = 0; // kao bolovanje: evidentira se, ne ulazi u obračun
     roditeljskiSati = normaDana;
+  } else if (vrsta === "montazaHR") {
+    montazaHRSati = normaDana; // MONTAŽA HR: obračun još nije dogovoren — evidentira se, ne ulazi u obračun plaće
   } else if (vrsta === "detasmanGodisnji") {
     // godišnji odmor za vrijeme detašmana: samo se evidentira (za evidenciju godišnjeg), ne ulazi u obračun plaće
 
@@ -513,7 +517,7 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
   // godišnji, plaćeni dopust, službeni put) — NE za bolovanje, očinski, roditeljski i detašman
   // (detašman se ne isplaćuje u plaći), i samo od ponedjeljka do petka (radne subote se ne računaju).
   // Odluka se donosi po DATUMU (ne po zapisu) u obracunMjeseca, jer dan može imati više zapisa.
-  const placenIzostanak = praznik || (vrsta !== "rad" && !["bolovanje", "ocinski", "roditeljski", "detasmanGodisnji", "detasman"].includes(vrsta));
+  const placenIzostanak = praznik || (vrsta !== "rad" && !["bolovanje", "ocinski", "roditeljski", "detasmanGodisnji", "detasman", "montazaHR"].includes(vrsta));
   const satiZaStaz = vrsta === "rad" && !praznik ? odradjeniSati : 0;
 
   // Zaposlenici na pola radnog vremena dobivaju putni trošak i topli obrok prepolovljene.
@@ -546,7 +550,7 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
   return {
     datum, vrsta, danUTjednu, praznik, smjena, dodatakSmjene, faktorPrekSaSmjenom,
     odradjeniSati, redovni, prekovremeni, placeniNerad, putni, topliObrok, gablecStimulacija, obrokaBroj,
-    praznikSati, godisnjiSati, dopustSati, detasmanSati, bolovanjeSati, ocinskiSati, roditeljskiSati, jeSluzbeniPut, placenIzostanak, satiZaStaz,
+    praznikSati, godisnjiSati, dopustSati, detasmanSati, bolovanjeSati, ocinskiSati, roditeljskiSati, montazaHRSati, jeSluzbeniPut, placenIzostanak, satiZaStaz,
     iznosRedovni, iznosPrekovremeni, iznosNerad, dodatakSmjeneRedovni, dodatakSmjenePrek,
     ukupnoDan: iznosRedovni + iznosPrekovremeni + iznosNerad + putni + topliObrok + dodatakSmjeneRedovni + dodatakSmjenePrek + gablecStimulacija,
   };
@@ -606,8 +610,9 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     bolovanjeSati: s.bolovanjeSati + d.bolovanjeSati,
     ocinskiSati: s.ocinskiSati + d.ocinskiSati,
     roditeljskiSati: s.roditeljskiSati + d.roditeljskiSati,
+    montazaHRSati: s.montazaHRSati + d.montazaHRSati,
     danaSluzbenogPuta: s.danaSluzbenogPuta + (d.jeSluzbeniPut ? 1 : 0),
-  }), { redovni: 0, prekovremeni: 0, placeniNerad: 0, putni: 0, topliObrok: 0, gablecStimulacija: 0, dodatakSmjeneRedovni: 0, dodatakSmjenePrek: 0, odradjeni: 0, satiSDodatkom: 0, iznosRedovni: 0, iznosPrekovremeni: 0, iznosNerad: 0, praznikSati: 0, godisnjiSati: 0, dopustSati: 0, detasmanSati: 0, bolovanjeSati: 0, ocinskiSati: 0, roditeljskiSati: 0, danaSluzbenogPuta: 0 });
+  }), { redovni: 0, prekovremeni: 0, placeniNerad: 0, putni: 0, topliObrok: 0, gablecStimulacija: 0, dodatakSmjeneRedovni: 0, dodatakSmjenePrek: 0, odradjeni: 0, satiSDodatkom: 0, iznosRedovni: 0, iznosPrekovremeni: 0, iznosNerad: 0, praznikSati: 0, godisnjiSati: 0, dopustSati: 0, detasmanSati: 0, bolovanjeSati: 0, ocinskiSati: 0, roditeljskiSati: 0, montazaHRSati: 0, danaSluzbenogPuta: 0 });
 
   // PREBIJANJE MANJKA PO MJESECU: radni dan (pon-pet) s manje sati od norme ("manjak") namiruje se prekovremenima
   // ISTOG mjeseca — prvo onima radnim danom, pa subotnjima. Prebačeni sat plaća se kao redovni, ostatak ostaje
@@ -16422,6 +16427,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
               {detaljZaposlenik.danaSluzbenogPuta > 0 && <><span>Službeni put ({detaljZaposlenik.danaSluzbenogPuta} dana plaćeno kao 8 h rada{Number(db.postavkePlaca?.dnevnicaTerenEurDan) > 0 ? ", dnevnica" : "; dnevnica ide kroz putni nalog"})</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.dnevnicaTeren)}</span></>}
               {detaljZaposlenik.ocinskiSati > 0 && <><span style={{ color: "var(--ink-faint)" }}>Očinski ({detaljZaposlenik.ocinskiSati.toFixed(1)} h, evidentirano)</span><span className="f-mono" style={{ textAlign: "right", color: "var(--ink-faint)" }}>0,00 €</span></>}
               {detaljZaposlenik.roditeljskiSati > 0 && <><span style={{ color: "var(--ink-faint)" }}>Roditeljski ({detaljZaposlenik.roditeljskiSati.toFixed(1)} h, evidentirano)</span><span className="f-mono" style={{ textAlign: "right", color: "var(--ink-faint)" }}>0,00 €</span></>}
+              {detaljZaposlenik.montazaHRSati > 0 && <><span style={{ color: "var(--ink-faint)" }}>Montaža HR ({detaljZaposlenik.montazaHRSati.toFixed(1)} h, evidentirano — obračun još nije dogovoren)</span><span className="f-mono" style={{ textAlign: "right", color: "var(--ink-faint)" }}>0,00 €</span></>}
               {detaljZaposlenik.bolovanjeSati > 0 && <><span style={{ color: "var(--ink-faint)" }}>Bolovanje ({detaljZaposlenik.bolovanjeSati.toFixed(1)} h, evidentirano)</span><span className="f-mono" style={{ textAlign: "right", color: "var(--ink-faint)" }}>0,00 €</span></>}
               <span style={{ fontWeight: 700, borderTop: "1px solid var(--line)", paddingTop: 6 }}>UKUPNO NETO</span>
               <span className="f-mono" style={{ textAlign: "right", fontWeight: 700, borderTop: "1px solid var(--line)", paddingTop: 6 }}>{fmtCurDec(detaljZaposlenik.ukupno)}</span>
