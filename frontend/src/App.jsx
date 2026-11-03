@@ -3051,11 +3051,11 @@ function Dashboard({ db, update, showToast, setPage, otvoriProjekt, mojId, mojaP
 }
 
 /* ============================== SKLADIŠTE ============================== */
-const TIPOVI_MATERIJALA = ["HEA", "HEB", "HEM", "IPE", "IPN", "UPN", "Kvadratna cijev", "Pravokutna cijev", "Okrugla cijev", "Okruglo", "Kvadratno", "Plosnato", "Kutni jednakokraki", "Kutni raznokraki", "Lim", "Vijčana roba", "Boja i premazi", "Ostalo"];
+const TIPOVI_MATERIJALA = ["HEA", "HEB", "HEM", "IPE", "IPN", "UPN", "T", "Kvadratna cijev", "Pravokutna cijev", "Okrugla cijev", "Okruglo", "Kvadratno", "Plosnato", "Kutni jednakokraki", "Kutni raznokraki", "Lim", "Vijčana roba", "Boja i premazi", "Ostalo"];
 const JEDINICE = ["kg", "kom", "m", "m2", "l"];
 // Skladište je podijeljeno na profile, ploče (limovi) i ostalo. Razvrstava se po katalogu (kg/m = profil, kg/m2 = ploča);
 // materijal izvan kataloga po tipu, a ako je tip "Ostalo" po nazivu ("Lim …", "Ploča …").
-const PROFILNI_TIPOVI = ["HEA", "HEB", "HEM", "IPE", "IPN", "UPN", "Kvadratna cijev", "Pravokutna cijev", "Okrugla cijev", "Okruglo", "Kvadratno", "Plosnato", "Kutni jednakokraki", "Kutni raznokraki"];
+const PROFILNI_TIPOVI = ["HEA", "HEB", "HEM", "IPE", "IPN", "UPN", "T", "Kvadratna cijev", "Pravokutna cijev", "Okrugla cijev", "Okruglo", "Kvadratno", "Plosnato", "Kutni jednakokraki", "Kutni raznokraki"];
 const grupaMaterijala = (m, katalog) => {
   const kat = (katalog || []).find((k) => k.id === m.katalogId);
   if (kat) return kat.jedinica === "kg/m2" ? "ploce" : kat.jedinica === "kg/m" ? "profili" : "ostalo";
@@ -3064,7 +3064,7 @@ const grupaMaterijala = (m, katalog) => {
   return "ostalo";
 };
 
-const TIPOVI_KATALOGA = ["HEA", "HEB", "HEM", "IPE", "IPN", "UPN", "Kvadratna cijev", "Pravokutna cijev", "Okrugla cijev", "Okruglo", "Kvadratno", "Plosnato", "Kutni jednakokraki", "Kutni raznokraki", "Lim", "Ostalo"];
+const TIPOVI_KATALOGA = ["HEA", "HEB", "HEM", "IPE", "IPN", "UPN", "T", "Kvadratna cijev", "Pravokutna cijev", "Okrugla cijev", "Okruglo", "Kvadratno", "Plosnato", "Kutni jednakokraki", "Kutni raznokraki", "Lim", "Ostalo"];
 const katalogPoTipu = (katalog) => TIPOVI_KATALOGA.map((tip) => ({ tip, stavke: katalog.filter((k) => k.tip === tip) })).filter((g) => g.stavke.length);
 // Puni naziv kataloške stavke za prikaz — oznaka obično već sadrži tip (npr. "HEA 100", "Lim 1
 // mm"), pa se tip ne dodaje ispred ako bi se time udvostručio (npr. "HEA HEA 100").
@@ -3137,7 +3137,7 @@ const cijenaPozicijeSaMarzom = (p, { cjenikRada, katalog, kvalitete, satnicaMont
 // Isti artikl + ista kvaliteta = uvijek ista šifra, pa se isti materijal ne može voditi dvaput.
 // Blok između oznaka čita i backend/migracija-skladiste-2026-10.js — ne mijenjati oznake.
 // <<SKLADISTE-SIFRE
-const VRSTA_MATERIJALA_KOD = { HEA: "10", HEB: "10", HEM: "10", IPE: "10", IPN: "10", UPN: "10", "Kutni jednakokraki": "10", "Kutni raznokraki": "10", "Kvadratna cijev": "11", "Pravokutna cijev": "11", "Okrugla cijev": "11", Lim: "20", Okruglo: "30", Kvadratno: "30", Plosnato: "30", SHS: "11", RHS: "11", CHS: "11", "Okrugla šipka": "30", "Kvadratna šipka": "30", Plosnat: "30", "Vijčana roba": "40", "Boja i premazi": "90", Ostalo: "90" };
+const VRSTA_MATERIJALA_KOD = { HEA: "10", HEB: "10", HEM: "10", IPE: "10", IPN: "10", UPN: "10", T: "10", "Kutni jednakokraki": "10", "Kutni raznokraki": "10", "Kvadratna cijev": "11", "Pravokutna cijev": "11", "Okrugla cijev": "11", Lim: "20", Okruglo: "30", Kvadratno: "30", Plosnato: "30", SHS: "11", RHS: "11", CHS: "11", "Okrugla šipka": "30", "Kvadratna šipka": "30", Plosnat: "30", "Vijčana roba": "40", "Boja i premazi": "90", Ostalo: "90" };
 const vrstaKod = (tip) => VRSTA_MATERIJALA_KOD[tip] || "90";
 const kodKvalitete = (kvalitete, oznaka) => {
   const o = String(oznaka || "").trim().toLowerCase();
@@ -4368,7 +4368,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne }) {
       {tab === "katalog" && (
         <>
           <div style={{ marginBottom: 12, fontSize: 13, color: "var(--ink-soft)" }}>
-            Puni standardni raspon profila (HEA, HEB, HEM, IPE, IPN, UPN sve dimenzije) te formulom generirani cijevni profili (kvadratne, pravokutne i okrugle cijevi), okruglo, kvadratno, plosnato i kutni profili te limovi. HEA/HEB/HEM/IPE/IPN/UPN mase su standardne tablične vrijednosti; ostali profili računati su po standardnoj formuli za gustoću čelika 7,85 kg/dm³ (točnost ±1–2%, preporuka: provjeriti s dobavljačem za velike narudžbe).
+            Puni standardni raspon profila (HEA, HEB, HEM, IPE, IPN, UPN sve dimenzije, T profili DIN 1024 T 20 – T 140) te formulom generirani cijevni profili (kvadratne, pravokutne i okrugle cijevi), okruglo, kvadratno, plosnato i kutni profili te limovi. HEA/HEB/HEM/IPE/IPN/UPN mase su standardne tablične vrijednosti; ostali profili računati su po standardnoj formuli za gustoću čelika 7,85 kg/dm³ (točnost ±1–2%, preporuka: provjeriti s dobavljačem za velike narudžbe).
           </div>
           <div style={{ marginBottom: 12, fontSize: 12, color: "var(--ink-faint)" }}>Ukupno stavki u katalogu: <strong className="f-mono">{db.katalogProfila.length}</strong></div>
           <EntityPage
