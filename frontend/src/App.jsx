@@ -86,6 +86,16 @@ const sljedeciBroj = (lista, polje, prefiks, sirina = 3) => {
   return `${prefiks}${String(sljedeci).padStart(sirina, "0")}`;
 };
 
+// Revizije ponuda: poslana ponuda se dorađuje kao nova ponuda s nastavkom _rev1, _rev2… (osnovni broj ostaje isti), a poslana verzija ostaje sačuvana.
+// Veza je revizijaOd (id ponude iz koje je nastala); "zamijenjena" se izračunava iz toga (postoji li novija revizija), pa se ništa ne mora ručno održavati.
+const osnovniBrojPonude = (broj) => String(broj || "").replace(/_rev\d+$/i, "");
+const brojRevizijePonude = (lista, ponuda) => {
+  const osnovni = osnovniBrojPonude(ponuda.broj);
+  const zauzete = (lista || []).filter((x) => osnovniBrojPonude(x.broj) === osnovni).map((x) => Number((String(x.broj).match(/_rev(\d+)$/i) || [])[1]) || 0);
+  return `${osnovni}_rev${Math.max(0, ...zauzete) + 1}`;
+};
+const imaNovijuReviziju = (lista, ponuda) => !!ponuda?.id && (lista || []).some((x) => x.revizijaOd === ponuda.id);
+
 // Sljedeći broj otpremnice, format OTP-DD-MM-N/YY — N raste ako je isti dan već izdana otpremnica
 const sljedeciBrojOtpremnice = (otpremnice, datumISO) => {
   const d = new Date(datumISO);
@@ -10264,7 +10274,7 @@ function LaserStavkaRedak({ stavka: s, kvalitete, onAzuriraj, onObrisi }) {
   );
 }
 
-function PonudaLaseraModal({ form, setForm, db, onSave, onClose }) {
+function PonudaLaseraModal({ form, setForm, db, onSave, onClose, onRevizija }) {
   const calc = izracunPonudeLasera(form, db.kvaliteteMaterijala);
   const prazanRed = () => ({ id: uid("lst"), opis: "", tipLasera: "plocasti", rezanjeMin: 0, pripremaMin: 0, formati: [prazanFormatLasera("plocasti")] });
   const azurirajStavku = (id, patch) => setForm({ ...form, stavke: form.stavke.map((s) => (s.id === id ? { ...s, ...patch } : s)) });
@@ -10283,6 +10293,16 @@ function PonudaLaseraModal({ form, setForm, db, onSave, onClose }) {
 
   return (
     <Modal wide title={form.id ? `Ponuda za laser ${form.broj}` : "Nova ponuda za laser"} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={onSave}>Spremi</Btn></>}>
+      {(() => {
+        const spremljena = form.id ? (db.ponudeLasera || []).find((p) => p.id === form.id) : null;
+        if (!spremljena || spremljena.status === "U izradi" || imaNovijuReviziju(db.ponudeLasera, spremljena)) return null;
+        return (
+          <div className="card" style={{ padding: "8px 12px", marginBottom: 10, background: "#EEF3F7", fontSize: 12.5, display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ flex: 1 }}>Ova je ponuda već poslana. Za doradu napravite <strong>reviziju</strong>: poslana verzija ostaje sačuvana, a dorada se sprema kao <span className="f-mono">{brojRevizijePonude(db.ponudeLasera, spremljena)}</span>. (Status ponude i dalje možete mijenjati ovdje.)</span>
+            <Btn size="sm" icon={HistoryIcon} onClick={onRevizija}>Napravi reviziju</Btn>
+          </div>
+        );
+      })()}
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
         <Field label="Naziv posla"><input className="input" placeholder="npr. Usluga laserskog rezanja" value={form.naziv} onChange={(e) => setForm({ ...form, naziv: e.target.value })} /></Field>
         <Field label="Kupac"><select className="select" value={form.kupacId} onChange={(e) => setForm({ ...form, kupacId: e.target.value })}>{db.kupci.map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}</select></Field>
@@ -10733,6 +10753,27 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
     setModal(null);
     showToast("Ponuda za laser spremljena.");
   };
+  const urediPonudu = (row) => {
+    setPonForm({
+      ...emptyPon(), ...JSON.parse(JSON.stringify(row)), pozicije: row.pozicije || [],
+      // Stare ponude (prije ovih polja) nemaju kontakt osobu ni njemačke uvjete spremljene —
+      // nadopuni ih razumnim zadanim vrijednostima umjesto emptyPon()-ovog zadanog kupca[0].
+      kontaktOsoba: row.kontaktOsoba || db.kupci.find((k) => k.id === row.kupacId)?.kontaktOsoba || "",
+      napomenaNjemacki: row.napomenaNjemacki || NJEMACKI_UVJETI_ZADANO,
+    });
+    setModal("pon");
+  };
+  const urediLaser = (row) => { setLaserForm({ ...emptyLaser(), ...JSON.parse(JSON.stringify(row)), stavke: row.stavke || [], ostaleStavke: row.ostaleStavke || [], cjenik: { ...prazniCjenikLasera(), ...(row.cjenik || {}) } }); setModal("laser"); };
+  // Revizija poslane ponude: kopija sa sljedećim nastavkom _revN, status "U izradi", bez veze na projekt. Sadržaj se uzima iz zadanog zapisa
+  // (iz popisa ili iz otvorenog obrasca, da započete izmjene ne propadnu); poslana verzija ostaje nedirnuta. Nova revizija se odmah otvara za doradu.
+  const napraviReviziju = (izvor, laser = false) => {
+    const kljuc = laser ? "ponudeLasera" : "ponude";
+    const lista = db[kljuc] || [];
+    const rev = { ...JSON.parse(JSON.stringify(izvor)), id: uid(laser ? "las" : "pon"), broj: brojRevizijePonude(lista, izvor), status: "U izradi", projektId: null, datum: todayISO(), revizijaOd: izvor.id };
+    update(kljuc, [...lista, rev]);
+    showToast(`Revizija spremljena kao ${rev.broj}.`);
+    if (laser) urediLaser(rev); else urediPonudu(rev);
+  };
   // Kopija ponude — nova ponuda s istim stavkama/pozicijama, ali svoj broj, "U izradi" status i
   // bez veze na projekt (kopija koja je već pretvorena u projekt ne smije "naslijediti" tu vezu).
   const kopirajPonudu = (ponuda) => {
@@ -10994,20 +11035,11 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
         <EntityPage
           title="" data={db.ponude}
           onAdd={() => { setPonForm(emptyPon()); setModal("pon"); }}
-          onEdit={(row) => {
-            setPonForm({
-              ...emptyPon(), ...JSON.parse(JSON.stringify(row)), pozicije: row.pozicije || [],
-              // Stare ponude (prije ovih polja) nemaju kontakt osobu ni njemačke uvjete spremljene —
-              // nadopuni ih razumnim zadanim vrijednostima umjesto emptyPon()-ovog zadanog kupca[0].
-              kontaktOsoba: row.kontaktOsoba || db.kupci.find((k) => k.id === row.kupacId)?.kontaktOsoba || "",
-              napomenaNjemacki: row.napomenaNjemacki || NJEMACKI_UVJETI_ZADANO,
-            });
-            setModal("pon");
-          }}
+          onEdit={urediPonudu}
           onDelete={(r) => setDel({ type: "pon", row: r })}
           addLabel="Nova ponuda" searchKeys={["broj", "naziv"]} readOnly={!mozePonude}
           columns={[
-            { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
+            { key: "broj", label: "Broj", render: (r) => <><span className="f-mono">{r.broj}</span>{imaNovijuReviziju(db.ponude, r) && <div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>zamijenjena revizijom</div>}</> },
             { key: "naziv", label: "Naziv posla" },
             { key: "kupac", label: "Kupac", render: (r) => kupacNaziv(r.kupacId) },
             { key: "sati", label: "Sati", render: (r) => <span className="f-mono">{fmtSatiPonude(izracunPonude(r, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala).ukupnoSati)} h</span> },
@@ -11016,6 +11048,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
             { key: "pdf", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrintPonuda(r)}>PDF ponude</Btn> },
             { key: "email", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Mail} onClick={() => setSlanjePonude(r)}>E-mail kupcu</Btn> },
             { key: "kopiraj", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Copy} onClick={() => kopirajPonudu(r)}>Kopiraj</Btn> },
+            { key: "revizija", label: "", render: (r) => (r.status !== "U izradi" && !imaNovijuReviziju(db.ponude, r) ? <Btn size="sm" variant="ghost" icon={HistoryIcon} disabled={!mozePonude} onClick={() => napraviReviziju(r)}>Revizija</Btn> : null) },
             {
               key: "akcija", label: "", render: (r) =>
                 r.projektId && db.projekti.some((p) => p.id === r.projektId) ? <span style={{ fontSize: 11, color: "var(--green)" }}>→ {projSifra(r.projektId)}</span>
@@ -11030,17 +11063,18 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
         <EntityPage
           title="" data={db.ponudeLasera}
           onAdd={() => { setLaserForm(emptyLaser()); setModal("laser"); }}
-          onEdit={(row) => { setLaserForm({ ...emptyLaser(), ...JSON.parse(JSON.stringify(row)), stavke: row.stavke || [], ostaleStavke: row.ostaleStavke || [], cjenik: { ...prazniCjenikLasera(), ...(row.cjenik || {}) } }); setModal("laser"); }}
+          onEdit={urediLaser}
           onDelete={(r) => setDel({ type: "laser", row: r })}
           addLabel="Nova ponuda za laser" searchKeys={["broj", "naziv"]} readOnly={!mozeLaser}
           columns={[
-            { key: "broj", label: "Broj", render: (r) => <span className="f-mono">{r.broj}</span> },
+            { key: "broj", label: "Broj", render: (r) => <><span className="f-mono">{r.broj}</span>{imaNovijuReviziju(db.ponudeLasera, r) && <div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>zamijenjena revizijom</div>}</> },
             { key: "naziv", label: "Naziv posla" },
             { key: "kupac", label: "Kupac", render: (r) => kupacNaziv(r.kupacId) },
             { key: "ukupno", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCurDec(izracunPonudeLasera(r, db.kvaliteteMaterijala).cijenaKonacna)}</span> },
             { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
             { key: "pdf", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrintLaser(r)}>PDF ponude</Btn> },
             { key: "kopiraj", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Copy} onClick={() => kopirajLaser(r)}>Kopiraj</Btn> },
+            { key: "revizija", label: "", render: (r) => (r.status !== "U izradi" && !imaNovijuReviziju(db.ponudeLasera, r) ? <Btn size="sm" variant="ghost" icon={HistoryIcon} disabled={!mozeLaser} onClick={() => napraviReviziju(r, true)}>Revizija</Btn> : null) },
             {
               key: "akcija", label: "", render: (r) =>
                 r.projektId && db.projekti.some((p) => p.id === r.projektId) ? <span style={{ fontSize: 11, color: "var(--green)" }}>→ {projSifra(r.projektId)}</span>
@@ -11145,8 +11179,16 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
 
         const azurirajOtpadLima = (katalogId, postotak) => setPonForm({ ...ponForm, otpadLimPoTipu: { ...(ponForm.otpadLimPoTipu || {}), [katalogId]: postotak } });
 
+        const spremljenaPon = ponForm.id ? db.ponude.find((p) => p.id === ponForm.id) : null;
+        const zaReviziju = !!spremljenaPon && spremljenaPon.status !== "U izradi" && !imaNovijuReviziju(db.ponude, spremljenaPon);
         return (
           <Modal xwide title={ponForm.id ? `Ponuda ${ponForm.broj}` : "Nova ponuda"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={savePon}>Spremi</Btn></>}>
+            {zaReviziju && (
+              <div className="card" style={{ padding: "8px 12px", marginBottom: 10, background: "#EEF3F7", fontSize: 12.5, display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ flex: 1 }}>Ova je ponuda već poslana. Za doradu napravite <strong>reviziju</strong>: poslana verzija ostaje sačuvana, a dorada se sprema kao <span className="f-mono">{brojRevizijePonude(db.ponude, spremljenaPon)}</span>. (Status ponude i dalje možete mijenjati ovdje.)</span>
+                <Btn size="sm" icon={HistoryIcon} onClick={() => napraviReviziju(ponForm)}>Napravi reviziju</Btn>
+              </div>
+            )}
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
               <Field label="Naziv posla / konstrukcije"><input className="input" placeholder="npr. Nadstrešnica autobusnog kolodvora" value={ponForm.naziv} onChange={(e) => setPonForm({ ...ponForm, naziv: e.target.value })} /></Field>
               <Field label="Kupac">
@@ -11264,7 +11306,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
       })()}
       {slanjePonude && <SlanjePonudeModal ponuda={db.ponude.find((x) => x.id === slanjePonude.id) || slanjePonude} kupac={db.kupci.find((k) => k.id === slanjePonude.kupacId)} db={db} update={update} showToast={showToast} posiljatelj={db.zaposlenici.find((z) => z.id === mojId)} onClose={() => setSlanjePonude(null)} />}
       {printPonuda && <PonudaPrintModal ponuda={printPonuda} kupac={db.kupci.find((k) => k.id === printPonuda.kupacId)} db={db} onClose={() => setPrintPonuda(null)} />}
-      {modal === "laser" && <PonudaLaseraModal form={laserForm} setForm={setLaserForm} db={db} onSave={saveLaser} onClose={() => setModal(null)} />}
+      {modal === "laser" && <PonudaLaseraModal form={laserForm} setForm={setLaserForm} db={db} onSave={saveLaser} onClose={() => setModal(null)} onRevizija={() => napraviReviziju(laserForm, true)} />}
       {printLaser && <PonudaLaseraPrintModal ponuda={printLaser} kupac={db.kupci.find((k) => k.id === printLaser.kupacId)} db={db} onClose={() => setPrintLaser(null)} />}
 
       {del && (
@@ -14008,7 +14050,7 @@ function izracunProjekcije(db, { od, doMjeseca, danas, trosakSata, materijalPost
   });
   const kupci = [...poKupcu.entries()].map(([naziv, iznos]) => ({ naziv, iznos })).filter((k) => k.iznos > 0.5).sort((a, b) => b.iznos - a.iznos);
 
-  const ponude = (db.ponude || []).filter((p) => p.status === "Poslana").map((p) => ({ broj: p.broj, naziv: p.naziv, kupac: kupacPoId.get(p.kupacId) || "", datum: p.datum, iznos: izracunPon(p).cijenaKonacna })).sort((a, b) => b.iznos - a.iznos);
+  const ponude = (db.ponude || []).filter((p) => p.status === "Poslana" && !imaNovijuReviziju(db.ponude, p)).map((p) => ({ broj: p.broj, naziv: p.naziv, kupac: kupacPoId.get(p.kupacId) || "", datum: p.datum, iznos: izracunPon(p).cijenaKonacna })).sort((a, b) => b.iznos - a.iznos);
   const upozorenja = {
     kasni: projekti.filter((r) => r.kasni).map((r) => ({ sifra: r.sifra, naziv: r.naziv, rok: r.rokKasni, iznos: r.iznosKasni, dio: r.rokKasni !== r.rok })),
     bezVrijednosti,
