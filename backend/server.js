@@ -2015,6 +2015,13 @@ const prilagodiUputnice = (req) => async (upsert, trenutno, client) => {
   for (const u of upsert) {
     znrIdZapisa(u);
     const staro = stara.get(u.id);
+    if (staro && u.povezi === true && staro.kandidat && staro.status !== "Poništena") {
+      // uputnica izdana osobi koja tada nije bila zaposlena: kad se zaposli, povezuje se s njezinim zapisom (snimka na uputnici se ne mijenja)
+      const zaposlenici = (await ucitajKljucKlijent(client, "zaposlenici")) || [];
+      if (!zaposlenici.some((z) => z.id === u.zaposlenikId)) throw greskaZahtjeva(400, "Zaposlenik nije pronađen.");
+      rezultat.push({ ...staro, zaposlenikId: u.zaposlenikId, kandidat: false, povezanoU: sada, povezaoId: req.zaposlenikId });
+      continue;
+    }
     if (staro) { rezultat.push(promijeniUputnicu(staro, u, req.zaposlenikId, sada)); continue; }
     if (!kontekst) {
       kontekst = { zaposlenici: (await ucitajKljucKlijent(client, "zaposlenici")) || [], radnaMjesta: (await ucitajKljucKlijent(client, "radnaMjesta")) || [], postavke: (await ucitajKljucKlijent(client, "zastitaPostavke")) || {} };
@@ -2024,7 +2031,9 @@ const prilagodiUputnice = (req) => async (upsert, trenutno, client) => {
     const polja = ocistiPoljaUputnice(u.polja, u.vrsta);
     if (!ZNR_VRSTE.includes(u.vrsta)) throw greskaZahtjeva(400, "Odaberite vrstu pregleda.");
     if (!datum || godina < 2000 || godina > 2100) throw greskaZahtjeva(400, "Nedostaje datum uputnice.");
-    if (!kontekst.zaposlenici.some((z) => z.id === u.zaposlenikId)) throw greskaZahtjeva(400, "Zaposlenik nije pronađen.");
+    const kandidat = u.kandidat === true;
+    if (kandidat && u.vrsta !== "prethodni") throw greskaZahtjeva(400, "Za osobu koja još nije zaposlena izrađuje se samo prethodni pregled.");
+    if (!kandidat && !kontekst.zaposlenici.some((z) => z.id === u.zaposlenikId)) throw greskaZahtjeva(400, "Zaposlenik nije pronađen.");
     if (!`${polja.ime}${polja.prezime}`.trim()) throw greskaZahtjeva(400, "Nedostaje ime i prezime.");
     if (!oibIspravan(polja.oib)) throw greskaZahtjeva(400, "OIB radnika nije ispravan.");
     if (!polja.datumRodjenja) throw greskaZahtjeva(400, "Nedostaje datum rođenja.");
@@ -2042,7 +2051,7 @@ const prilagodiUputnice = (req) => async (upsert, trenutno, client) => {
     const redniBroj = brojaci.get(godina) + 1;
     brojaci.set(godina, redniBroj);
     rezultat.push({
-      id: u.id, broj: `${redniBroj}/${godina}`, redniBroj, godina, datum, izradenoU: sada, izradioId: req.zaposlenikId, zaposlenikId: u.zaposlenikId, vrsta: u.vrsta,
+      id: u.id, broj: `${redniBroj}/${godina}`, redniBroj, godina, datum, izradenoU: sada, izradioId: req.zaposlenikId, zaposlenikId: kandidat ? null : u.zaposlenikId, ...(kandidat ? { kandidat: true } : {}), vrsta: u.vrsta,
       radnoMjestoId, dodatnaRadnaMjestaIds: dodatnaIds, prosliPregledId: znrTekst(u.prosliPregledId, 60) || null, izricitoZatrazeno: u.izricitoZatrazeno === true,
       polja, status: "Čeka rezultat", pregledId: null,
     });
@@ -2052,11 +2061,14 @@ const prilagodiUputnice = (req) => async (upsert, trenutno, client) => {
 // Rezultati pregleda (uz uputnicu ili ručno upisani raniji pregledi): datum i ocjena su obavezni, autora i vrijeme upisa postavlja poslužitelj.
 const prilagodiPregledi = (zaposlenikId) => async (upsert, trenutno, client) => {
   const poznati = new Set(((await ucitajKljucKlijent(client, "zaposlenici")) || []).map((z) => z.id));
+  const uputniceKandidata = new Set(((await ucitajKljucKlijent(client, "uputnice")) || []).filter((x) => x.kandidat).map((x) => x.id));
   const stara = new Map(trenutno.map((p) => [p.id, p]));
   const sada = new Date().toISOString();
   return upsert.map((u) => {
     znrIdZapisa(u);
-    if (!poznati.has(u.zaposlenikId)) throw greskaZahtjeva(400, "Zaposlenik nije pronađen.");
+    // rezultat pregleda osobe koja još nije zaposlena veže se uz njezinu uputnicu; zaposlenik se upisuje pri povezivanju
+    const zaKandidata = (u.zaposlenikId === null || u.zaposlenikId === undefined) && uputniceKandidata.has(znrTekst(u.uputnicaId, 60));
+    if (!zaKandidata && !poznati.has(u.zaposlenikId)) throw greskaZahtjeva(400, "Zaposlenik nije pronađen.");
     const datumPregleda = znrDatum(u.datumPregleda);
     if (!datumPregleda) throw greskaZahtjeva(400, "Upišite datum pregleda.");
     const ocjena = znrTekst(u.ocjena, 400);
@@ -2064,7 +2076,7 @@ const prilagodiPregledi = (zaposlenikId) => async (upsert, trenutno, client) => 
     const staro = stara.get(u.id);
     const uputnicaId = znrTekst(u.uputnicaId, 60) || null;
     return {
-      id: u.id, zaposlenikId: u.zaposlenikId, uputnicaId, datumPregleda, clanak: znrTekst(u.clanak, 20), tocke: znrTekst(u.tocke, 200), drugiPropis: znrTekst(u.drugiPropis, 300),
+      id: u.id, zaposlenikId: zaKandidata ? null : u.zaposlenikId, uputnicaId, datumPregleda, clanak: znrTekst(u.clanak, 20), tocke: znrTekst(u.tocke, 200), drugiPropis: znrTekst(u.drugiPropis, 300),
       ocjena, datumSljedeceg: znrDatum(u.datumSljedeceg), izvor: uputnicaId ? "uputnica" : "rucno", unioId: staro?.unioId || zaposlenikId, unesenoU: staro?.unesenoU || sada,
     };
   });

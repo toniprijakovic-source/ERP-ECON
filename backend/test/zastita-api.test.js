@@ -181,6 +181,21 @@ const kratko = (r) => `HTTP ${r.s} ${r.j?.error || ""}`;
   const brojevi2026 = r.j.uputnice.filter((x) => x.godina === 2026).map((x) => x.redniBroj).sort((a, b) => a - b);
   provjeri("brojevi 2026. idu redom bez rupa i ponavljanja, poništena se broji (nema ponovne upotrebe broja)", JSON.stringify(brojevi2026) === JSON.stringify([66, 67, 68, 69, 70, 71]) || (new Set(brojevi2026).size === brojevi2026.length && brojevi2026.every((b, i) => i === 0 || b === brojevi2026[i - 1] + 1)), JSON.stringify(brojevi2026));
 
+  // osoba koja još nije zaposlena: samo prethodni pregled, podaci se upisuju ručno, uputnica nema zaposlenika dok se ne poveže
+  const OIB_NOVI = oibIz("4567890123");
+  const poljaNovog = { ...polja("e1", "0305", "prethodni", "2026-10-31"), ime: "Novi", prezime: "Kandidatić", oib: OIB_NOVI, datumRodjenja: "1995-05-05", imeRoditelja: "Pero", mjestoRodjenja: "Grad" };
+  r = await up(T.adm, [{ id: "uk1", zaposlenikId: null, kandidat: true, vrsta: "prethodni", datum: "2026-10-31", radnoMjestoId: rm("0305").id, polja: poljaNovog }]);
+  const uk1 = r.j?.uputnice?.find((x) => x.id === "uk1");
+  provjeri("uputnica za osobu koja još nije zaposlena → 200, dobiva sljedeći broj, bez zaposlenika", r.s === 200 && uk1?.kandidat === true && uk1.zaposlenikId === null && /^\d+\/2026$/.test(uk1.broj) && uk1.polja.prezime === "Kandidatić", kratko(r) + " " + uk1?.broj);
+  r = await up(T.adm, [{ id: "uk2", zaposlenikId: null, kandidat: true, vrsta: "periodicki", datum: "2026-10-31", radnoMjestoId: rm("0305").id, polja: { ...poljaNovog, oib: oibIz("5678901234") } }]);
+  provjeri("  za osobu koja nije zaposlena samo prethodni pregled → 400", r.s === 400 && /samo prethodni/.test(r.j?.error || ""), kratko(r));
+  r = await up(T.adm, [{ id: "uk3", zaposlenikId: null, vrsta: "prethodni", datum: "2026-10-31", radnoMjestoId: rm("0305").id, polja: poljaNovog }]);
+  provjeri("  bez oznake kandidata zaposlenik i dalje mora postojati → 400", r.s === 400 && /Zaposlenik nije pronađen/.test(r.j?.error || ""), kratko(r));
+  r = await up(T.adm, [{ id: "uk4", zaposlenikId: null, kandidat: true, vrsta: "prethodni", datum: "2026-10-31", radnoMjestoId: rm("0305").id, polja: { ...poljaNovog, oib: "12345678900" } }]);
+  provjeri("  OIB kandidata mora biti ispravan → 400", r.s === 400 && /OIB/.test(r.j?.error || ""), kratko(r));
+  r = await up(T.adm, [{ id: "u1", povezi: true, zaposlenikId: "e2" }]);
+  provjeri("  povezivanje uputnice zaposlenika (nije kandidat) se ignorira", r.s === 200 && r.j.uputnice.find((x) => x.id === "u1").zaposlenikId === "e1");
+
   console.log("\n— Pregledi (rezultati)");
   const pr = (t, upsert, remove = []) => h("PUT", "/api/pregledi/patch", { upsert, remove }, A(t));
   r = await pr(T.adm, [{ id: "pg1", zaposlenikId: "e1", uputnicaId: "u1", datumPregleda: "2026-11-05", clanak: "3.", tocke: "1.,2.", ocjena: L.OCJENA_ZADANO, datumSljedeceg: "", unioId: "w1" }]);
@@ -196,6 +211,27 @@ const kratko = (r) => `HTTP ${r.s} ${r.j?.error || ""}`;
   provjeri("  Ured (bez modula) ne smije upisati → 403", r.s === 403, kratko(r));
   r = await pr(T.adm, [{ id: "pg1", zaposlenikId: "e1", uputnicaId: "u1", datumPregleda: "2026-11-06", ocjena: "Sposoban" }]);
   provjeri("  izmjena pregleda zadržava izvornog autora i vrijeme upisa", r.j.pregledi.find((x) => x.id === "pg1").unioId === "adm" && r.j.pregledi.find((x) => x.id === "pg1").unesenoU === pg1.unesenoU);
+
+  r = await pr(T.adm, [{ id: "pgk1", zaposlenikId: null, uputnicaId: "uk1", datumPregleda: "2026-11-02", clanak: "3.", tocke: "1.", ocjena: "Sposoban" }]);
+  const pgk1 = r.j?.pregledi?.find((x) => x.id === "pgk1");
+  provjeri("rezultat pregleda za uputnicu osobe koja još nije zaposlena → 200 (bez zaposlenika)", r.s === 200 && pgk1?.zaposlenikId === null && pgk1.izvor === "uputnica", kratko(r));
+  r = await pr(T.adm, [{ id: "pgk2", zaposlenikId: null, uputnicaId: "u1", datumPregleda: "2026-11-02", ocjena: "Sposoban" }]);
+  provjeri("  bez zaposlenika dopušteno samo uz uputnicu kandidata → 400", r.s === 400 && /Zaposlenik nije pronađen/.test(r.j?.error || ""), kratko(r));
+  r = await pr(T.adm, [{ id: "pgk3", zaposlenikId: null, datumPregleda: "2026-11-02", ocjena: "Sposoban" }]);
+  provjeri("  ni ručni pregled bez zaposlenika → 400", r.s === 400, kratko(r));
+  r = await up(T.adm, [{ id: "uk1", status: "Obavljeno", pregledId: "pgk1" }]);
+  provjeri("  uputnica kandidata se označava obavljenom kao i svaka druga", r.s === 200 && r.j.uputnice.find((x) => x.id === "uk1").status === "Obavljeno", kratko(r));
+  r = await up(T.adm, [{ id: "uk1", povezi: true, zaposlenikId: "nepostojeci" }]);
+  provjeri("povezivanje s nepostojećim zaposlenikom → 400", r.s === 400 && /Zaposlenik nije pronađen/.test(r.j?.error || ""), kratko(r));
+  r = await pr(T.adm, [{ ...pgk1, zaposlenikId: "e2" }]);
+  provjeri("rezultat prelazi na zaposlenika pri povezivanju (1. korak)", r.s === 200 && r.j.pregledi.find((x) => x.id === "pgk1").zaposlenikId === "e2", kratko(r));
+  r = await up(T.adm, [{ id: "uk1", povezi: true, zaposlenikId: "e2" }]);
+  const uk1p = r.j?.uputnice?.find((x) => x.id === "uk1");
+  provjeri("povezivanje uputnice sa zaposlenikom (2. korak): uputnica je njegova, snimka i broj ostaju", r.s === 200 && uk1p.zaposlenikId === "e2" && uk1p.kandidat === false && uk1p.broj === uk1.broj && uk1p.polja.prezime === "Kandidatić" && uk1p.polja.oib === OIB_NOVI, kratko(r));
+  r = await up(T.adm, [{ id: "uk1", povezi: true, zaposlenikId: "w1" }]);
+  provjeri("  već povezana uputnica se ne može ponovno preusmjeriti", r.s === 200 && r.j.uputnice.find((x) => x.id === "uk1").zaposlenikId === "e2");
+  r = await up(T.w1, [{ id: "uk9", zaposlenikId: null, kandidat: true, vrsta: "prethodni", datum: "2026-10-31", radnoMjestoId: rm("0305").id, polja: poljaNovog }]);
+  provjeri("Zaposlenik bez modula Zaštita na radu ne može izdati uputnicu kandidatu → 403", r.s === 403, kratko(r));
 
   console.log("\n— Prijedlozi korisnika");
   const pj = (t, upsert, remove = []) => h("PUT", "/api/prijedlozi/patch", { upsert, remove }, A(t));
