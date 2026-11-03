@@ -351,6 +351,8 @@ const izracunTipskogProjekta = (projekt, normativi) => {
   return { pod, komplet, ukupno };
 };
 
+const VRSTE_ODBITAKA = ["Predujam", "Kredit", "Ovrha / zaplena", "Sindikat", "Šteta / manjak", "Ostalo"];
+
 /* ============================== OBRAČUN PLAĆA ==============================
    Satnica se izvodi iz bodova i staža, a plaća se gradi iz STVARNO odrađenih sati.
    Osnovica (bodovi × vrijednost boda + dodatak na staž) služi samo za izračun satnice. */
@@ -731,8 +733,11 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   const stimulacija = stimulacijaRucno + visakPrekovremenihIznos + prebacenoSubota + dodatakSmjene + zbroj.gablecStimulacija;
   const kredit = Number(doplatak.kredit) || 0;
   const ustegPrehrane = Number(doplatak.ustegPrehrane) || 0;
+  // Ostali odbici: jednokratni odbici za taj mjesec (predujam, ovrha, sindikat…) — razlog se vodi samo u ERP-u, na ispisu ide ukupni iznos.
+  const odbici = Array.isArray(doplatak.odbici) ? doplatak.odbici : [];
+  const ostaliOdbici = odbici.reduce((z, o) => z + (Number(o.iznos) || 0), 0);
   const dodaciUkupno = topliObrok + dnevnicaTeren + putni;
-  const isplata = iznosRedovni + iznosPrekovremeniPrikaz + iznosNerad + dodatakStaz + stimulacija + dodaciUkupno - kredit - ustegPrehrane;
+  const isplata = iznosRedovni + iznosPrekovremeniPrikaz + iznosNerad + dodatakStaz + stimulacija + dodaciUkupno - kredit - ustegPrehrane - ostaliOdbici;
 
   return {
     zaposlenik, satnica, satnicaKorigirana, mjesecniFond, ostvareniSati, dodatakStaz, radniDaniMjeseca, ...osnova, ...zbroj,
@@ -742,7 +747,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     putni, topliObrok, daniObroka, prebacenoPutni, prebacenoObrok, prebacenoSubota,
     manjakSati, prebijenoSati, manjakPreostalo, redovniPrikaz: zbroj.redovni + manjakZaPrikaz, dodatakSmjene,
     jeUred, polaRadnoVrijeme: zaposlenik.radnoVrijeme === "pola", polaFiksnaPolovica, iznosRedovni, iznosNerad, fiksnaPlacaPuna, fiksnaPlaca, faktorFiksne, neplaceniDaniUred,
-    ukupno, brojDana: dani.length, dani, dnevnicaTeren, stimulacija, stimulacijaRucno, kredit, ustegPrehrane, dodaciUkupno, isplata,
+    ukupno, brojDana: dani.length, dani, dnevnicaTeren, stimulacija, stimulacijaRucno, kredit, ustegPrehrane, odbici, ostaliOdbici, dodaciUkupno, isplata,
   };
 };
 
@@ -16130,7 +16135,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
             <th style={{ width: 80 }}>Obrok</th>
             <th style={{ width: 90 }} title="Ručna stimulacija + prekovremeni koji se ne prikazuju + dodatak za popodnevnu smjenu + gablec + subotnji putni/obrok">Stimulacija</th>
             <th style={{ width: 95 }} title="Bez stimulacije">Ukupno neto</th>
-            <th style={{ width: 95 }} title="Ukupno neto + stimulacija − kredit i usteg prehrane">Isplata</th>
+            <th style={{ width: 95 }} title="Ukupno neto + stimulacija − kredit, usteg prehrane i ostali odbici">Isplata</th>
             <th style={{ width: 40 }}></th>
           </tr>
         </thead>
@@ -16155,7 +16160,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
               <td className="f-mono">{fmtCurDec(r.topliObrok)}</td>
               <td className="f-mono">{fmtCurDec(r.stimulacija)}</td>
               <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(r.ukupno)}</td>
-              <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(r.isplata)}</td>
+              <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(r.isplata)}{r.ostaliOdbici > 0 && <div style={{ fontSize: 10, fontWeight: 400, color: "var(--ink-faint)" }} title="Ostali odbici uračunati u isplatu">− odbici {fmtCurDec(r.ostaliOdbici)}</div>}</td>
               <td><button className="btn btn-icon btn-ghost" title="Detalji po danima" onClick={() => setDetalj(r.zaposlenik.id)}><Eye size={14} /></button></td>
             </tr>
           ))}
@@ -16463,10 +16468,14 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
                 <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 3 }}>Stvarno ostvareno: {detaljZaposlenik.prekovremeniStvarno.toFixed(1)} h. Prazno ili 0 = ništa se ne prikazuje, sve ide u stimulaciju.</div>
               </Field>
             </div>
+            <OdbiciUredjivac odbici={detaljZaposlenik.odbici} disabled={!mozeMijenjati}
+              onChange={(novi) => spremiDoplatak(detaljZaposlenik.zaposlenik.id, { odbici: novi })}
+              prosliMjesec={(() => { const [g, m] = mjesec.split("-").map(Number); const pm = m === 1 ? `${g - 1}-12` : `${g}-${String(m - 1).padStart(2, "0")}`; return (db.doplaciPlaca || []).find((d) => d.zaposlenikId === detaljZaposlenik.zaposlenik.id && d.mjesec === pm)?.odbici || []; })()} />
             <div style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid var(--line)", paddingTop: 8 }}>
               <strong style={{ fontSize: 13 }}>ISPLATA</strong>
-              <strong className="f-mono" style={{ fontSize: 15 }}>{fmtCurDec(detaljZaposlenik.isplata)}</strong>
+              <strong className="f-mono" style={{ fontSize: 15, color: detaljZaposlenik.isplata < 0 ? "var(--rust)" : undefined }}>{fmtCurDec(detaljZaposlenik.isplata)}</strong>
             </div>
+            {detaljZaposlenik.isplata < 0 && <div style={{ fontSize: 12, color: "var(--rust)", marginTop: 4 }}>Odbici su veći od isplate — isplata je negativna. Provjerite iznose.</div>}
           </div>
         </Modal>
       )}
@@ -16527,6 +16536,54 @@ const rasponiVrsteDana = (evidencijaRada, zaposlenici, mjesec, dozvoljeniIds, vr
   return rezultat.sort((a, b) => a.ime.localeCompare(b.ime, "hr"));
 };
 
+// Ostali odbici na plaći za mjesec (jednokratni): vrsta, opis i iznos. Sprema se tek na "Dodaj"/brisanje (ne pri svakom tipkanju).
+// Razlog je vidljiv samo ovdje; na ispisu obračuna ide samo ukupni iznos. Vrijedi samo za radnike u HR (redovni obračun plaće).
+function OdbiciUredjivac({ odbici, onChange, disabled, prosliMjesec }) {
+  const [vrsta, setVrsta] = useState(VRSTE_ODBITAKA[0]);
+  const [opis, setOpis] = useState("");
+  const [iznos, setIznos] = useState("");
+  const popis = odbici || [];
+  const ukupno = popis.reduce((z, o) => z + (Number(o.iznos) || 0), 0);
+  const dodaj = () => {
+    const i = Math.round((Number(String(iznos).replace(",", ".")) || 0) * 100) / 100;
+    if (!(i > 0)) return;
+    onChange([...popis, { id: uid("odb"), vrsta, opis: opis.trim(), iznos: i }]);
+    setOpis(""); setIznos("");
+  };
+  const kopiraj = () => onChange([...popis, ...prosliMjesec.map((o) => ({ ...o, id: uid("odb") }))]);
+  return (
+    <div style={{ borderTop: "1px solid var(--line)", paddingTop: 8, marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <strong style={{ fontSize: 13 }}>Ostali odbici (jednokratno, za ovaj mjesec)</strong>
+        {!disabled && popis.length === 0 && (prosliMjesec || []).length > 0 && <Btn size="sm" variant="ghost" onClick={kopiraj}>Kopiraj iz prošlog mjeseca ({prosliMjesec.length})</Btn>}
+      </div>
+      {popis.length === 0 ? <div style={{ fontSize: 12, color: "var(--ink-faint)", marginBottom: 6 }}>Nema odbitaka.</div> : (
+        <table className="erp-table" style={{ marginBottom: 6 }}>
+          <tbody>
+            {popis.map((o) => (
+              <tr key={o.id}>
+                <td style={{ width: 130 }}>{o.vrsta}</td>
+                <td>{o.opis || <span style={{ color: "var(--ink-faint)" }}>—</span>}</td>
+                <td className="f-mono" style={{ textAlign: "right", width: 90 }}>{fmtCurDec(Number(o.iznos) || 0)}</td>
+                <td style={{ width: 36 }}>{!disabled && <button className="btn btn-icon btn-ghost" title="Ukloni odbitak" onClick={() => onChange(popis.filter((x) => x.id !== o.id))}><X size={14} /></button>}</td>
+              </tr>
+            ))}
+            <tr><td colSpan={2} style={{ fontWeight: 700 }}>Ukupno ostali odbici</td><td className="f-mono" style={{ textAlign: "right", fontWeight: 700 }}>{fmtCurDec(ukupno)}</td><td /></tr>
+          </tbody>
+        </table>
+      )}
+      {!disabled && (
+        <div style={{ display: "grid", gridTemplateColumns: "150px 1fr 110px auto", gap: 8, alignItems: "end" }}>
+          <Field label="Vrsta"><select className="select" value={vrsta} onChange={(e) => setVrsta(e.target.value)}>{VRSTE_ODBITAKA.map((v) => <option key={v}>{v}</option>)}</select></Field>
+          <Field label="Opis (neobavezno)"><input className="input" value={opis} onChange={(e) => setOpis(e.target.value)} placeholder="npr. predujam 12.10." /></Field>
+          <Field label="Iznos (€)"><input className="input f-mono" type="number" step="0.01" min="0" value={iznos} onChange={(e) => setIznos(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") dodaj(); }} /></Field>
+          <Btn size="sm" icon={Plus} disabled={!(Number(iznos) > 0)} onClick={dodaj}>Dodaj</Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Ispis obračuna plaće za cijelu tvrtku za odabrani mjesec (A4 položeno) — stupci idu redoslijedom koji
 // traži knjigovodstvo; red je visok (24 pt) da se uz isplatu može ručno upisati bruto iznos, a tablica se
 // lomi na više stranica uz ponavljanje zaglavlja. Bolovanje (uključujući očinski i roditeljski, čiji se
@@ -16549,6 +16606,7 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
 
   const ukupnaIsplata = redovi.reduce((s, r) => s + r.isplata, 0);
   const imaUsteg = redovi.some((r) => Math.abs(r.ustegPrehrane) > 0.005);
+  const imaOstaleOdbitke = redovi.some((r) => Math.abs(r.ostaliOdbici) > 0.005);
   // stupac "Terenski Njemačka" treba se rijetko: uključuje se kvačicom, a pojavi se sam ako je netko ima iznos
   const prikaziTerenStupac = prikaziTeren || redovi.some((r) => Math.abs(r.dnevnicaTeren) > 0.005);
 
@@ -16575,6 +16633,7 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
     { naslov: "DODACI ukupno €", v: (r) => eur(r.dodaciUkupno) },
     { naslov: "ODBICI kredit €", v: (r) => eur(r.kredit) },
     { naslov: "USTEG prehrana €", v: (r) => eur(r.ustegPrehrane), uvjet: imaUsteg },
+    { naslov: "OSTALI ODBICI €", v: (r) => eur(r.ostaliOdbici), uvjet: imaOstaleOdbitke },
     { naslov: "ISPLATA €", v: (r) => eur(r.isplata), podebljano: true, siroko: true },
   ].filter((s) => s.uvjet === undefined || s.uvjet);
 
