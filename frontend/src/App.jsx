@@ -1544,15 +1544,19 @@ function useJeMobitel() {
   return jest;
 }
 
-function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete, columns, searchKeys, addLabel, rowClass, readOnly = false, onReorder, grupiraj, redoslijedGrupa, nazivGrupe }) {
+// filter (neobavezno): { svi: "Svi kupci", opcije: [{ value, label }], vrijednost: (row) => value } — padajući izbor uz pretragu.
+function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete, columns, searchKeys, addLabel, rowClass, readOnly = false, onReorder, grupiraj, redoslijedGrupa, nazivGrupe, filter }) {
   const [q, setQ] = useState("");
+  const [izbor, setIzbor] = useState("");
   const [dragOd, setDragOd] = useState(null);
   const jeMobitel = useJeMobitel();
   const filtered = useMemo(() => {
-    if (!q.trim()) return data;
+    let lista = data;
+    if (filter && izbor) lista = lista.filter((row) => filter.vrijednost(row) === izbor);
+    if (!q.trim()) return lista;
     const s = q.toLowerCase();
-    return data.filter((row) => searchKeys.some((k) => String(row[k] ?? "").toLowerCase().includes(s)));
-  }, [q, data, searchKeys]);
+    return lista.filter((row) => searchKeys.some((k) => String(row[k] ?? "").toLowerCase().includes(s)));
+  }, [q, izbor, data, searchKeys, filter]);
 
   const ispusti = (naIndeks) => {
     if (dragOd == null || dragOd === naIndeks) { setDragOd(null); return; }
@@ -1632,9 +1636,17 @@ function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete
   return (
     <div>
       <PageHeader title={title} subtitle={subtitle} icon={Icon} action={readOnly ? null : <Btn variant="primary" icon={Plus} onClick={onAdd}>{addLabel}</Btn>} />
-      <div className="card" style={{ marginBottom: 14, padding: "8px 10px", display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 8, maxWidth: 320 }}>
-        <Search size={15} color="var(--ink-faint)" style={{ flexShrink: 0 }} />
-        <input className="input" style={{ border: "none", padding: "4px 0", minWidth: 0 }} placeholder="Pretraži…" value={q} onChange={(e) => setQ(e.target.value)} />
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, marginBottom: 14 }}>
+        <div className="card" style={{ padding: "8px 10px", display: "flex", flexWrap: "nowrap", alignItems: "center", gap: 8, width: 320, maxWidth: "100%" }}>
+          <Search size={15} color="var(--ink-faint)" style={{ flexShrink: 0 }} />
+          <input className="input" style={{ border: "none", padding: "4px 0", minWidth: 0 }} placeholder="Pretraži…" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        {filter && (
+          <select className="input" aria-label={filter.svi} style={{ width: 260, maxWidth: "100%" }} value={izbor} onChange={(e) => setIzbor(e.target.value)}>
+            <option value="">{filter.svi}</option>
+            {filter.opcije.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        )}
       </div>
       {grupiraj ? (
         redoslijedGrupa.map((kljucGrupe) => {
@@ -10664,6 +10676,12 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
 
   const kupacNaziv = (id) => db.kupci.find((k) => k.id === id)?.naziv || "—";
   const projSifra = (id) => db.projekti.find((p) => p.id === id)?.sifra || "";
+  // Filtar po kupcu u popisu ponuda: nude se samo kupci koji u tom popisu imaju barem jednu ponudu.
+  const filterPoKupcu = (lista) => ({
+    svi: "Svi kupci",
+    opcije: [...new Set(lista.map((p) => p.kupacId).filter(Boolean))].map((id) => ({ value: id, label: kupacNaziv(id) })).sort((a, b) => a.label.localeCompare(b.label, "hr")),
+    vrijednost: (r) => r.kupacId,
+  });
 
   const dodajDodatak = () => setProjForm((pf) => ({ ...pf, dodaci: [...(pf.dodaci || []), { id: uid("dod"), naziv: `Dodatak ${(pf.dodaci || []).length + 1}`, rok: "", napomena: "", faze: praznaFazaSati() }] }));
   const urediDodatak = (id, izmjene) => setProjForm((pf) => ({ ...pf, dodaci: (pf.dodaci || []).map((d) => (d.id === id ? { ...d, ...izmjene } : d)) }));
@@ -11062,7 +11080,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
           onAdd={() => { setPonForm(emptyPon()); setModal("pon"); }}
           onEdit={urediPonudu}
           onDelete={(r) => setDel({ type: "pon", row: r })}
-          addLabel="Nova ponuda" searchKeys={["broj", "naziv"]} readOnly={!mozePonude}
+          addLabel="Nova ponuda" searchKeys={["broj", "naziv"]} readOnly={!mozePonude} filter={filterPoKupcu(db.ponude)}
           columns={[
             { key: "broj", label: "Broj", render: (r) => <><span className="f-mono">{r.broj}</span>{imaNovijuReviziju(db.ponude, r) && <div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>zamijenjena revizijom</div>}</> },
             { key: "naziv", label: "Naziv posla" },
@@ -11090,7 +11108,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
           onAdd={() => { setLaserForm(emptyLaser()); setModal("laser"); }}
           onEdit={urediLaser}
           onDelete={(r) => setDel({ type: "laser", row: r })}
-          addLabel="Nova ponuda za laser" searchKeys={["broj", "naziv"]} readOnly={!mozeLaser}
+          addLabel="Nova ponuda za laser" searchKeys={["broj", "naziv"]} readOnly={!mozeLaser} filter={filterPoKupcu(db.ponudeLasera)}
           columns={[
             { key: "broj", label: "Broj", render: (r) => <><span className="f-mono">{r.broj}</span>{imaNovijuReviziju(db.ponudeLasera, r) && <div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>zamijenjena revizijom</div>}</> },
             { key: "naziv", label: "Naziv posla" },
