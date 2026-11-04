@@ -9400,6 +9400,26 @@ function VanjskiTroskoviModal({ projekt, dobavljaci, patchProjekt, onClose, doda
   );
 }
 
+// Planirani sati radnog naloga uređuju se izravno u popisu naloga projekta; sprema se na Enter ili izlazak iz polja.
+function PlanSatiUnos({ nalog, onSpremi }) {
+  const [vrijednost, setVrijednost] = useState(null);
+  const prikaz = vrijednost != null ? vrijednost : String(nalog.planiranoSati ?? 0);
+  const spremi = () => {
+    if (vrijednost == null) return;
+    const n = Math.round((Number(String(vrijednost).replace(",", ".")) || 0) * 10) / 10;
+    setVrijednost(null);
+    if (n >= 0 && n !== (Number(nalog.planiranoSati) || 0)) onSpremi(nalog, n);
+  };
+  return (
+    <span className="f-mono" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      {nalog.utrosenoSati} /
+      <input className="input f-mono" aria-label={`Planirano sati za ${nalog.broj}`} inputMode="decimal" style={{ width: 70, padding: "4px 6px", fontSize: 13 }}
+        value={prikaz} onChange={(e) => setVrijednost(e.target.value)} onBlur={spremi}
+        onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); else if (e.key === "Escape") setVrijednost(null); }} />
+    </span>
+  );
+}
+
 function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsync, patchUpiti, showToast, setPage, onClose, mojId, otvoriKvalitetu }) {
   const kupac = db.kupci.find((k) => k.id === projekt.kupacId);
   const voditelj = db.zaposlenici.find((z) => z.id === projekt.voditeljId);
@@ -9443,6 +9463,11 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
     if (!window.confirm(`Obrisati radni nalog ${n.broj} (${fazaNaloga(n)}, ${n.planiranoSati} h)?${n.materijalIzdan ? " Materijal za njega je već izdan — izdatnica ostaje." : ""}${ovisni.length ? ` Ovisnost naloga ${ovisni.map((r) => r.broj).join(", ")} o njemu se uklanja.` : ""}`)) return;
     update("radniNalozi", db.radniNalozi.filter((r) => r.id !== n.id).map((r) => (r.ovisiONalogId === n.id ? { ...r, ovisiONalogId: null } : r)));
     showToast("Radni nalog obrisan.");
+  };
+  // Ispravak planiranih sati iz detalja projekta mijenja isti zapis radnog naloga (vidi se i u modulu Radni nalozi).
+  const promijeniPlanNaloga = (n, sati) => {
+    update("radniNalozi", db.radniNalozi.map((r) => (r.id === n.id ? { ...r, planiranoSati: sati } : r)));
+    showToast(`Plan naloga ${n.broj}: ${sati} h.`);
   };
   const planiranoUkupno = nalozi.reduce((s, n) => s + (Number(n.planiranoSati) || 0), 0);
   const utrosenoUkupno = nalozi.reduce((s, n) => s + (Number(n.utrosenoSati) || 0), 0);
@@ -9908,7 +9933,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
                   <td className="f-mono">{n.broj}{n.dodatakId && (projekt.dodaci || []).find((d) => d.id === n.dodatakId) && <div style={{ fontFamily: "var(--font-body)", fontSize: 10.5, color: "var(--ink-faint)" }}>{(projekt.dodaci || []).find((d) => d.id === n.dodatakId).naziv}</div>}</td>
                   <td>{fazaNaloga(n)}</td>
                   <td>{n.zaduzenTim || "—"}</td>
-                  <td className="f-mono">{n.utrosenoSati} / {n.planiranoSati}</td>
+                  <td><PlanSatiUnos nalog={n} onSpremi={promijeniPlanNaloga} /></td>
                   <td><Badge status={n.status} /></td>
                   <td><button className="btn btn-icon btn-ghost" title="Obriši radni nalog" aria-label={`Obriši nalog ${n.broj}`} onClick={() => obrisiNalog(n)}><Trash2 size={14} color="var(--rust)" /></button></td>
                 </tr>
