@@ -1545,9 +1545,11 @@ function useJeMobitel() {
 }
 
 // filter (neobavezno): { svi: "Svi kupci", opcije: [{ value, label }], vrijednost: (row) => value } — padajući izbor uz pretragu.
-function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete, columns, searchKeys, addLabel, rowClass, readOnly = false, onReorder, grupiraj, redoslijedGrupa, nazivGrupe, filter }) {
+function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete, columns, searchKeys, addLabel, rowClass, readOnly = false, onReorder: onReorderZadano, grupiraj, redoslijedGrupa, nazivGrupe, filter }) {
   const [q, setQ] = useState("");
   const [izbor, setIzbor] = useState("");
+  // Ručno slaganje povlačenjem radi samo nad cijelim popisom — nad pretraženim/filtriranim izdvojkom pokvarilo bi redoslijed ostalih redaka.
+  const onReorder = q.trim() || izbor ? undefined : onReorderZadano;
   const [dragOd, setDragOd] = useState(null);
   const jeMobitel = useJeMobitel();
   const filtered = useMemo(() => {
@@ -11051,7 +11053,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
           onAdd={() => { setProjForm(emptyProj()); setModal("proj"); }}
           onEdit={(row) => { setProjForm({ ...emptyProj(), ...row, zadaci: row.zadaci || noviZadaciIzStandarda(), voditeljId: row.voditeljId || "", faze: { ...praznaFazaSati(), ...(row.faze || {}) } }); setModal("proj"); }}
           onDelete={(r) => setDel({ type: "proj", row: r })}
-          addLabel="Novi projekt" searchKeys={["sifra", "naziv"]} readOnly={!mozeProjekti}
+          addLabel="Novi projekt" searchKeys={["sifra", "naziv"]} readOnly={!mozeProjekti} filter={filterPoKupcu(projektiSortirani)}
           columns={[
             { key: "sifra", label: "Šifra", render: (r) => <SifraProjektaLink p={r} /> },
             { key: "naziv", label: "Naziv" },
@@ -11130,7 +11132,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
 
       {tab === "zavrseni" && (
         <EntityPage
-          title="" data={projektiZavrseni} readOnly searchKeys={["sifra", "naziv"]}
+          title="" data={projektiZavrseni} readOnly searchKeys={["sifra", "naziv"]} filter={filterPoKupcu(projektiZavrseni)}
           columns={[
             { key: "sifra", label: "Šifra", render: (r) => <span className="f-mono">{r.sifra}</span> },
             { key: "naziv", label: "Naziv" },
