@@ -580,6 +580,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   const satnicaPraktikanta = grupaEvidencije(zaposlenik, db.pozicijeZaposlenika) === "praktikant" ? Number(zaposlenik.satnicaKooperant) || 0 : 0;
   const satnicaIzIznosa = satnicaPraktikanta > 0;
   const satnica = satnicaIzIznosa ? satnicaPraktikanta : satnicaIzBodova;
+  const doplatak = (db.doplaciPlaca || []).find((d) => d.zaposlenikId === zaposlenik.id && d.mjesec === mjesec) || {};
   const sviZapisi = (db.evidencijaRada || []).filter((e) => e.zaposlenikId === zaposlenik.id && e.vrijemeDolaska.slice(0, 7) === mjesec);
   // Cjelodnevna vrsta (godišnji, bolovanje, detašman...) vrijedi JEDNOM po datumu — ako je
   // greškom unesena dvaput, drugi zapis se ignorira da se dan ne plati/ne računa dvostruko.
@@ -652,6 +653,29 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   zbroj.iznosRedovni += prebijenoSati * satnica;
   zbroj.iznosPrekovremeni -= prebijenoSati * satnica * faktorPrek;
 
+  // DOPUNA FONDA (ručni unos po zaposleniku i mjesecu, doplatak.dopunaFondaSati): dani koji su se radili, a nisu evidentirani (npr. put na teren),
+  // pa fond izgleda nepopunjen. Najprije se prekovremeni sati prebace u redovne, ostatak su sati bez evidencije; svi se iskazuju kao redovni sati,
+  // a satnica za taj mjesec razmjerno se smanji tako da zbroj svega što ovisi o satnici (redovni, prekovremeni, godišnji/praznici, dodatak za smjenu)
+  // ostane isti — iznos isplate se ne mijenja. Ne vrijedi za tehnički ured (fiksna plaća) ni za pola radnog vremena. Dnevni detalj (dani) ostaje netaknut.
+  const dopunaTrazena = jeUred || zaposlenik.radnoVrijeme === "pola" ? 0 : Math.max(0, Number(doplatak.dopunaFondaSati) || 0);
+  const dopunaIzPrek = Math.min(dopunaTrazena, Math.max(0, zbroj.prekovremeni));
+  const dopunaNova = dopunaTrazena - dopunaIzPrek;
+  // koliko od prebačenih prekovremenih otpada na subote (prvo se troše prekovremeni radnim danom, kao kod prebijanja manjka)
+  const dopunaSubota = Math.max(0, dopunaIzPrek - Math.max(0, prekRadniDan - prebijenoSati));
+  let satnicaFaktor = 1;
+  if (dopunaTrazena > 0) {
+    const ovisnoOSatnici = () => zbroj.iznosRedovni + zbroj.iznosPrekovremeni + zbroj.iznosNerad + zbroj.dodatakSmjeneRedovni + zbroj.dodatakSmjenePrek;
+    const prije = ovisnoOSatnici();
+    zbroj.redovni += dopunaTrazena;
+    zbroj.prekovremeni -= dopunaIzPrek;
+    zbroj.iznosRedovni += dopunaTrazena * satnica;
+    zbroj.iznosPrekovremeni -= dopunaIzPrek * satnica * faktorPrek;
+    const poslije = ovisnoOSatnici();
+    satnicaFaktor = poslije > 0.0001 ? Math.max(0, prije) / poslije : 1;
+    ["iznosRedovni", "iznosPrekovremeni", "iznosNerad", "dodatakSmjeneRedovni", "dodatakSmjenePrek"].forEach((k) => { zbroj[k] *= satnicaFaktor; });
+  }
+  const satnicaMjeseca = satnica * satnicaFaktor;
+
   // Dani za dodatak na staž (po jedinstvenom datumu, samo pon-pet): dan stvarnog rada 4+ h
   // (zbroj svih segmenata tog dana) ili plaćeni izostanak. Sati prebačeni s prekovremenih na kratki dan
   // (vidi prebijanje) dopunjuju taj dan, i to od najranijeg datuma, pa dan s 1 h prijave koji je nadoknađen
@@ -680,7 +704,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   const normaDana = zaposlenik.radnoVrijeme === "pola" ? norma / 2 : norma; // pola radnog vremena: 4 h po radnom danu
   const mjesecniFond = radniDaniMjeseca * normaDana;
   const ostvareniSati = zbroj.redovni + zbroj.placeniNerad;
-  const satnicaKorigirana = mjesecniFond > 0 ? (ostvareniSati * satnica) / mjesecniFond : satnica; // za ured se ne koristi (fiksna plaća)
+  const satnicaKorigirana = mjesecniFond > 0 ? (ostvareniSati * satnicaMjeseca) / mjesecniFond : satnicaMjeseca; // za ured se ne koristi (fiksna plaća)
   // TEHNIČKI URED I ADMINISTRACIJA: neto plaća (bodovi × bod) je FIKSNI iznos za mjesečni fond
   // sati — ne množi se satima. Razmjerno se umanjuje za dane bolovanja/očinskog/roditeljskog te za
   // radne dane prije datuma zaposlenja. Godišnji, praznici i sl. su unutar fiksnog iznosa.
@@ -713,7 +737,6 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   const iznosRedovni = jeUred ? fiksnaPlaca : zbroj.iznosRedovni;
   const iznosNerad = jeUred ? 0 : zbroj.iznosNerad;
   const dnevnicaTeren = zbroj.danaSluzbenogPuta * (Number(postavke?.dnevnicaTerenEurDan) || 0);
-  const doplatak = (db.doplaciPlaca || []).find((d) => d.zaposlenikId === zaposlenik.id && d.mjesec === mjesec) || {};
 
   // "Prikaz prekovremenih (h)" — koliko od stvarno ostvarenih prekovremenih sati se PRIKAZUJE u
   // obračunu/PDF-u; prazno polje ili 0 znači da se ništa ne prikazuje kao prekovremeni, nego se
@@ -731,7 +754,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   // naknada za prijevoz i topli obrok također idu u stimulaciju (razmjerno udjelu subotnjih
   // sati koji se ne prikazuju), da se subotnji rad ne vidi u prikazanim stavkama.
   const suboteRad = dani.filter((d) => d.danUTjednu === 6 && d.prekovremeni > 0);
-  const suboteSati = Math.max(0, suboteRad.reduce((s, d) => s + d.prekovremeni, 0) - prebijenoSubota); // subotnji sati koji su ostali prekovremeni
+  const suboteSati = Math.max(0, suboteRad.reduce((s, d) => s + d.prekovremeni, 0) - prebijenoSubota - dopunaSubota); // subotnji sati koji su ostali prekovremeni
   const udioSubotaUStimulaciji = suboteSati > 0 ? Math.min(visakPrekovremenihSati, suboteSati) / suboteSati : 0;
   const prebacenoPutni = suboteRad.reduce((s, d) => s + d.putni, 0) * udioSubotaUStimulaciji;
   const prebacenoObrok = suboteRad.reduce((s, d) => s + d.topliObrok, 0) * udioSubotaUStimulaciji;
@@ -759,7 +782,8 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   const isplata = iznosRedovni + iznosPrekovremeniPrikaz + iznosNerad + dodatakStaz + stimulacija + dodaciUkupno - kredit - ustegPrehrane - ostaliOdbici;
 
   return {
-    zaposlenik, satnica, satnicaKorigirana, mjesecniFond, ostvareniSati, dodatakStaz, radniDaniMjeseca, ...osnova, ...zbroj,
+    zaposlenik, satnica: satnicaMjeseca, satnicaOsnovna: satnica, satnicaFaktor, dopunaFondaSati: doplatak.dopunaFondaSati ?? "", dopunaTrazena, dopunaIzPrek, dopunaNova,
+    satnicaKorigirana, mjesecniFond, ostvareniSati, dodatakStaz, radniDaniMjeseca, ...osnova, ...zbroj,
     prekovremeniStvarno: zbroj.prekovremeni, iznosPrekovremeniStvarno: zbroj.iznosPrekovremeni,
     prekovremeni: prekovremeniPrikaz, iznosPrekovremeni: iznosPrekovremeniPrikaz,
     prikazPrekovremenihSati: doplatak.prikazPrekovremenihSati ?? "", visakPrekovremenihSati, visakPrekovremenihIznos,
@@ -16260,7 +16284,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
               <td><strong>{r.zaposlenik.prezime} {r.zaposlenik.ime}</strong>
                 {r.vanjski
                   ? <div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{r.nazivPozicije} · fiksni iznos {fmtCurDec(r.iznosRedovni)} + prijevoz {fmtCurDec(r.putni)}</div>
-                  : <div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{r.satnicaIzIznosa ? `satnica ${fmtCurDec(r.satnica)}/h` : `${r.bodovi} bodova`} · staž {r.staz} god.{r.jeUred && <span style={{ color: "var(--steel)" }}> · fiksna plaća {fmtCurDec(r.fiksnaPlaca)}{r.manjakUredSati > 0.0001 && <> (umanjena za manjak {r.manjakUredSati.toFixed(1)} h)</>}</span>}{r.satiSDodatkom > 0 && <span style={{ color: "var(--steel)" }}> · {r.satiSDodatkom.toFixed(1)}h u smjeni s dodatkom</span>}</div>}
+                  : <div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{r.satnicaIzIznosa ? `satnica ${fmtCurDec(r.satnica)}/h` : `${r.bodovi} bodova`} · staž {r.staz} god.{r.jeUred && <span style={{ color: "var(--steel)" }}> · fiksna plaća {fmtCurDec(r.fiksnaPlaca)}{r.manjakUredSati > 0.0001 && <> (umanjena za manjak {r.manjakUredSati.toFixed(1)} h)</>}</span>}{r.satiSDodatkom > 0 && <span style={{ color: "var(--steel)" }}> · {r.satiSDodatkom.toFixed(1)}h u smjeni s dodatkom</span>}{r.dopunaTrazena > 0 && <span style={{ color: "var(--steel)" }} title="Sati bez evidencije dodani u fond; satnica za ovaj mjesec umanjena tako da se isplata ne mijenja"> · dopuna fonda +{r.dopunaTrazena.toFixed(1)} h (osnovna satnica {r.satnicaOsnovna.toFixed(2)})</span>}</div>}
               </td>
               <td className="f-mono">{r.vanjski ? "—" : r.satnica.toFixed(2)}{!r.vanjski && Math.abs(r.satnicaKorigirana - r.satnica) > 0.005 && <div style={{ fontSize: 10, color: "var(--steel)" }} title="Satnica za ovaj mjesec korigirana na ostvareni / mjesečni fond sati">{r.satnicaKorigirana.toFixed(2)} u mj.</div>}</td>
               <td className="f-mono">{r.redovni.toFixed(1)} h</td>
@@ -16473,7 +16497,15 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
           <div className="card" style={{ padding: 12, marginBottom: 12, background: "var(--surface-alt)", fontSize: 12.5 }}>
             {detaljZaposlenik.satnicaIzIznosa
               ? <>Satnica upisana izravno: <strong className="f-mono" style={{ color: "var(--steel)" }}>{detaljZaposlenik.satnica.toFixed(3)} €/h</strong> (praktikant — bez bodova)</>
-              : <>{detaljZaposlenik.bodovi} bodova × {db.postavkePlaca?.vrijednostBoda} € = <strong className="f-mono">{fmtCurDec(detaljZaposlenik.osnovica)}</strong> ÷ {db.postavkePlaca?.fondSatiMjesec} h (godišnji fond) = <strong className="f-mono" style={{ color: "var(--steel)" }}>{detaljZaposlenik.satnica.toFixed(3)} €/h</strong></>}
+              : <>{detaljZaposlenik.bodovi} bodova × {db.postavkePlaca?.vrijednostBoda} € = <strong className="f-mono">{fmtCurDec(detaljZaposlenik.osnovica)}</strong> ÷ {db.postavkePlaca?.fondSatiMjesec} h (godišnji fond) = <strong className="f-mono" style={{ color: "var(--steel)" }}>{(detaljZaposlenik.satnicaOsnovna ?? detaljZaposlenik.satnica).toFixed(3)} €/h</strong></>}
+            {detaljZaposlenik.dopunaTrazena > 0 && (
+              <div style={{ marginTop: 6, color: "var(--ink-soft)" }}>
+                <strong>Dopuna fonda:</strong> +<strong className="f-mono">{detaljZaposlenik.dopunaTrazena.toFixed(1)} h</strong> iskazano kao redovni sati
+                {detaljZaposlenik.dopunaIzPrek > 0 && <> ({detaljZaposlenik.dopunaIzPrek.toFixed(1)} h prebačeno iz prekovremenih{detaljZaposlenik.dopunaNova > 0 && <>, {detaljZaposlenik.dopunaNova.toFixed(1)} h bez evidencije</>})</>}
+                {detaljZaposlenik.dopunaIzPrek <= 0 && detaljZaposlenik.dopunaNova > 0 && <> (sati bez evidencije)</>}
+                {" "}— satnica za ovaj mjesec umanjena s <strong className="f-mono">{detaljZaposlenik.satnicaOsnovna.toFixed(3)}</strong> na <strong className="f-mono" style={{ color: "var(--steel)" }}>{detaljZaposlenik.satnica.toFixed(3)} €/h</strong> (× {detaljZaposlenik.satnicaFaktor.toFixed(4)}) tako da se iznos isplate ne mijenja.
+              </div>
+            )}
             {detaljZaposlenik.jeUred && (
               <div style={{ marginTop: 6, color: "var(--ink-soft)" }}>
                 <strong>Ured — fiksna neto plaća:</strong> {detaljZaposlenik.bodovi} bodova × {db.postavkePlaca?.vrijednostBoda} €{detaljZaposlenik.polaFiksnaPolovica && <> × 0,5 (pola radnog vremena)</>} = <strong className="f-mono">{fmtCurDec(detaljZaposlenik.fiksnaPlacaPuna)}</strong> za cijeli mjesečni fond ({detaljZaposlenik.mjesecniFond} h)
@@ -16538,7 +16570,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
 
           <div className="label" style={{ marginTop: 16, marginBottom: 6 }}>Ručni dodaci/odbici za {mjesec}</div>
           <div className="card" style={{ padding: 12, background: "var(--surface-alt)" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12, marginBottom: 12 }}>
               <Field label="Stimulacija (€, ručno)">
                 <input className="input f-mono" type="number" step="0.01" value={detaljZaposlenik.stimulacijaRucno || 0} onChange={(e) => spremiDoplatak(detaljZaposlenik.zaposlenik.id, { stimulacija: Number(e.target.value) || 0 })} disabled={!mozeMijenjati} />
               </Field>
@@ -16552,6 +16584,12 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
                 <input className="input f-mono" type="number" step="0.5" min="0" placeholder="0" value={detaljZaposlenik.prikazPrekovremenihSati} onChange={(e) => spremiDoplatak(detaljZaposlenik.zaposlenik.id, { prikazPrekovremenihSati: e.target.value === "" ? "" : Number(e.target.value) })} disabled={!mozeMijenjati} />
                 <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 3 }}>Stvarno ostvareno: {detaljZaposlenik.prekovremeniStvarno.toFixed(1)} h. Prazno ili 0 = ništa se ne prikazuje, sve ide u stimulaciju.</div>
               </Field>
+              {!detaljZaposlenik.jeUred && !detaljZaposlenik.polaRadnoVrijeme && (
+                <Field label="Dopuna fonda (h)">
+                  <input className="input f-mono" type="number" step="0.5" min="0" placeholder="0" value={detaljZaposlenik.dopunaFondaSati} onChange={(e) => spremiDoplatak(detaljZaposlenik.zaposlenik.id, { dopunaFondaSati: e.target.value === "" ? "" : Number(e.target.value) })} disabled={!mozeMijenjati} />
+                  <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 3 }}>Sati koji nisu u evidenciji (npr. put na teren), a trebaju ući u fond. Prvo se prekovremeni prebace u redovne, a satnica za mjesec se razmjerno smanji — isplata ostaje ista.</div>
+                </Field>
+              )}
             </div>
             <OdbiciUredjivac odbici={detaljZaposlenik.odbici} disabled={!mozeMijenjati}
               onChange={(novi) => spremiDoplatak(detaljZaposlenik.zaposlenik.id, { odbici: novi })}
