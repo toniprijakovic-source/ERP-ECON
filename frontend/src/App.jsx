@@ -17056,15 +17056,24 @@ function ObracunMontazaDEPrintModal({ redovi, mjesec, db, onClose }) {
 // (sati po nalozima + stalni poslovi) po radniku i danu, za razdoblje od-do (uključivo). Tekući dan se ne računa — poziva
 // se s "do" najkasnije jučer. Vraća sažetak i radnike s popisom dana koji se ne poklapaju.
 const dodajDane = (iso, n) => { const d = new Date(`${iso}T12:00:00`); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+// Dan koji je u evidenciji vođen kao izostanak (bolovanje, godišnji...), a na koji su ipak razduženi sati: radnik je dio dana radio pa otišao kući
+// (sate je računovodstvo platilo drukčije, npr. kroz stimulaciju, a zapis "rad" zamijenilo izostankom). To nije greška u razduženju: takav se dan
+// ne prikazuje kao neusklađen, a razduženi sati pribrajaju se evidenciji tog radnika (vidi "djelomicni" u povratnoj vrijednosti).
+const IZOSTANCI_DJELOMICNI_RAD = ["bolovanje", "godisnji", "placeniDopust", "ocinski", "roditeljski"];
 const uskladenostSati = (db, od, do_, grupa = "radiona") => {
   const radnici = (db.zaposlenici || []).filter((z) => z.status === "Aktivan" && grupaEvidencije(z, db.pozicijeZaposlenika) === grupa);
   const ids = new Set(radnici.map((z) => z.id));
-  const ev = new Map(), raz = new Map(); // zaposlenikId -> Map(datum -> sati)
+  const ev = new Map(), raz = new Map(), izostanci = new Map(); // zaposlenikId -> Map(datum -> sati | vrsta izostanka)
   const dodaj = (m, id, datum, h) => { const dani = m.get(id) || new Map(); dani.set(datum, (dani.get(datum) || 0) + h); m.set(id, dani); };
   (db.evidencijaRada || []).forEach((e) => {
-    if ((e.vrsta || "rad") !== "rad" || !ids.has(e.zaposlenikId)) return;
+    if (!ids.has(e.zaposlenikId)) return;
+    const vrsta = e.vrsta || "rad";
     const d = e.vrijemeDolaska.slice(0, 10);
     if (d < od || d > do_) return;
+    if (vrsta !== "rad") {
+      if (IZOSTANCI_DJELOMICNI_RAD.includes(vrsta)) { const m = izostanci.get(e.zaposlenikId) || new Map(); m.set(d, vrsta); izostanci.set(e.zaposlenikId, m); }
+      return;
+    }
     dodaj(ev, e.zaposlenikId, d, e.vrijemeOdlaska ? obracunskiSati(e.vrijemeDolaska, e.vrijemeOdlaska, odrediSmjenu(e.vrijemeDolaska, db.postavkePlaca), db.postavkePlaca) : 0);
   });
   let projekti = 0, stalni = 0, bezRadnika = 0;
@@ -17076,16 +17085,20 @@ const uskladenostSati = (db, od, do_, grupa = "radiona") => {
     dodaj(raz, s.zaposlenikId, s.datum, h);
     if (stalniPosao(s.radniNalogId)) stalni += h; else projekti += h;
   });
-  let evidencija = 0;
+  let evidencija = 0, djelomicniSati = 0, djelomicniDana = 0;
   const redovi = radnici.map((z) => {
-    const e = ev.get(z.id) || new Map(), r = raz.get(z.id) || new Map();
-    const dani = [...new Set([...e.keys(), ...r.keys()])].sort().map((datum) => ({ datum, ev: e.get(datum) || 0, raz: r.get(datum) || 0 })).filter((x) => Math.abs(x.ev - x.raz) > 0.01);
-    const sveEv = [...e.values()].reduce((a, h) => a + h, 0), sveRaz = [...r.values()].reduce((a, h) => a + h, 0);
-    evidencija += sveEv;
-    return { zaposlenik: z, evidencija: sveEv, razduzeno: sveRaz, razlika: sveEv - sveRaz, dani };
+    const e = ev.get(z.id) || new Map(), r = raz.get(z.id) || new Map(), iz = izostanci.get(z.id) || new Map();
+    const razlikeDana = [...new Set([...e.keys(), ...r.keys()])].sort().map((datum) => ({ datum, ev: e.get(datum) || 0, raz: r.get(datum) || 0 })).filter((x) => Math.abs(x.ev - x.raz) > 0.01);
+    const djelomicni = razlikeDana.filter((x) => x.ev < 0.01 && x.raz > 0.01 && iz.has(x.datum)).map((x) => ({ ...x, vrsta: iz.get(x.datum) }));
+    const datumiDjelomicnih = new Set(djelomicni.map((x) => x.datum));
+    const dani = razlikeDana.filter((x) => !datumiDjelomicnih.has(x.datum));
+    const satiDjelomicno = djelomicni.reduce((a, x) => a + x.raz, 0);
+    const sveEv = [...e.values()].reduce((a, h) => a + h, 0) + satiDjelomicno, sveRaz = [...r.values()].reduce((a, h) => a + h, 0);
+    evidencija += sveEv; djelomicniSati += satiDjelomicno; djelomicniDana += djelomicni.length;
+    return { zaposlenik: z, evidencija: sveEv, razduzeno: sveRaz, razlika: sveEv - sveRaz, dani, djelomicni };
   }).filter((r) => r.evidencija > 0 || r.razduzeno > 0).sort((a, b) => b.dani.length - a.dani.length || (a.zaposlenik.prezime + a.zaposlenik.ime).localeCompare(b.zaposlenik.prezime + b.zaposlenik.ime, "hr"));
   const nerazdijeljeno = Math.max(0, evidencija - projekti - stalni - bezRadnika);
-  return { redovi, sazetak: { evidencija, projekti, stalni, bezRadnika, nerazdijeljeno, posto: evidencija > 0 ? ((projekti + stalni + bezRadnika) / evidencija) * 100 : 0 }, brojDana: redovi.reduce((a, r) => a + r.dani.length, 0), brojRadnika: redovi.filter((r) => r.dani.length > 0).length };
+  return { redovi, sazetak: { evidencija, projekti, stalni, bezRadnika, nerazdijeljeno, djelomicniSati, djelomicniDana, posto: evidencija > 0 ? ((projekti + stalni + bezRadnika) / evidencija) * 100 : 0 }, brojDana: redovi.reduce((a, r) => a + r.dani.length, 0), brojRadnika: redovi.filter((r) => r.dani.length > 0).length };
 };
 
 function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetniPrikaz = null, pocetnaGrupa = null }) {
@@ -17238,7 +17251,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
         );
         return (
           <>
-            <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Usporedba sati iz evidencije rada (samo stvarni rad, obračunski sati) i razduženih sati (sati po nalozima i stalni poslovi) za radionu ili kooperante, po radniku i danu. Tekući dan se ne računa: provjerava se do jučer.</p>
+            <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Usporedba sati iz evidencije rada (samo stvarni rad, obračunski sati) i razduženih sati (sati po nalozima i stalni poslovi) za radionu ili kooperante, po radniku i danu. Tekući dan se ne računa: provjerava se do jučer. Dan koji je u evidenciji vođen kao bolovanje ili godišnji, a na kojem su ipak razduženi sati (radnik je dio dana radio pa otišao kući), ne smatra se neusklađenim: ti se sati pribrajaju evidenciji i prikazani su sivo.</p>
             <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
               {[["radiona", "Radiona"], ["kooperant", "Kooperanti"]].map(([k, naziv]) => <Btn key={k} variant={uskladenostGrupa === k ? "primary" : "ghost"} size="sm" onClick={() => { setUskladenostGrupa(k); setUskladenostOtvoren(null); }}>{naziv}</Btn>)}
             </div>
@@ -17249,7 +17262,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
             {!u ? <EmptyState text="Za odabrani mjesec još nema dana koji se mogu provjeriti." /> : (
               <>
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-                  {kartica("Sati iz evidencije", `${h(u.sazetak.evidencija)} h`)}
+                  {kartica("Sati iz evidencije", `${h(u.sazetak.evidencija)} h`, null, u.sazetak.djelomicniSati > 0 ? `uklj. ${h(u.sazetak.djelomicniSati)} h djelomičnog rada uz bolovanje/GO` : "")}
                   {kartica("Razdijeljeno na projekte", `${h(u.sazetak.projekti)} h`, null, u.sazetak.evidencija > 0 ? `${Math.round((u.sazetak.projekti / u.sazetak.evidencija) * 100)} % evidencije` : "")}
                   {kartica("Stalni poslovi", `${h(u.sazetak.stalni)} h`, null, u.sazetak.evidencija > 0 ? `${Math.round((u.sazetak.stalni / u.sazetak.evidencija) * 100)} % evidencije` : "")}
                   {u.sazetak.bezRadnika > 0 && kartica("Ukupni unos (bez radnika)", `${h(u.sazetak.bezRadnika)} h`, null, "Plan proizvodnje")}
@@ -17257,7 +17270,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
                 </div>
                 <div className="card" style={{ padding: 0, overflowX: "auto" }}>
                   <table className="erp-table">
-                    <thead><tr><th>Radnik</th><th style={{ width: 110, textAlign: "right" }}>Evidencija</th><th style={{ width: 110, textAlign: "right" }}>Razduženo</th><th style={{ width: 100, textAlign: "right" }}>Razlika</th><th style={{ width: 70, textAlign: "right" }}>%</th><th style={{ width: 190 }}>Dani koji se ne poklapaju</th></tr></thead>
+                    <thead><tr><th>Radnik</th><th style={{ width: 110, textAlign: "right" }}>Evidencija</th><th style={{ width: 110, textAlign: "right" }}>Razduženo</th><th style={{ width: 100, textAlign: "right" }}>Razlika</th><th style={{ width: 70, textAlign: "right" }}>%</th><th style={{ width: 250 }}>Dani koji se ne poklapaju</th></tr></thead>
                     <tbody>
                       {u.redovi.map((r) => {
                         const otvoren = uskladenostOtvoren === r.zaposlenik.id;
@@ -17269,7 +17282,12 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
                               <td className="f-mono" style={{ textAlign: "right" }}>{h(r.razduzeno)} h</td>
                               <td className="f-mono" style={{ textAlign: "right", color: Math.abs(r.razlika) > 0.05 ? "var(--rust)" : "inherit", fontWeight: Math.abs(r.razlika) > 0.05 ? 700 : 400 }}>{r.razlika > 0.05 ? "+" : ""}{h(r.razlika)} h</td>
                               <td className="f-mono" style={{ textAlign: "right", color: "var(--ink-soft)" }}>{r.evidencija > 0 ? `${Math.round((r.razduzeno / r.evidencija) * 100)} %` : "—"}</td>
-                              <td>{r.dani.length === 0 ? <span style={{ color: "var(--green)", fontSize: 12 }}>✓ sve se poklapa</span> : <Btn variant="ghost" size="sm" onClick={() => setUskladenostOtvoren(otvoren ? null : r.zaposlenik.id)}>{r.dani.length} {r.dani.length === 1 ? "dan" : "dana"} {otvoren ? "▲" : "▼"}</Btn>}</td>
+                              <td>{r.dani.length === 0 && r.djelomicni.length === 0 ? <span style={{ color: "var(--green)", fontSize: 12 }}>✓ sve se poklapa</span> : (
+                                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                                  {r.dani.length === 0 && <span style={{ color: "var(--green)", fontSize: 12 }}>✓</span>}
+                                  <Btn variant="ghost" size="sm" onClick={() => setUskladenostOtvoren(otvoren ? null : r.zaposlenik.id)}>{r.dani.length > 0 ? `${r.dani.length} ${r.dani.length === 1 ? "dan" : "dana"}` : `${r.djelomicni.length} ${r.djelomicni.length === 1 ? "dan" : "dana"} djelomičnog rada`} {otvoren ? "▲" : "▼"}</Btn>
+                                </span>
+                              )}</td>
                             </tr>
                             {otvoren && (
                               <tr><td colSpan={6} style={{ background: "var(--surface-alt)" }}>
@@ -17277,6 +17295,11 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
                                   {r.dani.map((d) => (
                                     <span key={d.datum} className="f-mono" style={{ fontSize: 12, padding: "3px 8px", border: "1px solid var(--line)", borderRadius: 3, background: "var(--surface)" }}>
                                       {fmtDate(d.datum)} {DAN[new Date(`${d.datum}T12:00:00`).getDay()]}: evidencija {h(d.ev)} h, razduženo <strong style={{ color: "var(--rust)" }}>{h(d.raz)} h</strong>
+                                    </span>
+                                  ))}
+                                  {r.djelomicni.map((d) => (
+                                    <span key={d.datum} className="f-mono" title="Dan je u evidenciji vođen kao izostanak, a radnik je dio dana radio: razduženi sati pribrojani su evidenciji i ne smatraju se greškom" style={{ fontSize: 12, padding: "3px 8px", border: "1px dashed var(--line)", borderRadius: 3, background: "var(--surface)", color: "var(--ink-soft)" }}>
+                                      {fmtDate(d.datum)} {DAN[new Date(`${d.datum}T12:00:00`).getDay()]}: {(VRSTE_DANA.find((v) => v.key === d.vrsta)?.label || d.vrsta).toLowerCase()}, djelomičan rad {h(d.raz)} h (razduženo)
                                     </span>
                                   ))}
                                 </div>
