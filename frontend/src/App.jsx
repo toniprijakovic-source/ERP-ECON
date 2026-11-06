@@ -471,7 +471,7 @@ const obracunskiSati = (dolazakISO, odlazakISO, smjena, postavke) => {
 };
 
 // Obračun jednog dana evidencije. dan: 0=ned, 6=sub
-const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
+const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0, maxSati = null) => {
   const datum = zapis.vrijemeDolaska.slice(0, 10);
   const vrsta = zapis.vrsta || "rad";
   const danUTjednu = new Date(datum).getDay();
@@ -484,7 +484,8 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0) => {
   // Dodatak za popodnevnu smjenu vrijedi samo za stvarni rad (službeni put i sl. ga nemaju)
   const dodatakSmjene = vrsta === "rad" ? 1 + (Number(smjena?.dodatakPostotak) || 0) / 100 : 1;
   // Sati se obračunavaju zaokruženo na obračunsku jedinicu (raniji dolazak se ne priznaje)
-  const odradjeniSati = vrsta === "rad" ? obracunskiSati(zapis.vrijemeDolaska, zapis.vrijemeOdlaska, smjena, postavke) : 0;
+  // maxSati (samo praktikant): sati iznad dnevnog ograničenja brišu se iz obračuna (vidi obracunMjeseca)
+  const odradjeniSati = vrsta === "rad" ? Math.min(obracunskiSati(zapis.vrijemeDolaska, zapis.vrijemeOdlaska, smjena, postavke), maxSati ?? Infinity) : 0;
 
   // Kategorije plaćenih neradnih sati vode se odvojeno (praznik/godišnji/dopust/bolovanje) —
   // isti ukupni "placeniNerad" ostaje zbroj svih plaćenih (bolovanje se evidentira, ali NE
@@ -593,7 +594,17 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     vidjenoPosebno.add(k);
     return true;
   });
-  const dani = zapisi.map((z) => obracunDana(z, zaposlenik, postavke, db.praznici, satnica));
+  // PRAKTIKANT: u obračun ulazi najviše norma (8 h) po danu — sati iznad toga brišu se iz obračuna (evidencija ostaje netaknuta).
+  // Ograničenje vrijedi za zbroj svih zapisa istog datuma, a briše i dodatni obrok za 12+ h.
+  const potrosenoPoDatumu = new Map();
+  const dani = zapisi.map((z) => {
+    if (!jePraktikant || (z.vrsta || "rad") !== "rad") return obracunDana(z, zaposlenik, postavke, db.praznici, satnica);
+    const datum = z.vrijemeDolaska.slice(0, 10);
+    const preostalo = Math.max(0, (Number(postavke?.normaSatiDan) || 8) - (potrosenoPoDatumu.get(datum) || 0));
+    const d = obracunDana(z, zaposlenik, postavke, db.praznici, satnica, preostalo);
+    potrosenoPoDatumu.set(datum, (potrosenoPoDatumu.get(datum) || 0) + d.odradjeniSati);
+    return d;
+  });
 
   // Praznici u mjesecu za koje zaposlenik nema NIKAKAV zapis (npr. cijela tvrtka ne radi tog
   // dana) svejedno se plaćaju kao puna norma — ali samo ako padaju na radni dan (pon-pet).
@@ -606,8 +617,8 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     }
   }
 
-  // PRAKTIKANT nema plaćenih prekovremenih: svi njegovi sati (i subotnji, i iznad norme) plaćaju se kao redovni, sati × satnica (bez faktora 1,5).
-  // Dodatak za popodnevnu smjenu ostaje isti, samo se vodi uz redovne sate. Mijenja se kopija dnevnog obračuna u ovoj funkciji, evidencija ostaje netaknuta.
+  // PRAKTIKANT nema plaćenih prekovremenih: sati iznad 8 h po danu već su izbrisani (vidi gore), a preostali sati (npr. subotnji) plaćaju se kao redovni,
+  // sati × satnica (bez faktora 1,5). Dodatak za popodnevnu smjenu ostaje isti, samo se vodi uz redovne sate. Mijenja se kopija dnevnog obračuna u ovoj funkciji.
   if (jePraktikant) {
     dani.forEach((d) => {
       if (d.prekovremeni <= 0) return;
@@ -16728,7 +16739,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true, mojId })
       {printGrupa === "kooperant" && <ObracunKooperantiPrintModal redovi={redoviKooperanti} mjesec={mjesec} db={db} onClose={() => setPrintGrupa(null)} />}
       {printGrupa === "montazaDE" && (
         <ObracunPlacaPrintModal
-          redovi={montazaDEKaoRadiona} naslovGrupe="Montaža DE (izaslani radnici)"
+          redovi={montazaDEKaoRadiona} naslovGrupe="Montaža DE (izaslani radnici)" naslovDodatak=" - Isplata u HR"
           naslovPdfa="OBRAČUN PLAĆE · Montaža DE (izaslani radnici) - isplata u HR"
           nazivDatoteke="Montaza de (izaslani radnici ) - isplata u HR"
           mjesec={mjesec} db={db} onClose={() => setPrintGrupa(null)}
@@ -16833,7 +16844,7 @@ function OdbiciUredjivac({ odbici, onChange, disabled, prosliMjesec }) {
 // sati vode pod BO da fond ostane pun) i detašman prikazuju se kao popis raspona datuma ispod tablice;
 // bolovanje se evidentira ali ne obračunava (vidi obracunDana) pa nosi napomenu "dodati", a detašman
 // se ne isplaćuje u plaći pa nema stupca. Poziv na broj se ne može izvesti automatski pa ostaje ručno polje.
-function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose, naslovPdfa = null, nazivDatoteke = null }) {
+function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose, naslovPdfa = null, nazivDatoteke = null, naslovDodatak = "" }) {
   const t = db.postavkeTvrtke || {};
   const [pozivBroj, setPozivBroj] = useState("");
   const [prikaziTeren, setPrikaziTeren] = useState(false);
@@ -16895,7 +16906,7 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose, nasl
   const thS = { ...tdS, height: "auto", fontWeight: 700, background: "#f0f0f0", textAlign: "center", whiteSpace: "normal", fontSize: 7.5 };
 
   return (
-    <Modal wide maxSirina={1240} title={`Pregled za ispis — Obračun plaće ${naslovGrupe} ${mjesec}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(nazivDatoteke || `Placa_${naslovGrupe.replace(/\s+/g, "-")}_${gg}${gmesec}`)}>Ispis / Spremi kao PDF</Btn></>}>
+    <Modal wide maxSirina={1240} title={`Pregled za ispis — Obračun plaće ${naslovGrupe} ${mjesec}${naslovDodatak}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(nazivDatoteke || `Placa_${naslovGrupe.replace(/\s+/g, "-")}_${gg}${gmesec}`)}>Ispis / Spremi kao PDF</Btn></>}>
       <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, marginBottom: 10, cursor: "pointer" }}>
         <input type="checkbox" checked={prikaziTeren} onChange={(e) => setPrikaziTeren(e.target.checked)} />
         Prikaži stupac „Terenski Njemačka“ (za mjesec u kojem je bilo terena)
