@@ -577,7 +577,8 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   // Staž se računa na ZADNJI dan mjeseca: nova godina staža vrijedi za cijeli mjesec obljetnice.
   const { satnica: satnicaIzBodova, ...osnova } = satnicaZaposlenika(zaposlenik, postavke, `${mjesec}-${String(brojDanaMjeseca).padStart(2, "0")}`);
   // Praktikantu se satnica upisuje izravno u €/h (polje satnicaKooperant), a ne preko bodova; ako nije upisana, vrijedi satnica iz bodova.
-  const satnicaPraktikanta = grupaEvidencije(zaposlenik, db.pozicijeZaposlenika) === "praktikant" ? Number(zaposlenik.satnicaKooperant) || 0 : 0;
+  const jePraktikant = grupaEvidencije(zaposlenik, db.pozicijeZaposlenika) === "praktikant";
+  const satnicaPraktikanta = jePraktikant ? Number(zaposlenik.satnicaKooperant) || 0 : 0;
   const satnicaIzIznosa = satnicaPraktikanta > 0;
   const satnica = satnicaIzIznosa ? satnicaPraktikanta : satnicaIzBodova;
   const doplatak = (db.doplaciPlaca || []).find((d) => d.zaposlenikId === zaposlenik.id && d.mjesec === mjesec) || {};
@@ -603,6 +604,21 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     if (jePraznik(datum, db.praznici) && dow >= 1 && dow <= 5 && !datumiSaZapisom.has(datum)) {
       dani.push(obracunDana({ vrijemeDolaska: `${datum}T00:00:00`, vrijemeOdlaska: null, vrsta: "rad" }, zaposlenik, postavke, db.praznici, satnica));
     }
+  }
+
+  // PRAKTIKANT nema plaćenih prekovremenih: svi njegovi sati (i subotnji, i iznad norme) plaćaju se kao redovni, sati × satnica (bez faktora 1,5).
+  // Dodatak za popodnevnu smjenu ostaje isti, samo se vodi uz redovne sate. Mijenja se kopija dnevnog obračuna u ovoj funkciji, evidencija ostaje netaknuta.
+  if (jePraktikant) {
+    dani.forEach((d) => {
+      if (d.prekovremeni <= 0) return;
+      d.redovni += d.prekovremeni;
+      d.prekovremeni = 0;
+      d.iznosRedovni = d.redovni * satnica;
+      d.iznosPrekovremeni = 0;
+      d.dodatakSmjeneRedovni += d.dodatakSmjenePrek;
+      d.dodatakSmjenePrek = 0;
+      d.ukupnoDan = d.iznosRedovni + d.iznosNerad + d.putni + d.topliObrok + d.dodatakSmjeneRedovni + d.gablecStimulacija;
+    });
   }
 
   const zbroj = dani.reduce((s, d) => ({
