@@ -186,7 +186,9 @@ const KARTICE_MODULA = {
   zaposlenici: {
     zaposlenici: { citanje: ["zaposlenici"], pisanje: ["zaposlenici"] },
     pozicije: { citanje: ["pozicijeZaposlenika"], pisanje: ["pozicijeZaposlenika"] },
-    obracun: { citanje: ["evidencijaRada", "postavkePlaca", "praznici", "zaposlenici", "doplaciPlaca", "postavkeTvrtke"], pisanje: ["postavkePlaca", "praznici", "doplaciPlaca"] },
+    // godisnjiOdmor: stanje godišnjeg (tko je u minusu) i zamjena prekovremenih za dane godišnjeg — zamjena se upisuje u Obračunu plaća,
+    // a sprema uz godišnji odmor (ne uz plaćne podatke), da je vide i uloge kojima je Obračun isključen.
+    obracun: { citanje: ["evidencijaRada", "postavkePlaca", "praznici", "zaposlenici", "doplaciPlaca", "postavkeTvrtke", "godisnjiOdmor"], pisanje: ["postavkePlaca", "praznici", "doplaciPlaca", "godisnjiOdmor"] },
     // Godišnji odmor: pravo na dane (staž izvan Econa, složenost, preneseno, korekcija — upis u godisnjiOdmor) i iskorišteni
     // dani iz evidencije rada (godišnji i detašman - godišnji), uz praznike i pozicije za skupine radiona / režija.
     godisnji: { citanje: ["godisnjiOdmor", "evidencijaRada", "praznici", "zaposlenici", "pozicijeZaposlenika", "postavkeTvrtke"], pisanje: ["godisnjiOdmor"] },

@@ -653,6 +653,23 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   zbroj.iznosRedovni += prebijenoSati * satnica;
   zbroj.iznosPrekovremeni -= prebijenoSati * satnica * faktorPrek;
 
+  // ZAMJENA PREKOVREMENIH ZA GODIŠNJI ODMOR (po dogovoru s radnikom): radnik u minusu s godišnjim "otplaćuje" dane prekovremenim satima — svakih 8 h
+  // (norma) = 1 dan godišnjeg, koji ide u korekciju godišnjeg. Upisuje se u Obračunu plaća, a sprema uz godišnji odmor
+  // (godisnjiOdmor.godine[god].zaposlenici[id].zamjene[mjesec].sati), da ga vide i uloge koje nemaju pristup plaćnim podacima. Zamijenjeni sati se NE plaćaju
+  // (ni sat ni dodatak 1,5×). Troše se nakon prebijanja manjka, a prije dopune fonda; prvo prekovremeni radnim danom, pa subotnji. Ne vrijedi za pola radnog vremena.
+  const goZapis = db.godisnjiOdmor && !Array.isArray(db.godisnjiOdmor) ? db.godisnjiOdmor.godine?.[mjesec.slice(0, 4)]?.zaposlenici?.[zaposlenik.id] : null;
+  const goTrazeno = zaposlenik.radnoVrijeme === "pola" ? 0 : Math.max(0, Number(goZapis?.zamjene?.[mjesec]?.sati) || 0);
+  const prekovremeniZaGo = Math.max(0, zbroj.prekovremeni); // raspoloživo za zamjenu (nakon prebijanja manjka, prije zamjene i dopune fonda)
+  const goZamjenaSati = Math.min(goTrazeno, Math.floor(prekovremeniZaGo / norma + 1e-9) * norma);
+  const prekRadniDanOstalo = Math.max(0, prekRadniDan - prebijenoSati);
+  const goSubota = Math.max(0, goZamjenaSati - prekRadniDanOstalo);
+  const goZamjenaIznos = goZamjenaSati * satnica * faktorPrek;
+  if (goZamjenaSati > 0) {
+    zbroj.dodatakSmjenePrek *= 1 - goZamjenaSati / prekovremeniZaGo;
+    zbroj.prekovremeni -= goZamjenaSati;
+    zbroj.iznosPrekovremeni -= goZamjenaIznos;
+  }
+
   // DOPUNA FONDA (ručni unos po zaposleniku i mjesecu, doplatak.dopunaFondaSati): dani koji su se radili, a nisu evidentirani (npr. put na teren),
   // pa fond izgleda nepopunjen. Najprije se prekovremeni sati prebace u redovne, ostatak su sati bez evidencije; svi se iskazuju kao redovni sati,
   // a satnica za taj mjesec razmjerno se smanji tako da zbroj svega što ovisi o satnici (redovni, prekovremeni, godišnji/praznici, dodatak za smjenu)
@@ -661,7 +678,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   const dopunaIzPrek = Math.min(dopunaTrazena, Math.max(0, zbroj.prekovremeni));
   const dopunaNova = dopunaTrazena - dopunaIzPrek;
   // koliko od prebačenih prekovremenih otpada na subote (prvo se troše prekovremeni radnim danom, kao kod prebijanja manjka)
-  const dopunaSubota = Math.max(0, dopunaIzPrek - Math.max(0, prekRadniDan - prebijenoSati));
+  const dopunaSubota = Math.max(0, dopunaIzPrek - Math.max(0, prekRadniDanOstalo - goZamjenaSati));
   let satnicaFaktor = 1;
   if (dopunaTrazena > 0) {
     const ovisnoOSatnici = () => zbroj.iznosRedovni + zbroj.iznosPrekovremeni + zbroj.iznosNerad + zbroj.dodatakSmjeneRedovni + zbroj.dodatakSmjenePrek;
@@ -754,7 +771,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   // naknada za prijevoz i topli obrok također idu u stimulaciju (razmjerno udjelu subotnjih
   // sati koji se ne prikazuju), da se subotnji rad ne vidi u prikazanim stavkama.
   const suboteRad = dani.filter((d) => d.danUTjednu === 6 && d.prekovremeni > 0);
-  const suboteSati = Math.max(0, suboteRad.reduce((s, d) => s + d.prekovremeni, 0) - prebijenoSubota - dopunaSubota); // subotnji sati koji su ostali prekovremeni
+  const suboteSati = Math.max(0, suboteRad.reduce((s, d) => s + d.prekovremeni, 0) - prebijenoSubota - goSubota - dopunaSubota); // subotnji sati koji su ostali prekovremeni
   const udioSubotaUStimulaciji = suboteSati > 0 ? Math.min(visakPrekovremenihSati, suboteSati) / suboteSati : 0;
   const prebacenoPutni = suboteRad.reduce((s, d) => s + d.putni, 0) * udioSubotaUStimulaciji;
   const prebacenoObrok = suboteRad.reduce((s, d) => s + d.topliObrok, 0) * udioSubotaUStimulaciji;
@@ -783,6 +800,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
 
   return {
     zaposlenik, satnica: satnicaMjeseca, satnicaOsnovna: satnica, satnicaFaktor, dopunaFondaSati: doplatak.dopunaFondaSati ?? "", dopunaTrazena, dopunaIzPrek, dopunaNova,
+    goZamjenaTrazena: goTrazeno, goZamjenaSati, goZamjenaDana: goZamjenaSati / norma, goZamjenaIznos, prekovremeniZaGo,
     satnicaKorigirana, mjesecniFond, ostvareniSati, dodatakStaz, radniDaniMjeseca, ...osnova, ...zbroj,
     prekovremeniStvarno: zbroj.prekovremeni, iznosPrekovremeniStvarno: zbroj.iznosPrekovremeni,
     prekovremeni: prekovremeniPrikaz, iznosPrekovremeni: iznosPrekovremeniPrikaz,
@@ -15673,9 +15691,10 @@ const sazetakDanaEvidencije = (zapisi, postavkePlaca) => {
 const zbrojeviEvidencije = (zaposlenik, mjesec, db) => {
   const r = obracunMjeseca(zaposlenik, mjesec, db);
   return {
-    ukupno: r.redovni + r.prekovremeniStvarno + r.praznikSati + r.godisnjiSati + r.dopustSati + r.detasmanSati,
+    // Prekovremeni zamijenjeni za godišnji (goZamjenaSati) se ne isplaćuju, ali su stvarno odrađeni — u evidenciji ostaju u satima.
+    ukupno: r.redovni + r.prekovremeniStvarno + r.goZamjenaSati + r.praznikSati + r.godisnjiSati + r.dopustSati + r.detasmanSati,
     redovni: r.redovni,
-    prekovremeni: r.prekovremeniStvarno,
+    prekovremeni: r.prekovremeniStvarno + r.goZamjenaSati,
     // Praznik i godišnji prikazuju se u SATIMA (1 dan = norma, 8 h; za pola radnog vremena 4 h) — isti sati koji ulaze u "Ukupno sati".
     praznikSati: r.praznikSati,
     goSati: r.godisnjiSati,
@@ -16172,8 +16191,9 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true, d
 }
 
 /* ============================== OBRAČUN PLAĆA — TAB ============================== */
-function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
+function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true, mojId }) {
   const [mjesec, setMjesec] = useState(todayISO().slice(0, 7));
+  const [goDanaUnos, setGoDanaUnos] = useState({}); // zamjena prekovremenih za godišnji: broj dana koji se upisuje, po zaposleniku
   const [postavkeOtvorene, setPostavkeOtvorene] = useState(false);
   const [detalj, setDetalj] = useState(null);
   const [detaljKoop, setDetaljKoop] = useState(null);
@@ -16194,6 +16214,21 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
   const tehnickiFormula = useMemo(() => redovi.filter((r) => grupaEvidencije(r.zaposlenik, db.pozicijeZaposlenika) === "ostalo"), [redovi, db.pozicijeZaposlenika]);
 
   const detaljZaposlenik = detalj ? redovi.find((r) => r.zaposlenik.id === detalj) : null;
+
+  // Stanje godišnjeg za godinu obračuna (tko je u minusu) — za zamjenu prekovremenih za dane godišnjeg.
+  const goPoId = useMemo(() => new Map(izracunGodisnjeg(db, Number(mjesec.slice(0, 4))).redovi.map((r) => [r.z.id, r])), [db, mjesec]);
+  // Zamjena se sprema uz godišnji odmor (ne uz plaćne podatke), a obračun je čita — vidi obracunMjeseca. sati = 0 poništava zamjenu.
+  const spremiGoZamjenu = (zaposlenikId, sati) => {
+    const godina = mjesec.slice(0, 4);
+    const go = db.godisnjiOdmor && !Array.isArray(db.godisnjiOdmor) ? db.godisnjiOdmor : {};
+    const pg = go.godine?.[godina] || {};
+    const zap = pg.zaposlenici?.[zaposlenikId] || {};
+    const zamjene = { ...(zap.zamjene || {}) };
+    const korisnik = db.zaposlenici.find((x) => x.id === mojId);
+    if (sati > 0) zamjene[mjesec] = { sati, datum: todayISO(), korisnik: korisnik ? `${korisnik.prezime} ${korisnik.ime}` : "" };
+    else delete zamjene[mjesec];
+    update("godisnjiOdmor", { ...go, godine: { ...(go.godine || {}), [godina]: { ...pg, zaposlenici: { ...(pg.zaposlenici || {}), [zaposlenikId]: { ...zap, zamjene } } } } });
+  };
 
   // Ručni mjesečni dodaci/odbici (stimulacija, kredit, usteg prehrane) po zaposleniku — ne
   // proizlaze iz evidencije rada, pa se pamte kao zaseban zapis po (zaposlenik, mjesec).
@@ -16284,7 +16319,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
               <td><strong>{r.zaposlenik.prezime} {r.zaposlenik.ime}</strong>
                 {r.vanjski
                   ? <div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{r.nazivPozicije} · fiksni iznos {fmtCurDec(r.iznosRedovni)} + prijevoz {fmtCurDec(r.putni)}</div>
-                  : <div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{r.satnicaIzIznosa ? `satnica ${fmtCurDec(r.satnica)}/h` : `${r.bodovi} bodova`} · staž {r.staz} god.{r.jeUred && <span style={{ color: "var(--steel)" }}> · fiksna plaća {fmtCurDec(r.fiksnaPlaca)}{r.manjakUredSati > 0.0001 && <> (umanjena za manjak {r.manjakUredSati.toFixed(1)} h)</>}</span>}{r.satiSDodatkom > 0 && <span style={{ color: "var(--steel)" }}> · {r.satiSDodatkom.toFixed(1)}h u smjeni s dodatkom</span>}{r.dopunaTrazena > 0 && <span style={{ color: "var(--steel)" }} title="Sati bez evidencije dodani u fond; satnica za ovaj mjesec umanjena tako da se isplata ne mijenja"> · dopuna fonda +{r.dopunaTrazena.toFixed(1)} h (osnovna satnica {r.satnicaOsnovna.toFixed(2)})</span>}</div>}
+                  : <div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{r.satnicaIzIznosa ? `satnica ${fmtCurDec(r.satnica)}/h` : `${r.bodovi} bodova`} · staž {r.staz} god.{r.jeUred && <span style={{ color: "var(--steel)" }}> · fiksna plaća {fmtCurDec(r.fiksnaPlaca)}{r.manjakUredSati > 0.0001 && <> (umanjena za manjak {r.manjakUredSati.toFixed(1)} h)</>}</span>}{r.satiSDodatkom > 0 && <span style={{ color: "var(--steel)" }}> · {r.satiSDodatkom.toFixed(1)}h u smjeni s dodatkom</span>}{r.dopunaTrazena > 0 && <span style={{ color: "var(--steel)" }} title="Sati bez evidencije dodani u fond; satnica za ovaj mjesec umanjena tako da se isplata ne mijenja"> · dopuna fonda +{r.dopunaTrazena.toFixed(1)} h (osnovna satnica {r.satnicaOsnovna.toFixed(2)})</span>}{r.goZamjenaSati > 0 && <span style={{ color: "var(--steel)" }} title="Prekovremeni zamijenjeni za dane godišnjeg odmora; ne isplaćuju se"> · GO zamjena −{r.goZamjenaSati.toFixed(1)} h prekovremenih ({r.goZamjenaDana} d)</span>}{(goPoId.get(r.zaposlenik.id)?.preostalo ?? 0) < -0.001 && <span style={{ color: "var(--rust)", fontWeight: 600 }} title="Preostalo dana godišnjeg odmora (negativno = u minusu)"> · GO u minusu ({(Math.round(goPoId.get(r.zaposlenik.id).preostalo * 10) / 10).toLocaleString("hr-HR")} d)</span>}</div>}
               </td>
               <td className="f-mono">{r.vanjski ? "—" : r.satnica.toFixed(2)}{!r.vanjski && Math.abs(r.satnicaKorigirana - r.satnica) > 0.005 && <div style={{ fontSize: 10, color: "var(--steel)" }} title="Satnica za ovaj mjesec korigirana na ostvareni / mjesečni fond sati">{r.satnicaKorigirana.toFixed(2)} u mj.</div>}</td>
               <td className="f-mono">{r.redovni.toFixed(1)} h</td>
@@ -16568,6 +16603,57 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true }) {
             </div>
           </div>
 
+          {(() => {
+            // Zamjena prekovremenih za dane godišnjeg: nudi se osobi koja je u minusu s godišnjim, a ima barem 8 h prekovremenih u ovom mjesecu.
+            const goRed = goPoId.get(detaljZaposlenik.zaposlenik.id);
+            if (!goRed || detaljZaposlenik.polaRadnoVrijeme) return null;
+            const zamijenjenoDana = goRed.zamjene.find((x) => x.mjesec === mjesec)?.dana || 0;
+            const preostaloBaz = goRed.preostalo - zamijenjenoDana; // stanje bez zamjene u ovom mjesecu
+            const uMinusu = preostaloBaz < -0.001;
+            const primijenjeno = detaljZaposlenik.goZamjenaTrazena > 0;
+            if (!uMinusu && !primijenjeno) return null;
+            const norma = Number(db.postavkePlaca?.normaSatiDan) || 8;
+            const faktorPrek = Number(db.postavkePlaca?.prekovremeniFaktor) || 1.5;
+            const satnicaOsn = detaljZaposlenik.satnicaOsnovna ?? detaljZaposlenik.satnica;
+            const fmtD = (v) => (Math.round(v * 10) / 10).toLocaleString("hr-HR");
+            const mogucoDana = Math.floor(detaljZaposlenik.prekovremeniZaGo / norma + 1e-9);
+            const potrebnoDana = Math.max(0, Math.ceil(-preostaloBaz - 1e-9));
+            const prijedlog = Math.min(mogucoDana, potrebnoDana);
+            const danaUnos = Math.min(mogucoDana, Math.max(1, Number(goDanaUnos[detaljZaposlenik.zaposlenik.id] ?? prijedlog) || 1));
+            const iznosZamjene = danaUnos * norma * satnicaOsn * faktorPrek;
+            return (
+              <>
+                <div className="label" style={{ marginTop: 16, marginBottom: 6 }}>Godišnji odmor — zamjena prekovremenih</div>
+                <div className="card" style={{ padding: 12, background: "var(--surface-alt)", fontSize: 12.5 }}>
+                  <div>
+                    Preostalo godišnjeg {mjesec.slice(0, 4)}: <strong className="f-mono" style={{ color: uMinusu ? "var(--rust)" : "var(--green)" }}>{fmtD(preostaloBaz)} dana</strong>{uMinusu ? " (u minusu)" : ""}
+                    {primijenjeno && <> · nakon zamjene: <strong className="f-mono" style={{ color: goRed.preostalo < -0.001 ? "var(--rust)" : "var(--green)" }}>{fmtD(goRed.preostalo)} dana</strong></>}
+                    {" "}· prekovremenih u ovom mjesecu raspoloživo za zamjenu: <strong className="f-mono">{detaljZaposlenik.prekovremeniZaGo.toFixed(1)} h</strong>
+                  </div>
+                  {primijenjeno ? (
+                    <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <span>
+                        Zamijenjeno <strong className="f-mono">{detaljZaposlenik.goZamjenaSati.toFixed(1)} h</strong> prekovremenih za <strong className="f-mono">{fmtD(detaljZaposlenik.goZamjenaDana)} d</strong> godišnjeg — sati se ne isplaćuju (<strong className="f-mono">−{fmtCurDec(detaljZaposlenik.goZamjenaIznos)}</strong>), dani su upisani u korekciju godišnjeg.
+                        {detaljZaposlenik.goZamjenaSati < detaljZaposlenik.goZamjenaTrazena && <span style={{ color: "var(--rust)" }}> Upisano je {detaljZaposlenik.goZamjenaTrazena} h, a prekovremenih ima manje — obračun uzima samo {detaljZaposlenik.goZamjenaSati.toFixed(1)} h; provjerite.</span>}
+                      </span>
+                      <Btn variant="ghost" size="sm" disabled={!mozeMijenjati} onClick={() => spremiGoZamjenu(detaljZaposlenik.zaposlenik.id, 0)}>Poništi zamjenu</Btn>
+                    </div>
+                  ) : mogucoDana >= 1 ? (
+                    <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <span>Prijedlog: zamijeniti</span>
+                      <input className="input f-mono" type="number" min="1" max={mogucoDana} step="1" style={{ width: 64 }} value={danaUnos} disabled={!mozeMijenjati}
+                        onChange={(e) => setGoDanaUnos({ ...goDanaUnos, [detaljZaposlenik.zaposlenik.id]: e.target.value })} />
+                      <span>dana × {norma} h = <strong className="f-mono">{danaUnos * norma} h</strong> prekovremenih za {danaUnos} {danaUnos === 1 ? "dan" : "dana"} godišnjeg (sati se ne isplaćuju: <strong className="f-mono">−{fmtCurDec(iznosZamjene)}</strong>)</span>
+                      <Btn variant="primary" size="sm" disabled={!mozeMijenjati} onClick={() => { spremiGoZamjenu(detaljZaposlenik.zaposlenik.id, danaUnos * norma); showToast(`Zamijenjeno ${danaUnos * norma} h prekovremenih za ${danaUnos} d godišnjeg`); }}>Zamijeni</Btn>
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: 8, color: "var(--ink-faint)" }}>Prekovremenih ima manje od {norma} h, pa zamjena nije moguća.</div>
+                  )}
+                </div>
+              </>
+            );
+          })()}
+
           <div className="label" style={{ marginTop: 16, marginBottom: 6 }}>Ručni dodaci/odbici za {mjesec}</div>
           <div className="card" style={{ padding: 12, background: "var(--surface-alt)" }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12, marginBottom: 12 }}>
@@ -16762,6 +16848,7 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
   // Bolovanja (uključujući očinski i roditeljski) i detašmani — raspon datuma po zaposleniku, samo za
   // zaposlenike iz OVE skupine (redovi), da PDF jedne skupine ne prikazuje tuđe podatke.
   const uSkupini = useMemo(() => new Set(redovi.map((r) => r.zaposlenik.id)), [redovi]);
+  const goZamjene = redovi.filter((r) => r.goZamjenaSati > 0); // prekovremeni zamijenjeni za godišnji odmor — ne isplaćuju se
   const rasponi = (vrsta) => rasponiVrsteDana(db.evidencijaRada, db.zaposlenici, mjesec, uSkupini, vrsta, db.praznici);
   const bolovanja = useMemo(() => rasponi("bolovanje"), [db.evidencijaRada, db.zaposlenici, db.praznici, mjesec, uSkupini]);
   const ocinski = useMemo(() => rasponi("ocinski"), [db.evidencijaRada, db.zaposlenici, db.praznici, mjesec, uSkupini]);
@@ -16801,6 +16888,15 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
           </table>
           <div style={{ textAlign: "right", fontWeight: 700, fontSize: 11, marginTop: 6, paddingRight: 4 }}>{fmtCurDec(ukupnaIsplata)}</div>
         </div>
+
+        {goZamjene.length > 0 && (
+          <div style={{ marginTop: 18, fontSize: 10.5 }}>
+            <div style={{ fontWeight: 700, textDecoration: "underline", marginBottom: 4 }}>Prekovremeni zamijenjeni za godišnji odmor (po dogovoru s radnikom; ne isplaćuju se):</div>
+            {goZamjene.map((r) => (
+              <div key={r.zaposlenik.id}><strong>{r.zaposlenik.prezime} {r.zaposlenik.ime}:</strong> {r.goZamjenaSati.toFixed(1).replace(".", ",")} h prekovremenih = {String(r.goZamjenaDana).replace(".", ",")} {r.goZamjenaDana === 1 ? "dan" : "dana"} godišnjeg odmora (upisano u korekciju godišnjeg)</div>
+            ))}
+          </div>
+        )}
 
         {bolovanja.length > 0 && (
           <div style={{ marginTop: 18, fontSize: 10.5 }}>
@@ -17535,7 +17631,15 @@ const izracunGodisnjeg = (db, godina) => {
     const osnova = r.osnovaRucno != null && r.osnovaRucno !== "" ? brojGO(r.osnovaRucno) : osnovaAuto;
     const ukupno = osnova + dodatni + slozenost;
     const preneseno = brojGO(r.preneseno);
-    const korekcija = brojGO(r.korekcija);
+    // Korekcija = ručni upis + dani dobiveni zamjenom prekovremenih (8 h = 1 dan; upisuje se u Obračunu plaća, vidi obracunMjeseca)
+    const korekcijaRucna = brojGO(r.korekcija);
+    const normaDana = Number(db.postavkePlaca?.normaSatiDan) || 8;
+    const zamjene = Object.entries(r.zamjene || {})
+      .filter(([mj, v]) => mj.startsWith(`${godina}-`) && Number(v?.sati) > 0)
+      .map(([mj, v]) => ({ mjesec: mj, sati: Number(v.sati), dana: Number(v.sati) / normaDana, datum: v.datum || "", korisnik: v.korisnik || "" }))
+      .sort((a, b) => a.mjesec.localeCompare(b.mjesec));
+    const zamjenaDana = zamjene.reduce((s, x) => s + x.dana, 0);
+    const korekcija = korekcijaRucna + zamjenaDana;
     const dani = [...(datumi.get(z.id) || new Map()).entries()].sort();
     const poMjesecima = MJESECI_GO.map((_, i) => {
       const mm = String(i + 1).padStart(2, "0");
@@ -17547,7 +17651,7 @@ const izracunGodisnjeg = (db, godina) => {
     return {
       z, grupa: grupaEvidencije(z, db.pozicijeZaposlenika) === "radiona" ? "radiona" : "rezija", ime: `${z.prezime} ${z.ime}`,
       stazEcon, stazIzvan, staz, dodatni, slozenost, osnova, osnovaAuto, osnovaRucno: r.osnovaRucno != null && r.osnovaRucno !== "", ukupno,
-      preneseno, korekcija, napomena: r.napomena || "", poMjesecima, iskoristeno, stanjeProsle,
+      preneseno, korekcija, korekcijaRucna, zamjene, zamjenaDana, napomena: r.napomena || "", poMjesecima, iskoristeno, stanjeProsle,
       stanjeTekuce: ukupno + Math.min(0, stanjeProsle) + korekcija, preostalo: ukupno + preneseno - iskoristeno + korekcija,
     };
   }).sort((a, b) => a.ime.localeCompare(b.ime, "hr"));
@@ -17578,6 +17682,7 @@ function GodisnjiOdmorTab({ db, update, showToast, mozeMijenjati }) {
   const fmt = (v) => (Math.round(v * 10) / 10).toLocaleString("hr-HR");
   const skupine = [["radiona", "Radiona"], ["rezija", "Režija"]].map(([k, naziv]) => ({ k, naziv, redovi: rez.redovi.filter((r) => r.grupa === k) })).filter((s) => s.redovi.length);
   const zbroj = (rr, f) => rr.reduce((a, r) => a + f(r), 0);
+  const uMinusu = rez.redovi.filter((r) => r.preostalo < -0.001);
   const zaglavlja = ["Ime i prezime", ">Staž", ">Dodatni", ">Složenost", ">Osnova", `>Ukupno ${godina}`, `>Preneseno ${godina - 1}`, ">Iskorišteno", ...MJESECI_GO.map((m) => `>${m}`), `>Stanje ${godina - 1}`, `>Stanje ${godina}`, ">Preostalo"];
   const redakIspisa = (r) => [r.ime + (r.korekcija ? ` (korekcija ${r.korekcija > 0 ? "+" : ""}${fmt(r.korekcija)})` : ""), fmt(r.staz), String(r.dodatni), fmt(r.slozenost), fmt(r.osnova), fmt(r.ukupno), fmt(r.preneseno), fmt(r.iskoristeno), ...r.poMjesecima.map((m) => (m.dani ? fmt(m.dani) : "")), fmt(r.stanjeProsle), fmt(r.stanjeTekuce), fmt(r.preostalo)];
   const ispisi = () => ispisiTablicuPdf({
@@ -17605,6 +17710,12 @@ function GodisnjiOdmorTab({ db, update, showToast, mozeMijenjati }) {
         <Btn icon={Printer} onClick={ispisi} disabled={!rez.redovi.length}>Ispis / PDF</Btn>
         <Btn icon={Download} onClick={izvozCsv} disabled={!rez.redovi.length}>Izvoz (Excel)</Btn>
       </div>
+      {uMinusu.length > 0 && (
+        <div className="card" style={{ padding: "8px 12px", marginBottom: 12, background: "#FBEAE6", borderColor: "#E8B4A8", fontSize: 12.5, color: "var(--rust)" }}>
+          <strong>U minusu s godišnjim ({uMinusu.length}):</strong> {uMinusu.map((r) => `${r.ime} (${fmt(r.preostalo)})`).join(", ")}.
+          <span style={{ color: "var(--ink-soft)" }}> Ako imaju prekovremenih, u Obračunu plaća (detalji osobe) nudi se zamjena 8 h za 1 dan godišnjeg.</span>
+        </div>
+      )}
       <div className="card" style={{ padding: 0, overflowX: "auto" }}>
         <table className="erp-table" style={{ minWidth: 1500 }}>
           <thead>
@@ -17634,6 +17745,7 @@ function GodisnjiOdmorTab({ db, update, showToast, mozeMijenjati }) {
                     <td style={{ position: "sticky", left: 0, background: "var(--surface)", zIndex: 1, whiteSpace: "nowrap" }}>
                       <button type="button" style={{ ...STIL_LINK_GUMBA, fontSize: 13, color: "var(--ink)", fontWeight: 600 }} onClick={() => setDetalj({ id: r.z.id })}>{r.ime}</button>
                       {r.z.status !== "Aktivan" && <span style={{ fontSize: 10.5, color: "var(--ink-faint)" }}> · neaktivan</span>}
+                      {r.preostalo < -0.001 && <span style={{ fontSize: 10.5, color: "var(--rust)", fontWeight: 700 }}> · u minusu</span>}
                     </td>
                     <td style={tdS} title={`Econ ${fmt(r.stazEcon)} + izvan ${fmt(r.stazIzvan)}`}>{fmt(r.staz)}</td>
                     <td style={tdS}><UnosGO mozeMijenjati={mozeMijenjati} vrijednost={pg.zaposlenici?.[r.z.id]?.stazIzvan} placeholder="0" onSpremi={(v) => spremiZapis(r.z.id, { stazIzvan: v })} /></td>
@@ -17656,7 +17768,7 @@ function GodisnjiOdmorTab({ db, update, showToast, mozeMijenjati }) {
                     <td style={{ ...tdS, ...boja(r.stanjeProsle) }}>{fmt(r.stanjeProsle)}</td>
                     <td style={{ ...tdS, ...boja(r.stanjeTekuce) }}>{fmt(r.stanjeTekuce)}</td>
                     <td style={{ ...tdS, ...boja(r.preostalo), fontWeight: 700 }}>{fmt(r.preostalo)}</td>
-                    <td style={tdS} title={r.napomena}><UnosGO mozeMijenjati={mozeMijenjati} vrijednost={pg.zaposlenici?.[r.z.id]?.korekcija} placeholder="0" sirina={40} onSpremi={(v) => spremiZapis(r.z.id, { korekcija: v })} />{r.napomena && <span style={{ color: "var(--steel)", marginLeft: 3 }}>*</span>}</td>
+                    <td style={tdS} title={r.napomena}><UnosGO mozeMijenjati={mozeMijenjati} vrijednost={pg.zaposlenici?.[r.z.id]?.korekcija} placeholder="0" sirina={40} onSpremi={(v) => spremiZapis(r.z.id, { korekcija: v })} />{r.zamjenaDana > 0 && <span style={{ color: "var(--steel)", marginLeft: 4, fontSize: 11.5, fontWeight: 600 }} title={`Zamjena prekovremenih za godišnji: ${r.zamjene.map((x) => `${x.mjesec.slice(5, 7)}/${x.mjesec.slice(0, 4)}: ${fmt(x.sati)} h = ${fmt(x.dana)} d`).join("; ")}`}>+{fmt(r.zamjenaDana)} zam.</span>}{r.napomena && <span style={{ color: "var(--steel)", marginLeft: 3 }}>*</span>}</td>
                   </tr>
                 ))}
                 <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
@@ -17680,6 +17792,7 @@ function GodisnjiOdmorTab({ db, update, showToast, mozeMijenjati }) {
         Plava polja upisuju se ručno; ostalo se računa samo. Ukupno = osnova + dodatni dani za staž (5–15 god. = 1, 15–25 = 2, 25 i više = 3) + složenost posla; osnova je {rez.osnovniDani} dana, a u godini zaposlenja razmjerno punim mjesecima rada (može se upisati ručno).
         Mjeseci prije {rez.evidencijaOd.slice(5, 7)}/{godina} upisuju se ručno; od tada se broje dani „Godišnji odmor“ i „Detašman - Godišnji“ iz evidencije rada (pon–pet, bez praznika) — klik na broj prikazuje datume.
         Stanje {godina - 1} = preneseno − iskorišteno (preneseni dani troše se prvi); Stanje {godina} = ukupno + manjak prenesenih + korekcija; Preostalo = ukupno + preneseno − iskorišteno + korekcija. Staž izvan Econa vrijedi samo za godišnji — ne mijenja dodatak na staž u plaći.
+        Korekcija = ručni upis + dani dobiveni zamjenom prekovremenih (8 h = 1 dan; upisuje se u Obračunu plaća za osobe u minusu, a zamijenjeni sati se ne isplaćuju).
       </p>
       {det && (
         <Modal title={`${det.ime} — godišnji odmor ${godina}`} onClose={() => setDetalj(null)} footer={<Btn onClick={() => setDetalj(null)}>Zatvori</Btn>}>
@@ -17687,7 +17800,13 @@ function GodisnjiOdmorTab({ db, update, showToast, mozeMijenjati }) {
             <span style={{ color: "var(--ink-soft)" }}>Zaposlen od</span><span>{det.z.datumZaposlenja ? fmtDate(det.z.datumZaposlenja) : "—"}</span>
             <span style={{ color: "var(--ink-soft)" }}>Staž (Econ + izvan)</span><span className="f-mono">{fmt(det.stazEcon)} + {fmt(det.stazIzvan)} = {fmt(det.staz)} god.</span>
             <span style={{ color: "var(--ink-soft)" }}>Pravo {godina}</span><span className="f-mono">{fmt(det.osnova)} + {det.dodatni} + {fmt(det.slozenost)} = {fmt(det.ukupno)} dana</span>
-            <span style={{ color: "var(--ink-soft)" }}>Preostalo</span><span className="f-mono" style={{ fontWeight: 700 }}>{fmt(det.preostalo)} dana</span>
+            <span style={{ color: "var(--ink-soft)" }}>Preostalo</span><span className="f-mono" style={{ fontWeight: 700, color: det.preostalo < -0.001 ? "var(--rust)" : undefined }}>{fmt(det.preostalo)} dana{det.preostalo < -0.001 ? " (u minusu)" : ""}</span>
+            {det.zamjene.length > 0 && <>
+              <span style={{ color: "var(--ink-soft)" }}>Korekcija</span>
+              <span className="f-mono">ručno {fmt(det.korekcijaRucna)} + zamjena prekovremenih {fmt(det.zamjenaDana)} = {fmt(det.korekcija)} d</span>
+              <span style={{ color: "var(--ink-soft)" }}>Zamjene prekovremenih</span>
+              <span style={{ fontSize: 12.5 }}>{det.zamjene.map((x) => <div key={x.mjesec}>{x.mjesec.slice(5, 7)}/{x.mjesec.slice(0, 4)}: <span className="f-mono">{fmt(x.sati)} h = {fmt(x.dana)} d</span>{x.datum ? ` · upisano ${fmtDate(x.datum)}` : ""}{x.korisnik ? ` (${x.korisnik})` : ""}</div>)}</span>
+            </>}
           </div>
           <Field label="Napomena (npr. razlog korekcije)">
             <input key={`nap-${det.napomena}`} className="input" disabled={!mozeMijenjati} defaultValue={det.napomena} onBlur={(e) => { if (e.target.value !== det.napomena) spremiZapis(det.z.id, { napomena: e.target.value }); }} />
@@ -18006,7 +18125,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
       )}
 
 
-      {tab === "obracun" && <ObracunPlacaTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "obracun").izmjene} />}
+      {tab === "obracun" && <ObracunPlacaTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "obracun").izmjene} mojId={mojId} />}
       {tab === "aktivnost" && mojaPozicija?.id === "poz-administrator" && <AktivnostTab db={db} />}
       {tab === "godisnji" && <GodisnjiOdmorTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "zaposlenici", "godisnji").izmjene} />}
 
