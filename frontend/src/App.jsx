@@ -840,6 +840,9 @@ const obracunMjesecaMontazaDE = (zaposlenik, mjesec, db) => {
   const neto = Number(doplatak.netoDE) || 0;
   return { zaposlenik, uHR, sati, neto, isplata: uHR ? neto : 0, brojDana: dani.length, dani };
 };
+// Nulti redak obračuna u obliku koji očekuju tablica i A4 ispis (ObracunPlacaPrintModal): za skupine koje nemaju formulu plaće
+// (vanjski suradnik, Montaža DE) preostaje popuniti samo sate, iznos i isplatu.
+const PRAZAN_REDAK_OBRACUNA = { prekovremeni: 0, prekovremeniStvarno: 0, placeniNerad: 0, praznikSati: 0, dopustSati: 0, godisnjiSati: 0, bolovanjeSati: 0, ocinskiSati: 0, roditeljskiSati: 0, detasmanSati: 0, stimulacija: 0, dodatakStaz: 0, iznosNerad: 0, iznosPrekovremeni: 0, topliObrok: 0, daniObroka: 0, dnevnicaTeren: 0, kredit: 0, ustegPrehrane: 0, ostaliOdbici: 0, odbici: [], visakPrekovremenihSati: 0, prikazPrekovremenihSati: "", satiSDodatkom: 0 };
 // Operater na laseru ima svedeni prikaz (samo Plan rezanja) i ne vidi administrativne alate poput Backupa.
 const jeOperaterLasera = (pozicija) => (pozicija?.naziv || "").trim().toLowerCase() === "operater na laseru";
 
@@ -16269,9 +16272,8 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true, mojId })
   // Obračun ostaje isti (fiksni iznos + fiksna naknada za prijevoz, bez obzira na sate); retku se samo daje isti oblik kao ostalima iz ureda,
   // pa tablica i PDF rade bez posebnih slučajeva. Kao radni sati vode se sati iz evidencije (odluka korisnika 6.11.), ne puni fond.
   const vanjskiKaoUred = useMemo(() => redoviVanjski.map((v) => {
-    const nula = { prekovremeni: 0, prekovremeniStvarno: 0, placeniNerad: 0, praznikSati: 0, dopustSati: 0, godisnjiSati: 0, bolovanjeSati: 0, ocinskiSati: 0, roditeljskiSati: 0, detasmanSati: 0, stimulacija: 0, dodatakStaz: 0, iznosNerad: 0, iznosPrekovremeni: 0, topliObrok: 0, daniObroka: 0, dnevnicaTeren: 0, kredit: 0, ustegPrehrane: 0, ostaliOdbici: 0, odbici: [], visakPrekovremenihSati: 0, prikazPrekovremenihSati: "", satiSDodatkom: 0 };
     return {
-      ...nula, zaposlenik: v.zaposlenik, vanjski: v, jeUred: true, brojDana: v.brojDana, dani: v.dani,
+      ...PRAZAN_REDAK_OBRACUNA, zaposlenik: v.zaposlenik, vanjski: v, jeUred: true, brojDana: v.brojDana, dani: v.dani,
       nazivPozicije: db.pozicijeZaposlenika.find((p) => p.id === v.zaposlenik.pozicijaId)?.naziv || "Zaštita na radu",
       satiEvidencija: v.sati, satnica: 0, satnicaKorigirana: 0, bodovi: 0, staz: 0, fiksnaPlaca: v.iznos,
       redovni: v.sati, redovniPrikaz: v.sati, iznosRedovni: v.iznos, putni: v.naknadaPrijevoz, dodaciUkupno: v.naknadaPrijevoz,
@@ -16280,13 +16282,21 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true, mojId })
   }), [redoviVanjski, mjesec, db.postavkePlaca, db.pozicijeZaposlenika]);
   const tehnickiRedovi = useMemo(() => [...tehnickiFormula, ...vanjskiKaoUred].sort((a, b) => (a.zaposlenik.prezime + a.zaposlenik.ime).localeCompare(b.zaposlenik.prezime + b.zaposlenik.ime, "hr")), [tehnickiFormula, vanjskiKaoUred]);
 
-  // Montaža DE: svaki mjesec se vide svi aktivni radnici; U DE = isplata u Njemačkoj (kod nas 0), U HR = neto iznos ide u isplatu.
-  const redoviMontazaDE = useMemo(() => db.zaposlenici
+  // Montaža DE: u obračunu plaće su samo radnici koji su za odabrani mjesec označeni kao "u HR" (neto iznos ide u isplatu);
+  // ostali se isplaćuju u Njemačkoj pa ih ovdje nema — dodaju se izborom iz popisa iznad tablice.
+  const montazaDESvi = useMemo(() => db.zaposlenici
     .filter((z) => z.status === "Aktivan" && jeMontazaDE(z, db.pozicijeZaposlenika))
     .map((z) => obracunMjesecaMontazaDE(z, mjesec, db))
     .sort((a, b) => (a.zaposlenik.prezime + a.zaposlenik.ime).localeCompare(b.zaposlenik.prezime + b.zaposlenik.ime, "hr")),
     [db, mjesec]);
-  const ukMontazaDE = redoviMontazaDE.reduce((s, r) => ({ sati: s.sati + (r.uHR ? r.sati : 0), isplata: s.isplata + r.isplata, uHR: s.uHR + (r.uHR ? 1 : 0) }), { sati: 0, isplata: 0, uHR: 0 });
+  const redoviMontazaDE = useMemo(() => montazaDESvi.filter((r) => r.uHR), [montazaDESvi]);
+  const montazaDEIzvanObracuna = montazaDESvi.filter((r) => !r.uHR);
+  const ukMontazaDE = redoviMontazaDE.reduce((s, r) => ({ sati: s.sati + r.sati, isplata: s.isplata + r.isplata }), { sati: 0, isplata: 0 });
+  // Isti oblik retka kao Radiona, da se za ispis (A4 PDF) koristi isti obrazac: sati iz evidencije i neto iznos kao iznos i isplata.
+  const montazaDEKaoRadiona = useMemo(() => redoviMontazaDE.map((r) => ({
+    ...PRAZAN_REDAK_OBRACUNA, zaposlenik: r.zaposlenik, brojDana: r.brojDana, dani: r.dani, satiEvidencija: r.sati,
+    redovni: r.sati, redovniPrikaz: r.sati, iznosRedovni: r.neto, putni: 0, dodaciUkupno: 0, ukupno: r.neto, isplata: r.neto,
+  })), [redoviMontazaDE]);
 
   const imaBolovanje = redovi.some((r) => r.dani.some((d) => d.vrsta === "bolovanje"));
 
@@ -16442,52 +16452,54 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true, mojId })
       )}
 
       <div style={{ marginTop: 24 }}><NaslovSaPdf naslov="Montaža DE (izaslani radnici)" broj={redoviMontazaDE.length} grupa="montazaDE" /></div>
-      {redoviMontazaDE.length === 0 ? <EmptyState text="Nema aktivnih radnika na Montaži DE." /> : (
+      {mozeMijenjati && montazaDEIzvanObracuna.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12.5 }}>Radnik koji je ovaj mjesec u HR:</span>
+          <select className="select" style={{ width: 240 }} value="" onChange={(e) => { if (e.target.value) spremiDoplatak(e.target.value, { lokacijaDE: "HR" }); }}>
+            <option value="">+ Dodaj u obračun…</option>
+            {montazaDEIzvanObracuna.map((r) => <option key={r.zaposlenik.id} value={r.zaposlenik.id}>{r.zaposlenik.prezime} {r.zaposlenik.ime}</option>)}
+          </select>
+        </div>
+      )}
+      {redoviMontazaDE.length === 0 ? <EmptyState text="Nitko od radnika na Montaži DE nije za ovaj mjesec označen kao „u HR“." /> : (
         <>
           <table className="erp-table">
             <thead>
               <tr>
                 <th>Radnik</th>
-                <th style={{ width: 150 }}>Ovaj mjesec</th>
-                <th style={{ width: 90 }}>Sati (evidencija)</th>
-                <th style={{ width: 130 }}>Neto iznos (€)</th>
+                <th style={{ width: 110 }}>Sati (evidencija)</th>
+                <th style={{ width: 140 }}>Neto iznos (€)</th>
                 <th style={{ width: 120 }}>Za isplatu</th>
+                <th style={{ width: 40 }}></th>
               </tr>
             </thead>
             <tbody>
               {redoviMontazaDE.map((r) => (
                 <tr key={r.zaposlenik.id}>
                   <td><strong>{r.zaposlenik.prezime} {r.zaposlenik.ime}</strong></td>
+                  <td className="f-mono">{r.sati.toFixed(1)} h</td>
                   <td>
-                    <select className="select" disabled={!mozeMijenjati} value={r.uHR ? "HR" : "DE"} onChange={(e) => spremiDoplatak(r.zaposlenik.id, { lokacijaDE: e.target.value })}>
-                      <option value="DE">U DE (plaća u DE)</option>
-                      <option value="HR">U HR</option>
-                    </select>
+                    <input className="input f-mono" type="number" min="0" step="0.01" disabled={!mozeMijenjati} style={{ padding: "5px 8px" }} key={`${r.zaposlenik.id}-${mjesec}-${r.neto}`} defaultValue={r.neto || ""}
+                      onBlur={(e) => { const v = e.target.value === "" ? 0 : Math.max(0, Number(e.target.value) || 0); if (v !== r.neto) spremiDoplatak(r.zaposlenik.id, { netoDE: v }); }} />
                   </td>
-                  <td className="f-mono">{r.uHR ? `${r.sati.toFixed(1)} h` : "—"}</td>
-                  <td>
-                    {r.uHR
-                      ? <input className="input f-mono" type="number" min="0" step="0.01" disabled={!mozeMijenjati} style={{ padding: "5px 8px" }} key={`${r.zaposlenik.id}-${mjesec}-${r.neto}`} defaultValue={r.neto || ""}
-                          onBlur={(e) => { const v = e.target.value === "" ? 0 : Math.max(0, Number(e.target.value) || 0); if (v !== r.neto) spremiDoplatak(r.zaposlenik.id, { netoDE: v }); }} />
-                      : <span style={{ color: "var(--ink-faint)", fontSize: 12 }}>isplaćuje se u DE</span>}
-                  </td>
-                  <td className="f-mono" style={{ fontWeight: 700 }}>{r.uHR ? fmtCurDec(r.isplata) : "—"}</td>
+                  <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(r.isplata)}</td>
+                  <td>{mozeMijenjati && <button className="btn btn-icon btn-ghost" title="Ukloni iz obračuna (radnik ovaj mjesec nije u HR, plaća se u DE)" onClick={() => spremiDoplatak(r.zaposlenik.id, { lokacijaDE: "DE" })}><X size={14} /></button>}</td>
                 </tr>
               ))}
               <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
-                <td>UKUPNO ({redoviMontazaDE.length}, u HR: {ukMontazaDE.uHR})</td>
-                <td></td>
+                <td>UKUPNO ({redoviMontazaDE.length})</td>
                 <td className="f-mono">{ukMontazaDE.sati.toFixed(1)} h</td>
                 <td></td>
                 <td className="f-mono">{fmtCurDec(ukMontazaDE.isplata)}</td>
+                <td></td>
               </tr>
             </tbody>
           </table>
-          <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 10 }}>
-            Radnicima na Montaži DE plaća se isplaćuje u Njemačkoj. Kad su neki mjesec kod kuće (u HR), odaberi „U HR“, upiši sate po danima u Evidenciji rada (grupa Montaža DE) i neto iznos koji se isplaćuje — taj iznos ide u isplatu. Bez bodova, staža i toplog obroka.
-          </p>
         </>
       )}
+      <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 10 }}>
+        Radnicima na Montaži DE plaća se isplaćuje u Njemačkoj, pa se ovdje vide samo oni koji su za odabrani mjesec u HR. Kad je netko kod kuće, dodaj ga iz popisa iznad tablice, upiši sate po danima u Evidenciji rada (grupa Montaža DE) i neto iznos koji se isplaćuje — taj iznos ide u isplatu i na PDF. Križić uklanja radnika iz obračuna tog mjeseca (upisani neto iznos ostaje sačuvan). Bez bodova, staža i toplog obroka.
+      </p>
 
       {detaljVanjski && (
         <Modal title={`Evidencija — ${detaljVanjski.zaposlenik.prezime} ${detaljVanjski.zaposlenik.ime} (${mjesec})`} onClose={() => setDetaljVanjski(null)} footer={<Btn onClick={() => setDetaljVanjski(null)}>Zatvori</Btn>}>
@@ -16698,7 +16710,14 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true, mojId })
         />
       )}
       {printGrupa === "kooperant" && <ObracunKooperantiPrintModal redovi={redoviKooperanti} mjesec={mjesec} db={db} onClose={() => setPrintGrupa(null)} />}
-      {printGrupa === "montazaDE" && <ObracunMontazaDEPrintModal redovi={redoviMontazaDE} mjesec={mjesec} db={db} onClose={() => setPrintGrupa(null)} />}
+      {printGrupa === "montazaDE" && (
+        <ObracunPlacaPrintModal
+          redovi={montazaDEKaoRadiona} naslovGrupe="Montaža DE (izaslani radnici)"
+          naslovPdfa="OBRAČUN PLAĆE · Montaža DE (izaslani radnici) - isplata u HR"
+          nazivDatoteke="Montaza de (izaslani radnici ) - isplata u HR"
+          mjesec={mjesec} db={db} onClose={() => setPrintGrupa(null)}
+        />
+      )}
     </div>
   );
 }
@@ -16798,7 +16817,7 @@ function OdbiciUredjivac({ odbici, onChange, disabled, prosliMjesec }) {
 // sati vode pod BO da fond ostane pun) i detašman prikazuju se kao popis raspona datuma ispod tablice;
 // bolovanje se evidentira ali ne obračunava (vidi obracunDana) pa nosi napomenu "dodati", a detašman
 // se ne isplaćuje u plaći pa nema stupca. Poziv na broj se ne može izvesti automatski pa ostaje ručno polje.
-function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
+function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose, naslovPdfa = null, nazivDatoteke = null }) {
   const t = db.postavkeTvrtke || {};
   const [pozivBroj, setPozivBroj] = useState("");
   const [prikaziTeren, setPrikaziTeren] = useState(false);
@@ -16807,14 +16826,14 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
   const radniSati = (r) => r.redovniPrikaz ?? r.redovni; // manjak do 1 h bez čega ga namiriti prikazuje se kao puni fond
   const boSati = (r) => r.bolovanjeSati + r.ocinskiSati + r.roditeljskiSati;
   const ukupnoSati = (r) => radniSati(r) + r.prekovremeni + r.praznikSati + r.dopustSati + r.godisnjiSati + boSati(r);
-  const fondEur = (r) => r.iznosRedovni + r.iznosNerad;
+  // Ostali odbici (npr. radna odjeća) umanjuju „Ukupno fond sati €" — na ispisu nema zasebnog stupca (knjigovodstvo); ISPLATA je ista.
+  const fondEur = (r) => r.iznosRedovni + r.iznosNerad - r.ostaliOdbici;
   const ukupnoPdf = (r) => r.stimulacija + r.dodatakStaz + fondEur(r) + r.iznosPrekovremeni;
   const eur = (x) => fmtCurDec(x).replace(" €", "");
   const sat = (x) => (Math.round(x * 100) / 100).toFixed(2);
 
   const ukupnaIsplata = redovi.reduce((s, r) => s + r.isplata, 0);
   const imaUsteg = redovi.some((r) => Math.abs(r.ustegPrehrane) > 0.005);
-  const imaOstaleOdbitke = redovi.some((r) => Math.abs(r.ostaliOdbici) > 0.005);
   // stupac "Terenski Njemačka" treba se rijetko: uključuje se kvačicom, a pojavi se sam ako je netko ima iznos
   const prikaziTerenStupac = prikaziTeren || redovi.some((r) => Math.abs(r.dnevnicaTeren) > 0.005);
 
@@ -16841,7 +16860,6 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
     { naslov: "DODACI ukupno €", v: (r) => eur(r.dodaciUkupno) },
     { naslov: "ODBICI kredit €", v: (r) => eur(r.kredit) },
     { naslov: "USTEG prehrana €", v: (r) => eur(r.ustegPrehrane), uvjet: imaUsteg },
-    { naslov: "OSTALI ODBICI €", v: (r) => eur(r.ostaliOdbici), uvjet: imaOstaleOdbitke },
     { naslov: "ISPLATA €", v: (r) => eur(r.isplata), podebljano: true, siroko: true },
   ].filter((s) => s.uvjet === undefined || s.uvjet);
 
@@ -16861,7 +16879,7 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
   const thS = { ...tdS, height: "auto", fontWeight: 700, background: "#f0f0f0", textAlign: "center", whiteSpace: "normal", fontSize: 7.5 };
 
   return (
-    <Modal wide maxSirina={1240} title={`Pregled za ispis — Obračun plaće ${naslovGrupe} ${mjesec}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(`Placa_${naslovGrupe.replace(/\s+/g, "-")}_${gg}${gmesec}`)}>Ispis / Spremi kao PDF</Btn></>}>
+    <Modal wide maxSirina={1240} title={`Pregled za ispis — Obračun plaće ${naslovGrupe} ${mjesec}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(nazivDatoteke || `Placa_${naslovGrupe.replace(/\s+/g, "-")}_${gg}${gmesec}`)}>Ispis / Spremi kao PDF</Btn></>}>
       <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, marginBottom: 10, cursor: "pointer" }}>
         <input type="checkbox" checked={prikaziTeren} onChange={(e) => setPrikaziTeren(e.target.checked)} />
         Prikaži stupac „Terenski Njemačka“ (za mjesec u kojem je bilo terena)
@@ -16870,7 +16888,7 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose }) {
         <style>{"@page { size: A4 landscape; } .placa-list thead { display: table-header-group; } .placa-list tr { break-inside: avoid; page-break-inside: avoid; }"}</style>
         <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 12, marginBottom: 8 }}>
           <span>{t.naziv || "ECON d.o.o."}</span>
-          <span>OBRAČUN PLAĆE - HR · {naslovGrupe}</span>
+          <span>{naslovPdfa || `OBRAČUN PLAĆE - HR · ${naslovGrupe}`}</span>
           <span>Mjesec obračuna: {gmesec}/{gg}</span>
         </div>
         <div style={{ overflowX: "auto" }}>
@@ -16996,48 +17014,6 @@ function ObracunKooperantiPrintModal({ redovi, mjesec, db, onClose }) {
                 <td style={tdS}>{fmtCurDec(r.satnica)}</td>
                 <td style={tdS}>{r.sati.toFixed(1)}</td>
                 <td style={{ ...tdS, fontWeight: 700 }}>{fmtCurDec(r.ukupno)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div style={{ textAlign: "right", fontWeight: 700, fontSize: 11, marginTop: 6, paddingRight: 4 }}>{fmtCurDec(ukupnaIsplata)}</div>
-      </div>
-    </Modal>
-  );
-}
-
-function ObracunMontazaDEPrintModal({ redovi, mjesec, db, onClose }) {
-  const t = db.postavkeTvrtke || {};
-  const [gmesec, gg] = mjesec.split("-");
-  const tdS = { padding: "3px 4px", fontSize: 9, whiteSpace: "nowrap", height: 24 };
-  const thS = { ...tdS, fontWeight: 700, background: "#f0f0f0", height: "auto" };
-  const ukupnaIsplata = redovi.reduce((s, r) => s + r.isplata, 0);
-  return (
-    <Modal title={`Pregled za ispis — Obračun Montaža DE ${mjesec}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(`Placa_Montaza-DE_${gg}${gmesec}`)}>Ispis / Spremi kao PDF</Btn></>}>
-      <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 12, marginBottom: 8 }}>
-          <span>{t.naziv || "ECON d.o.o."}</span>
-          <span>OBRAČUN MONTAŽA DE</span>
-          <span>Mjesec obračuna: {gg}/{gmesec}</span>
-        </div>
-        <table style={{ borderCollapse: "collapse", width: "100%" }}>
-          <thead>
-            <tr>
-              <th style={thS}>Red. broj</th>
-              <th style={thS}>Ime i prezime</th>
-              <th style={thS}>Ovaj mjesec</th>
-              <th style={thS}>Sati</th>
-              <th style={thS}>Neto iznos za isplatu</th>
-            </tr>
-          </thead>
-          <tbody>
-            {redovi.map((r, i) => (
-              <tr key={r.zaposlenik.id}>
-                <td style={tdS}>{i + 1}</td>
-                <td style={tdS}>{r.zaposlenik.prezime} {r.zaposlenik.ime}</td>
-                <td style={tdS}>{r.uHR ? "U HR" : "U DE — isplaćuje se u DE"}</td>
-                <td style={tdS}>{r.uHR ? r.sati.toFixed(1) : ""}</td>
-                <td style={{ ...tdS, fontWeight: 700 }}>{r.uHR ? fmtCurDec(r.isplata) : ""}</td>
               </tr>
             ))}
           </tbody>
