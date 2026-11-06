@@ -408,7 +408,7 @@ const PRACENA_POLJA_ZAPOSLENIKA = [
   { polje: "fiksnaPlacaBezPolovice", naziv: "Bodovi su već iznos za pola radnog vremena", tip: "logicko" },
   { polje: "dodatniStazGodine", naziv: "Dodatni staž (godine)", tip: "broj" },
   { polje: "datumZaposlenja", naziv: "Zaposlen od", tip: "datum" },
-  { polje: "satnicaKooperant", naziv: "Satnica kooperanta (€/h)", tip: "broj" },
+  { polje: "satnicaKooperant", naziv: "Satnica kooperanta / praktikanta (€/h)", tip: "broj" },
   { polje: "fiksniMjesecniIznos", naziv: "Fiksni mjesečni iznos (€)", tip: "broj" },
   { polje: "naknadaPrijevoz", naziv: "Naknada za prijevoz (€)", tip: "broj" },
   { polje: "pozicijaId", naziv: "Pozicija", tip: "tekst" },
