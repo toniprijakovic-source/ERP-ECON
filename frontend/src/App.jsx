@@ -15152,17 +15152,25 @@ function UpisTezineOtpremniceModal({ otpremnica, db, update, showToast, onClose 
 
 // Ručni unos ukupnih iznosa za mjesec (npr. prije nego što su otpremnice u ERP-u, iz izvješća poslanog DZS-u).
 function RucniMjesecStatistikeModal({ mjesec, zapis, onSpremi, onUkloni, onClose }) {
-  const [f, setF] = useState({ inoKg: zapis?.ino?.kg ?? "", inoBroj: zapis?.ino?.broj ?? "", tuzKg: zapis?.tuz?.kg ?? "", tuzBroj: zapis?.tuz?.broj ?? "", napomena: zapis?.napomena || "" });
+  const [f, setF] = useState({ samoUkupno: !!zapis && !zapis.ino && !zapis.tuz, ukupnoKg: zapis?.ukupno?.kg ?? "", inoKg: zapis?.ino?.kg ?? "", inoBroj: zapis?.ino?.broj ?? "", tuzKg: zapis?.tuz?.kg ?? "", tuzBroj: zapis?.tuz?.broj ?? "", napomena: zapis?.napomena || "" });
   const br = (v) => Number(String(v ?? "").replace(",", ".")) || 0;
   return (
-    <Modal title={`Ručni unos — ${nazivMjeseca(mjesec)}`} onClose={onClose} footer={<>{zapis && <Btn variant="ghost" onClick={onUkloni}>Ukloni ručni unos</Btn>}<Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={() => onSpremi({ izvor: "rucno", ino: { kg: br(f.inoKg), broj: br(f.inoBroj) }, tuz: { kg: br(f.tuzKg), broj: br(f.tuzBroj) }, napomena: f.napomena.trim() })}>Spremi</Btn></>}>
+    <Modal title={`Ručni unos — ${nazivMjeseca(mjesec)}`} onClose={onClose} footer={<>{zapis && <Btn variant="ghost" onClick={onUkloni}>Ukloni ručni unos</Btn>}<Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={() => onSpremi(f.samoUkupno ? { izvor: "rucno", ukupno: { kg: br(f.ukupnoKg) }, napomena: f.napomena.trim() } : { izvor: "rucno", ino: { kg: br(f.inoKg), broj: br(f.inoBroj) }, tuz: { kg: br(f.tuzKg), broj: br(f.tuzBroj) }, napomena: f.napomena.trim() })}>Spremi</Btn></>}>
       <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 0 }}>Za mjesec s ručnim unosom u godišnjem pregledu vrijede ovi iznosi, a ne izračun iz otpremnica. Namijenjeno mjesecima prije otpremnica u ERP-u ili prepisu poslanog izvješća.</p>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginBottom: 10, cursor: "pointer" }}>
+        <input type="checkbox" checked={f.samoUkupno} onChange={(e) => setF({ ...f, samoUkupno: e.target.checked })} />
+        Poznat je samo ukupni iznos (bez podjele na inozemstvo i tuzemstvo)
+      </label>
+      {f.samoUkupno ? (
+        <Field label="Ukupno (kg)"><input className="input f-mono" type="number" min="0" step="0.1" aria-label="Ukupno (kg)" value={f.ukupnoKg} onChange={(e) => setF({ ...f, ukupnoKg: e.target.value })} /></Field>
+      ) : (
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <Field label="Inozemstvo (kg)"><input className="input f-mono" type="number" min="0" step="0.1" value={f.inoKg} onChange={(e) => setF({ ...f, inoKg: e.target.value })} /></Field>
         <Field label="Inozemstvo — broj otpremnica (neobavezno)"><input className="input f-mono" type="number" min="0" value={f.inoBroj} onChange={(e) => setF({ ...f, inoBroj: e.target.value })} /></Field>
         <Field label="Tuzemstvo (kg)"><input className="input f-mono" type="number" min="0" step="0.1" value={f.tuzKg} onChange={(e) => setF({ ...f, tuzKg: e.target.value })} /></Field>
         <Field label="Tuzemstvo — broj otpremnica (neobavezno)"><input className="input f-mono" type="number" min="0" value={f.tuzBroj} onChange={(e) => setF({ ...f, tuzBroj: e.target.value })} /></Field>
       </div>
+      )}
       <Field label="Napomena / izvor"><input className="input" placeholder="npr. izvješće poslano DZS-u" value={f.napomena} onChange={(e) => setF({ ...f, napomena: e.target.value })} /></Field>
     </Modal>
   );
@@ -15222,10 +15230,10 @@ function StatistikaIsporukaTab({ db, update, showToast, mojId, mozeMijenjati = f
     nazivTvrtke: db.postavkeTvrtke?.naziv, showToast,
   });
   const izvorTekst = { izracun: "izračun", zakljucano: "zaključano", rucno: "ručno", prazno: "—" };
-  const redoviGodine = g.redovi.map((x) => [nazivMjeseca(x.mjesec), izvorTekst[x.izvor], kgTxt(x.ino.kg), kgTxt(x.tuz.kg), kgTxt(x.ukupno.kg)]);
+  const redoviGodine = g.redovi.map((x) => [nazivMjeseca(x.mjesec), izvorTekst[x.izvor], x.samoUkupno ? "—" : kgTxt(x.ino.kg), x.samoUkupno ? "—" : kgTxt(x.tuz.kg), kgTxt(x.ukupno.kg)]);
   const izvozGodineCsv = () => preuzmiCsv([
     ["Mjesec", "Izvor", "Inozemstvo (kg)", "Tuzemstvo (kg)", "Ukupno (kg)", "Stavki bez težine"].map(celija).join(";"),
-    ...g.redovi.map((x) => [x.mjesec, izvorTekst[x.izvor], kgTxt(x.ino.kg), kgTxt(x.tuz.kg), kgTxt(x.ukupno.kg), x.bezTezine].map(celija).join(";")),
+    ...g.redovi.map((x) => [x.mjesec, izvorTekst[x.izvor], x.samoUkupno ? "" : kgTxt(x.ino.kg), x.samoUkupno ? "" : kgTxt(x.tuz.kg), kgTxt(x.ukupno.kg), x.bezTezine].map(celija).join(";")),
     ["UKUPNO " + g.godina, "", kgTxt(g.ino.kg), kgTxt(g.tuz.kg), kgTxt(g.ukupno.kg), g.bezTezine].map(celija).join(";"),
   ], `statistika-isporuka-${g.godina}.csv`);
   const ispisGodine = () => ispisiTablicuPdf({
@@ -15270,6 +15278,7 @@ function StatistikaIsporukaTab({ db, update, showToast, mojId, mozeMijenjati = f
             <div className="card" style={plocica}><div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Tuzemstvo {g.godina}.</div><div className="f-mono" style={{ fontWeight: 700, fontSize: 20, color: "var(--steel)" }}>{kg(g.tuz.kg)}</div></div>
             <div className="card" style={plocica}><div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Ukupno {g.godina}.</div><div className="f-mono" style={{ fontWeight: 700, fontSize: 20 }}>{kg(g.ukupno.kg)}</div></div>
           </div>
+          {g.nepotpuno > 0 && <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 8 }}>Za {g.nepotpuno} {g.nepotpuno === 1 ? "mjesec" : "mjeseci"} poznat je samo ukupni iznos (bez podjele), pa zbroj inozemstva i tuzemstva ne obuhvaća te mjesece; „Ukupno“ ih obuhvaća.</div>}
           {g.bezTezine > 0 && <div className="card" style={{ padding: "8px 12px", marginBottom: 10, background: "#FFF6DE", borderColor: "#F5D98A", fontSize: 12.5 }}>U izračunatim mjesecima ima {g.bezTezine} stavki otpremnica bez težine — nisu u zbroju. Težinu možete upisati u prikazu „Po mjesecu“.</div>}
           <div style={{ overflowX: "auto" }}>
             <table className="erp-table">
@@ -15281,8 +15290,8 @@ function StatistikaIsporukaTab({ db, update, showToast, mojId, mozeMijenjati = f
                       {x.spremljeno?.napomena ? <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{x.spremljeno.napomena}</div> : null}
                       {x.razlika && (x.razlika.ino !== 0 || x.razlika.tuz !== 0) ? <div style={{ fontSize: 11, color: "var(--rust)" }}>od zaključavanja: inozemstvo {x.razlika.ino > 0 ? "+" : ""}{kgTxt(x.razlika.ino)} kg, tuzemstvo {x.razlika.tuz > 0 ? "+" : ""}{kgTxt(x.razlika.tuz)} kg</div> : null}</td>
                     <td>{badgeIzvora(x)}{x.spremljeno?.datum ? <div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{fmtDate(x.spremljeno.datum)}</div> : null}</td>
-                    <td className="f-mono" style={{ textAlign: "right" }}>{x.izvor === "prazno" ? "—" : kg(x.ino.kg)}</td>
-                    <td className="f-mono" style={{ textAlign: "right" }}>{x.izvor === "prazno" ? "—" : kg(x.tuz.kg)}</td>
+                    <td className="f-mono" style={{ textAlign: "right" }} title={x.samoUkupno ? "Podjela na inozemstvo i tuzemstvo nije poznata" : undefined}>{x.izvor === "prazno" || x.samoUkupno ? "—" : kg(x.ino.kg)}</td>
+                    <td className="f-mono" style={{ textAlign: "right" }} title={x.samoUkupno ? "Podjela na inozemstvo i tuzemstvo nije poznata" : undefined}>{x.izvor === "prazno" || x.samoUkupno ? "—" : kg(x.tuz.kg)}</td>
                     <td className="f-mono" style={{ textAlign: "right", fontWeight: 600 }}>{x.izvor === "prazno" ? "—" : kg(x.ukupno.kg)}</td>
                     <td className="f-mono" style={{ textAlign: "right", color: x.bezTezine > 0 ? "var(--rust)" : "var(--ink-faint)" }}>{x.bezTezine > 0 ? x.bezTezine : "—"}</td>
                     <td style={{ textAlign: "right" }}>{mozeMijenjati && x.izvor !== "zakljucano" && <Btn size="sm" variant="ghost" onClick={() => setRucnoZa(x.mjesec)}>{x.izvor === "rucno" ? "Uredi ručni unos" : "Unesi ručno"}</Btn>}</td>
@@ -15311,7 +15320,7 @@ function StatistikaIsporukaTab({ db, update, showToast, mojId, mozeMijenjati = f
                 </>
               ) : (
                 <>
-                  <strong>Za ovaj mjesec su iznosi uneseni ručno</strong>: inozemstvo {kg(zapisMjeseca.ino?.kg)}, tuzemstvo {kg(zapisMjeseca.tuz?.kg)}{zapisMjeseca.napomena ? ` (${zapisMjeseca.napomena})` : ""}. U godišnjem pregledu vrijedi ručni unos, a popis ispod je izračun iz otpremnica.
+                  <strong>Za ovaj mjesec su iznosi uneseni ručno</strong>: {zapisMjeseca.ukupno && !zapisMjeseca.ino ? <>ukupno <strong>{kg(zapisMjeseca.ukupno.kg)}</strong> (bez podjele na inozemstvo i tuzemstvo)</> : <>inozemstvo {kg(zapisMjeseca.ino?.kg)}, tuzemstvo {kg(zapisMjeseca.tuz?.kg)}</>}{zapisMjeseca.napomena ? ` (${zapisMjeseca.napomena})` : ""}. U godišnjem pregledu vrijedi ručni unos, a popis ispod je izračun iz otpremnica.
                   {mozeMijenjati && <> <Btn size="sm" variant="ghost" onClick={() => setRucnoZa(mjesec)}>Uredi</Btn></>}
                 </>
               )}

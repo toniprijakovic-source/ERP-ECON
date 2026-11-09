@@ -106,3 +106,18 @@ test("godišnji pregled: izračun iz otpremnica, zaključani i ručno uneseni mj
   assert.equal(g.tuz.kg, 30000 + 500 + 70);
   assert.equal(g.ukupno.kg, 12000 + 900 + 30000 + 500 + 70);
 });
+
+test("ručni unos samo s ukupnim iznosom ulazi u ukupno, a inozemstvo/tuzemstvo ostaju nepoznati (nepotpuno)", () => {
+  const otpremnice = [otp("1", "2026-11-03", 70)];
+  const spremljeno = { "2026-01": { izvor: "rucno", ukupno: { kg: 84000 }, napomena: "DZS" }, "2026-02": { izvor: "rucno", ino: { kg: 1000, broj: 1 }, tuz: { kg: 3000, broj: 2 } } };
+  const g = statistikaGodine({ otpremnice, cmr: [] }, 2026, tezina, spremljeno);
+  assert.equal(g.redovi[0].samoUkupno, true);
+  assert.equal(g.redovi[0].ukupno.kg, 84000);
+  assert.equal(g.redovi[0].ino.kg, 0);
+  assert.equal(g.redovi[1].samoUkupno, false);
+  assert.equal(g.redovi[1].ukupno.kg, 4000);
+  assert.equal(g.nepotpuno, 1);
+  assert.equal(g.ukupno.kg, 84000 + 4000 + 70);
+  assert.equal(g.ino.kg, 1000); // bez nepoznatog siječnja
+  assert.equal(g.tuz.kg, 3000 + 70);
+});

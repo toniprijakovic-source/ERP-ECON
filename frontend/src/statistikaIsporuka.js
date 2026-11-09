@@ -87,18 +87,22 @@ export function statistikaIsporuka({ otpremnice = [], cmr = [], kupci = [] }, mj
 
 // Godišnji pregled po mjesecima. spremljeno = { "GGGG-MM": { izvor: "zakljucano" | "rucno", ino: { kg, broj }, tuz: { kg, broj }, datum, korisnik, napomena } }:
 // mjesec zaključan nakon slanja DZS-u i ručno unesen mjesec (npr. prije nego što su otpremnice u ERP-u) imaju prednost pred izračunom iz otpremnica.
+// Ručni unos može imati samo ukupni iznos ({ izvor: "rucno", ukupno: { kg } } bez ino/tuz) — npr. izvješće DZS-u koje ne razdvaja inozemstvo i tuzemstvo;
+// takav mjesec ulazi u ukupno, a inozemstvo/tuzemstvo su nepoznati (samoUkupno) pa zbroj inozemstva i tuzemstva nije cjelovit (nepotpuno > 0).
 export function statistikaGodine({ otpremnice = [], cmr = [], kupci = [] }, godina, tezina, spremljeno = {}) {
   const mjeseci = Array.from({ length: 12 }, (_, i) => `${godina}-${String(i + 1).padStart(2, "0")}`);
   const redovi = mjeseci.map((mjesec) => {
     const r = statistikaIsporuka({ otpremnice, cmr, kupci }, mjesec, tezina);
     const sp = spremljeno?.[mjesec] || null;
-    const ino = sp ? { kg: zaokruzi(sp.ino?.kg), broj: Number(sp.ino?.broj) || 0 } : { kg: r.inozemstvo.kg, broj: r.inozemstvo.broj };
-    const tuz = sp ? { kg: zaokruzi(sp.tuz?.kg), broj: Number(sp.tuz?.broj) || 0 } : { kg: r.tuzemstvo.kg, broj: r.tuzemstvo.broj };
+    const samoUkupno = !!sp && sp.izvor === "rucno" && !sp.ino && !sp.tuz && !!sp.ukupno;
+    const ino = samoUkupno ? { kg: 0, broj: 0 } : sp ? { kg: zaokruzi(sp.ino?.kg), broj: Number(sp.ino?.broj) || 0 } : { kg: r.inozemstvo.kg, broj: r.inozemstvo.broj };
+    const tuz = samoUkupno ? { kg: 0, broj: 0 } : sp ? { kg: zaokruzi(sp.tuz?.kg), broj: Number(sp.tuz?.broj) || 0 } : { kg: r.tuzemstvo.kg, broj: r.tuzemstvo.broj };
     const izvor = sp ? sp.izvor : (r.ukupno.broj > 0 ? "izracun" : "prazno");
+    const ukupno = samoUkupno ? { kg: zaokruzi(sp.ukupno.kg), broj: Number(sp.ukupno.broj) || 0 } : { kg: zaokruzi(ino.kg + tuz.kg), broj: ino.broj + tuz.broj };
     // zaključani mjesec: koliko se današnji izračun razlikuje od poslanog (kasnije upisane težine, nove otpremnice)
     const razlika = sp && sp.izvor === "zakljucano" ? { ino: zaokruzi(r.inozemstvo.kg - ino.kg), tuz: zaokruzi(r.tuzemstvo.kg - tuz.kg) } : null;
-    return { mjesec, izvor, ino, tuz, ukupno: { kg: zaokruzi(ino.kg + tuz.kg), broj: ino.broj + tuz.broj }, bezTezine: sp ? 0 : r.ukupno.bezTezine, razlika, spremljeno: sp };
+    return { mjesec, izvor, samoUkupno, ino, tuz, ukupno, bezTezine: sp ? 0 : r.ukupno.bezTezine, razlika, spremljeno: sp };
   });
   const zbroj = (k) => ({ kg: zaokruzi(redovi.reduce((s, x) => s + x[k].kg, 0)), broj: redovi.reduce((s, x) => s + x[k].broj, 0) });
-  return { godina, redovi, ino: zbroj("ino"), tuz: zbroj("tuz"), ukupno: zbroj("ukupno"), bezTezine: redovi.reduce((s, x) => s + x.bezTezine, 0) };
+  return { godina, redovi, ino: zbroj("ino"), tuz: zbroj("tuz"), ukupno: zbroj("ukupno"), bezTezine: redovi.reduce((s, x) => s + x.bezTezine, 0), nepotpuno: redovi.filter((x) => x.samoUkupno).length };
 }
