@@ -283,6 +283,16 @@ const izracunPonude = (ponuda, materijali, cjenikRada, katalog = [], kvalitete =
    kalkulacija laserskog rezanja). */
 const prazniCjenikLasera = () => ({ plocastiEurH: 150, pripremaPlocastiEurH: 40, cijevniEurH: 250, pripremaCijevniEurH: 150, savijanjeEurH: 40, dodatakPct: 10 });
 
+// Savijanje ponude za laser: popis redaka { id, opis, brojPregiba, minPoKom } (trošak = pregiba × min po komadu ÷ 60 × €/h savijanja). Stare ponude imaju
+// jedan zapis savijanje { brojPregiba, minPoKom } — čita se kao jedan redak bez opisa (bez migracije baze, cijena ostaje ista); čim se ponuda spremi iz
+// obrasca, zapisuje se niz "savijanja" koji ima prednost.
+const savijanjaPonude = (ponuda) => {
+  if (Array.isArray(ponuda?.savijanja)) return ponuda.savijanja;
+  const s = ponuda?.savijanje;
+  return s && (Number(s.brojPregiba) > 0 || Number(s.minPoKom) > 0) ? [{ id: "sav-0", opis: "", brojPregiba: s.brojPregiba, minPoKom: s.minPoKom }] : [];
+};
+const trosakRetkaSavijanja = (r, savijanjeEurH) => (((Number(r.brojPregiba) || 0) * (Number(r.minPoKom) || 0)) / 60) * (Number(savijanjeEurH) || 0);
+
 const masaFormataLasera = (f, tipLasera, kvalitete) => {
   if (tipLasera === "cijevni") return ((Number(f.duzinaMM) || 0) / 1000) * (Number(f.komada) || 0) * (Number(f.kgPoM) || 0);
   const gustocaKgM3 = faktorGustoce(kvalitete, f.kvaliteta) * GUSTOCA_CELIKA * 1000;
@@ -306,12 +316,11 @@ const izracunPonudeLasera = (ponuda, kvalitete = []) => {
   const zbrojStavki = stavke.reduce((s, st) => s + st.ukupno, 0);
   const dodatakPct = Number(cjenik.dodatakPct) || 0;
   const iznosDodatka = zbrojStavki * (dodatakPct / 100);
-  const brojPregiba = Number(ponuda.savijanje?.brojPregiba) || 0;
-  const minPoKom = Number(ponuda.savijanje?.minPoKom) || 0;
-  const trosakSavijanja = ((brojPregiba * minPoKom) / 60) * (Number(cjenik.savijanjeEurH) || 0);
+  const savijanja = savijanjaPonude(ponuda).map((r) => ({ ...r, trosak: trosakRetkaSavijanja(r, cjenik.savijanjeEurH) }));
+  const trosakSavijanja = savijanja.reduce((s, r) => s + r.trosak, 0);
   const trosakOstalo = (ponuda.ostaleStavke || []).reduce((s, st) => s + (Number(st.kolicina) || 0) * (Number(st.cijenaJed) || 0), 0);
   const cijenaKonacna = zbrojStavki + iznosDodatka + trosakSavijanja + trosakOstalo;
-  return { cjenik, stavke, zbrojStavki, dodatakPct, iznosDodatka, trosakSavijanja, trosakOstalo, cijenaKonacna };
+  return { cjenik, stavke, zbrojStavki, dodatakPct, iznosDodatka, savijanja, trosakSavijanja, trosakOstalo, cijenaKonacna };
 };
 
 /* ============================== NORMATIV TIPSKIH PROJEKATA ==============================
@@ -5322,6 +5331,35 @@ const ukupnaCijenaPonude = (s, p, katalogProfila, kvalitete) => {
   return kolicinaZaCijenu * (Number(p.cijena) || 0) + (Number(p.dodatak) || 0);
 };
 
+// Naručene cijene stavki narudžbenice — SAMO za prikaz na ekranu (za provjeru računa); ne ide u PDF narudžbe dobavljaču.
+// Narudžbenica nastala iz upita: cijena, jedinica (€/kg ili €/m) i dodatak uzimaju se iz odabrane ponude u upitu (stavke upita povezane s ovom
+// narudžbenicom, istim redoslijedom). Ručna narudžbenica: cijena na samom retku (cijenaPoJed). Vraća niz po stavkama; null = cijena se ne može izvesti
+// (npr. upit je obrisan, ili je narudžbenica naknadno mijenjana pa redci više ne odgovaraju upitu).
+const naruceneCijeneNarudzbenice = (n, db) => {
+  const stavke = n.stavke || [];
+  const upit = n.izvorUpitaId ? (db.upitiNabave || []).find((u) => u.id === n.izvorUpitaId) : null;
+  const upitStavke = upit ? upit.stavke.filter((s) => s.narudzbenicaId === n.id) : [];
+  const izUpita = !!upit && upitStavke.length === stavke.length;
+  return stavke.map((st, i) => {
+    if (izUpita) {
+      const us = upitStavke[i];
+      const p = (us.ponude || []).find((x) => x.id === us.odabranaPonudaId);
+      if (p && Number(p.cijena) > 0) { // ponuda bez upisane cijene (0) ne vrijedi kao naručena cijena
+        const poMetru = p.jedinicaCijene === "m";
+        const kolicina = poMetru ? duzinaUkupnaMStavke(us) : tezinaStavkeUpita(us, db.katalogProfila, db.kvaliteteMaterijala);
+        return { naziv: us.vrstaMaterijala, izvor: `upit ${upit.broj}`, cijena: Number(p.cijena) || 0, jedinica: poMetru ? "€/m" : "€/kg", kolicina, kolicinaJm: poMetru ? "m" : "kg", dodatak: Number(p.dodatak) || 0, iznos: ukupnaCijenaPonude(us, p, db.katalogProfila, db.kvaliteteMaterijala), dobavljacId: p.dobavljacId };
+      }
+    }
+    if (st.cijenaPoJed != null && st.cijenaPoJed !== "") {
+      const mat = (db.materijali || []).find((x) => x.id === st.materijalId);
+      const jm = mat?.jm || st.jm || "kg";
+      const kolicina = efektivnaKolicinaMaterijala(st, mat);
+      return { izvor: "narudžbenica", cijena: Number(st.cijenaPoJed) || 0, jedinica: `€/${jm}`, kolicina, kolicinaJm: jm, dodatak: 0, iznos: (Number(st.cijenaPoJed) || 0) * kolicina };
+    }
+    return null;
+  });
+};
+
 const generirajBrojUpita = (upiti) => {
   const god = new Date().getFullYear().toString().slice(-2);
   const brojevi = upiti.filter((u) => u.broj && u.broj.startsWith(`${god}-`)).map((u) => parseInt(u.broj.split("-")[1], 10)).filter((n) => !isNaN(n));
@@ -5581,6 +5619,54 @@ function UpitDetaljModal({ upit, db, update, patchUpiti, showToast, onClose, onO
   );
 }
 
+// Pregled naručenih cijena na narudžbenici (samo ekran, za provjeru računa dobavljača) — vidi naruceneCijeneNarudzbenice.
+function NaruceneCijenePanel({ narudzbenica, db }) {
+  const nc = naruceneCijeneNarudzbenice(narudzbenica, db);
+  if (!nc.some(Boolean)) return null;
+  const naziv = (st, x) => {
+    const m = (db.materijali || []).find((y) => y.id === st.materijalId);
+    const k = (db.katalogProfila || []).find((y) => y.id === st.katalogId);
+    return m ? m.naziv : k ? katalogOznakaPuna(k) : (st.rucniNaziv || x?.naziv || "—");
+  };
+  const izvori = [...new Set(nc.filter(Boolean).map((x) => x.izvor))].join(", ");
+  const zbroj = nc.reduce((s, x) => s + (x && x.iznos != null ? x.iznos : 0), 0);
+  const nepotpuno = nc.some((x) => !x || x.iznos == null);
+  return (
+    <div className="card" style={{ padding: 12, marginTop: 12, background: "var(--surface-alt)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
+        <strong style={{ fontSize: 13 }}>Naručene cijene</strong>
+        <span style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>samo za provjeru računa — ne ide dobavljaču · izvor: {izvori}</span>
+      </div>
+      <table className="erp-table">
+        <thead><tr><th>Stavka</th><th style={{ width: 110 }}>Cijena</th><th style={{ width: 110 }}>Količina</th><th style={{ width: 90 }}>Dodatak</th><th style={{ width: 110 }}>Iznos</th></tr></thead>
+        <tbody>
+          {nc.map((x, i) => {
+            const st = narudzbenica.stavke[i];
+            const dim = dimenzijeStavkeNarudzbenice(narudzbenica, st, i, db, true);
+            return (
+              <tr key={i}>
+                <td>{naziv(st, x)}{dim ? <span className="f-mono" style={{ color: "var(--ink-faint)", fontSize: 11.5 }}> · {dim}</span> : null}</td>
+                {x ? (
+                  <>
+                    <td className="f-mono">{fmtCurDec(x.cijena)}{x.jedinica.slice(1)}</td>
+                    <td className="f-mono">{x.kolicina != null ? `${(Math.round(x.kolicina * 10) / 10).toString().replace(".", ",")} ${x.kolicinaJm}` : <span style={{ color: "var(--rust)" }} title="Težina se ne može izračunati iz kataloga">—</span>}</td>
+                    <td className="f-mono">{x.dodatak > 0 ? fmtCurDec(x.dodatak) : "—"}</td>
+                    <td className="f-mono" style={{ fontWeight: 600 }}>{x.iznos != null ? fmtCurDec(x.iznos) : "—"}</td>
+                  </>
+                ) : <td colSpan={4} style={{ color: "var(--ink-faint)" }}>cijena nije zabilježena</td>}
+              </tr>
+            );
+          })}
+          <tr style={{ fontWeight: 700, background: "var(--surface)" }}>
+            <td colSpan={4}>Ukupno{nepotpuno ? " (samo stavke s poznatom cijenom)" : ""}</td>
+            <td className="f-mono">{fmtCurDec(zbroj)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, dodajMaticne }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "nabava");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "narudzbenice");
@@ -5718,7 +5804,13 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
   const [zaprimanjeZa, setZaprimanjeZa] = useState(null); // narudžbenica čije se zaprimanje potvrđuje
   const dobNaziv = (id) => db.dobavljaci.find((d) => d.id === id)?.naziv || "—";
   const zaposlenikIme = (id) => { const z = db.zaposlenici.find((zz) => zz.id === id); return z ? `${z.ime} ${z.prezime}` : "—"; };
-  const iznos = (row) => row.stavke.reduce((s, st) => { const m = db.materijali.find((x) => x.id === st.materijalId); const cijena = st.cijenaPoJed != null ? Number(st.cijenaPoJed) : (m ? m.cijena : 0); return s + cijena * efektivnaKolicinaMaterijala(st, m); }, 0);
+  // Iznos narudžbenice: kad se naručene cijene mogu izvesti za SVE stavke (vidi naruceneCijeneNarudzbenice), to je stvarni naručeni iznos
+  // (cijena ponude × količina + dodatak); inače procjena prema cijeni na skladišnom artiklu kao i prije.
+  const iznos = (row) => {
+    const nc = naruceneCijeneNarudzbenice(row, db);
+    if (nc.length > 0 && nc.every((x) => x && x.iznos != null)) return nc.reduce((s, x) => s + x.iznos, 0);
+    return row.stavke.reduce((s, st) => { const m = db.materijali.find((x) => x.id === st.materijalId); const cijena = st.cijenaPoJed != null ? Number(st.cijenaPoJed) : (m ? m.cijena : 0); return s + cijena * efektivnaKolicinaMaterijala(st, m); }, 0);
+  };
 
   const openUpitAdd = () => { setUpitForm(emptyUpit()); setModal("upit"); };
   const openUpitEdit = (row) => { setUpitForm(JSON.parse(JSON.stringify(row))); setModal("upit"); };
@@ -5816,6 +5908,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
           <Field label="Stavke narudžbe">
             <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} dozvoliKatalog kvalitete={db.kvaliteteMaterijala} projekti={db.projekti.filter((p) => !["Završen", "Otkazan"].includes(p.status) || form.stavke.some((st) => st.projektId === p.id))} />
           </Field>
+          {form.id && (() => { const spremljena = db.narudzbenice.find((x) => x.id === form.id); return spremljena ? <NaruceneCijenePanel narudzbenica={spremljena} db={db} /> : null; })()}
           <Field label="Napomena"><textarea className="textarea" rows={2} value={form.napomena} onChange={(e) => setForm({ ...form, napomena: e.target.value })} /></Field>
         </Modal>
       )}
@@ -10482,6 +10575,12 @@ function PonudaLaseraModal({ form, setForm, db, onSave, onClose, onRevizija }) {
   const azurirajStavku = (id, patch) => setForm({ ...form, stavke: form.stavke.map((s) => (s.id === id ? { ...s, ...patch } : s)) });
   const obrisiStavku = (id) => setForm({ ...form, stavke: form.stavke.filter((s) => s.id !== id) });
   const azurirajCjenik = (patch) => setForm({ ...form, cjenik: { ...prazniCjenikLasera(), ...form.cjenik, ...patch } });
+  // Savijanje: više redaka s opisom (stara ponuda s jednim zapisom čita se kao jedan redak — vidi savijanjaPonude).
+  const redciSavijanja = savijanjaPonude(form);
+  const praznoSavijanje = () => ({ id: uid("sav"), opis: "", brojPregiba: 0, minPoKom: 0 });
+  const postaviSavijanja = (niz) => setForm({ ...form, savijanja: niz });
+  const azurirajSavijanje = (id, patch) => postaviSavijanja(redciSavijanja.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const obrisiSavijanje = (id) => postaviSavijanja(redciSavijanja.filter((r) => r.id !== id));
   // Kartice — isti princip kao Pozicije/Materijal/Rekapitulacija kod obične ponude: "Stavke
   // rezanja" su unos, "Materijal" je izvedeni pregled potrebnog sirovog materijala (bez
   // optimizacije po standardnim dužinama/limovima jer stavke lasera nemaju katalošku vezu,
@@ -10547,11 +10646,22 @@ function PonudaLaseraModal({ form, setForm, db, onSave, onClose, onRevizija }) {
           ))}
           <Btn variant="ghost" size="sm" icon={Plus} onClick={() => setForm({ ...form, stavke: [...form.stavke, prazanRed()] })} style={{ marginBottom: 16 }}>Dodaj stavku rezanja</Btn>
 
-          <div className="label" style={{ marginBottom: 4 }}>Savijanje (opcionalno)</div>
-          <div className="card" style={{ padding: 14, background: "var(--surface-alt)", marginBottom: 16, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
-            <Field label="Broj pregiba"><input className="input f-mono" type="number" min="0" value={form.savijanje?.brojPregiba ?? 0} onChange={(e) => setForm({ ...form, savijanje: { ...form.savijanje, brojPregiba: e.target.value } })} /></Field>
-            <Field label="Min. po komadu"><input className="input f-mono" type="number" min="0" step="0.5" value={form.savijanje?.minPoKom ?? 0} onChange={(e) => setForm({ ...form, savijanje: { ...form.savijanje, minPoKom: e.target.value } })} /></Field>
-            <div><div className="label">Trošak savijanja</div><div className="f-mono" style={{ fontSize: 15, fontWeight: 700, marginTop: 6 }}>{fmtCurDec(calc.trosakSavijanja)}</div></div>
+          <div className="label" style={{ marginBottom: 4 }}>Savijanje (opcionalno) — svaki redak ima svoj opis; opis se ispisuje na ponudi</div>
+          <div className="card" style={{ padding: 14, background: "var(--surface-alt)", marginBottom: 16 }}>
+            {redciSavijanja.length === 0 && <div style={{ color: "var(--ink-faint)", fontSize: 12.5, marginBottom: 8 }}>Nema savijanja.</div>}
+            {redciSavijanja.map((r, i) => (
+              <div key={r.id} style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 8, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 200 }}><label className="label">Opis savijanja</label><input className="input" aria-label={`Opis savijanja ${i + 1}`} placeholder="npr. L profil 40×40, pozicija 3" value={r.opis || ""} onChange={(e) => azurirajSavijanje(r.id, { opis: e.target.value })} /></div>
+                <div style={{ width: 110 }}><label className="label">Broj pregiba</label><input className="input f-mono" type="number" min="0" aria-label={`Broj pregiba ${i + 1}`} value={r.brojPregiba ?? 0} onChange={(e) => azurirajSavijanje(r.id, { brojPregiba: e.target.value })} /></div>
+                <div style={{ width: 120 }}><label className="label">Min. po komadu</label><input className="input f-mono" type="number" min="0" step="0.5" aria-label={`Min. po komadu ${i + 1}`} value={r.minPoKom ?? 0} onChange={(e) => azurirajSavijanje(r.id, { minPoKom: e.target.value })} /></div>
+                <div style={{ width: 100, textAlign: "right" }}><label className="label">Trošak</label><div className="f-mono" style={{ fontWeight: 600, paddingBottom: 8 }}>{fmtCurDec(trosakRetkaSavijanja(r, calc.cjenik.savijanjeEurH))}</div></div>
+                <button className="btn btn-icon btn-ghost" title="Ukloni redak savijanja" aria-label={`Ukloni savijanje ${i + 1}`} onClick={() => obrisiSavijanje(r.id)} style={{ marginBottom: 4 }}><X size={14} /></button>
+              </div>
+            ))}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <Btn variant="ghost" size="sm" icon={Plus} onClick={() => postaviSavijanja([...redciSavijanja, praznoSavijanje()])}>Dodaj savijanje</Btn>
+              <div><span className="label" style={{ display: "inline", marginRight: 8 }}>Trošak savijanja ukupno</span><span className="f-mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCurDec(calc.trosakSavijanja)}</span></div>
+            </div>
           </div>
 
           <Field label="Ostale stavke (crtanje, transport…)"><LineItemsEditor mode="custom" rows={form.ostaleStavke} setRows={(rows) => setForm({ ...form, ostaleStavke: rows })} /></Field>
@@ -10707,6 +10817,13 @@ function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
           </tbody>
         </table>
 
+        {calc.savijanja.some((r) => String(r.opis || "").trim()) && (
+          <table className="doc-table" style={{ marginBottom: 16 }}>
+            <thead><tr><th>Savijanje</th><th style={{ width: 100 }}>Iznos</th></tr></thead>
+            <tbody>{calc.savijanja.map((r, i) => <tr key={r.id || i}><td>{String(r.opis || "").trim() || "—"}</td><td className="f-mono">{fmtCurDec(r.trosak)}</td></tr>)}</tbody>
+          </table>
+        )}
+
         {(ponuda.ostaleStavke || []).length > 0 && (
           <table className="doc-table" style={{ marginBottom: 16 }}>
             <thead><tr><th>Ostale stavke</th><th style={{ width: 100 }}>Iznos</th></tr></thead>
@@ -10830,7 +10947,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
   const [printPonuda, setPrintPonuda] = useState(null);
   const [slanjePonude, setSlanjePonude] = useState(null); // ponuda za koju se priprema e-mail kupcu
 
-  const emptyLaser = () => ({ id: null, broj: sljedeciBroj(db.ponudeLasera, "broj", "LAS-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", cjenik: prazniCjenikLasera(), stavke: [], savijanje: { brojPregiba: 0, minPoKom: 0 }, ostaleStavke: [], projektId: null });
+  const emptyLaser = () => ({ id: null, broj: sljedeciBroj(db.ponudeLasera, "broj", "LAS-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", cjenik: prazniCjenikLasera(), stavke: [], ostaleStavke: [], projektId: null }); // bez "savijanja": nedefinirano = nema redaka, a stara ponuda zadržava svoj zapis savijanje (vidi savijanjaPonude)
   const [laserForm, setLaserForm] = useState(emptyLaser());
   const [printLaser, setPrintLaser] = useState(null);
   const mozeLaser = dozvolaZaKarticu(mojaPozicija, "ponude", "laser").izmjene;
