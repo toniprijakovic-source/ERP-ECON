@@ -470,6 +470,25 @@ const obracunskiSati = (dolazakISO, odlazakISO, smjena, postavke) => {
   return Math.max(0, (end - start) / 60);
 };
 
+// Obroci jednog dana (ili zbroja sati jednog datuma). Topli obrok: od min. sati (6 h). Tko jede u tvrtki ne dobiva ga u prehrani, ali za radnu
+// subotu i za popodnevnu smjenu (kad restoran ne radi) dobiva isti iznos kao gablec — u STIMULACIJI. Dan od 12 i više sati daje još jedan obrok
+// (svima; u prehrani, a kod onih koji jedu u tvrtki u stimulaciji). Pola radnog vremena: iznos se prepolovljuje.
+const obrociDana = (zaposlenik, postavke, { jeRadniDan, sati, danUTjednu, dodatakSmjene }) => {
+  const faktorRadnogVremena = zaposlenik?.radnoVrijeme === "pola" ? 0.5 : 1;
+  const iznosObroka = (Number(postavke?.topliObrokIznos) || 0) * faktorRadnogVremena;
+  const jedeUTvrtki = !!zaposlenik?.koristiPrehranuUTvrtki;
+  const imaObrok = jeRadniDan && sati >= (Number(postavke?.topliObrokMinSati) || 6);
+  const dodatniObrok = jeRadniDan && sati >= 12 ? iznosObroka : 0;
+  let topliObrok = imaObrok && !jedeUTvrtki ? iznosObroka : 0;
+  let gablecStimulacija = imaObrok && jedeUTvrtki && (danUTjednu === 6 || dodatakSmjene > 1) ? iznosObroka : 0;
+  if (jedeUTvrtki) gablecStimulacija += dodatniObrok; else topliObrok += dodatniObrok;
+  const obrokaBroj = jedeUTvrtki ? 0 : (imaObrok ? 1 : 0) + (dodatniObrok > 0 ? 1 : 0);
+  return { topliObrok, gablecStimulacija, obrokaBroj };
+};
+
+// Prilagodba obroka pri prebijanju manjka (vidi obracunMjeseca) vrijedi od ovog mjeseca; ranije je već isplaćeno po starom pravilu.
+const OBROCI_PREBIJANJE_OD = "2026-10";
+
 // Obračun jednog dana evidencije. dan: 0=ned, 6=sub
 const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0, maxSati = null) => {
   const datum = zapis.vrijemeDolaska.slice(0, 10);
@@ -537,17 +556,8 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0, maxSati
   const faktorRadnogVremena = zaposlenik?.radnoVrijeme === "pola" ? 0.5 : 1;
   const jeRadniDan = vrsta === "rad" && odradjeniSati > 0 && !praznik;
   const putni = jeRadniDan ? (Number(zaposlenik?.udaljenostKm) || 0) * (Number(postavke?.cijenaKm) || 0) * faktorRadnogVremena : 0;
-  // Topli obrok: od min. sati (6 h). Tko jede u tvrtki ne dobiva ga u prehrani, ali za radnu subotu i
-  // za popodnevnu smjenu (kad restoran ne radi) dobiva isti iznos kao gablec — u STIMULACIJI.
-  // Dan od 12 i više sati daje još jedan obrok (svima; u prehrani, a kod onih koji jedu u tvrtki u stimulaciji).
-  const iznosObroka = (Number(postavke?.topliObrokIznos) || 0) * faktorRadnogVremena;
-  const jedeUTvrtki = !!zaposlenik?.koristiPrehranuUTvrtki;
-  const imaObrok = jeRadniDan && odradjeniSati >= (Number(postavke?.topliObrokMinSati) || 6);
-  const dodatniObrok = jeRadniDan && odradjeniSati >= 12 ? iznosObroka : 0;
-  let topliObrok = imaObrok && !jedeUTvrtki ? iznosObroka : 0;
-  let gablecStimulacija = imaObrok && jedeUTvrtki && (danUTjednu === 6 || dodatakSmjene > 1) ? iznosObroka : 0;
-  if (jedeUTvrtki) gablecStimulacija += dodatniObrok; else topliObrok += dodatniObrok;
-  const obrokaBroj = jedeUTvrtki ? 0 : (imaObrok ? 1 : 0) + (dodatniObrok > 0 ? 1 : 0); // za stupac "dani prehrane"
+  // Topli obrok / gablec / dodatni obrok — vidi obrociDana (isto pravilo koristi i prilagodba obroka pri prebijanju manjka).
+  const { topliObrok, gablecStimulacija, obrokaBroj } = obrociDana(zaposlenik, postavke, { jeRadniDan, sati: odradjeniSati, danUTjednu, dodatakSmjene }); // obrokaBroj = za stupac "dani prehrane"
 
   // Dodatak za smjenu (popodnevna ×1,2) i prekovremeni (×1,5) ZBRAJAJU se, ne množe: sat popodne iznad 8 h
   // vrijedi ×(1,2 + 0,5) = ×1,7. Iznos dodatka za smjenu ne ulazi u redovne/prekovremene sate nego se
@@ -632,7 +642,73 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     });
   }
 
-  const zbroj = dani.reduce((s, d) => ({
+  // PREBIJANJE MANJKA (izračun količine; primjena na sate i iznose je niže): radni dan (pon-pet) s manje sati od norme ("manjak") namiruje se prekovremenima
+  // ISTOG mjeseca — prvo onima radnim danom, pa subotnjima. Izračun je ovdje (prije zbroja) jer prebijanje mijenja i obroke vidi ispod.
+  const norma = Number(postavke?.normaSatiDan) || 8;
+  const faktorPrek = Number(postavke?.prekovremeniFaktor) || 1.5;
+  const satiPoDatumu = new Map();
+  dani.forEach((d) => { if (d.vrsta === "rad" && !d.praznik && d.danUTjednu >= 1 && d.danUTjednu <= 5 && d.odradjeniSati > 0) satiPoDatumu.set(d.datum, (satiPoDatumu.get(d.datum) || 0) + d.odradjeniSati); });
+  const manjakSati = zaposlenik.radnoVrijeme === "pola" ? 0 : [...satiPoDatumu.values()].reduce((s, h) => s + Math.max(0, norma - h), 0);
+  const prekRadniDan = dani.filter((d) => d.danUTjednu >= 1 && d.danUTjednu <= 5).reduce((s, d) => s + d.prekovremeni, 0);
+  const prebijenoSati = Math.min(manjakSati, dani.reduce((s, d) => s + d.prekovremeni, 0));
+  const prebijenoSubota = Math.max(0, prebijenoSati - prekRadniDan);
+  const manjakPreostalo = manjakSati - prebijenoSati;
+
+  // OBROCI PRI PREBIJANJU MANJKA (po dogovoru sa Sarom, 9.11.2026.): sati prebačeni s subote na kratki radni dan "sele" i s obrokom — radni dan koji je tako
+  // nadopunjen na 6+ h dobiva topli obrok, a SVAKA subota kojoj su zbog raspodjele sati preuzeti i koja padne ispod 6 h (ili na 0) nema pravo na obrok/gablec.
+  // Subote se troše redom po blizini datuma manjka (prvo prekovremeni radnim danom, pa najbliža subota/nedjelja, pa sljedeća najbliža). Putni se ne mijenja.
+  // Vrijedi od listopada 2026. (rujan je već isplaćen). Dnevni detalj (dani) ostaje netaknut: novčani zbrojevi idu preko kopije daniObr, a promjene se vide u obrokPrilagodbe.
+  const daniObr = dani.map((d) => ({ ...d }));
+  const obrokPrilagodbe = [];
+  if (prebijenoSati > 0.0001 && mjesec >= OBROCI_PREBIJANJE_OD) {
+    const prvi = (datum, filtar) => daniObr.find((d) => d.datum === datum && d.vrsta === "rad" && !d.praznik && filtar(d));
+    const primijeniObroke = (datum, prije, poslije, filtar, napomena) => {
+      const d = prvi(datum, filtar);
+      if (!d) return;
+      const dTopli = poslije.topliObrok - prije.topliObrok, dGablec = poslije.gablecStimulacija - prije.gablecStimulacija, dBroj = poslije.obrokaBroj - prije.obrokaBroj;
+      if (Math.abs(dTopli) < 0.0001 && Math.abs(dGablec) < 0.0001 && dBroj === 0) return;
+      d.topliObrok = Math.max(0, d.topliObrok + dTopli);
+      d.gablecStimulacija = Math.max(0, d.gablecStimulacija + dGablec);
+      d.obrokaBroj = Math.max(0, d.obrokaBroj + dBroj);
+      obrokPrilagodbe.push({ datum, promjena: dBroj > 0 || dTopli > 0 || dGablec > 0 ? 1 : -1, ...napomena });
+    };
+    const obrokZa = (d, sati) => obrociDana(zaposlenik, postavke, { jeRadniDan: sati > 0, sati, danUTjednu: d.danUTjednu, dodatakSmjene: d.dodatakSmjene });
+    // popis radnih dana s manjkom (kronološki) i vikend dana s prekovremenima iz kojih se može uzeti
+    const danMs = (datum) => new Date(`${datum}T12:00:00`).getTime();
+    const manjkovi = [...satiPoDatumu.entries()].filter(([, h]) => h < norma).sort((x, y) => x[0].localeCompare(y[0]));
+    const vikendSati = new Map(); // datum -> preostali prekovremeni sati koji se mogu uzeti
+    daniObr.forEach((d) => { if ((d.danUTjednu === 6 || d.danUTjednu === 0) && d.vrsta === "rad" && !d.praznik && d.prekovremeni > 0) vikendSati.set(d.datum, (vikendSati.get(d.datum) || 0) + d.odradjeniSati); });
+    const vikendOriginal = new Map(vikendSati);
+    let preostaloRadniDan = prekRadniDan; // prvo se troše prekovremeni radnim danom (ne utječu na obroke)
+    let zaRaspodjelu = prebijenoSati;
+    manjkovi.forEach(([datum, h]) => {
+      let dio = Math.min(Math.max(0, norma - h), zaRaspodjelu);
+      if (dio <= 0.0001) return;
+      zaRaspodjelu -= dio;
+      // dan s manjkom: nadopunjen na poslije sati — obrok ako je prešao prag
+      const dRad = prvi(datum, (x) => x.danUTjednu >= 1 && x.danUTjednu <= 5);
+      if (dRad) primijeniObroke(datum, obrokZa(dRad, h), obrokZa(dRad, h + dio), (x) => x.danUTjednu >= 1 && x.danUTjednu <= 5, { sati: h + dio, uzrok: "nadopunjen" });
+      const izRadnogDana = Math.min(dio, preostaloRadniDan);
+      preostaloRadniDan -= izRadnogDana;
+      let izVikenda = dio - izRadnogDana;
+      [...vikendSati.keys()].sort((x, y) => Math.abs(danMs(x) - danMs(datum)) - Math.abs(danMs(y) - danMs(datum)) || x.localeCompare(y)).forEach((vd) => {
+        if (izVikenda <= 0.0001) return;
+        const uzmi = Math.min(izVikenda, vikendSati.get(vd));
+        vikendSati.set(vd, vikendSati.get(vd) - uzmi);
+        izVikenda -= uzmi;
+      });
+    });
+    // vikend dani kojima su sati preuzeti: obrok prema preostalim satima (ispod praga od 6 h nema obroka/gableca)
+    vikendSati.forEach((preostalo, vd) => {
+      const original = vikendOriginal.get(vd);
+      if (Math.abs(preostalo - original) < 0.0001) return;
+      const filtar = (x) => x.danUTjednu === 6 || x.danUTjednu === 0;
+      const dV = prvi(vd, filtar);
+      if (dV) primijeniObroke(vd, obrokZa(dV, original), obrokZa(dV, Math.max(0, preostalo)), filtar, { sati: Math.max(0, preostalo), uzrok: "preuzeto" });
+    });
+  }
+
+  const zbroj = daniObr.reduce((s, d) => ({
     redovni: s.redovni + d.redovni,
     prekovremeni: s.prekovremeni + d.prekovremeni,
     placeniNerad: s.placeniNerad + d.placeniNerad,
@@ -662,15 +738,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   // ISTOG mjeseca — prvo onima radnim danom, pa subotnjima. Prebačeni sat plaća se kao redovni, ostatak ostaje
   // prekovremeni (u uredu samo smanjuje prekovremene jer je plaća fiksna). Prekovremeni iz sljedećeg mjeseca
   // ne pokrivaju manjak prošlog. Ne vrijedi za pola radnog vremena. Dnevni detalj (dani) ostaje netaknut.
-  const norma = Number(postavke?.normaSatiDan) || 8;
-  const faktorPrek = Number(postavke?.prekovremeniFaktor) || 1.5;
-  const satiPoDatumu = new Map();
-  dani.forEach((d) => { if (d.vrsta === "rad" && !d.praznik && d.danUTjednu >= 1 && d.danUTjednu <= 5 && d.odradjeniSati > 0) satiPoDatumu.set(d.datum, (satiPoDatumu.get(d.datum) || 0) + d.odradjeniSati); });
-  const manjakSati = zaposlenik.radnoVrijeme === "pola" ? 0 : [...satiPoDatumu.values()].reduce((s, h) => s + Math.max(0, norma - h), 0);
-  const prekRadniDan = dani.filter((d) => d.danUTjednu >= 1 && d.danUTjednu <= 5).reduce((s, d) => s + d.prekovremeni, 0);
-  const prebijenoSati = Math.min(manjakSati, zbroj.prekovremeni);
-  const prebijenoSubota = Math.max(0, prebijenoSati - prekRadniDan);
-  const manjakPreostalo = manjakSati - prebijenoSati;
+  // (norma, satiPoDatumu, manjakSati, prekRadniDan, prebijenoSati, prebijenoSubota i manjakPreostalo izračunati su iznad, prije zbroja)
   const jeUred = grupaEvidencije(zaposlenik, db.pozicijeZaposlenika) === "ostalo";
   // Manjak do 1 h u mjesecu (nema ga čime namiriti): na obračunskom listu prikazuje se puni fond, plaća se samo odrađeno.
   // Tehnički ured: puni fond prikazuje se za svaki preostali manjak, a fiksna plaća se razmjerno umanjuje (vidi niže).
@@ -797,7 +865,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   // Višak prekovremenih (koji se ne prikazuje) uzima se prvo iz SUBOTNJIH sati — za te subote
   // naknada za prijevoz i topli obrok također idu u stimulaciju (razmjerno udjelu subotnjih
   // sati koji se ne prikazuju), da se subotnji rad ne vidi u prikazanim stavkama.
-  const suboteRad = dani.filter((d) => d.danUTjednu === 6 && d.prekovremeni > 0);
+  const suboteRad = daniObr.filter((d) => d.danUTjednu === 6 && d.prekovremeni > 0);
   const suboteSati = Math.max(0, suboteRad.reduce((s, d) => s + d.prekovremeni, 0) - prebijenoSubota - goSubota - dopunaSubota); // subotnji sati koji su ostali prekovremeni
   const udioSubotaUStimulaciji = suboteSati > 0 ? Math.min(visakPrekovremenihSati, suboteSati) / suboteSati : 0;
   const prebacenoPutni = suboteRad.reduce((s, d) => s + d.putni, 0) * udioSubotaUStimulaciji;
@@ -805,7 +873,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   const prebacenoSubota = prebacenoPutni + prebacenoObrok;
   const putni = zbroj.putni - prebacenoPutni;
   const topliObrok = zbroj.topliObrok - prebacenoObrok;
-  const daniObroka = dani.reduce((s, d) => s + d.obrokaBroj, 0) - Math.round(suboteRad.reduce((s, d) => s + d.obrokaBroj, 0) * udioSubotaUStimulaciji);
+  const daniObroka = daniObr.reduce((s, d) => s + d.obrokaBroj, 0) - Math.round(suboteRad.reduce((s, d) => s + d.obrokaBroj, 0) * udioSubotaUStimulaciji);
 
   const ukupno = iznosRedovni + iznosPrekovremeniPrikaz + iznosNerad + dodatakStaz + putni + topliObrok;
 
@@ -833,7 +901,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     prekovremeni: prekovremeniPrikaz, iznosPrekovremeni: iznosPrekovremeniPrikaz,
     prikazPrekovremenihSati: doplatak.prikazPrekovremenihSati ?? "", visakPrekovremenihSati, visakPrekovremenihIznos,
     putni, topliObrok, daniObroka, prebacenoPutni, prebacenoObrok, prebacenoSubota,
-    manjakSati, prebijenoSati, manjakPreostalo, redovniPrikaz: zbroj.redovni + manjakZaPrikaz, dodatakSmjene,
+    manjakSati, prebijenoSati, manjakPreostalo, obrokPrilagodbe, redovniPrikaz: zbroj.redovni + manjakZaPrikaz, dodatakSmjene,
     jeUred, polaRadnoVrijeme: zaposlenik.radnoVrijeme === "pola", polaFiksnaPolovica, iznosRedovni, iznosNerad, fiksnaPlacaPuna, fiksnaPlaca, faktorFiksne, neplaceniDaniUred, manjakUredSati, satnicaIzIznosa,
     ukupno, brojDana: dani.length, dani, dnevnicaTeren, stimulacija, stimulacijaRucno, kredit, ustegPrehrane, odbici, ostaliOdbici, dodaciUkupno, isplata,
   };
@@ -865,7 +933,16 @@ const obracunMjesecaMontazaDE = (zaposlenik, mjesec, db) => {
   const sati = dani.reduce((s, d) => s + d.odradjeniSati, 0);
   const uHR = doplatak.lokacijaDE === "HR";
   const neto = Number(doplatak.netoDE) || 0;
-  return { zaposlenik, uHR, sati, neto, isplata: uHR ? neto : 0, brojDana: dani.length, dani };
+  // Izostanci (godišnji, bolovanje, očinski, roditeljski, plaćeni dopust): jedan dan = norma (8 h), jednom po datumu — isto kao u obračunu Radione,
+  // da se sati vide u stupcima GO/BO/Plaćeni dopust na ispisu (neto iznos je ručni i ne ovisi o njima). Detašman se ne iskazuje (ne isplaćuje se u HR).
+  const norma = Number(postavke?.normaSatiDan) || 8;
+  const satiIzostanka = (vrsta) => new Set((db.evidencijaRada || []).filter((e) => e.zaposlenikId === zaposlenik.id && e.vrijemeDolaska.slice(0, 7) === mjesec && e.vrsta === vrsta).map((e) => e.vrijemeDolaska.slice(0, 10))).size * norma;
+  const godisnjiSati = satiIzostanka("godisnji");
+  const bolovanjeSati = satiIzostanka("bolovanje");
+  const ocinskiSati = satiIzostanka("ocinski");
+  const roditeljskiSati = satiIzostanka("roditeljski");
+  const dopustSati = satiIzostanka("placeniDopust");
+  return { zaposlenik, uHR, sati, neto, isplata: uHR ? neto : 0, brojDana: dani.length, dani, godisnjiSati, bolovanjeSati, ocinskiSati, roditeljskiSati, dopustSati };
 };
 // Nulti redak obračuna u obliku koji očekuju tablica i A4 ispis (ObracunPlacaPrintModal): za skupine koje nemaju formulu plaće
 // (vanjski suradnik, Montaža DE) preostaje popuniti samo sate, iznos i isplatu.
@@ -16263,6 +16340,8 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true, mojId })
 
   // Ručni mjesečni dodaci/odbici (stimulacija, kredit, usteg prehrane) po zaposleniku — ne
   // proizlaze iz evidencije rada, pa se pamte kao zaseban zapis po (zaposlenik, mjesec).
+  // Napomena ispod obračuna po skupini (radiona, praktikant, ostalo, montazaDE): zapis grupa-<skupina> za mjesec u doplaciPlaca.
+  const napomenaGrupe = (grupa) => (db.doplaciPlaca || []).find((d) => d.zaposlenikId === `grupa-${grupa}` && d.mjesec === mjesec)?.napomenaObracuna || "";
   const spremiDoplatak = (zaposlenikId, patch) => {
     const postojeci = (db.doplaciPlaca || []).find((d) => d.zaposlenikId === zaposlenikId && d.mjesec === mjesec);
     if (postojeci) {
@@ -16323,6 +16402,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true, mojId })
   // Isti oblik retka kao Radiona, da se za ispis (A4 PDF) koristi isti obrazac: sati iz evidencije i neto iznos kao iznos i isplata.
   const montazaDEKaoRadiona = useMemo(() => redoviMontazaDE.map((r) => ({
     ...PRAZAN_REDAK_OBRACUNA, zaposlenik: r.zaposlenik, brojDana: r.brojDana, dani: r.dani, satiEvidencija: r.sati,
+    godisnjiSati: r.godisnjiSati, bolovanjeSati: r.bolovanjeSati, ocinskiSati: r.ocinskiSati, roditeljskiSati: r.roditeljskiSati, dopustSati: r.dopustSati,
     redovni: r.sati, redovniPrikaz: r.sati, iznosRedovni: r.neto, putni: 0, dodaciUkupno: 0, ukupno: r.neto, isplata: r.neto,
   })), [redoviMontazaDE]);
 
@@ -16505,7 +16585,14 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true, mojId })
               {redoviMontazaDE.map((r) => (
                 <tr key={r.zaposlenik.id}>
                   <td><strong>{r.zaposlenik.prezime} {r.zaposlenik.ime}</strong></td>
-                  <td className="f-mono">{r.sati.toFixed(1)} h</td>
+                  <td className="f-mono">
+                    {r.sati.toFixed(1)} h
+                    {(r.godisnjiSati > 0 || r.bolovanjeSati + r.ocinskiSati + r.roditeljskiSati > 0 || r.dopustSati > 0) && (
+                      <div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>
+                        {[r.godisnjiSati > 0 && `GO ${r.godisnjiSati} h`, r.bolovanjeSati + r.ocinskiSati + r.roditeljskiSati > 0 && `BO ${r.bolovanjeSati + r.ocinskiSati + r.roditeljskiSati} h`, r.dopustSati > 0 && `dopust ${r.dopustSati} h`].filter(Boolean).join(" · ")}
+                      </div>
+                    )}
+                  </td>
                   <td>
                     <input className="input f-mono" type="number" min="0" step="0.01" disabled={!mozeMijenjati} style={{ padding: "5px 8px" }} key={`${r.zaposlenik.id}-${mjesec}-${r.neto}`} defaultValue={r.neto || ""}
                       onBlur={(e) => { const v = e.target.value === "" ? 0 : Math.max(0, Number(e.target.value) || 0); if (v !== r.neto) spremiDoplatak(r.zaposlenik.id, { netoDE: v }); }} />
@@ -16614,6 +16701,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true, mojId })
               <span>{detaljZaposlenik.jeUred ? "Fiksna neto plaća (ured)" : `Redovni rad (${detaljZaposlenik.redovni.toFixed(1)} h)`}</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosRedovni)}</span>
               <span>Prekovremeni ({detaljZaposlenik.prekovremeni.toFixed(1)} h{detaljZaposlenik.visakPrekovremenihSati > 0 && <span style={{ color: "var(--ink-faint)" }}> — stvarno {detaljZaposlenik.prekovremeniStvarno.toFixed(1)} h, {detaljZaposlenik.visakPrekovremenihSati.toFixed(1)} h u stimulaciji</span>})</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosPrekovremeni)}</span>
               {detaljZaposlenik.prebijenoSati > 0 && <><span style={{ color: "var(--ink-faint)", fontSize: 11 }}>— od toga {detaljZaposlenik.prebijenoSati.toFixed(1)} h prekovremenih prebijeno s manjkom sati u mjesecu (plaćeno kao redovni)</span><span></span></>}
+              {(detaljZaposlenik.obrokPrilagodbe || []).length > 0 && <><span style={{ color: "var(--ink-faint)", fontSize: 11 }}>— obroci pri prebijanju manjka: {detaljZaposlenik.obrokPrilagodbe.map((p) => `${fmtDate(p.datum)} ${p.promjena > 0 ? "+1 obrok (dan nadopunjen na" : "−1 obrok (preostalo"} ${String(Math.round(p.sati * 100) / 100).replace(".", ",")} h)`).join("; ")}</span><span></span></>}
               {detaljZaposlenik.manjakPreostalo > 0 && <><span style={{ color: "var(--ink-faint)", fontSize: 11 }}>— manjak sati koji nema čime namiriti: {detaljZaposlenik.manjakPreostalo.toFixed(1)} h{detaljZaposlenik.jeUred ? " (fiksna plaća je razmjerno umanjena, na obračunskom listu prikazuje se puni fond)" : detaljZaposlenik.manjakPreostalo <= 1.0001 && " (na obračunskom listu prikazuje se puni fond)"}</span><span></span></>}
               <span>Godišnji / praznici / plaćeni dopust ({detaljZaposlenik.placeniNerad.toFixed(1)} h)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.iznosNerad)}</span>
               {detaljZaposlenik.detasmanSati > 0 && <><span style={{ color: "var(--ink-faint)", fontSize: 11 }}>Detašman: {detaljZaposlenik.detasmanSati.toFixed(1)} h — ne isplaćuje se u plaći (samo napomena na obračunskom listu)</span><span></span></>}
@@ -16735,15 +16823,17 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true, mojId })
           redovi={printGrupa === "radiona" ? radionaRedovi : printGrupa === "praktikant" ? praktikantiRedovi : tehnickiRedovi}
           naslovGrupe={printGrupa === "radiona" ? "Radiona" : printGrupa === "praktikant" ? "Praktikanti" : "Tehnički ured i administracija"}
           mjesec={mjesec} db={db} onClose={() => setPrintGrupa(null)}
+          napomena={napomenaGrupe(printGrupa)} onNapomena={(tekst) => spremiDoplatak(`grupa-${printGrupa}`, { napomenaObracuna: tekst })} mozeMijenjati={mozeMijenjati}
         />
       )}
-      {printGrupa === "kooperant" && <ObracunKooperantiPrintModal redovi={redoviKooperanti} mjesec={mjesec} db={db} onClose={() => setPrintGrupa(null)} />}
+      {printGrupa === "kooperant" &&<ObracunKooperantiPrintModal redovi={redoviKooperanti} mjesec={mjesec} db={db} onClose={() => setPrintGrupa(null)} />}
       {printGrupa === "montazaDE" && (
         <ObracunPlacaPrintModal
           redovi={montazaDEKaoRadiona} naslovGrupe="Montaža DE (izaslani radnici)" naslovDodatak=" - Isplata u HR"
           naslovPdfa="OBRAČUN PLAĆE · Montaža DE (izaslani radnici) - isplata u HR"
           nazivDatoteke="Montaza de (izaslani radnici ) - isplata u HR"
           mjesec={mjesec} db={db} onClose={() => setPrintGrupa(null)}
+          napomena={napomenaGrupe("montazaDE")} onNapomena={(tekst) => spremiDoplatak("grupa-montazaDE", { napomenaObracuna: tekst })} mozeMijenjati={mozeMijenjati}
         />
       )}
     </div>
@@ -16845,9 +16935,12 @@ function OdbiciUredjivac({ odbici, onChange, disabled, prosliMjesec }) {
 // sati vode pod BO da fond ostane pun) i detašman prikazuju se kao popis raspona datuma ispod tablice;
 // bolovanje se evidentira ali ne obračunava (vidi obracunDana) pa nosi napomenu "dodati", a detašman
 // se ne isplaćuje u plaći pa nema stupca. Poziv na broj se ne može izvesti automatski pa ostaje ručno polje.
-function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose, naslovPdfa = null, nazivDatoteke = null, naslovDodatak = "" }) {
+// Napomena ispod tablice (npr. tko i koliko sati je neplaćeno, isplata po Ugovoru): upisuje se ručno u prozoru pregleda, sprema se po skupini i mjesecu
+// (u doplaciPlaca kao zapis grupa-<skupina>) i ispisuje iznad popisa bolovanja.
+function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose, naslovPdfa = null, nazivDatoteke = null, naslovDodatak = "", napomena = "", onNapomena = null, mozeMijenjati = false }) {
   const t = db.postavkeTvrtke || {};
   const [pozivBroj, setPozivBroj] = useState("");
+  const [napomenaTekst, setNapomenaTekst] = useState(napomena);
   const [prikaziTeren, setPrikaziTeren] = useState(false);
   const [gmesec, gg] = mjesec.split("-");
 
@@ -16912,6 +17005,14 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose, nasl
         <input type="checkbox" checked={prikaziTeren} onChange={(e) => setPrikaziTeren(e.target.checked)} />
         Prikaži stupac „Terenski Njemačka“ (za mjesec u kojem je bilo terena)
       </label>
+      {onNapomena && (
+        <div style={{ marginBottom: 12 }}>
+          <div className="label">Napomena na ispisu (iznad bolovanja)</div>
+          <textarea className="textarea" rows={3} disabled={!mozeMijenjati} aria-label="Napomena na ispisu obračuna" value={napomenaTekst} placeholder="npr. Ime Prezime: 16 h neplaćeno — isplata po Ugovoru"
+            onChange={(e) => setNapomenaTekst(e.target.value)} onBlur={() => { if (napomenaTekst !== napomena) onNapomena(napomenaTekst); }} />
+          <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 2 }}>Sprema se uz ovu skupinu i mjesec (izlaz iz polja). Prazno polje se ne ispisuje.</div>
+        </div>
+      )}
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
         <style>{"@page { size: A4 landscape; } .placa-list thead { display: table-header-group; } .placa-list tr { break-inside: avoid; page-break-inside: avoid; }"}</style>
         <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 12, marginBottom: 8 }}>
@@ -16934,6 +17035,13 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose, nasl
           </table>
           <div style={{ textAlign: "right", fontWeight: 700, fontSize: 11, marginTop: 6, paddingRight: 4 }}>{fmtCurDec(ukupnaIsplata)}</div>
         </div>
+
+        {napomenaTekst.trim() && (
+          <div style={{ marginTop: 18, fontSize: 10.5 }}>
+            <div style={{ fontWeight: 700, textDecoration: "underline", marginBottom: 4 }}>Napomena:</div>
+            <div style={{ whiteSpace: "pre-wrap" }}>{napomenaTekst.trim()}</div>
+          </div>
+        )}
 
         {goZamjene.length > 0 && (
           <div style={{ marginTop: 18, fontSize: 10.5 }}>
