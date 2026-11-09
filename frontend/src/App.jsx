@@ -5821,6 +5821,7 @@ const STALNI_POSLOVI = [
   { id: "stalni-A", slovo: "A", naziv: "Brigadirski poslovi" },
   { id: "stalni-O", slovo: "O", naziv: "Pakiranje" },
   { id: "stalni-P", slovo: "P", naziv: "Utovar - istovar", projekt: true },
+  { id: "stalni-Q", slovo: "Q", naziv: "Priprema alata za montažu", projekt: true },
   { id: "stalni-R", slovo: "R", naziv: "Čekanje na dokumentaciju" },
   { id: "stalni-S", slovo: "S", naziv: "Čišćenje" },
   { id: "stalni-T", slovo: "T", naziv: "Održavanje" },
