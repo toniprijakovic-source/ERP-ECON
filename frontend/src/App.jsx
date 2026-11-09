@@ -9,7 +9,7 @@ import {
 import logoEcon from "./assets/logo-econ.jpg";
 import QRCode from "qrcode";
 import { napraviPdfUpitaMaterijala, napraviPdfPonude, napraviEml, preuzmiDatoteku, potpisEmail } from "./pdfNabave";
-import { statistikaIsporuka, tezinaOtpremnice as tezinaOtpremniceLogika } from "./statistikaIsporuka";
+import { statistikaIsporuka, statistikaGodine, tezinaOtpremnice as tezinaOtpremniceLogika, tezinaStavkeOtpremnice } from "./statistikaIsporuka";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
@@ -8094,10 +8094,16 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, patchProjekt, show
   const azurirajOpis = (i, val) => setForm({ ...form, stavke: form.stavke.map((s, idx) => (idx === i ? { ...s, opis: val } : s)) });
   const [opisOtvoren, setOpisOtvoren] = useState({}); // { [stavkaId]: true } — red s dodatnim opisom stavke je otvoren
 
-  const spremi = () => {
+  const [bezTezine, setBezTezine] = useState(0); // broj stavki bez poznate težine — otvara upozorenje prije spremanja
+  const spremi = (preskociProvjeruTezine = false) => {
     const stavke = form.stavke.filter((s) => Number(s.kolicina) > 0).map(({ pbBrojevi, ...s }) => ({ ...s, kolicina: Number(s.kolicina) }));
     if (stavke.length === 0) { showToast("Unesi količinu za barem jednu stavku."); return; }
     const novaOtpremnica = { ...form, id: uid("otp"), stavke };
+    // Težina ide u Statistiku isporuka (DZS): upozori ako za neku stavku nije poznata ni na otpremnici, ni u narudžbi, ni u projektu.
+    if (!preskociProvjeruTezine) {
+      const t = tezinaOtpremnice(novaOtpremnica, db);
+      if (t.nedostaje > 0) { setBezTezine(t.nedostaje); return; }
+    }
     update("otpremnice", [...db.otpremnice, novaOtpremnica]);
     if (koristiNormativ) {
       const ukljucenIds = new Set(stavke.flatMap((s) => s.isporukaIds || []).filter(Boolean));
@@ -8110,7 +8116,16 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, patchProjekt, show
   };
 
   return (
-    <Modal wide title="Nova otpremnica" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi}>Kreiraj otpremnicu</Btn></>}>
+    <Modal wide title="Nova otpremnica" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={() => spremi(false)}>Kreiraj otpremnicu</Btn></>}>
+      {bezTezine > 0 && (
+        <div className="card" style={{ padding: "10px 12px", marginBottom: 12, background: "#FFF6DE", borderColor: "#F5D98A", fontSize: 12.5 }}>
+          Za <strong>{bezTezine}</strong> {bezTezine === 1 ? "stavku" : "stavki"} težina nije poznata (nije upisana u stupcu „Masa (kg)“, a nema je ni u narudžbi ni u projektu), pa neće biti u Statistici isporuka za DZS.
+          <span style={{ marginLeft: 10 }}>
+            <Btn size="sm" onClick={() => setBezTezine(0)}>Vrati se i upiši</Btn>{" "}
+            <Btn size="sm" variant="primary" onClick={() => { setBezTezine(0); spremi(true); }}>Kreiraj bez težine</Btn>
+          </span>
+        </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
         <Field label="Broj otpremnice"><input className="input f-mono" value={form.broj} disabled /></Field>
         <Field label="Datum"><input className="input" type="date" value={form.datum} onChange={(e) => setForm({ ...form, datum: e.target.value, broj: sljedeciBrojOtpremnice(db.otpremnice, e.target.value) })} /></Field>
@@ -15102,91 +15117,277 @@ function XRechnungTab({ db, update, showToast, mozeMijenjati }) {
   );
 }
 
-// Statistika isporuka: kilogrami otpremljeni kupcima u mjesecu, odvojeno inozemstvo (otpremnica je u CMR-u) i tuzemstvo (bez CMR-a).
-// Mjesec po datumu otpremnice; otpremnice kooperantima (dorade) se ne ubrajaju. Samo pregled, ništa se ne sprema.
-function StatistikaIsporukaTab({ db, showToast }) {
+// Upis težine stavki otpremnice kojima težina nije poznata (ni na otpremnici, ni u narudžbi kupca, ni u projektu) — izravno iz Statistike isporuka.
+function UpisTezineOtpremniceModal({ otpremnica, db, update, showToast, onClose }) {
+  const izvori = { narudzbe: db.narudzbe || [], projekti: db.projekti || [] };
+  const redci = (otpremnica.stavke || []).map((s, i) => ({ s, i, t: tezinaStavkeOtpremnice(s, otpremnica, izvori) }));
+  const [unos, setUnos] = useState({});
+  const spremi = () => {
+    const nove = (otpremnica.stavke || []).map((s, i) => { const v = Number(String(unos[i] ?? "").replace(",", ".")); return v > 0 ? { ...s, masaKg: v } : s; });
+    if (nove.every((s, i) => s === otpremnica.stavke[i])) { showToast("Nije upisana nijedna težina."); return; }
+    update("otpremnice", db.otpremnice.map((o) => (o.id === otpremnica.id ? { ...o, stavke: nove } : o)));
+    showToast("Težina upisana na otpremnicu.");
+    onClose();
+  };
+  return (
+    <Modal wide title={`Težina stavki — otpremnica ${otpremnica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi}>Spremi težine</Btn></>}>
+      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 0 }}>Upiši ukupnu masu (kg) cijele stavke, ne po komadu. Upisuje se na samu otpremnicu (isto polje kao „Masa (kg)“ pri izdavanju) i ulazi u statistiku.</p>
+      <table className="erp-table">
+        <thead><tr><th>Stavka</th><th style={{ width: 110 }}>Količina</th><th style={{ width: 150 }}>Masa (kg)</th></tr></thead>
+        <tbody>
+          {redci.map(({ s, i, t }) => (
+            <tr key={s.id || i}>
+              <td>{s.naziv || "—"}{s.opis ? <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{s.opis}</div> : null}</td>
+              <td className="f-mono">{s.kolicina} {s.jm || ""}</td>
+              <td>{t > 0
+                ? <span className="f-mono" style={{ color: "var(--ink-soft)" }}>{(Math.round(t * 10) / 10).toString().replace(".", ",")} kg</span>
+                : <input className="input f-mono" type="number" min="0" step="0.1" aria-label={`Masa stavke ${i + 1} (kg)`} placeholder="npr. 450" style={{ padding: "5px 8px" }} value={unos[i] ?? ""} onChange={(e) => setUnos({ ...unos, [i]: e.target.value })} />}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Modal>
+  );
+}
+
+// Ručni unos ukupnih iznosa za mjesec (npr. prije nego što su otpremnice u ERP-u, iz izvješća poslanog DZS-u).
+function RucniMjesecStatistikeModal({ mjesec, zapis, onSpremi, onUkloni, onClose }) {
+  const [f, setF] = useState({ inoKg: zapis?.ino?.kg ?? "", inoBroj: zapis?.ino?.broj ?? "", tuzKg: zapis?.tuz?.kg ?? "", tuzBroj: zapis?.tuz?.broj ?? "", napomena: zapis?.napomena || "" });
+  const br = (v) => Number(String(v ?? "").replace(",", ".")) || 0;
+  return (
+    <Modal title={`Ručni unos — ${nazivMjeseca(mjesec)}`} onClose={onClose} footer={<>{zapis && <Btn variant="ghost" onClick={onUkloni}>Ukloni ručni unos</Btn>}<Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={() => onSpremi({ izvor: "rucno", ino: { kg: br(f.inoKg), broj: br(f.inoBroj) }, tuz: { kg: br(f.tuzKg), broj: br(f.tuzBroj) }, napomena: f.napomena.trim() })}>Spremi</Btn></>}>
+      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 0 }}>Za mjesec s ručnim unosom u godišnjem pregledu vrijede ovi iznosi, a ne izračun iz otpremnica. Namijenjeno mjesecima prije otpremnica u ERP-u ili prepisu poslanog izvješća.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <Field label="Inozemstvo (kg)"><input className="input f-mono" type="number" min="0" step="0.1" value={f.inoKg} onChange={(e) => setF({ ...f, inoKg: e.target.value })} /></Field>
+        <Field label="Inozemstvo — broj otpremnica (neobavezno)"><input className="input f-mono" type="number" min="0" value={f.inoBroj} onChange={(e) => setF({ ...f, inoBroj: e.target.value })} /></Field>
+        <Field label="Tuzemstvo (kg)"><input className="input f-mono" type="number" min="0" step="0.1" value={f.tuzKg} onChange={(e) => setF({ ...f, tuzKg: e.target.value })} /></Field>
+        <Field label="Tuzemstvo — broj otpremnica (neobavezno)"><input className="input f-mono" type="number" min="0" value={f.tuzBroj} onChange={(e) => setF({ ...f, tuzBroj: e.target.value })} /></Field>
+      </div>
+      <Field label="Napomena / izvor"><input className="input" placeholder="npr. izvješće poslano DZS-u" value={f.napomena} onChange={(e) => setF({ ...f, napomena: e.target.value })} /></Field>
+    </Modal>
+  );
+}
+
+// Statistika isporuka: kilogrami otpremljeni kupcima, odvojeno inozemstvo / tuzemstvo (pravilo smjera: vidi smjerOtpremnice u statistikaIsporuka.js).
+// Mjesec po datumu otpremnice; otpremnice kooperantima (dorade) se ne ubrajaju. Pregled po mjesecu i po godini. Mjesec se može zaključati kad je
+// poslan DZS-u (brojke se zamrznu), a za mjesece prije otpremnica u ERP-u ukupni iznosi se unose ručno — oboje u db.statistikaIsporuka.mjeseci.
+function StatistikaIsporukaTab({ db, update, showToast, mojId, mozeMijenjati = false }) {
+  const [prikaz, setPrikaz] = useState("mjesec");
   const [mjesec, setMjesec] = useState(todayISO().slice(0, 7));
-  const r = useMemo(() => statistikaIsporuka({ otpremnice: db.otpremnice || [], cmr: db.cmr || [] }, mjesec, (o) => tezinaOtpremnice(o, db)), [db.otpremnice, db.cmr, db.narudzbe, db.projekti, mjesec]);
+  const [godina, setGodina] = useState(Number(todayISO().slice(0, 4)));
+  const [tezinaZa, setTezinaZa] = useState(null); // otpremnica kojoj se upisuju težine
+  const [rucnoZa, setRucnoZa] = useState(null); // mjesec za ručni unos
+  const [potvrdaZakljucaj, setPotvrdaZakljucaj] = useState(false);
+  const spremljenoSve = db.statistikaIsporuka && !Array.isArray(db.statistikaIsporuka) ? db.statistikaIsporuka : {};
+  const spremljeno = spremljenoSve.mjeseci || {};
+  const podaci = { otpremnice: db.otpremnice || [], cmr: db.cmr || [], kupci: db.kupci || [] };
+  const r = useMemo(() => statistikaIsporuka(podaci, mjesec, (o) => tezinaOtpremnice(o, db)), [db.otpremnice, db.cmr, db.kupci, db.narudzbe, db.projekti, mjesec]);
+  const g = useMemo(() => statistikaGodine(podaci, godina, (o) => tezinaOtpremnice(o, db), spremljeno), [db.otpremnice, db.cmr, db.kupci, db.narudzbe, db.projekti, db.statistikaIsporuka, godina]);
   const kg = (n) => `${(Number(n) || 0).toLocaleString("hr-HR", { maximumFractionDigits: 1 })} kg`;
+  const kgTxt = (n) => (Math.round((Number(n) || 0) * 10) / 10).toString().replace(".", ",");
   const kupac = (o) => db.kupci.find((k) => k.id === o.kupacId)?.naziv || "—";
   const projekt = (o) => db.projekti.find((p) => p.id === o.projektId)?.sifra || "";
+  const korisnik = () => { const z = (db.zaposlenici || []).find((x) => x.id === mojId); return z ? `${z.prezime} ${z.ime}` : ""; };
+  const spremiMjesec = (mj, zapis) => update("statistikaIsporuka", { ...spremljenoSve, mjeseci: { ...spremljeno, [mj]: { ...zapis, datum: todayISO(), korisnik: korisnik() } } });
+  const ukloniMjesec = (mj) => { const { [mj]: _, ...ostali } = spremljeno; update("statistikaIsporuka", { ...spremljenoSve, mjeseci: ostali }); };
+  const zapisMjeseca = spremljeno[mjesec] || null;
+  const postaviSmjer = (o, smjer) => update("otpremnice", db.otpremnice.map((x) => { if (x.id !== o.id) return x; const { smjer: _, ...bez } = x; return smjer ? { ...bez, smjer } : bez; }));
   const bezTezine = r.ukupno.bezTezine;
   const zaglavlja = ["#Broj otpremnice", "#Datum", "Kupac", "#Projekt", "Smjer", "#CMR", ">Težina (kg)"];
-  const redoviIzvoza = (smjer) => r.redovi.filter((x) => (smjer === "inozemstvo" ? x.inozemstvo : !x.inozemstvo)).map((x) => [x.otpremnica.broj, fmtDate(x.otpremnica.datum), kupac(x.otpremnica), projekt(x.otpremnica), x.inozemstvo ? "Inozemstvo" : "Tuzemstvo", x.cmr?.broj || "", (Math.round(x.kg * 10) / 10).toString().replace(".", ",")]);
+  const redoviIzvoza = (smjer) => r.redovi.filter((x) => (smjer === "inozemstvo" ? x.inozemstvo : !x.inozemstvo)).map((x) => [x.otpremnica.broj, fmtDate(x.otpremnica.datum), kupac(x.otpremnica), projekt(x.otpremnica), x.inozemstvo ? "Inozemstvo" : "Tuzemstvo", x.cmr?.broj || "", kgTxt(x.kg)]);
+  const celija = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const preuzmiCsv = (linije, naziv) => {
+    const blob = new Blob(["﻿" + linije.join("\r\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = naziv;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
   const izvozCsv = () => {
-    const celija = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const zbroj = (naziv, s) => [mjesec, naziv, s.broj, String(s.kg).replace(".", ",")].map(celija).join(";");
-    const linije = [
+    preuzmiCsv([
       ["Mjesec", "Smjer", "Broj otpremnica", "Težina (kg)"].map(celija).join(";"),
       zbroj("Inozemstvo", r.inozemstvo), zbroj("Tuzemstvo", r.tuzemstvo), zbroj("Ukupno", r.ukupno),
       "",
       zaglavlja.map((z) => celija(z.replace(/^[#>]/, ""))).join(";"),
       ...["inozemstvo", "tuzemstvo"].flatMap(redoviIzvoza).map((red) => red.map(celija).join(";")),
-    ];
-    const blob = new Blob(["﻿" + linije.join("\r\n")], { type: "text/csv;charset=utf-8" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `statistika-isporuka-${mjesec}.csv`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    ], `statistika-isporuka-${mjesec}.csv`);
   };
   const ispis = () => ispisiTablicuPdf({
     naslov: `Statistika isporuka — ${nazivMjeseca(mjesec)}`,
     podnaslov: `Inozemstvo ${kg(r.inozemstvo.kg)} (${r.inozemstvo.broj}) · Tuzemstvo ${kg(r.tuzemstvo.kg)} (${r.tuzemstvo.broj})`,
     zaglavlja, redovi: ["inozemstvo", "tuzemstvo"].flatMap(redoviIzvoza),
-    podnozje: ["", "", "", "", "UKUPNO", "", (Math.round(r.ukupno.kg * 10) / 10).toString().replace(".", ",")],
+    podnozje: ["", "", "", "", "UKUPNO", "", kgTxt(r.ukupno.kg)],
+    nazivTvrtke: db.postavkeTvrtke?.naziv, showToast,
+  });
+  const izvorTekst = { izracun: "izračun", zakljucano: "zaključano", rucno: "ručno", prazno: "—" };
+  const redoviGodine = g.redovi.map((x) => [nazivMjeseca(x.mjesec), izvorTekst[x.izvor], kgTxt(x.ino.kg), kgTxt(x.tuz.kg), kgTxt(x.ukupno.kg)]);
+  const izvozGodineCsv = () => preuzmiCsv([
+    ["Mjesec", "Izvor", "Inozemstvo (kg)", "Tuzemstvo (kg)", "Ukupno (kg)", "Stavki bez težine"].map(celija).join(";"),
+    ...g.redovi.map((x) => [x.mjesec, izvorTekst[x.izvor], kgTxt(x.ino.kg), kgTxt(x.tuz.kg), kgTxt(x.ukupno.kg), x.bezTezine].map(celija).join(";")),
+    ["UKUPNO " + g.godina, "", kgTxt(g.ino.kg), kgTxt(g.tuz.kg), kgTxt(g.ukupno.kg), g.bezTezine].map(celija).join(";"),
+  ], `statistika-isporuka-${g.godina}.csv`);
+  const ispisGodine = () => ispisiTablicuPdf({
+    naslov: `Statistika isporuka — ${g.godina}.`,
+    podnaslov: `Inozemstvo ${kg(g.ino.kg)} · Tuzemstvo ${kg(g.tuz.kg)} · Ukupno ${kg(g.ukupno.kg)}`,
+    zaglavlja: ["#Mjesec", "Izvor", ">Inozemstvo (kg)", ">Tuzemstvo (kg)", ">Ukupno (kg)"], redovi: redoviGodine,
+    podnozje: ["UKUPNO", "", kgTxt(g.ino.kg), kgTxt(g.tuz.kg), kgTxt(g.ukupno.kg)],
     nazivTvrtke: db.postavkeTvrtke?.naziv, showToast,
   });
   const plocica = { flex: "1 1 190px", padding: "10px 14px" };
+  const badgeIzvora = (x) => (x.izvor === "zakljucano" ? <span className="badge badge-info">zaključano</span> : x.izvor === "rucno" ? <span className="badge badge-info">ručno</span> : x.izvor === "izracun" ? <span className="badge">izračun</span> : <span style={{ color: "var(--ink-faint)" }}>—</span>);
+
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
         <strong style={{ fontSize: 14 }}>Statistika isporuka</strong>
-        <MjesecOdabir value={mjesec} onChange={setMjesec} style={{ marginLeft: 8 }} />
+        <div style={{ display: "flex", gap: 14, marginLeft: 6 }}>
+          <div className={`nav-tab ${prikaz === "mjesec" ? "active" : ""}`} style={{ padding: "4px 8px", fontSize: 12.5 }} onClick={() => setPrikaz("mjesec")}>Po mjesecu</div>
+          <div className={`nav-tab ${prikaz === "godina" ? "active" : ""}`} style={{ padding: "4px 8px", fontSize: 12.5 }} onClick={() => setPrikaz("godina")}>Po godini</div>
+        </div>
+        {prikaz === "mjesec"
+          ? <MjesecOdabir value={mjesec} onChange={setMjesec} style={{ marginLeft: 8 }} />
+          : <select className="select" aria-label="Godina" style={{ width: 100, marginLeft: 8 }} value={godina} onChange={(e) => setGodina(Number(e.target.value))}>{[...new Set([2024, 2025, 2026, 2027, Number(todayISO().slice(0, 4)), godina])].sort().map((y) => <option key={y} value={y}>{y}.</option>)}</select>}
         <div style={{ flex: 1 }} />
-        <Btn size="sm" icon={Download} onClick={izvozCsv} disabled={r.ukupno.broj === 0}>Excel (CSV)</Btn>
-        <Btn size="sm" icon={Eye} onClick={ispis} disabled={r.ukupno.broj === 0}>Ispis / PDF</Btn>
+        {prikaz === "mjesec" ? (
+          <>
+            <Btn size="sm" icon={Download} onClick={izvozCsv} disabled={r.ukupno.broj === 0}>Excel (CSV)</Btn>
+            <Btn size="sm" icon={Eye} onClick={ispis} disabled={r.ukupno.broj === 0}>Ispis / PDF</Btn>
+          </>
+        ) : (
+          <>
+            <Btn size="sm" icon={Download} onClick={izvozGodineCsv}>Excel (CSV)</Btn>
+            <Btn size="sm" icon={Eye} onClick={ispisGodine}>Ispis / PDF</Btn>
+          </>
+        )}
       </div>
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-        <div className="card" style={plocica}>
-          <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Inozemstvo</div>
-          <div className="f-mono" style={{ fontWeight: 700, fontSize: 20, color: "var(--steel)" }}>{kg(r.inozemstvo.kg)}</div>
-          <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{r.inozemstvo.broj} otpremnica, CMR-ova: {r.cmrBroj}</div>
-        </div>
-        <div className="card" style={plocica}>
-          <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Tuzemstvo</div>
-          <div className="f-mono" style={{ fontWeight: 700, fontSize: 20, color: "var(--steel)" }}>{kg(r.tuzemstvo.kg)}</div>
-          <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{r.tuzemstvo.broj} otpremnica bez CMR-a</div>
-        </div>
-        <div className="card" style={plocica}>
-          <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Ukupno</div>
-          <div className="f-mono" style={{ fontWeight: 700, fontSize: 20 }}>{kg(r.ukupno.kg)}</div>
-          <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{r.ukupno.broj} otpremnica</div>
-        </div>
-      </div>
-      {bezTezine > 0 && <div className="card" style={{ padding: "8px 12px", marginBottom: 10, background: "#FFF6DE", borderColor: "#F5D98A", fontSize: 12.5 }}>Za dio stavki otpremnica težina nije upisana (ni na otpremnici ni u narudžbi), pa nije u zbroju — broj takvih stavki: {bezTezine}. Upišite je u otpremnici ili provjerite narudžbu.</div>}
-      {r.inozemstvo.broj > 0 && <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 6 }}>Za usporedbu: bruto težina upisana na tim CMR-ovima iznosi {kg(r.cmrBruto)} (zbroj otpremnica je neto prema stavkama).</div>}
-      <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 10 }}>Pravilo: inozemstvo = otpremnica kupcu koja je u nekom CMR-u; tuzemstvo = otpremnica kupcu bez CMR-a. Mjesec se određuje po datumu otpremnice. Otpremnice kooperantima (dorade) se ne ubrajaju{r.kooperantske > 0 ? ` — u ovom mjesecu ih je ${r.kooperantske}` : ""}.</div>
-      {r.redovi.length === 0 ? <EmptyState text={`Nema otpremnica kupcima u mjesecu ${nazivMjeseca(mjesec)}`} /> : (
-        <div style={{ overflowX: "auto" }}>
-          <table className="erp-table">
-            <thead><tr><th>Otpremnica</th><th>Datum</th><th>Kupac</th><th>Projekt</th><th>Smjer</th><th>CMR</th><th style={{ textAlign: "right" }}>Težina</th></tr></thead>
-            <tbody>
-              {r.redovi.map((x) => (
-                <tr key={x.otpremnica.id}>
-                  <td className="f-mono">{x.otpremnica.broj}</td>
-                  <td>{fmtDate(x.otpremnica.datum)}</td>
-                  <td>{kupac(x.otpremnica)}</td>
-                  <td className="f-mono">{projekt(x.otpremnica)}</td>
-                  <td>{x.inozemstvo ? <span className="badge badge-info">Inozemstvo</span> : <span className="badge">Tuzemstvo</span>}</td>
-                  <td className="f-mono">{x.cmr?.broj || "—"}</td>
-                  <td className="f-mono" style={{ textAlign: "right" }}>{x.kg > 0 ? kg(x.kg) : <span style={{ color: "var(--rust)" }}>nema težine</span>}{x.kg > 0 && x.nedostaje > 0 ? <span style={{ color: "var(--rust)" }}> (+{x.nedostaje} bez)</span> : ""}</td>
+
+      {prikaz === "godina" && (
+        <>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+            <div className="card" style={plocica}><div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Inozemstvo {g.godina}.</div><div className="f-mono" style={{ fontWeight: 700, fontSize: 20, color: "var(--steel)" }}>{kg(g.ino.kg)}</div></div>
+            <div className="card" style={plocica}><div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Tuzemstvo {g.godina}.</div><div className="f-mono" style={{ fontWeight: 700, fontSize: 20, color: "var(--steel)" }}>{kg(g.tuz.kg)}</div></div>
+            <div className="card" style={plocica}><div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Ukupno {g.godina}.</div><div className="f-mono" style={{ fontWeight: 700, fontSize: 20 }}>{kg(g.ukupno.kg)}</div></div>
+          </div>
+          {g.bezTezine > 0 && <div className="card" style={{ padding: "8px 12px", marginBottom: 10, background: "#FFF6DE", borderColor: "#F5D98A", fontSize: 12.5 }}>U izračunatim mjesecima ima {g.bezTezine} stavki otpremnica bez težine — nisu u zbroju. Težinu možete upisati u prikazu „Po mjesecu“.</div>}
+          <div style={{ overflowX: "auto" }}>
+            <table className="erp-table">
+              <thead><tr><th>Mjesec</th><th>Izvor</th><th style={{ textAlign: "right" }}>Inozemstvo</th><th style={{ textAlign: "right" }}>Tuzemstvo</th><th style={{ textAlign: "right" }}>Ukupno</th><th style={{ textAlign: "right" }}>Bez težine</th><th style={{ width: 150 }}></th></tr></thead>
+              <tbody>
+                {g.redovi.map((x) => (
+                  <tr key={x.mjesec}>
+                    <td><a href="#" onClick={(e) => { e.preventDefault(); setMjesec(x.mjesec); setPrikaz("mjesec"); }}>{nazivMjeseca(x.mjesec)}</a>
+                      {x.spremljeno?.napomena ? <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{x.spremljeno.napomena}</div> : null}
+                      {x.razlika && (x.razlika.ino !== 0 || x.razlika.tuz !== 0) ? <div style={{ fontSize: 11, color: "var(--rust)" }}>od zaključavanja: inozemstvo {x.razlika.ino > 0 ? "+" : ""}{kgTxt(x.razlika.ino)} kg, tuzemstvo {x.razlika.tuz > 0 ? "+" : ""}{kgTxt(x.razlika.tuz)} kg</div> : null}</td>
+                    <td>{badgeIzvora(x)}{x.spremljeno?.datum ? <div style={{ fontSize: 10.5, color: "var(--ink-faint)" }}>{fmtDate(x.spremljeno.datum)}</div> : null}</td>
+                    <td className="f-mono" style={{ textAlign: "right" }}>{x.izvor === "prazno" ? "—" : kg(x.ino.kg)}</td>
+                    <td className="f-mono" style={{ textAlign: "right" }}>{x.izvor === "prazno" ? "—" : kg(x.tuz.kg)}</td>
+                    <td className="f-mono" style={{ textAlign: "right", fontWeight: 600 }}>{x.izvor === "prazno" ? "—" : kg(x.ukupno.kg)}</td>
+                    <td className="f-mono" style={{ textAlign: "right", color: x.bezTezine > 0 ? "var(--rust)" : "var(--ink-faint)" }}>{x.bezTezine > 0 ? x.bezTezine : "—"}</td>
+                    <td style={{ textAlign: "right" }}>{mozeMijenjati && x.izvor !== "zakljucano" && <Btn size="sm" variant="ghost" onClick={() => setRucnoZa(x.mjesec)}>{x.izvor === "rucno" ? "Uredi ručni unos" : "Unesi ručno"}</Btn>}</td>
+                  </tr>
+                ))}
+                <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
+                  <td>UKUPNO {g.godina}.</td><td></td>
+                  <td className="f-mono" style={{ textAlign: "right" }}>{kg(g.ino.kg)}</td><td className="f-mono" style={{ textAlign: "right" }}>{kg(g.tuz.kg)}</td><td className="f-mono" style={{ textAlign: "right" }}>{kg(g.ukupno.kg)}</td><td></td><td></td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </tbody>
+            </table>
+          </div>
+          <p style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 10 }}>Izvor: <strong>izračun</strong> = iz otpremnica u ERP-u; <strong>zaključano</strong> = brojke poslane DZS-u (zamrznute); <strong>ručno</strong> = uneseni ukupni iznosi (npr. mjeseci prije nego što su otpremnice u ERP-u). Mjesec s ručnim unosom ili zaključanjem ne mijenja se kad se otpremnice kasnije ispravljaju.</p>
+        </>
       )}
+
+      {prikaz === "mjesec" && (
+        <>
+          {zapisMjeseca && (
+            <div className="card" style={{ padding: "8px 12px", marginBottom: 10, background: "#EEF3F7", fontSize: 12.5 }}>
+              {zapisMjeseca.izvor === "zakljucano" ? (
+                <>
+                  <strong>Mjesec je zaključan</strong> ({fmtDate(zapisMjeseca.datum)}{zapisMjeseca.korisnik ? `, ${zapisMjeseca.korisnik}` : ""}): poslano inozemstvo <strong>{kg(zapisMjeseca.ino?.kg)}</strong>, tuzemstvo <strong>{kg(zapisMjeseca.tuz?.kg)}</strong>.
+                  {(Math.abs(r.inozemstvo.kg - (zapisMjeseca.ino?.kg || 0)) > 0.05 || Math.abs(r.tuzemstvo.kg - (zapisMjeseca.tuz?.kg || 0)) > 0.05) && <span style={{ color: "var(--rust)" }}> Današnji izračun iz otpremnica se razlikuje: inozemstvo {kg(r.inozemstvo.kg)}, tuzemstvo {kg(r.tuzemstvo.kg)}.</span>}
+                  {mozeMijenjati && <> <Btn size="sm" variant="ghost" onClick={() => ukloniMjesec(mjesec)}>Otključaj</Btn></>}
+                </>
+              ) : (
+                <>
+                  <strong>Za ovaj mjesec su iznosi uneseni ručno</strong>: inozemstvo {kg(zapisMjeseca.ino?.kg)}, tuzemstvo {kg(zapisMjeseca.tuz?.kg)}{zapisMjeseca.napomena ? ` (${zapisMjeseca.napomena})` : ""}. U godišnjem pregledu vrijedi ručni unos, a popis ispod je izračun iz otpremnica.
+                  {mozeMijenjati && <> <Btn size="sm" variant="ghost" onClick={() => setRucnoZa(mjesec)}>Uredi</Btn></>}
+                </>
+              )}
+            </div>
+          )}
+          {!zapisMjeseca && mozeMijenjati && r.ukupno.broj > 0 && !potvrdaZakljucaj && (
+            <div style={{ marginBottom: 10 }}><Btn size="sm" variant="ghost" onClick={() => setPotvrdaZakljucaj(true)}>Zaključaj mjesec (poslano DZS-u)</Btn></div>
+          )}
+          {potvrdaZakljucaj && (
+            <div className="card" style={{ padding: "10px 12px", marginBottom: 10, background: "#FFF6DE", borderColor: "#F5D98A", fontSize: 12.5 }}>
+              Zaključati {nazivMjeseca(mjesec)} s brojkama: inozemstvo <strong>{kg(r.inozemstvo.kg)}</strong>, tuzemstvo <strong>{kg(r.tuzemstvo.kg)}</strong>? Kasnije ispravljanje težina neće mijenjati te brojke (razlika će se pokazivati), a zaključanje se može ukloniti.
+              <span style={{ marginLeft: 10 }}>
+                <Btn size="sm" variant="primary" onClick={() => { spremiMjesec(mjesec, { izvor: "zakljucano", ino: { kg: r.inozemstvo.kg, broj: r.inozemstvo.broj }, tuz: { kg: r.tuzemstvo.kg, broj: r.tuzemstvo.broj }, napomena: "" }); setPotvrdaZakljucaj(false); showToast("Mjesec zaključan."); }}>Zaključaj</Btn>{" "}
+                <Btn size="sm" onClick={() => setPotvrdaZakljucaj(false)}>Odustani</Btn>
+              </span>
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+            <div className="card" style={plocica}>
+              <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Inozemstvo</div>
+              <div className="f-mono" style={{ fontWeight: 700, fontSize: 20, color: "var(--steel)" }}>{kg(r.inozemstvo.kg)}</div>
+              <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{r.inozemstvo.broj} otpremnica, CMR-ova: {r.cmrBroj}</div>
+            </div>
+            <div className="card" style={plocica}>
+              <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Tuzemstvo</div>
+              <div className="f-mono" style={{ fontWeight: 700, fontSize: 20, color: "var(--steel)" }}>{kg(r.tuzemstvo.kg)}</div>
+              <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{r.tuzemstvo.broj} otpremnica</div>
+            </div>
+            <div className="card" style={plocica}>
+              <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>Ukupno</div>
+              <div className="f-mono" style={{ fontWeight: 700, fontSize: 20 }}>{kg(r.ukupno.kg)}</div>
+              <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{r.ukupno.broj} otpremnica</div>
+            </div>
+          </div>
+          {bezTezine > 0 && <div className="card" style={{ padding: "8px 12px", marginBottom: 10, background: "#FFF6DE", borderColor: "#F5D98A", fontSize: 12.5 }}>Za dio stavki otpremnica težina nije upisana (ni na otpremnici, ni u narudžbi, ni u projektu), pa nije u zbroju — broj takvih stavki: {bezTezine}.{mozeMijenjati ? " Kliknite „Upiši težinu“ uz otpremnicu u popisu." : " Upišite je u otpremnici."}</div>}
+          {r.inozemstvo.broj > 0 && <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 6 }}>Za usporedbu: bruto težina upisana na CMR-ovima u ovom mjesecu iznosi {kg(r.cmrBruto)} (zbroj otpremnica je neto prema stavkama).</div>}
+          <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 10 }}>Smjer: ručno određen na otpremnici, inače inozemstvo ako je otpremnica u CMR-u ili kupac ima stranu državu (Kupci i dobavljači), inače tuzemstvo. Mjesec se određuje po datumu otpremnice. Otpremnice kooperantima (dorade) se ne ubrajaju{r.kooperantske > 0 ? ` — u ovom mjesecu ih je ${r.kooperantske}` : ""}.</div>
+          {r.redovi.length === 0 ? <EmptyState text={`Nema otpremnica kupcima u mjesecu ${nazivMjeseca(mjesec)}`} /> : (
+            <div style={{ overflowX: "auto" }}>
+              <table className="erp-table">
+                <thead><tr><th>Otpremnica</th><th>Datum</th><th>Kupac</th><th>Projekt</th><th>Smjer</th><th>CMR</th><th style={{ textAlign: "right" }}>Težina</th></tr></thead>
+                <tbody>
+                  {r.redovi.map((x) => (
+                    <tr key={x.otpremnica.id}>
+                      <td className="f-mono">{x.otpremnica.broj}</td>
+                      <td>{fmtDate(x.otpremnica.datum)}</td>
+                      <td>{kupac(x.otpremnica)}</td>
+                      <td className="f-mono">{projekt(x.otpremnica)}</td>
+                      <td>
+                        {x.inozemstvo ? <span className="badge badge-info">Inozemstvo</span> : <span className="badge">Tuzemstvo</span>}
+                        {x.izvorSmjera ? <span style={{ fontSize: 10.5, color: "var(--ink-faint)", marginLeft: 4 }}>{x.izvorSmjera}</span> : null}
+                        {mozeMijenjati && (
+                          <select className="select" aria-label={`Smjer otpremnice ${x.otpremnica.broj}`} style={{ display: "block", marginTop: 3, fontSize: 11.5, padding: "2px 4px" }} value={x.otpremnica.smjer || ""} onChange={(e) => postaviSmjer(x.otpremnica, e.target.value)}>
+                            <option value="">automatski</option>
+                            <option value="tuzemstvo">ručno: tuzemstvo</option>
+                            <option value="inozemstvo">ručno: inozemstvo</option>
+                          </select>
+                        )}
+                      </td>
+                      <td className="f-mono">{x.cmr?.broj || "—"}</td>
+                      <td className="f-mono" style={{ textAlign: "right" }}>
+                        {x.kg > 0 ? kg(x.kg) : <span style={{ color: "var(--rust)" }}>nema težine</span>}{x.kg > 0 && x.nedostaje > 0 ? <span style={{ color: "var(--rust)" }}> (+{x.nedostaje} bez)</span> : ""}
+                        {mozeMijenjati && x.nedostaje > 0 && <div><Btn size="sm" variant="ghost" onClick={() => setTezinaZa(x.otpremnica)}>Upiši težinu</Btn></div>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+      {tezinaZa && <UpisTezineOtpremniceModal otpremnica={db.otpremnice.find((o) => o.id === tezinaZa.id) || tezinaZa} db={db} update={update} showToast={showToast} onClose={() => setTezinaZa(null)} />}
+      {rucnoZa && <RucniMjesecStatistikeModal mjesec={rucnoZa} zapis={spremljeno[rucnoZa]?.izvor === "rucno" ? spremljeno[rucnoZa] : null} onClose={() => setRucnoZa(null)}
+        onSpremi={(z) => { spremiMjesec(rucnoZa, z); setRucnoZa(null); showToast("Ručni unos spremljen."); }}
+        onUkloni={() => { ukloniMjesec(rucnoZa); setRucnoZa(null); showToast("Ručni unos uklonjen."); }} />}
     </div>
   );
 }
@@ -15250,7 +15451,7 @@ function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, sh
 
       {tab === "otpremnice" && <OtpremniceTab db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeOtpremnice} />}
       {tab === "cmr" && <CmrTab db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mozeMijenjati={mozeCmr} mojId={mojId} />}
-      {tab === "statistika" && <StatistikaIsporukaTab db={db} showToast={showToast} />}
+      {tab === "statistika" && <StatistikaIsporukaTab db={db} update={update} showToast={showToast} mojId={mojId} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "otpremnice", "statistika").izmjene} />}
       {tab === "podloge" && <PodlogeZaFakturuTab db={db} update={update} showToast={showToast} mozeMijenjati={mozePodloge} mozeFakture={mozeFakture} onNapraviFakturu={otvoriFakturuIzPodloge} />}
       {tab === "fakturirano" && <FakturiranoPoMjesecimaTab db={db} />}
       {tab === "xrechnung" && <XRechnungTab db={db} update={update} showToast={showToast} mozeMijenjati={mozeXrechnung} />}
@@ -15444,6 +15645,13 @@ function PartneriPage({ db, update, showToast, mojaPozicija }) {
             <Field label="E-mail"><input className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
           </div>
           <Field label="Adresa"><input className="input" value={form.adresa || ""} onChange={(e) => setForm({ ...form, adresa: e.target.value })} /></Field>
+          {tab === "kupci" && (
+            <Field label="Država (neobavezno)">
+              <input className="input" list="drzave-kupaca-popis" value={form.drzava || ""} onChange={(e) => setForm({ ...form, drzava: e.target.value })} placeholder="prazno = Hrvatska" />
+              <datalist id="drzave-kupaca-popis">{["Hrvatska", "Njemačka", "Austrija", "Slovenija", "Italija", "Švicarska", "Bosna i Hercegovina"].map((d) => <option key={d} value={d} />)}</datalist>
+              <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 3 }}>Za Statistiku isporuka: kupac sa stranom državom računa se kao inozemstvo i kad otpremnica nije u CMR-u (smjer se može ručno promijeniti na pojedinoj otpremnici).</div>
+            </Field>
+          )}
           {tab === "dobavljaci" && (
             <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, marginBottom: 8 }}>
               <input type="checkbox" checked={!!form.prijevoznik} onChange={(e) => setForm({ ...form, prijevoznik: e.target.checked })} />
@@ -17432,7 +17640,12 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
     const noviSatiPoNalogu = [...bezStarih, ...noviRedovi];
 
     const sviDotaknuti = new Set([...dotaknutiStari, ...validni.map((r) => r.radniNalogId)]);
-    const noviRadniNalozi = db.radniNalozi.map((n) => (sviDotaknuti.has(n.id) ? { ...n, utrosenoSati: zbrojSatiZaNalog(n.id, noviSatiPoNalogu) } : n));
+    // Nalog koji dobije prve sate automatski prelazi iz "Planiran" u "U tijeku" (isto kao pri unosu u Planu proizvodnje → Danas – unos).
+    const noviRadniNalozi = db.radniNalozi.map((n) => {
+      if (!sviDotaknuti.has(n.id)) return n;
+      const utroseno = zbrojSatiZaNalog(n.id, noviSatiPoNalogu);
+      return { ...n, utrosenoSati: utroseno, ...(utroseno > 0 && n.status === "Planiran" ? { status: "U tijeku" } : {}) };
+    });
 
     update("satiPoNalogu", noviSatiPoNalogu);
     update("radniNalozi", noviRadniNalozi);

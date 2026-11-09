@@ -1,7 +1,7 @@
 // Provjere statistike isporuka (kg inozemstvo / tuzemstvo po mjesecu). Pokretanje: `npm test` u mapi frontend. Svi podaci su izmišljeni.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { statistikaIsporuka, tezinaOtpremnice } from "./statistikaIsporuka.js";
+import { statistikaIsporuka, statistikaGodine, tezinaOtpremnice } from "./statistikaIsporuka.js";
 
 const tezina = (o) => ({ ukupno: (o.stavke || []).reduce((s, x) => s + (Number(x.masaKg) || 0), 0), nedostaje: (o.stavke || []).filter((x) => !(Number(x.masaKg) > 0)).length });
 const otp = (id, datum, kg, extra = {}) => ({ id, broj: `OTP-${id}`, datum, vrsta: "kupac", stavke: [{ masaKg: kg }], ...extra });
@@ -63,4 +63,46 @@ test("težina otpremnice: upisana masa, pa narudžba, pa projekt kupaonica (masa
   ] };
   assert.deepEqual(tezinaOtpremnice(otpremnica, { narudzbe, projekti }), { ukupno: 400 + 300 + 20 + 50, nedostaje: 1 });
   assert.deepEqual(tezinaOtpremnice({ id: "x", stavke: [{ kolicina: 1 }] }, {}), { ukupno: 0, nedostaje: 1 });
+});
+
+test("smjer: ručno određen > CMR > država kupca > tuzemstvo", () => {
+  const kupci = [{ id: "k1", drzava: "Njemačka" }, { id: "k2", drzava: "Hrvatska" }, { id: "k3" }];
+  const otpremnice = [
+    otp("1", "2026-10-02", 100, { kupacId: "k1" }),                         // strani kupac bez CMR-a → inozemstvo (država kupca)
+    otp("2", "2026-10-03", 200, { kupacId: "k1", smjer: "tuzemstvo" }),     // ručno: preuzeto u Prelogu → tuzemstvo
+    otp("3", "2026-10-04", 300, { kupacId: "k2", smjer: "inozemstvo" }),    // ručno inozemstvo i uz hrvatskog kupca
+    otp("4", "2026-10-05", 400, { kupacId: "k3" }),                         // bez države i bez CMR-a → tuzemstvo
+    otp("5", "2026-10-06", 500, { kupacId: "k2" }),                         // u CMR-u → inozemstvo
+    otp("6", "2026-10-07", 600, { kupacId: "k1", smjer: "tuzemstvo" }),     // ručno tuzemstvo ima prednost i pred CMR-om
+  ];
+  const cmr = [{ id: "c1", otpremniceIds: ["5", "6"] }];
+  const r = statistikaIsporuka({ otpremnice, cmr, kupci }, "2026-10", tezina);
+  const smjer = Object.fromEntries(r.redovi.map((x) => [x.otpremnica.id, `${x.inozemstvo ? "INO" : "TUZ"}:${x.izvorSmjera}`]));
+  assert.deepEqual(smjer, { 1: "INO:država kupca", 2: "TUZ:ručno", 3: "INO:ručno", 4: "TUZ:", 5: "INO:CMR", 6: "TUZ:ručno" });
+  assert.equal(r.inozemstvo.kg, 100 + 300 + 500);
+  assert.equal(r.tuzemstvo.kg, 200 + 400 + 600);
+  assert.equal(r.cmrBroj, 1); // CMR se broji samo za otpremnice koje su stvarno inozemstvo
+});
+
+test("godišnji pregled: izračun iz otpremnica, zaključani i ručno uneseni mjesec imaju prednost, razlika zaključanog mjeseca", () => {
+  const otpremnice = [otp("1", "2026-10-02", 1000), otp("2", "2026-10-15", 500), otp("3", "2026-11-03", 70)];
+  const cmr = [{ id: "c1", otpremniceIds: ["1"] }];
+  const spremljeno = {
+    "2026-03": { izvor: "rucno", ino: { kg: 12000, broj: 5 }, tuz: { kg: 30000, broj: 20 } },
+    "2026-10": { izvor: "zakljucano", ino: { kg: 900, broj: 1 }, tuz: { kg: 500, broj: 1 } }, // poslano 900 kg INO; od tada je upisana težina 1000
+  };
+  const g = statistikaGodine({ otpremnice, cmr }, 2026, tezina, spremljeno);
+  assert.equal(g.redovi.length, 12);
+  const m = (n) => g.redovi[n - 1];
+  assert.equal(m(3).izvor, "rucno");
+  assert.equal(m(3).ino.kg, 12000);
+  assert.equal(m(10).izvor, "zakljucano");
+  assert.equal(m(10).ino.kg, 900);
+  assert.deepEqual(m(10).razlika, { ino: 100, tuz: 0 });
+  assert.equal(m(11).izvor, "izracun");
+  assert.equal(m(11).tuz.kg, 70);
+  assert.equal(m(1).izvor, "prazno");
+  assert.equal(g.ino.kg, 12000 + 900);
+  assert.equal(g.tuz.kg, 30000 + 500 + 70);
+  assert.equal(g.ukupno.kg, 12000 + 900 + 30000 + 500 + 70);
 });

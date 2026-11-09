@@ -93,7 +93,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
   "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca",
   "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije", "maticnaKnjiga", "upitiTransporta", "narudzbeTransporta", "godisnjiOdmor", "xrechnungPostavke",
-  "kadrovskiPodaci", "radnaMjesta", "uputnice", "pregledi", "zastitaPostavke", "prijedlozi",
+  "kadrovskiPodaci", "radnaMjesta", "uputnice", "pregledi", "zastitaPostavke", "prijedlozi", "statistikaIsporuka",
 ];
 
 // Svaki modul (isti "moduli" popis kao u pozicijeZaposlenika) dijeli se na kartice — iste
@@ -142,7 +142,7 @@ const KARTICE_MODULA = {
     otpremnice: { citanje: ["otpremnice", "projekti", "kupci", "narudzbe", "podlogeZaFakturu"], pisanje: ["otpremnice"] },
     cmr: { citanje: ["cmr", "otpremnice", "projekti", "kupci", "dobavljaci", "narudzbe", "postavkeTvrtke"], pisanje: ["cmr"] },
     // Statistika isporuka (kg inozemstvo/tuzemstvo po mjesecu): samo pregled postojećih otpremnica i CMR-ova.
-    statistika: { citanje: ["otpremnice", "cmr", "narudzbe", "kupci", "postavkeTvrtke"], pisanje: [] },
+    statistika: { citanje: ["otpremnice", "cmr", "narudzbe", "kupci", "projekti", "postavkeTvrtke", "statistikaIsporuka"], pisanje: ["otpremnice", "statistikaIsporuka"] },
   },
   // Financije (ključ ostaje "fakturiranje" zbog postojećih pozicija).
   fakturiranje: {
@@ -223,7 +223,7 @@ const filtrirajPrijedloge = (prijedlozi, pozicija, zaposlenikId) => (Array.isArr
 const UVIJEK_CITLJIVO = ["zaposlenici", "pozicijeZaposlenika", "postavkeTvrtke", "prijedlozi"];
 
 // Ključevi čija je vrijednost objekt (ne niz) — koristi se za ispravan "prazan" placeholder.
-const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi", "postavkePlaca", "planProizvodnje", "nedovrsenaProizvodnja", "godisnjiOdmor", "xrechnungPostavke", "zastitaPostavke"]);
+const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi", "postavkePlaca", "planProizvodnje", "nedovrsenaProizvodnja", "godisnjiOdmor", "xrechnungPostavke", "zastitaPostavke", "statistikaIsporuka"]);
 // Popisi koji se spremaju SAMO ciljano (PUT /api/<ključ>/patch): zastarjeli preglednik ne smije cijelim popisom prepisati uputnice (brojevi, snimke
 // izdanih uputnica) ni osobne podatke radnika. Ostalo (zastitaPostavke) se sprema kao cijeli objekt.
 const SAMO_CILJANO = new Set(["kadrovskiPodaci", "radnaMjesta", "uputnice", "pregledi", "prijedlozi"]);
@@ -305,7 +305,13 @@ function zadrziNoveOznakeNaloga(dolazni, trenutni) {
 const uskladiUtrosenoSati = (nalozi, sati) => {
   const zbroj = new Map();
   (sati || []).forEach((z) => zbroj.set(z.radniNalogId, (zbroj.get(z.radniNalogId) || 0) + (Number(z.sati) || 0)));
-  return nalozi.map((n) => (n && n.id ? { ...n, utrosenoSati: zbroj.get(n.id) || 0 } : n));
+  // Nalog koji ima upisane sate, a još je "Planiran", automatski prelazi u "U tijeku" (svejedno kojim putem su sati upisani).
+  // "Pauziran" i "Završen" se ne diraju.
+  return nalozi.map((n) => {
+    if (!(n && n.id)) return n;
+    const utroseno = zbroj.get(n.id) || 0;
+    return { ...n, utrosenoSati: utroseno, ...(utroseno > 0 && n.status === "Planiran" ? { status: "U tijeku" } : {}) };
+  });
 };
 // Uvoz sati iz Excela nalozima otvorenim s preostalim satima povećao je plan za uvezene sate (planUvecanZaUvoz).
 // Preglednik učitan prije uvoza šalje nalog bez tog polja i sa starim planom — tada ostaje plan s poslužitelja,
