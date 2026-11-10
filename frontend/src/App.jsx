@@ -357,6 +357,9 @@ const izracunSkupine = (stavke, grupa) => {
   return { poStavci, ukupno };
 };
 
+// Normativ kupaonica po projektu: projekt s vlastitim zapisom (normativi.poProjektima[projekt.id]) koristi njega, ostali zadani normativ.
+// Promjena cijena jednog projekta ili zadanog normativa tako ne mijenja ostale projekte (poslužitelj prije promjene zadanog "zamrzne" projekte bez vlastitog zapisa).
+const normativProjekta = (db, projekt) => (projekt?.id && db.normativi?.poProjektima?.[projekt.id]) || db.normativi;
 const izracunTipskogProjekta = (projekt, normativi) => {
   const grupa = (kljuc) => (normativi?.grupe || []).find((g) => g.kljuc === kljuc);
   const pod = izracunSkupine(projekt.stavkePod, grupa("pod"));
@@ -2639,6 +2642,24 @@ export default function App() {
     }
   };
 
+  // Normativ kupaonica: sprema se preko poslužitelja (vlastiti normativ projekta i/ili zadani) — poslužitelj sam zamrzava projekte bez vlastitog normativa.
+  // Čeka odgovor i vraća { ok, greska }; cijeli normativ (s poProjektima) iz odgovora zamjenjuje lokalni.
+  const spremiNormativ = async (zahtjev) => {
+    try {
+      const res = await fetch(`${API_URL}/api/normativi/patch`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` },
+        body: JSON.stringify(zahtjev),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, greska: data.error || "Greška pri spremanju — pokušaj ponovno." };
+      setDb((prev) => ({ ...prev, normativi: data.normativi }));
+      return { ok: true };
+    } catch {
+      return { ok: false, greska: "Greška pri spremanju — provjeri internetsku vezu." };
+    }
+  };
+
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2600); };
 
   const urlParametri = new URLSearchParams(window.location.search);
@@ -2803,7 +2824,7 @@ export default function App() {
           {aktivnaStranica === "transporti" && <TransportiPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} pocetniTab={transportiTab} ocistiTab={() => setTransportiTab(null)} />}
           {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} dodajMaticne={dodajMaticne} />}
           {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage refetchKljuc={refetchKljuc} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjekt={dopusteniKljucevi.includes("projekti") ? (id) => { setOtvoriProjektId(id); setPage("projekti"); } : undefined} />}
-          {(aktivnaStranica === "projekti" || aktivnaStranica === "ponude") && <ProjektiPage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} patchProjekt={patchProjekt} patchProjekti={patchProjekti} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjektId={otvoriProjektId} ocistiOtvoriProjekt={() => setOtvoriProjektId(null)} otvoriKvalitetu={dopusteniKljucevi.includes("kontrola") ? (id) => { setKkProjektId(id); setPage("kontrola"); } : undefined} />}
+          {(aktivnaStranica === "projekti" || aktivnaStranica === "ponude") && <ProjektiPage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} spremiNormativ={spremiNormativ} patchProjekt={patchProjekt} patchProjekti={patchProjekti} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjektId={otvoriProjektId} ocistiOtvoriProjekt={() => setOtvoriProjektId(null)} otvoriKvalitetu={dopusteniKljucevi.includes("kontrola") ? (id) => { setKkProjektId(id); setPage("kontrola"); } : undefined} />}
           {(aktivnaStranica === "otpremnice" || aktivnaStranica === "fakturiranje") && <FakturiranjePage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} />}
           {aktivnaStranica === "partneri" && <PartneriPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} mojaPozicija={mojaPozicija} mojId={prijavljenId} />}
@@ -6127,7 +6148,7 @@ const PLAN_MJESECI = ["siječanj", "veljača", "ožujak", "travanj", "svibanj", 
 
 // Glavni izračun. drugaSmjenaSvuda = varijanta u kojoj svaki stroj kojemu je 2. smjena dopuštena
 // radi 16 h svaki dan — iz nje se vidi kojih dana bi 2. smjena pomogla (prijedlog u "Opterećenju").
-function izracunajPlanProizvodnje({ db, normativ, odsutnosti, danas, drugaSmjenaSvuda = false }) {
+function izracunajPlanProizvodnje({ db, normativ, poProjektima, odsutnosti, danas, drugaSmjenaSvuda = false }) {
   const post = postavkePlana(db.planProizvodnje);
   const kal = kalendarPlana(db.praznici);
   const POCETAK = kal.sljedeciRadni(danas);
@@ -6170,12 +6191,12 @@ function izracunajPlanProizvodnje({ db, normativ, odsutnosti, danas, drugaSmjena
   });
 
   // Kupaonice (tipski projekti po normativu): svaki datum iz rasporeda isporuka je jedna serija.
-  const grupaNorm = (k) => (normativ?.grupe || []).find((g) => g.kljuc === k);
+  const grupaNorm = (p, k) => ((poProjektima?.[p.id] || normativ)?.grupe || []).find((g) => g.kljuc === k);
   const kupaonice = [];
   uPlanu.filter((p) => p.koristiNormativ).forEach((p) => {
     const sve = [...(p.stavkePod || []).map((s) => ({ ...s, grupa: "stavkePod" })), ...(p.stavkeKomplet || []).map((s) => ({ ...s, grupa: "stavkeKomplet" }))];
     const isp = p.isporuke || [];
-    const satiKomada = (s, kom) => { const g = grupaNorm(s.grupa === "stavkePod" ? "pod" : "komplet"); return Number(g?.ucinakKgH) > 0 ? ((Number(s.masaJed) || 0) * kom) / Number(g.ucinakKgH) : 0; };
+    const satiKomada = (s, kom) => { const g = grupaNorm(p, s.grupa === "stavkePod" ? "pod" : "komplet"); return Number(g?.ucinakKgH) > 0 ? ((Number(s.masaJed) || 0) * kom) / Number(g.ucinakKgH) : 0; };
     let bezDatumaKom = 0, bezDatumaSati = 0;
     sve.forEach((s) => {
       const zakazano = isp.filter((i) => i.stavkaId === s.id && i.grupa === s.grupa && i.datum).reduce((a, i) => a + (Number(i.komada) || 0), 0);
@@ -6186,7 +6207,7 @@ function izracunajPlanProizvodnje({ db, normativ, odsutnosti, danas, drugaSmjena
     isp.filter((i) => !i.isporuceno && i.datum).forEach((i) => {
       const s = sve.find((x) => x.id === i.stavkaId && x.grupa === i.grupa);
       if (!s) return;
-      const g = grupaNorm(i.grupa === "stavkePod" ? "pod" : "komplet");
+      const g = grupaNorm(p, i.grupa === "stavkePod" ? "pod" : "komplet");
       const sati = satiKomada(s, Number(i.komada) || 0);
       const serija = poDatumu.get(i.datum) || { pod: 0, stranica: 0, faze: {} };
       if (i.grupa === "stavkePod") serija.pod += Number(i.komada) || 0; else serija.stranica += Number(i.komada) || 0;
@@ -6347,7 +6368,7 @@ function PlanProizvodnjeView({ db, update, patchProjekt, showToast, mozeMijenjat
   }, []);
   const danas = todayISO();
   const plan = useMemo(
-    () => (podaci ? izracunajPlanProizvodnje({ db, normativ: podaci.normativ, odsutnosti: podaci.odsutnosti, danas }) : null),
+    () => (podaci ? izracunajPlanProizvodnje({ db, normativ: podaci.normativ, poProjektima: podaci.poProjektima, odsutnosti: podaci.odsutnosti, danas }) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [db.radniNalozi, db.projekti, db.zaposlenici, db.praznici, db.kapacitetiDana, db.planProizvodnje, podaci, danas]
   );
@@ -6666,7 +6687,7 @@ function PlanOpterecenje({ plan, db, podaci, update, showToast, mozeMijenjati })
   const { kal, danas, post } = plan;
   // varijanta s 2. smjenom svugdje gdje je dopuštena — iz nje se vide dani kad bi pomogla
   const planS2 = useMemo(
-    () => izracunajPlanProizvodnje({ db, normativ: podaci?.normativ, odsutnosti: podaci?.odsutnosti, danas, drugaSmjenaSvuda: true }),
+    () => izracunajPlanProizvodnje({ db, normativ: podaci?.normativ, poProjektima: podaci?.poProjektima, odsutnosti: podaci?.odsutnosti, danas, drugaSmjenaSvuda: true }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [db.radniNalozi, db.projekti, db.zaposlenici, db.praznici, db.kapacitetiDana, db.planProizvodnje, podaci, danas]
   );
@@ -9647,8 +9668,14 @@ function StavkeNormativaTablica({ naslov, rezultat, rasporedjeno, isporuceno, on
 }
 
 /* ============================== NORMATIV TIPSKIH PROJEKATA — UREĐIVANJE ============================== */
-function NormativiModal({ db, update, showToast, onClose }) {
-  const [form, setForm] = useState(() => JSON.parse(JSON.stringify(db.normativi || { naziv: "", grupe: [] })));
+// Uređuje normativ JEDNOG projekta (vlastiti zapis normativi.poProjektima[projekt.id]). Kvačica "zadano" dodatno postavlja iste vrijednosti kao zadani
+// normativ za nove projekte — poslužitelj tada prije promjene zamrzne sve projekte koji još nemaju vlastiti normativ, pa se ostali projekti ne mijenjaju.
+function NormativiModal({ db, projekt, spremiNormativ, showToast, onClose }) {
+  const imaVlastiti = !!db.normativi?.poProjektima?.[projekt.id];
+  const [form, setForm] = useState(() => JSON.parse(JSON.stringify(normativProjekta(db, projekt) || { naziv: "", grupe: [] })));
+  const [kaoZadano, setKaoZadano] = useState(false);
+  const [sprema, setSprema] = useState(false);
+  const [greska, setGreska] = useState("");
 
   const azurirajGrupu = (kljuc, patch) => setForm({ ...form, grupe: form.grupe.map((g) => (g.kljuc === kljuc ? { ...g, ...patch } : g)) });
   const azurirajPostotak = (kljuc, opKey, val) => setForm({
@@ -9656,21 +9683,29 @@ function NormativiModal({ db, update, showToast, onClose }) {
     grupe: form.grupe.map((g) => (g.kljuc === kljuc ? { ...g, raspodjela: { ...g.raspodjela, [opKey]: val === "" ? 0 : Number(val) } } : g)),
   });
 
-  const spremi = () => {
+  const spremi = async () => {
     const losa = form.grupe.find((g) => Math.abs(zbrojRaspodjele(g.raspodjela) - 100) > 0.01);
     if (losa) { showToast(`Raspodjela za "${losa.naziv}" ne daje 100% (trenutno ${zbrojRaspodjele(losa.raspodjela).toFixed(1)}%).`); return; }
-    update("normativi", form);
-    showToast("Normativ spremljen.");
+    setSprema(true); setGreska("");
+    const rezultat = await spremiNormativ({ projektId: projekt.id, normativ: form, ...(kaoZadano ? { zadano: form } : {}) });
+    setSprema(false);
+    if (!rezultat.ok) { setGreska(rezultat.greska); return; }
+    showToast(kaoZadano ? "Normativ spremljen za ovaj projekt i kao zadani za nove projekte." : "Normativ spremljen samo za ovaj projekt.");
     onClose();
   };
 
   return (
-    <Modal wide title="Normativ tipskih projekata (ugovorene cijene)" onClose={onClose}
-      footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi}>Spremi</Btn></>}>
-      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>
-        Postavlja se jednom i vrijedi za sve projekte koji koriste normativ. Cijena i sati izvode se iz mase:
+    <Modal wide title={`Normativ projekta ${projekt.sifra} (ugovorene cijene)`} onClose={onClose}
+      footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} disabled={sprema} onClick={spremi}>{sprema ? "Spremam…" : "Spremi"}</Btn></>}>
+      {greska && <div className="card" style={{ padding: "10px 12px", marginBottom: 12, background: "#FDECEA", borderColor: "#F0B4AE", fontSize: 12.5 }}><strong>Normativ nije spremljen.</strong> {greska}</div>}
+      <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 10 }}>
+        Vrijedi <strong>samo za ovaj projekt</strong> — ostali projekti zadržavaju svoje cijene i sate. {imaVlastiti ? "Ovaj projekt već ima vlastiti normativ." : "Ovaj projekt trenutno koristi zadani normativ; spremanjem dobiva vlastiti."} Cijena i sati izvode se iz mase:
         <strong> vrijednost = masa × €/kg</strong>, <strong>sati = masa ÷ (kg/h)</strong>, a ti se sati raspoređuju po operacijama prema postotku ispod.
       </p>
+      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, marginBottom: 14, cursor: "pointer" }}>
+        <input type="checkbox" checked={kaoZadano} onChange={(e) => setKaoZadano(e.target.checked)} style={{ marginTop: 2 }} />
+        <span><strong>Postavi i kao zadano za nove projekte.</strong> Projekti koji još nemaju vlastiti normativ ostaju na dosadašnjim cijenama (automatski se zamrznu prije promjene).</span>
+      </label>
       <Field label="Naziv normativa"><input className="input" value={form.naziv} onChange={(e) => setForm({ ...form, naziv: e.target.value })} /></Field>
 
       {form.grupe.map((g) => {
@@ -9774,7 +9809,7 @@ function PlanSatiUnos({ nalog, onSpremi }) {
   );
 }
 
-function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsync, patchUpiti, showToast, setPage, onClose, mojId, otvoriKvalitetu }) {
+function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt: patchProjektAsync, patchUpiti, showToast, setPage, onClose, mojId, otvoriKvalitetu }) {
   const kupac = db.kupci.find((k) => k.id === projekt.kupacId);
   const voditelj = db.zaposlenici.find((z) => z.id === projekt.voditeljId);
   const vanjskiSvi = [...(projekt.vanjskiTroskovi || []), ...troskoviTransportaProjekta(db, projekt.id)];
@@ -9785,7 +9820,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
   // Kupaonice (normativ): po jedan nalog za svaku operaciju sa satima iz normativa (svi komadi projekta) umanjenima za
   // sate već otvorenih naloga te faze. Nalozi služe za upis sati po radnicima (Sati po nalozima); plan proizvodnje
   // kupaonice i dalje računa iz normativa i rasporeda isporuka, pa ih ne broji dvaput.
-  const satiNormativa = projekt.koristiNormativ ? izracunTipskogProjekta(projekt, db.normativi).ukupno.satiPoOperaciji : null;
+  const satiNormativa = projekt.koristiNormativ ? izracunTipskogProjekta(projekt, normativProjekta(db, projekt)).ukupno.satiPoOperaciji : null;
   const kreirajRadneNaloge = () => {
     let brojac = parseInt(sljedeciBrojRadnogNaloga(db.radniNalozi, projekt.sifra).split("/").pop(), 10);
     const dijelovi = satiNormativa
@@ -9850,7 +9885,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
   const stavkeKomplet = projekt.stavkeKomplet || [];
   const isporuke = projekt.isporuke || [];
   const koristiNormativ = !!projekt.koristiNormativ;
-  const izracunNorm = useMemo(() => izracunTipskogProjekta({ stavkePod, stavkeKomplet }, db.normativi), [stavkePod, stavkeKomplet, db.normativi]);
+  const izracunNorm = useMemo(() => izracunTipskogProjekta({ stavkePod, stavkeKomplet }, normativProjekta(db, projekt)), [stavkePod, stavkeKomplet, db.normativi, projekt.id]);
   const patchProjekt = (patch) => patchProjektAsync(projekt.id, patch);
   const dodajStavku = (grupa) => patchProjekt({ [grupa]: [...(projekt[grupa] || []), { id: uid("stv"), oznaka: "", masaJed: 0, komada: 0 }] });
   const azurirajStavku = (grupa, id, patch) => patchProjekt({ [grupa]: (projekt[grupa] || []).map((s) => (s.id === id ? { ...s, ...patch } : s)) });
@@ -10008,7 +10043,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
         {koristiNormativ && (
           <>
             <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 10 }}>
-              Normativ: <strong>{db.normativi?.naziv}</strong> · {(db.normativi?.grupe || []).map((g) => `${g.naziv.split(" (")[0]}: ${g.cijenaKg} €/kg, ${g.ucinakKgH} kg/h`).join(" · ")}
+              Normativ: <strong>{normativProjekta(db, projekt)?.naziv}</strong> ({db.normativi?.poProjektima?.[projekt.id] ? "vlastiti normativ ovog projekta" : "zadani normativ"}) · {(normativProjekta(db, projekt)?.grupe || []).map((g) => `${g.naziv.split(" (")[0]}: ${g.cijenaKg} €/kg, ${g.ucinakKgH} kg/h`).join(" · ")}
               {narudzbeProjekta.length === 0 && <span> · Za uvoz stavki iz narudžbe prvo kreiraj narudžbu kupca za ovaj projekt.</span>}
             </div>
 
@@ -10321,7 +10356,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
     {potvrdaModal && <PotvrdaNarudzbeModal narudzba={db.narudzbe.find((n) => n.id === potvrdaModal.id) || potvrdaModal} projekt={projekt} db={db} update={update} showToast={showToast} mojId={mojId} onClose={() => setPotvrdaModal(null)} />}
     {uvozOdabir && <OdaberiNarudzbuModal narudzbe={narudzbeProjekta} naslov="Uvoz u normativ — odaberi narudžbu" onOdaberi={(n) => { setUvozOdabir(false); setUvozOtvoren(n); }} onClose={() => setUvozOdabir(false)} />}
     {otpremniceModal && <OtpremniceListModal projekt={projekt} narudzbe={narudzbeProjekta} db={db} update={update} patchProjekt={patchProjektAsync} showToast={showToast} onClose={() => setOtpremniceModal(false)} />}
-    {normativOtvoren && <NormativiModal db={db} update={update} showToast={showToast} onClose={() => setNormativOtvoren(false)} />}
+    {normativOtvoren && <NormativiModal db={db} projekt={projekt} spremiNormativ={spremiNormativ} showToast={showToast} onClose={() => setNormativOtvoren(false)} />}
     {pbDodajOtvoren && <ProizvodniBrojeviDodajModal stavkePod={stavkePod} stavkeKomplet={stavkeKomplet} postojeciBrojevi={brojeviPB} pocetno={pbPocetno} onDodaj={dodajPB} onClose={() => setPbDodajOtvoren(false)} />}
     {pbPopisOtvoren && <ProizvodniBrojeviPopisModal stavkePod={stavkePod} stavkeKomplet={stavkeKomplet} postojeciBrojevi={brojeviPB} onDodaj={dodajPB} onClose={() => setPbPopisOtvoren(false)} />}
     {uvozOtvoren && <NarudzbaUvozModal narudzba={uvozOtvoren} stavkePod={stavkePod} stavkeKomplet={stavkeKomplet} onUvezi={uveziIzNarudzbe} onClose={() => setUvozOtvoren(false)} />}
@@ -10980,7 +11015,7 @@ function ispisiTablicuPdf({ naslov, zaglavlja, redovi, podnozje, podnaslov, nazi
 
 // Jedna stranica za dva modula: "projekti" (Projekti, Završeni projekti) i "ponude" (Ponude,
 // Ponude - Laser) — dijele obrasce i pretvorbu ponude u projekt.
-function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProjekti, patchUpiti, showToast, setPage, mojaPozicija, mojId, otvoriProjektId, ocistiOtvoriProjekt, otvoriKvalitetu }) {
+function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchProjekt, patchProjekti, patchUpiti, showToast, setPage, mojaPozicija, mojId, otvoriProjektId, ocistiOtvoriProjekt, otvoriKvalitetu }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, modul);
   const [tab, setTab] = useState(dozvKartice[0]?.key || modul);
   useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || modul); }, [dozvKartice, tab, modul]);
@@ -11684,7 +11719,7 @@ function ProjektiPage({ modul = "projekti", db, update, patchProjekt, patchProje
 
       {cjenikOpen && <CjenikRadaModal cjenikRada={db.cjenikRada} onSave={saveCjenik} onClose={() => setCjenikOpen(false)} />}
       {zadaciOpen && <StandardniZadaciModal standardniZadaci={db.standardniZadaci} update={update} showToast={showToast} onClose={() => setZadaciOpen(false)} />}
-      {detalj && <ProjektDetaljModal projekt={db.projekti.find((p) => p.id === detalj.id) || detalj} db={db} update={update} patchProjekt={patchProjekt} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} onClose={() => setDetalj(null)} mojId={mojId} otvoriKvalitetu={otvoriKvalitetu} />}
+      {detalj && <ProjektDetaljModal projekt={db.projekti.find((p) => p.id === detalj.id) || detalj} db={db} update={update} spremiNormativ={spremiNormativ} patchProjekt={patchProjekt} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} onClose={() => setDetalj(null)} mojId={mojId} otvoriKvalitetu={otvoriKvalitetu} />}
 
       {pretvorba && (
         <Modal title="Pretvori ponudu u projekt" onClose={() => setPretvorba(null)}
@@ -13864,7 +13899,7 @@ function produktivnostProjekata(db, sMontazom) {
   return (db.projekti || []).filter((p) => p.status !== "Otkazan").map((p) => {
     const plan = {};
     if (p.koristiNormativ) {
-      const izracun = izracunTipskogProjekta(p, db.normativi);
+      const izracun = izracunTipskogProjekta(p, normativProjekta(db, p));
       OPERACIJE.forEach((o) => { const h = izracun.ukupno.satiPoOperaciji[o.key] || 0; if (h > 0) plan[o.label] = h; });
     } else {
       Object.entries(p.faze || {}).forEach(([f, h]) => { if (Number(h) > 0) plan[f] = Number(h); });
@@ -14281,7 +14316,7 @@ function satiRadionePoMjesecu(db) {
   return sati;
 }
 
-const cijenaKgNormativa = (db, grupa) => Number((db.normativi?.grupe || []).find((g) => g.kljuc === grupa)?.cijenaKg) || 0;
+const cijenaKgNormativa = (db, projekt, grupa) => Number((normativProjekta(db, projekt)?.grupe || []).find((g) => g.kljuc === grupa)?.cijenaKg) || 0;
 // Vrijednost otpremnice kupcu: kupaonice po masi × €/kg normativa (preko rasporeda isporuka), ostalo po cijenama iz narudžbe kupca.
 function vrijednostOtpremniceKupcu(o, db) {
   const p = (db.projekti || []).find((x) => x.id === o.projektId);
@@ -14291,7 +14326,7 @@ function vrijednostOtpremniceKupcu(o, db) {
     return (o.stavke || []).reduce((a, st) => {
       const isp = (st.isporukaIds || []).map((id) => isporuke.get(id)).find(Boolean);
       const x = isp && stavke.get(isp.stavkaId);
-      return a + (x ? (Number(st.kolicina) || 0) * (Number(x.s.masaJed) || 0) * cijenaKgNormativa(db, x.g) : 0);
+      return a + (x ? (Number(st.kolicina) || 0) * (Number(x.s.masaJed) || 0) * cijenaKgNormativa(db, p, x.g) : 0);
     }, 0);
   }
   const narudzbe = (db.narudzbe || []).filter((n) => n.projektId === o.projektId);
@@ -14367,7 +14402,7 @@ function izracunProjekcije(db, { od, doMjeseca, danas, trosakSata, materijalPost
     const narudzbe = (db.narudzbe || []).filter((n) => n.projektId === p.id);
     let ugovoreno, izvor;
     if (p.koristiNormativ) {
-      ugovoreno = [...(p.stavkePod || []).map((s) => [s, "pod"]), ...(p.stavkeKomplet || []).map((s) => [s, "komplet"])].reduce((a, [s, g]) => a + (Number(s.komada) || 0) * (Number(s.masaJed) || 0) * cijenaKgNormativa(db, g), 0);
+      ugovoreno = [...(p.stavkePod || []).map((s) => [s, "pod"]), ...(p.stavkeKomplet || []).map((s) => [s, "komplet"])].reduce((a, [s, g]) => a + (Number(s.komada) || 0) * (Number(s.masaJed) || 0) * cijenaKgNormativa(db, p, g), 0);
       izvor = "normativ (masa × €/kg)";
     } else {
       ugovoreno = narudzbe.flatMap((n) => n.stavke || []).reduce((a, s) => a + (Number(s.kolicina) || 0) * (Number(s.cijena) || 0), 0);
@@ -14404,7 +14439,7 @@ function izracunProjekcije(db, { od, doMjeseca, danas, trosakSata, materijalPost
       let zakazano = 0;
       (p.isporuke || []).filter((i) => !isporukeUOtpremnicama.has(i.id)).forEach((i) => {
         const x = stavke.get(i.stavkaId);
-        const v = x ? (Number(i.komada) || 0) * (Number(x.s.masaJed) || 0) * cijenaKgNormativa(db, x.g) : 0;
+        const v = x ? (Number(i.komada) || 0) * (Number(x.s.masaJed) || 0) * cijenaKgNormativa(db, p, x.g) : 0;
         zakazano += v;
         dodaj(i.datum || r.rok, v);
       });
