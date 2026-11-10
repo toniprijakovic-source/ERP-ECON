@@ -10,6 +10,7 @@ import logoEcon from "./assets/logo-econ.jpg";
 import QRCode from "qrcode";
 import { napraviPdfUpitaMaterijala, napraviPdfPonude, napraviEml, preuzmiDatoteku, potpisEmail } from "./pdfNabave";
 import { statistikaIsporuka, statistikaGodine, tezinaOtpremnice as tezinaOtpremniceLogika, tezinaStavkeOtpremnice, isporucenoPoStavkama } from "./statistikaIsporuka";
+import { satiPoRadnicimaIOperacijama, projektiSaSatima } from "./satiPoProjektu";
 import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, ogranicenjeStavke, pocetnaKolicina, visakStavke, zatvoriIsporuke, vratiZatvoreneIsporuke } from "./otpremniceKontrola";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
 
@@ -17675,6 +17676,10 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
   const [radnikMjesec, setRadnikMjesec] = useState(todayISO().slice(0, 7)); // pregled po radniku
   const [radnikGrupa, setRadnikGrupa] = useState("svi"); // "svi" | "radiona" | "kooperant" | "ostalo"
   const [radnikOtvoren, setRadnikOtvoren] = useState(null); // id radnika čiji se nalozi prikazuju
+  const [projektPregled, setProjektPregled] = useState(""); // pregled po projektu: odabrani projekt (prazno = onaj s najnovijim satima)
+  const [projektOd, setProjektOd] = useState("");
+  const [projektDo, setProjektDo] = useState("");
+  const [projektDio, setProjektDio] = useState("sve"); // "sve" | "osnovna" | id dodatka
   const [datum, setDatum] = useState(todayISO());
   const [uredjivanje, setUredjivanje] = useState(null); // id zaposlenika trenutno otvorenog za unos
   const [redoviUnos, setRedoviUnos] = useState([]);
@@ -17801,6 +17806,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
         <div className={`nav-tab ${prikaz === "dnevno" ? "active" : ""}`} onClick={() => setPrikaz("dnevno")}>Dnevni unos</div>
         <div className={`nav-tab ${prikaz === "mjesecno" ? "active" : ""}`} onClick={() => setPrikaz("mjesecno")}>Pregled po mjesecu</div>
         <div className={`nav-tab ${prikaz === "radnik" ? "active" : ""}`} onClick={() => setPrikaz("radnik")}>Pregled po radniku</div>
+        <div className={`nav-tab ${prikaz === "projekt" ? "active" : ""}`} onClick={() => setPrikaz("projekt")}>Pregled po projektu</div>
         <div className={`nav-tab ${prikaz === "uskladenost" ? "active" : ""}`} onClick={() => setPrikaz("uskladenost")}>Usklađenost sati</div>
       </div>
 
@@ -18027,6 +18033,98 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
                 </table>
               </div>
             )}
+          </>
+        );
+      })()}
+
+      {prikaz === "projekt" && (() => {
+        const h = (x) => (Math.round(x * 10) / 10).toLocaleString("hr-HR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+        const stalniPoslovi = STALNI_POSLOVI;
+        const zadnjiUnos = projektiSaSatima({ sati: db.satiPoNalogu, nalozi: db.radniNalozi, stalniPoslovi });
+        const projektPoId = new Map(db.projekti.map((p) => [p.id, p]));
+        const popis = [...zadnjiUnos.keys()].map((id) => projektPoId.get(id)).filter(Boolean).sort((a, b) => usporediPrirodno(b.sifra, a.sifra));
+        const odabraniId = projektPregled || [...zadnjiUnos.entries()].sort((a, b) => b[1].localeCompare(a[1]))[0]?.[0] || "";
+        const projekt = projektPoId.get(odabraniId);
+        const dodaci = projekt?.dodaci || [];
+        const dio = dodaci.some((d) => d.id === projektDio) || projektDio === "osnovna" ? projektDio : "sve";
+        const r = projekt ? satiPoRadnicimaIOperacijama({ sati: db.satiPoNalogu, nalozi: db.radniNalozi, zaposlenici: db.zaposlenici, projektId: projekt.id, od: projektOd, do: projektDo, dio, faze: FAZE, stalniPoslovi }) : null;
+        const nazivStupca = (k) => (k.startsWith("stalni:") ? nazivStalnogPosla(stalniPosao(k.slice(7))) : fazaOznaka(k));
+        const razdoblje = projektOd || projektDo ? `${projektOd ? fmtDate(projektOd) : "početak"} – ${projektDo ? fmtDate(projektDo) : "danas"}` : "cijeli projekt";
+        const dioNaziv = dio === "sve" ? "" : dio === "osnovna" ? " · osnovna narudžba" : ` · dodatak: ${dodaci.find((d) => d.id === dio)?.naziv || ""}`;
+        const podnaslov = projekt ? `${projekt.sifra} — ${projekt.naziv} · ${razdoblje}${dioNaziv}` : "";
+        const izvozCsv = () => {
+          const celija = (v) => (typeof v === "number" ? (Math.round(v * 10) / 10).toString().replace(".", ",") : `"${String(v ?? "").replace(/"/g, '""')}"`);
+          const zaglavlje = ["Radnik", ...r.stupci.map(nazivStupca), "Ukupno (h)"];
+          const linije = [...r.redovi.map((x) => [x.ime, ...r.stupci.map((k) => x.poStupcu[k] ?? ""), x.ukupno]), ["UKUPNO", ...r.stupci.map((k) => r.ukupnoPoStupcu[k] ?? ""), r.ukupno]];
+          const tekst = [zaglavlje.map((z) => `"${z}"`).join(";"), ...linije.map((l) => l.map(celija).join(";"))].join("\r\n");
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(new Blob(["﻿" + tekst], { type: "text/csv;charset=utf-8" }));
+          a.download = `sati-po-radnicima-${projekt.sifra.replace(/[^\w-]+/g, "_")}-${todayISO()}.csv`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        };
+        const ispisi = () => ispisiTablicuPdf({
+          naslov: "Sati po radnicima i operacijama", podnaslov,
+          zaglavlja: ["Radnik", ...r.stupci.map((k) => `>${nazivStupca(k)}`), ">Ukupno (h)"],
+          redovi: r.redovi.map((x) => [x.ime, ...r.stupci.map((k) => (x.poStupcu[k] ? h(x.poStupcu[k]) : "")), h(x.ukupno)]),
+          podnozje: ["UKUPNO", ...r.stupci.map((k) => h(r.ukupnoPoStupcu[k] || 0)), h(r.ukupno)],
+          nazivTvrtke: db.postavkeTvrtke?.naziv, showToast,
+        });
+        return (
+          <>
+            <p style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 14 }}>Sati odabranog projekta po radnicima i operacijama (fazama radnih naloga), bez cijena. Uključeni su sati upisani po radniku; stalni poslovi vezani uz projekt (utovar, prijevozi, popravak…) dolaze kao dodatni stupci. Razdoblje se može suziti na pojedini mjesec ili tjedan.</p>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+              <span className="label">Projekt</span>
+              <select className="select" style={{ minWidth: 300 }} value={odabraniId} onChange={(e) => { setProjektPregled(e.target.value); setProjektDio("sve"); }}>
+                {popis.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}
+              </select>
+              <span className="label" style={{ marginLeft: 8 }}>Od</span>
+              <input className="input" type="date" style={{ width: 150 }} value={projektOd} onChange={(e) => setProjektOd(e.target.value)} />
+              <span className="label">Do</span>
+              <input className="input" type="date" style={{ width: 150 }} value={projektDo} onChange={(e) => setProjektDo(e.target.value)} />
+              {(projektOd || projektDo) && <Btn variant="ghost" size="sm" onClick={() => { setProjektOd(""); setProjektDo(""); }}>Cijeli projekt</Btn>}
+              {dodaci.length > 0 && (
+                <select className="select" style={{ width: 200 }} value={dio} onChange={(e) => setProjektDio(e.target.value)}>
+                  <option value="sve">Cijeli projekt (s dodacima)</option>
+                  <option value="osnovna">Samo osnovna narudžba</option>
+                  {dodaci.map((d) => <option key={d.id} value={d.id}>Dodatak: {d.naziv}</option>)}
+                </select>
+              )}
+              {r && r.redovi.length > 0 && (
+                <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+                  <Btn size="sm" icon={Download} onClick={izvozCsv}>Excel (CSV)</Btn>
+                  <Btn size="sm" icon={Printer} onClick={ispisi}>Ispis / PDF</Btn>
+                </div>
+              )}
+            </div>
+            {!projekt ? <EmptyState text="Nema projekata s upisanim satima." /> : r.redovi.length === 0 ? <EmptyState text="Nema sati upisanih po radnicima za odabrani projekt i razdoblje." /> : (
+              <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+                <table className="erp-table" style={{ minWidth: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ position: "sticky", left: 0, background: "var(--surface-alt)", zIndex: 1 }}>Radnik</th>
+                      {r.stupci.map((k) => <th key={k} style={{ minWidth: 92, textAlign: "center" }}>{nazivStupca(k)}</th>)}
+                      <th style={{ minWidth: 90, textAlign: "center", background: "var(--surface-alt)" }}>Ukupno (h)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {r.redovi.map((x) => (
+                      <tr key={x.zaposlenikId}>
+                        <td style={{ position: "sticky", left: 0, background: "var(--surface)", fontWeight: 600 }}>{x.ime}</td>
+                        {r.stupci.map((k) => <td key={k} className="f-mono" style={{ textAlign: "center", color: x.poStupcu[k] ? "var(--ink)" : "var(--ink-faint)" }}>{x.poStupcu[k] ? h(x.poStupcu[k]) : ""}</td>)}
+                        <td className="f-mono" style={{ textAlign: "center", fontWeight: 700, background: "var(--surface-alt)" }}>{h(x.ukupno)}</td>
+                      </tr>
+                    ))}
+                    <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
+                      <td style={{ position: "sticky", left: 0, background: "var(--surface-alt)" }}>UKUPNO</td>
+                      {r.stupci.map((k) => <td key={k} className="f-mono" style={{ textAlign: "center" }}>{h(r.ukupnoPoStupcu[k] || 0)}</td>)}
+                      <td className="f-mono" style={{ textAlign: "center" }}>{h(r.ukupno)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {r && r.bezRadnika > 0 && <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 10 }}>Uz ovo je na projekt upisano još {h(r.bezRadnika)} h ukupno (bez radnika, od voditelja u Planu proizvodnje) — nije u tablici.</p>}
           </>
         );
       })()}
