@@ -9,7 +9,7 @@ import {
 import logoEcon from "./assets/logo-econ.jpg";
 import QRCode from "qrcode";
 import { napraviPdfUpitaMaterijala, napraviPdfPonude, napraviEml, preuzmiDatoteku, potpisEmail } from "./pdfNabave";
-import { statistikaIsporuka, statistikaGodine, tezinaOtpremnice as tezinaOtpremniceLogika, tezinaStavkeOtpremnice } from "./statistikaIsporuka";
+import { statistikaIsporuka, statistikaGodine, tezinaOtpremnice as tezinaOtpremniceLogika, tezinaStavkeOtpremnice, isporucenoPoStavkama } from "./statistikaIsporuka";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
@@ -9521,7 +9521,9 @@ function NarudzbaUvozModal({ narudzba, stavkePod, stavkeKomplet, onUvezi, onClos
   );
 }
 
-function StavkeNormativaTablica({ naslov, rezultat, rasporedjeno, onDodaj, onAzuriraj, onObrisi }) {
+// isporuceno(stavkaId) → { komada, otpremnice: [{ broj, datum, komada }] }: komadi prema otpremnicama (vidi isporucenoPoStavkama)
+function StavkeNormativaTablica({ naslov, rezultat, rasporedjeno, isporuceno, onDodaj, onAzuriraj, onObrisi }) {
+  const isporucenoUkupno = rezultat.poStavci.reduce((s, r) => s + isporuceno(r.stavka.id).komada, 0);
   return (
     <div style={{ marginBottom: 14 }}>
       <div className="label" style={{ marginBottom: 6 }}>{naslov}</div>
@@ -9535,16 +9537,19 @@ function StavkeNormativaTablica({ naslov, rezultat, rasporedjeno, onDodaj, onAzu
             <th style={{ width: 110 }}>Vrijednost</th>
             <th style={{ width: 90 }}>Sati</th>
             <th style={{ width: 90 }}>U rasporedu</th>
+            <th style={{ width: 100 }} title="Koliko je komada isporučeno prema otpremnicama">Isporučeno</th>
             <th style={{ width: 40 }}></th>
           </tr>
         </thead>
         <tbody>
           {rezultat.poStavci.length === 0 && (
-            <tr><td colSpan={8}><EmptyState text="Nema unesenih stavki." /></td></tr>
+            <tr><td colSpan={9}><EmptyState text="Nema unesenih stavki." /></td></tr>
           )}
           {rezultat.poStavci.map((r) => {
             const rasp = rasporedjeno(r.stavka.id);
             const kom = Number(r.stavka.komada) || 0;
+            const isp = isporuceno(r.stavka.id);
+            const ispBoja = isp.komada <= 0 ? "var(--ink-faint)" : isp.komada === kom ? "var(--green)" : isp.komada > kom ? "var(--rust)" : "var(--steel)";
             return (
               <tr key={r.stavka.id}>
                 <td><input className="input" placeholder="npr. Typ A1" value={r.stavka.oznaka} onChange={(e) => onAzuriraj(r.stavka.id, { oznaka: e.target.value })} /></td>
@@ -9554,6 +9559,7 @@ function StavkeNormativaTablica({ naslov, rezultat, rasporedjeno, onDodaj, onAzu
                 <td className="f-mono">{fmtCur(r.vrijednost)}</td>
                 <td className="f-mono">{r.sati.toFixed(1)} h</td>
                 <td className="f-mono" style={{ color: rasp === kom ? "var(--green)" : "var(--rust)" }}>{rasp}/{kom}</td>
+                <td className="f-mono" style={{ color: ispBoja, fontWeight: isp.komada > 0 ? 600 : 400 }} title={isp.otpremnice.length ? isp.otpremnice.map((o) => `${o.broj}${o.datum ? ` (${fmtDate(o.datum)})` : ""}: ${o.komada} kom`).join("\n") : "Nema otpremnica za ovaj tip"}>{isp.komada}/{kom}</td>
                 <td><button className="btn btn-icon btn-ghost" onClick={() => potvrdiBrisanje(() => onObrisi(r.stavka.id))}><Trash2 size={14} /></button></td>
               </tr>
             );
@@ -9567,6 +9573,7 @@ function StavkeNormativaTablica({ naslov, rezultat, rasporedjeno, onDodaj, onAzu
               <td className="f-mono">{fmtCur(rezultat.ukupno.vrijednost)}</td>
               <td className="f-mono">{rezultat.ukupno.sati.toFixed(1)} h</td>
               <td></td>
+              <td className="f-mono">{isporucenoUkupno}/{rezultat.ukupno.komada}</td>
               <td></td>
             </tr>
           )}
@@ -9798,6 +9805,9 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
   ];
   const nadjiStavku = (grupa, stavkaId) => (grupa === "stavkePod" ? stavkePod : stavkeKomplet).find((s) => s.id === stavkaId);
   const rasporedjenoZaStavku = (grupa, stavkaId) => isporuke.filter((i) => i.grupa === grupa && i.stavkaId === stavkaId).reduce((s, i) => s + (Number(i.komada) || 0), 0);
+  // Isporučeno prema otpremnicama (za stupac "Isporučeno" u tablicama Pod / Stranice)
+  const isporucenoMapa = useMemo(() => isporucenoPoStavkama(projekt, db.otpremnice), [projekt, db.otpremnice]);
+  const isporucenoZaStavku = (grupa, stavkaId) => isporucenoMapa.get(`${grupa}:${stavkaId}`) || { komada: 0, otpremnice: [] };
   const [uvozOtvoren, setUvozOtvoren] = useState(false); // false | narudžba iz koje se uvozi
   const uveziIzNarudzbe = (odabrane) => {
     const noviPod = [...stavkePod];
@@ -9939,8 +9949,8 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
               {narudzbeProjekta.length === 0 && <span> · Za uvoz stavki iz narudžbe prvo kreiraj narudžbu kupca za ovaj projekt.</span>}
             </div>
 
-            <StavkeNormativaTablica naslov="Pod (podna konstrukcija)" rezultat={izracunNorm.pod} rasporedjeno={(id) => rasporedjenoZaStavku("stavkePod", id)} onDodaj={() => dodajStavku("stavkePod")} onAzuriraj={(id, patch) => azurirajStavku("stavkePod", id, patch)} onObrisi={(id) => obrisiStavku("stavkePod", id)} />
-            <StavkeNormativaTablica naslov="Stranice" rezultat={izracunNorm.komplet} rasporedjeno={(id) => rasporedjenoZaStavku("stavkeKomplet", id)} onDodaj={() => dodajStavku("stavkeKomplet")} onAzuriraj={(id, patch) => azurirajStavku("stavkeKomplet", id, patch)} onObrisi={(id) => obrisiStavku("stavkeKomplet", id)} />
+            <StavkeNormativaTablica naslov="Pod (podna konstrukcija)" rezultat={izracunNorm.pod} rasporedjeno={(id) => rasporedjenoZaStavku("stavkePod", id)} isporuceno={(id) => isporucenoZaStavku("stavkePod", id)} onDodaj={() => dodajStavku("stavkePod")} onAzuriraj={(id, patch) => azurirajStavku("stavkePod", id, patch)} onObrisi={(id) => obrisiStavku("stavkePod", id)} />
+            <StavkeNormativaTablica naslov="Stranice" rezultat={izracunNorm.komplet} rasporedjeno={(id) => rasporedjenoZaStavku("stavkeKomplet", id)} isporuceno={(id) => isporucenoZaStavku("stavkeKomplet", id)} onDodaj={() => dodajStavku("stavkeKomplet")} onAzuriraj={(id, patch) => azurirajStavku("stavkeKomplet", id, patch)} onObrisi={(id) => obrisiStavku("stavkeKomplet", id)} />
 
             {izracunNorm.pod.ukupno.komada > 0 && izracunNorm.komplet.ukupno.komada > 0 && izracunNorm.pod.ukupno.komada !== izracunNorm.komplet.ukupno.komada && (
               <p style={{ fontSize: 11.5, color: "var(--rust)", marginTop: -6, marginBottom: 14 }}>

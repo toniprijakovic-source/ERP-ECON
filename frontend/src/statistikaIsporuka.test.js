@@ -1,7 +1,7 @@
 // Provjere statistike isporuka (kg inozemstvo / tuzemstvo po mjesecu). Pokretanje: `npm test` u mapi frontend. Svi podaci su izmišljeni.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { statistikaIsporuka, statistikaGodine, tezinaOtpremnice } from "./statistikaIsporuka.js";
+import { statistikaIsporuka, statistikaGodine, tezinaOtpremnice, isporucenoPoStavkama } from "./statistikaIsporuka.js";
 
 const tezina = (o) => ({ ukupno: (o.stavke || []).reduce((s, x) => s + (Number(x.masaKg) || 0), 0), nedostaje: (o.stavke || []).filter((x) => !(Number(x.masaKg) > 0)).length });
 const otp = (id, datum, kg, extra = {}) => ({ id, broj: `OTP-${id}`, datum, vrsta: "kupac", stavke: [{ masaKg: kg }], ...extra });
@@ -120,4 +120,46 @@ test("ručni unos samo s ukupnim iznosom ulazi u ukupno, a inozemstvo/tuzemstvo 
   assert.equal(g.ukupno.kg, 84000 + 4000 + 70);
   assert.equal(g.ino.kg, 1000); // bez nepoznatog siječnja
   assert.equal(g.tuz.kg, 3000 + 70);
+});
+
+test("isporučeno po stavkama tipskog projekta: zbroj količina s otpremnica, kooperant i tuđi projekti se ne broje", () => {
+  const projekt = {
+    id: "p1",
+    isporuke: [
+      { id: "i1", grupa: "stavkePod", stavkaId: "s1", komada: 5 },
+      { id: "i2", grupa: "stavkePod", stavkaId: "s1", komada: 3 },
+      { id: "i3", grupa: "stavkeKomplet", stavkaId: "s1", komada: 4 }, // isti id stavke u drugoj grupi ne smije se miješati
+    ],
+  };
+  const otpremnice = [
+    { id: "o1", broj: "OTP-2", datum: "2026-11-05", projektId: "p1", stavke: [{ kolicina: 8, isporukaIds: ["i1", "i2"] }, { kolicina: 4, isporukaIds: ["i3"] }] },
+    { id: "o2", broj: "OTP-1", datum: "2026-11-02", projektId: "p1", stavke: [{ kolicina: "2", isporukaIds: ["i1"] }, { kolicina: 0, isporukaIds: ["i2"] }, { kolicina: 1, isporukaIds: ["nepostoji"] }] },
+    { id: "o3", broj: "OTP-3", datum: "2026-11-06", projektId: "p1", vrsta: "kooperant", stavke: [{ kolicina: 9, isporukaIds: ["i1"] }] },
+    { id: "o4", broj: "OTP-4", datum: "2026-11-07", projektId: "p2", stavke: [{ kolicina: 7, isporukaIds: ["i1"] }] },
+  ];
+  const r = isporucenoPoStavkama(projekt, otpremnice);
+  assert.equal(r.get("stavkePod:s1").komada, 10);
+  assert.deepEqual(r.get("stavkePod:s1").otpremnice.map((x) => x.broj), ["OTP-1", "OTP-2"]); // po datumu
+  assert.equal(r.get("stavkeKomplet:s1").komada, 4);
+  assert.equal(r.size, 2);
+  assert.equal(isporucenoPoStavkama({ id: "p9" }, otpremnice).size, 0);
+});
+
+test("isporučeno po stavkama: starija otpremnica bez isporukaIds prepoznaje se po nazivu stavke (samo ako je tip jednoznačan)", () => {
+  const projekt = {
+    id: "p1", isporuke: [],
+    stavkePod: [{ id: "a", oznaka: "Pod Typ A1 EG (500-76)" }, { id: "b", oznaka: "Dvojni" }, { id: "c", oznaka: "dvojni" }],
+    stavkeKomplet: [{ id: "k", oznaka: "Stranica Typ B3-GS (500-76)" }],
+  };
+  const otpremnice = [{ id: "o1", broj: "OTP-1", datum: "2026-09-18", projektId: "p1", stavke: [
+    { naziv: "Pod — Pod Typ A1 EG (500-76)", kolicina: 2 },
+    { naziv: "Komplet — Stranica Typ B3-GS (500-76)", kolicina: 1 },
+    { naziv: "Stranica — Stranica Typ B3-GS (500-76)", kolicina: 3 },
+    { naziv: "Pod — Dvojni", kolicina: 5 }, // dva tipa s istom oznakom → ne pogađa se
+    { naziv: "Nešto drugo", kolicina: 4 },
+  ] }];
+  const r = isporucenoPoStavkama(projekt, otpremnice);
+  assert.equal(r.get("stavkePod:a").komada, 2);
+  assert.equal(r.get("stavkeKomplet:k").komada, 4);
+  assert.equal(r.size, 2);
 });

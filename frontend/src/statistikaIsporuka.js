@@ -37,6 +37,38 @@ export function tezinaOtpremnice(otpremnica, izvori = {}) {
   return { ukupno, nedostaje };
 }
 
+// Isporučeno prema otpremnicama po stavci tipskog projekta (Pod / Stranice): zbroj količina sa stavki otpremnica tog projekta.
+// Stavka otpremnice veže se uz tip preko isporukaIds → isporuka projekta → (grupa, stavkaId). Otpremnice kooperantu (dorade) ne broje.
+// Starije otpremnice bez isporukaIds prepoznaju se po nazivu stavke ("Pod — <oznaka>", "Komplet — <oznaka>" ili "Stranica — <oznaka>") ako
+// točno jedan tip projekta ima tu oznaku. Vraća Map "grupa:stavkaId" → { komada, otpremnice: [{ broj, datum, komada }] };
+// stavke koje se ne mogu povezati s tipom (obrisana isporuka, nepoznat naziv) se preskaču.
+const normNaziv = (t) => String(t || "").toLowerCase().replace(/\s+/g, " ").trim();
+export function isporucenoPoStavkama(projekt, otpremnice = []) {
+  const isporuke = new Map((projekt?.isporuke || []).map((i) => [i.id, i]));
+  const poNazivu = (st) => {
+    const m = normNaziv(st.naziv).match(/^(pod|komplet|stranica)\s+[—–-]\s+(.+)$/);
+    if (!m) return null;
+    const grupa = m[1] === "pod" ? "stavkePod" : "stavkeKomplet";
+    const pogodaka = (projekt?.[grupa] || []).filter((s) => normNaziv(s.oznaka) === m[2]);
+    return pogodaka.length === 1 ? { grupa, stavkaId: pogodaka[0].id } : null;
+  };
+  const rezultat = new Map();
+  otpremnice.filter((o) => o.projektId === projekt?.id && o.vrsta !== "kooperant").forEach((o) => {
+    (o.stavke || []).forEach((st) => {
+      const komada = Number(st.kolicina) || 0;
+      const isporuka = (st.isporukaIds || []).length > 0 ? (st.isporukaIds || []).map((id) => isporuke.get(id)).find(Boolean) : poNazivu(st);
+      if (komada <= 0 || !isporuka) return;
+      const kljuc = `${isporuka.grupa}:${isporuka.stavkaId}`;
+      const r = rezultat.get(kljuc) || { komada: 0, otpremnice: [] };
+      r.komada += komada;
+      r.otpremnice.push({ broj: o.broj, datum: o.datum, komada });
+      rezultat.set(kljuc, r);
+    });
+  });
+  rezultat.forEach((r) => r.otpremnice.sort((a, b) => String(a.datum).localeCompare(String(b.datum)) || String(a.broj).localeCompare(String(b.broj), "hr", { numeric: true })));
+  return rezultat;
+}
+
 // Država kupca (neobavezno polje na kupcu): prazno ili Hrvatska = tuzemstvo, svaka druga upisana država = inozemstvo.
 const HR_NAZIVI = new Set(["hrvatska", "hr", "croatia", "kroatien"]);
 export const jeStranaDrzava = (drzava) => {
