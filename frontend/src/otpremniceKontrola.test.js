@@ -1,7 +1,7 @@
 // Provjere kontrole otpremnica tipskih projekata (komad ne smije na dvije otpremnice, količina ne smije biti veća od spremnog ni od naručenog). Svi podaci su izmišljeni.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isporukeNaOtpremnicama, slobodneIsporuke, dvostrukeIsporuke, isporukeZaKolicinu, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, zbrojPoTipu, ogranicenjeTipa, pocetnaKolicina } from "./otpremniceKontrola.js";
+import { isporukeNaOtpremnicama, slobodneIsporuke, dvostrukeIsporuke, isporukeZaKolicinu, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, zbrojPoTipu, ogranicenjeTipa, pocetnaKolicina, zatvoriIsporuke, vratiZatvoreneIsporuke, visakStavke } from "./otpremniceKontrola.js";
 
 const isp = (id, extra = {}) => ({ id, grupa: "stavkePod", stavkaId: "s1", komada: 1, datum: "2026-11-02", isporuceno: true, uOtpremniciId: null, redniBroj: Number(id.slice(1)), ...extra });
 const projekt = {
@@ -113,4 +113,28 @@ test("obični projekti: upozorenje kad količina premašuje naručeno minus već
   assert.equal(u[0].stavkaId, "a");
   assert.match(u[0].poruka, /naručeno 10, već otpremljeno 8, na ovoj otpremnici 3 — ukupno 11/);
   assert.equal(prekoNarucenogPoNarudzbi([{ id: "c", narudzbaStavkaId: "n1", narucena: 10, kolicina: "2" }], "p1", otpremnice).length, 0);
+});
+
+test("zatvoreno bez otpremnice: komad se ne nudi, vraćanje ga ponovno nudi, komad na otpremnici se ne zatvara", () => {
+  const zatvoreno = zatvoriIsporuke(projekt.isporuke, ["i1", "i2"], "2026-11-10");
+  assert.equal(zatvoreno.find((i) => i.id === "i1").zatvorenoBezOtpremnice, true);
+  assert.equal(zatvoreno.find((i) => i.id === "i1").zatvorenoDatum, "2026-11-10");
+  assert.equal(projekt.isporuke.find((i) => i.id === "i1").zatvorenoBezOtpremnice, undefined); // ulaz se ne mijenja
+  const p = { ...projekt, isporuke: zatvoreno };
+  assert.ok(!slobodneIsporuke(p, []).some((i) => ["i1", "i2"].includes(i.id)));
+  const vraceno = vratiZatvoreneIsporuke(zatvoreno, ["i1"]);
+  assert.equal("zatvorenoBezOtpremnice" in vraceno.find((i) => i.id === "i1"), false);
+  assert.ok(slobodneIsporuke({ ...projekt, isporuke: vraceno }, []).some((i) => i.id === "i1"));
+  const naOtpremnici = zatvoriIsporuke([isp("x1", { uOtpremniciId: "o1" })], ["x1"], "2026-11-10");
+  assert.equal(naOtpremnici[0].zatvorenoBezOtpremnice, undefined);
+});
+
+test("višak stavke: komadi koji ne stanu do naručenog, spremni za zatvaranje bez otpremnice", () => {
+  const otpremnice = [otp("o1", ["i1", "i2"]), otp("o2", ["i2"])]; // zbroj 3 od naručenih 4 → preostaje 1
+  const s = { id: "f1", isporukaIds: ["i3", "i4", "i5"], dostupno: 3 };
+  const v = visakStavke(s, projekt, otpremnice);
+  assert.deepEqual(v.ids, ["i4", "i5"]);
+  assert.equal(v.komada, 2);
+  assert.deepEqual(visakStavke(s, projekt, []), { ids: [], komada: 0 }); // sve stane
+  assert.deepEqual(visakStavke(s, projekt, [otp("o1", ["i1", "i2", "i6", "i7"])]).ids, ["i3", "i4", "i5"]); // preostaje 0 → svi spremni su višak
 });

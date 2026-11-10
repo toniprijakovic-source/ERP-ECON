@@ -22,7 +22,29 @@ export function isporukeNaOtpremnicama(otpremnice = []) {
 export function slobodneIsporuke(projekt, otpremnice = []) {
   const zauzete = isporukeNaOtpremnicama(otpremnice);
   const postojece = new Set(otpremnice.map((o) => o.id));
-  return (projekt?.isporuke || []).filter((i) => i.isporuceno && !zauzete.has(i.id) && !(i.uOtpremniciId && postojece.has(i.uOtpremniciId)));
+  return (projekt?.isporuke || []).filter((i) => i.isporuceno && !i.zatvorenoBezOtpremnice && !zauzete.has(i.id) && !(i.uOtpremniciId && postojece.has(i.uOtpremniciId)));
+}
+
+// "Zatvoreno bez otpremnice": komad koji neće na otpremnicu (npr. mjesto u narudžbi potrošeno starim dvostrukim upisom) — ne nudi se za otpremu,
+// a ostaje u projektu s oznakom i datumom; može se vratiti. Vraćaju se NOVI popisi isporuka (ulaz se ne mijenja).
+export const zatvoriIsporuke = (isporuke = [], ids = [], datum = "") => isporuke.map((i) => (ids.includes(i.id) && !i.uOtpremniciId ? { ...i, zatvorenoBezOtpremnice: true, zatvorenoDatum: datum } : i));
+export const vratiZatvoreneIsporuke = (isporuke = [], ids = []) => isporuke.map((i) => {
+  if (!ids.includes(i.id) || !i.zatvorenoBezOtpremnice) return i;
+  const { zatvorenoBezOtpremnice, zatvorenoDatum, ...ostalo } = i;
+  return ostalo;
+});
+
+// Komadi stavke obrasca koji ne stanu na otpremnicu jer bi zbroj po tipu premašio naručeno (ostaju slobodni, a mogu se zatvoriti bez otpremnice).
+// Vraća { ids, komada }; prazno ako nema viška ili se višak ne može odvojiti od cijelih isporuka.
+export function visakStavke(stavka, projekt, otpremnice = []) {
+  const o = ogranicenjeStavke(stavka, projekt, otpremnice);
+  const dostupno = Number(stavka?.dostupno) || 0;
+  if (!o || o.preostalo >= dostupno) return { ids: [], komada: 0 };
+  const zadrzi = isporukeZaKolicinu(stavka.isporukaIds, projekt?.isporuke, o.preostalo);
+  if (!zadrzi) return { ids: [], komada: 0 };
+  const ids = stavka.isporukaIds.filter((id) => !zadrzi.includes(id));
+  const komadaViska = ids.reduce((a, id) => a + komada((projekt?.isporuke || []).find((i) => i.id === id)), 0);
+  return { ids, komada: zaokruziKom(komadaViska) };
 }
 
 // Komadi koji stoje na dvije ili više otpremnica (stari ili nastali zbog zastarjele kopije): [{ isporuka, tip, otpremnice: [{ broj, datum }] }].

@@ -10,7 +10,7 @@ import logoEcon from "./assets/logo-econ.jpg";
 import QRCode from "qrcode";
 import { napraviPdfUpitaMaterijala, napraviPdfPonude, napraviEml, preuzmiDatoteku, potpisEmail } from "./pdfNabave";
 import { statistikaIsporuka, statistikaGodine, tezinaOtpremnice as tezinaOtpremniceLogika, tezinaStavkeOtpremnice, isporucenoPoStavkama } from "./statistikaIsporuka";
-import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, ogranicenjeStavke, pocetnaKolicina } from "./otpremniceKontrola";
+import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, ogranicenjeStavke, pocetnaKolicina, visakStavke, zatvoriIsporuke, vratiZatvoreneIsporuke } from "./otpremniceKontrola";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
@@ -8143,6 +8143,14 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, patchProjekt, show
     onClose();
   };
 
+  // Višak koji ne stane na otpremnicu (zbroj po tipu bi premašio naručeno) može se zatvoriti bez otpremnice — komad se više ne nudi za otpremu.
+  const zatvoriVisak = (s, visak) => {
+    if (!window.confirm(`Zatvoriti ${visak.komada} ${visak.komada === 1 ? "komad" : "komada"} (${s.naziv}) bez otpremnice? Neće se više nuditi za otpremu. Mogu se vratiti u detaljima projekta (Proizvodni brojevi / Raspored isporuka).`)) return;
+    patchProjekt(projekt.id, { isporuke: zatvoriIsporuke(projekt.isporuke, visak.ids, todayISO()) });
+    setForm((f) => ({ ...f, stavke: f.stavke.map((x) => (x.id === s.id ? { ...x, isporukaIds: x.isporukaIds.filter((id) => !visak.ids.includes(id)), dostupno: Math.max(0, (Number(x.dostupno) || 0) - visak.komada) } : x)).filter((x) => !(x.isporukaIds && x.isporukaIds.length === 0)) }));
+    showToast(`Zatvoreno bez otpremnice: ${visak.komada} kom.`);
+  };
+
   return (
     <Modal wide title="Nova otpremnica" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} disabled={sprema || imaGresaka} onClick={() => spremi(false)}>{sprema ? "Spremam…" : "Kreiraj otpremnicu"}</Btn></>}>
       {greskaServera && (
@@ -8216,9 +8224,10 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, patchProjekt, show
                   )}
                   {koristiNormativ && !sprema && !provjeraNormativa?.greske[s.id] && (() => {
                     const o = ogranicenjeStavke(s, projekt, db.otpremnice);
+                    const visak = visakStavke(s, projekt, db.otpremnice);
                     return o && o.preostalo < s.dostupno ? (
                       <tr><td colSpan={6} style={{ fontSize: 12, color: "var(--ink-soft)", padding: "2px 10px 8px" }}>
-                        Spremno je {s.dostupno} kom, ali do naručenog ({o.naruceno}) preostaje {o.preostalo}: na otpremnicama je već {o.vec}.{o.dupli > 0 ? ` Od toga na dvije otpremnice: ${o.dupli} ${o.dupli === 1 ? "komad" : "komada"}.` : ""} Ostali komadi ostaju slobodni.
+                        Spremno je {s.dostupno} kom, ali do naručenog ({o.naruceno}) preostaje {o.preostalo}: na otpremnicama je već {o.vec}.{o.dupli > 0 ? ` Od toga na dvije otpremnice: ${o.dupli} ${o.dupli === 1 ? "komad" : "komada"}.` : ""} Ostali komadi ostaju slobodni.{visak.ids.length > 0 && <>{" "}<Btn size="sm" variant="ghost" onClick={() => zatvoriVisak(s, visak)}>Zatvori višak ({visak.komada} kom) bez otpremnice</Btn></>}
                       </td></tr>
                     ) : null;
                   })()}
@@ -10089,6 +10098,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
                       const retci = retciPB(isporuke, pb.id);
                       const datum = datumPB(isporuke, pb.id);
                       const zakljucan = (r) => !!r?.uOtpremniciId;
+                      const zatvorene = [retci.pod, retci.stranica].filter((r) => r?.zatvorenoBezOtpremnice);
                       const kasni = datum && datum < todayISO() && [retci.pod, retci.stranica].some((r) => r && !r.isporuceno);
                       const otpremniceBr = [...new Set([retci.pod, retci.stranica].map((r) => r?.uOtpremniciId).filter(Boolean))].map((id) => db.otpremnice.find((o) => o.id === id)?.broj).filter(Boolean);
                       const izbornik = (grupa, stavke, vrijednost) => (
@@ -10106,7 +10116,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
                           <td><input className="input" type="date" disabled={zakljucan(retci.pod) && zakljucan(retci.stranica)} value={datum} onChange={(e) => patchProjekt(pbPostaviDatum(projekt, [pb.id], e.target.value))} /></td>
                           <td style={{ textAlign: "center" }}><input type="checkbox" disabled={!retci.pod || zakljucan(retci.pod)} checked={!!retci.pod?.isporuceno} title={zakljucan(retci.pod) ? "Uključeno u otpremnicu — status se mijenja preko te otpremnice" : ""} onChange={(e) => patchProjekt(pbPostaviIsporuceno(projekt, pb.id, GRUPA_POD, e.target.checked))} /></td>
                           <td style={{ textAlign: "center" }}><input type="checkbox" disabled={!retci.stranica || zakljucan(retci.stranica)} checked={!!retci.stranica?.isporuceno} title={zakljucan(retci.stranica) ? "Uključeno u otpremnicu — status se mijenja preko te otpremnice" : ""} onChange={(e) => patchProjekt(pbPostaviIsporuceno(projekt, pb.id, GRUPA_STRANICA, e.target.checked))} /></td>
-                          <td style={{ fontSize: 11 }}>{otpremniceBr.length > 0 ? <span style={{ color: "var(--ink-soft)" }}>U otpremnici {otpremniceBr.join(", ")}</span> : kasni ? <span style={{ color: "var(--rust)", fontWeight: 600 }}>Kasni</span> : null}</td>
+                          <td style={{ fontSize: 11 }}>{otpremniceBr.length > 0 ? <span style={{ color: "var(--ink-soft)" }}>U otpremnici {otpremniceBr.join(", ")}</span> : kasni ? <span style={{ color: "var(--rust)", fontWeight: 600 }}>Kasni</span> : null}{zatvorene.length > 0 && <div style={{ color: "var(--ink-soft)" }}>Zatvoreno bez otpremnice <button className="btn btn-ghost" style={{ padding: "0 4px", fontSize: 11 }} title="Vrati komad među one koji idu na otpremnicu" onClick={() => patchProjekt({ isporuke: vratiZatvoreneIsporuke(isporuke, zatvorene.map((r) => r.id)) })}>Vrati</button></div>}</td>
                           <td><button className="btn btn-icon btn-ghost" title="Kopiraj proizvodni broj (isti pod, stranica i datum, novi broj)" onClick={() => { setPbPocetno({ izBroja: pb.broj, podId: pb.podId || "", stranicaId: pb.stranicaId || "", datum }); setPbDodajOtvoren(true); }}><Copy size={14} color="var(--ink-soft)" /></button></td>
                           <td><button className="btn btn-icon btn-ghost" disabled={zakljucan(retci.pod) || zakljucan(retci.stranica)} onClick={() => potvrdiBrisanje(() => primijeniPB(pbObrisi(projekt, pb.id)), `proizvodni broj ${pb.broj}`)}><Trash2 size={14} color={zakljucan(retci.pod) || zakljucan(retci.stranica) ? "var(--ink-faint)" : "var(--rust)"} /></button></td>
                         </tr>
@@ -10158,7 +10168,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
                       <td><input className="input f-mono" type="number" min="0" step="1" max={stavka?.komada || undefined} disabled={!!i.uOtpremniciId} value={i.komada} onChange={(e) => azurirajIsporuku(i.id, { komada: e.target.value })} /></td>
                       <td><input className="input" type="date" disabled={!!i.uOtpremniciId} value={i.datum || ""} onChange={(e) => azurirajIsporuku(i.id, { datum: e.target.value })} /></td>
                       <td><input type="checkbox" checked={!!i.isporuceno} disabled={!!i.uOtpremniciId} title={i.uOtpremniciId ? `Uključeno u otpremnicu ${db.otpremnice.find((o) => o.id === i.uOtpremniciId)?.broj || ""}` : ""} onChange={(e) => azurirajIsporuku(i.id, { isporuceno: e.target.checked })} /></td>
-                      <td style={{ fontSize: 11 }}>{i.uOtpremniciId ? <span style={{ color: "var(--ink-soft)" }}>U otpremnici {db.otpremnice.find((o) => o.id === i.uOtpremniciId)?.broj || ""}</span> : kasni ? <span style={{ color: "var(--rust)", fontWeight: 600 }}>Kasni</span> : null}</td>
+                      <td style={{ fontSize: 11 }}>{i.uOtpremniciId ? <span style={{ color: "var(--ink-soft)" }}>U otpremnici {db.otpremnice.find((o) => o.id === i.uOtpremniciId)?.broj || ""}</span> : kasni ? <span style={{ color: "var(--rust)", fontWeight: 600 }}>Kasni</span> : null}{i.zatvorenoBezOtpremnice && <div style={{ color: "var(--ink-soft)" }}>Zatvoreno bez otpremnice <button className="btn btn-ghost" style={{ padding: "0 4px", fontSize: 11 }} title="Vrati komad među one koji idu na otpremnicu" onClick={() => patchProjekt({ isporuke: vratiZatvoreneIsporuke(isporuke, [i.id]) })}>Vrati</button></div>}</td>
                       <td><button className="btn btn-icon btn-ghost" disabled={!!i.uOtpremniciId} onClick={() => potvrdiBrisanje(() => obrisiIsporuku(i.id))}><Trash2 size={14} color={i.uOtpremniciId ? "var(--ink-faint)" : "var(--rust)"} /></button></td>
                     </tr>
                   );
