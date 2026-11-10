@@ -1458,15 +1458,26 @@ function provjeriIsporukeNoveOtpremnice(nova, projekt, ostale) {
     const kolicina = Number(st.kolicina) || 0;
     if (kolicina !== zbroj) throw greskaOtpremnice(`Količina (${kolicina}) stavke „${st.naziv || ""}” mora biti jednaka broju odabranih komada (${zbroj}).`);
   }
-  // Ukupno otpremljeno po tipu (svaki komad jednom, bez obzira na stare dvostruke upise) ne smije premašiti naručeno.
+  // Zbroj količina na otpremnicama po tipu ne smije premašiti naručeno. Kupac zbraja otpremnice, pa se broje dokumenti (količine na otpremnicama),
+  // a ne različiti komadi: komad upisan na dvije otpremnice troši naručenu količinu dvaput (zato je ranije dupliciranje vidljivo i u ovoj provjeri).
+  const vecPoTipu = new Map(); // "grupa|stavkaId" -> { komada, dupli }
+  const viden = new Set();
+  ostale.forEach((o) => (o.stavke || []).forEach((st) => {
+    const prva = (st.isporukaIds || []).map((id) => isporuke.get(id)).find(Boolean);
+    if (!prva) return;
+    const k = `${prva.grupa}|${prva.stavkaId}`;
+    const r = vecPoTipu.get(k) || { komada: 0, dupli: 0 };
+    r.komada += Number(st.kolicina) || 0;
+    [...new Set(st.isporukaIds)].forEach((id) => { const i = isporuke.get(id); if (!i) return; if (viden.has(id)) r.dupli += Number(i.komada) || 0; viden.add(id); });
+    vecPoTipu.set(k, r);
+  }));
   for (const [k, komadaNova] of novoPoTipu) {
     const [grupa, stavkaId] = k.split("|");
     const tip = (projekt[grupa] || []).find((s) => s.id === stavkaId);
     const naruceno = Number(tip?.komada) || 0;
     if (!tip || naruceno <= 0) continue;
-    let vec = 0;
-    zauzete.forEach((_, id) => { const i = isporuke.get(id); if (i && i.grupa === grupa && i.stavkaId === stavkaId) vec += Number(i.komada) || 0; });
-    if (vec + komadaNova > naruceno) throw greskaOtpremnice(`Tip „${grupa === "stavkePod" ? "Pod" : "Stranica"} — ${tip.oznaka || "(bez oznake)"}”: s ovom otpremnicom bilo bi otpremljeno ${vec + komadaNova} od naručenih ${naruceno} komada.`);
+    const { komada: vec, dupli } = vecPoTipu.get(k) || { komada: 0, dupli: 0 };
+    if (vec + komadaNova > naruceno) throw greskaOtpremnice(`Tip „${grupa === "stavkePod" ? "Pod" : "Stranica"} — ${tip.oznaka || "(bez oznake)"}”: naručeno ${naruceno}, na otpremnicama već ${vec}, s ovom otpremnicom bilo bi ${vec + komadaNova}. Kupac ne smije dobiti otpremnice čiji zbroj premašuje narudžbu.${dupli > 0 ? ` Od toga na dvije otpremnice: ${dupli} ${dupli === 1 ? "komad" : "komada"}.` : ""}`);
   }
 }
 // Nakon spremanja: isporuke u novim otpremnicama dobivaju uOtpremniciId; isporuke obrisanih otpremnica se oslobađaju. Vraća { projekti } za odgovor.

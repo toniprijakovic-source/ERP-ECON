@@ -84,7 +84,7 @@ const provjeri = (naziv, uvjet, detalj) => { (uvjet ? ok++ : lose++); console.lo
 
   console.log("\n— Ukupno otpremljeno ne smije premašiti naručeno (tip naručen 3, raspoređene 4 isporuke)");
   r = await h("PUT", "/api/otpremnice/patch", { upsert: [otp("o5", "2026-11-07", [{ kolicina: 2, isporukaIds: ["i3", "i4"] }])], remove: [] }, A);
-  provjeri("  4. komad tipa odbijen (4 od naručena 3)", r.s === 409 && /od naručenih 3/.test(r.j?.error || ""), `HTTP ${r.s} ${r.j?.error}`);
+  provjeri("  4. komad tipa odbijen (zbroj 4 od naručena 3)", r.s === 409 && /naručeno 3, na otpremnicama već 2/.test(r.j?.error || ""), `HTTP ${r.s} ${r.j?.error}`);
   r = await h("PUT", "/api/otpremnice/patch", { upsert: [otp("o5", "2026-11-07", [{ kolicina: 1, isporukaIds: ["i3"] }])], remove: [] }, A);
   provjeri("  3. komad tipa prolazi", r.s === 200, `HTTP ${r.s} ${r.j?.error || ""}`);
 
@@ -99,6 +99,9 @@ const provjeri = (naziv, uvjet, detalj) => { (uvjet ? ok++ : lose++); console.lo
   console.log("\n— Stari dvostruki upis: brisanje jedne otpremnice prebacuje oznaku na drugu");
   ozn = await oznake();
   provjeri("  početno: oznaka i7 na o-star2", ozn.i7 === "o-star2", ozn.i7);
+  // zbroj otpremnica tipa B već je jednak naručenom (2) jer je i7 upisan dvaput — kupac bi dobio više komada nego je naručio
+  r = await h("PUT", "/api/otpremnice/patch", { upsert: [otp("o9", "2026-11-08", [{ kolicina: 1, isporukaIds: ["i5"], naziv: "Stranica — Typ B" }])], remove: [] }, A);
+  provjeri("  stari dvostruki upis troši naručeno: nova otpremnica tipa odbijena", r.s === 409 && /naručeno 2, na otpremnicama već 2/.test(r.j?.error || "") && /Od toga na dvije otpremnice: 1 komad/.test(r.j?.error || ""), `HTTP ${r.s} ${r.j?.error}`);
   r = await h("PUT", "/api/otpremnice/patch", { upsert: [], remove: ["o-star2"] }, A);
   ozn = await oznake();
   provjeri("  nakon brisanja oznaka i7 ide na o-star1 (ne oslobađa se)", ozn.i7 === "o-star1", ozn.i7);
