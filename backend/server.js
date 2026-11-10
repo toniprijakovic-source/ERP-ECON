@@ -1006,6 +1006,8 @@ app.get("/api/plan/podaci", autentikacija, async (req, res) => {
   });
   res.json({
     normativ: { naziv: normativi?.naziv || "", grupe: (normativi?.grupe || []).map((g) => ({ kljuc: g.kljuc, naziv: g.naziv, ucinakKgH: Number(g.ucinakKgH) || 0, raspodjela: g.raspodjela || {} })) },
+    // vlastiti normativi projekata — također samo učinak i raspodjela, bez cijena
+    poProjektima: Object.fromEntries(Object.entries(normativi?.poProjektima || {}).map(([id, n]) => [id, { naziv: n?.naziv || "", grupe: (n?.grupe || []).map((g) => ({ kljuc: g.kljuc, naziv: g.naziv, ucinakKgH: Number(g.ucinakKgH) || 0, raspodjela: g.raspodjela || {} })) }])),
     odsutnosti,
     projektiPregled: Object.fromEntries((projekti || []).map((p) => [p.id, { kupac: nazivKupca.get(p.kupacId) || "", narudzbe: brojeviNarudzbi[p.id] || [] }])),
   });
@@ -1659,6 +1661,75 @@ app.get("/api/data/:key", autentikacija, async (req, res) => {
     : vrijednost);
 });
 
+// ---------- Normativ kupaonica po projektu ----------
+// Ključ "normativi" = { naziv, grupe: [pod, komplet], poProjektima: { [projektId]: { naziv, grupe } } }. Zadani normativ (naziv, grupe) vrijedi za projekte
+// koji nemaju vlastiti zapis u poProjektima; projekt s vlastitim zapisom koristi njega. Promjena zadanog normativa NIKAD ne mijenja postojeće projekte:
+// prije promjene svaki projekt po normativu koji još nema vlastiti normativ "zamrzava" se na dosadašnjim vrijednostima (ista transakcija).
+// To vrijedi i za stare preglednike koji cijeli normativ spremaju običnim PUT /api/data/normativi (poProjektima im ne treba, ostaje u bazi).
+function provjeriNormativ(n) {
+  if (!n || typeof n !== "object" || !Array.isArray(n.grupe) || n.grupe.length === 0) return "Neispravan normativ.";
+  for (const g of n.grupe) {
+    if (!g || typeof g !== "object" || !["pod", "komplet"].includes(g.kljuc)) return "Neispravna grupa normativa.";
+    const cijena = Number(g.cijenaKg), ucinak = Number(g.ucinakKgH);
+    if (!Number.isFinite(cijena) || cijena < 0) return `Neispravna cijena za „${g.naziv || g.kljuc}”.`;
+    if (!Number.isFinite(ucinak) || ucinak < 0) return `Neispravan učinak za „${g.naziv || g.kljuc}”.`;
+    const zbroj = Object.values(g.raspodjela || {}).reduce((s, v) => s + (Number(v) || 0), 0);
+    if (Math.abs(zbroj - 100) > 0.01) return `Raspodjela sati za „${g.naziv || g.kljuc}” ne daje 100% (${zbroj.toFixed(1)}%).`;
+  }
+  return null;
+}
+function primijeniNormativ(stari, projekti, { projektId, normativ, zadano } = {}) {
+  const klon = (v) => JSON.parse(JSON.stringify(v));
+  const baza = stari && typeof stari === "object" && !Array.isArray(stari) ? stari : {};
+  const poProjektima = { ...(baza.poProjektima || {}) };
+  const dosadasnji = { naziv: baza.naziv || "", grupe: Array.isArray(baza.grupe) ? baza.grupe : [] };
+  let rezultat = { ...baza };
+  if (zadano) {
+    (projekti || []).filter((p) => p?.koristiNormativ && p.id && !poProjektima[p.id]).forEach((p) => { poProjektima[p.id] = klon(dosadasnji); });
+    rezultat = { ...rezultat, naziv: zadano.naziv ?? dosadasnji.naziv, grupe: klon(zadano.grupe) };
+  }
+  if (projektId && normativ) poProjektima[projektId] = { naziv: normativ.naziv ?? dosadasnji.naziv, grupe: klon(normativ.grupe) };
+  return { ...rezultat, poProjektima };
+}
+async function spremiNormativTransakcija(client, zahtjev) {
+  const r = await client.query("SELECT value FROM app_data WHERE key = 'normativi' FOR UPDATE");
+  const projekti = (await client.query("SELECT value FROM app_data WHERE key = 'projekti'")).rows[0]?.value || [];
+  const novi = primijeniNormativ(r.rows[0]?.value, projekti, zahtjev);
+  await client.query(
+    `INSERT INTO app_data (key, value, updated_at) VALUES ('normativi', $1, now())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+    [JSON.stringify(novi)]
+  );
+  return novi;
+}
+// body: { projektId, normativ } — vlastiti normativ jednog projekta; neobavezno zadano — novi zadani normativ za nove projekte (ostali projekti se zamrzavaju).
+app.put("/api/normativi/patch", autentikacija, async (req, res) => {
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  const { pisivo } = izracunajDozvoljeneKljuceve(pozicija);
+  if (!pisivo.has("normativi")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za mijenjanje normativa." });
+  const { projektId, normativ, zadano } = req.body || {};
+  if (!projektId && !zadano) return res.status(400).json({ error: "Nije naveden projekt ni zadani normativ." });
+  for (const n of [projektId ? normativ : null, zadano]) { if (n) { const greska = provjeriNormativ(n); if (greska) return res.status(400).json({ error: greska }); } }
+  if (projektId && !normativ) return res.status(400).json({ error: "Nedostaje normativ projekta." });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    if (projektId) {
+      const projekti = (await client.query("SELECT value FROM app_data WHERE key = 'projekti'")).rows[0]?.value || [];
+      if (!projekti.some((p) => p.id === projektId)) { await client.query("ROLLBACK"); return res.status(404).json({ error: "Projekt nije pronađen." }); }
+    }
+    const novi = await spremiNormativTransakcija(client, { projektId, normativ, zadano });
+    await client.query("COMMIT");
+    res.json({ ok: true, normativi: novi });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Greška kod spremanja normativa:", e);
+    res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+  } finally {
+    client.release();
+  }
+});
+
 app.put("/api/data/:key", autentikacija, async (req, res, next) => {
   if (!DOZVOLJENI_KLJUCEVI.includes(req.params.key)) return res.status(400).json({ error: "Nepoznat ključ." });
   if (SAMO_CILJANO.has(req.params.key)) return res.status(400).json({ error: "Ovaj popis se sprema ciljano (PUT /api/<ključ>/patch), ne cijeli." });
@@ -1671,6 +1742,24 @@ app.put("/api/data/:key", autentikacija, async (req, res, next) => {
     } catch (e) {
       console.error("Greška kod spremanja radnih naloga:", e);
       return res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+    }
+    return res.json({ ok: true });
+  }
+  // Stari preglednik sprema cijeli normativ: to je promjena zadanog normativa — postojeći projekti se zamrzavaju, a poProjektima ostaje (vidi gore).
+  if (req.params.key === "normativi") {
+    const greska = provjeriNormativ(req.body);
+    if (greska) return res.status(400).json({ error: greska });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await spremiNormativTransakcija(client, { zadano: { naziv: req.body.naziv, grupe: req.body.grupe } });
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      console.error("Greška kod spremanja normativa:", e);
+      return res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+    } finally {
+      client.release();
     }
     return res.json({ ok: true });
   }
