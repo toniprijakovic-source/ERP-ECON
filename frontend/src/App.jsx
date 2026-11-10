@@ -10,6 +10,7 @@ import logoEcon from "./assets/logo-econ.jpg";
 import QRCode from "qrcode";
 import { napraviPdfUpitaMaterijala, napraviPdfPonude, napraviEml, preuzmiDatoteku, potpisEmail } from "./pdfNabave";
 import { statistikaIsporuka, statistikaGodine, tezinaOtpremnice as tezinaOtpremniceLogika, tezinaStavkeOtpremnice, isporucenoPoStavkama } from "./statistikaIsporuka";
+import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi } from "./otpremniceKontrola";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
@@ -2412,17 +2413,27 @@ export default function App() {
     const upsert = newArr.filter((o) => stare.get(o.id) !== JSON.stringify(o));
     const remove = (db[kljuc] || []).filter((o) => !noveIds.has(o.id)).map((o) => o.id);
     setDb((prev) => ({ ...prev, [kljuc]: newArr }));
-    if (upsert.length === 0 && remove.length === 0) return;
-    fetch(`${API_URL}/api/${kljuc}/patch`, {
+    if (upsert.length === 0 && remove.length === 0) return Promise.resolve({ ok: true });
+    // Vraća { ok, greska } da obrazac (npr. nova otpremnica) može pokazati razlog odbijanja. Poslužitelj otpremnicu tipskog projekta odbija (409)
+    // ako je komad već na drugoj otpremnici ili je količina prevelika — tada se prikaz vraća na stvarno stanje (otpremnice i isporuke projekata).
+    return fetch(`${API_URL}/api/${kljuc}/patch`, {
       method: "PUT",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` },
       body: JSON.stringify({ upsert, remove }),
     }).then(async (res) => {
-      if (!res.ok) { showToast({ cmr: "Greška pri spremanju CMR-a.", slobodniZadaci: "Greška pri spremanju zadatka.", radniNalozi: "Greška pri spremanju radnog naloga.", materijali: "Greška pri spremanju materijala.", rezervacije: "Greška pri spremanju rezervacija.", maticnaKnjiga: "Greška pri spremanju matične knjige.", upitiTransporta: "Greška pri spremanju upita za transport.", narudzbeTransporta: "Greška pri spremanju narudžbe za transport.", narudzbenice: "Greška pri spremanju narudžbenice.", satiPoNalogu: "Greška pri spremanju sati.", ponude: "Greška pri spremanju ponude.", ponudeLasera: "Greška pri spremanju ponude za laser." }[kljuc] || "Greška pri spremanju otpremnice."); return; }
+      if (!res.ok) {
+        const podaci = await res.json().catch(() => ({}));
+        const opca = { cmr: "Greška pri spremanju CMR-a.", slobodniZadaci: "Greška pri spremanju zadatka.", radniNalozi: "Greška pri spremanju radnog naloga.", materijali: "Greška pri spremanju materijala.", rezervacije: "Greška pri spremanju rezervacija.", maticnaKnjiga: "Greška pri spremanju matične knjige.", upitiTransporta: "Greška pri spremanju upita za transport.", narudzbeTransporta: "Greška pri spremanju narudžbe za transport.", narudzbenice: "Greška pri spremanju narudžbenice.", satiPoNalogu: "Greška pri spremanju sati.", ponude: "Greška pri spremanju ponude.", ponudeLasera: "Greška pri spremanju ponude za laser." }[kljuc] || "Greška pri spremanju otpremnice.";
+        const poruka = res.status === 409 && podaci.error ? podaci.error : opca;
+        showToast(poruka);
+        if (res.status === 409) { refetchKljuc(kljuc).catch(() => {}); if (kljuc === "otpremnice") refetchKljuc("projekti").catch(() => {}); }
+        return { ok: false, greska: poruka };
+      }
       const data = await res.json();
-      setDb((prev) => ({ ...prev, [kljuc]: data[kljuc] }));
+      setDb((prev) => ({ ...prev, [kljuc]: data[kljuc], ...(data.projekti ? { projekti: data.projekti } : {}) }));
       (data.promijenjeniBrojevi || []).forEach((p) => showToast(`Broj ${p.staro} je već bio zauzet — spremljeno kao ${p.novo}.`));
-    }).catch(() => showToast("Greška pri spremanju — provjeri internetsku vezu."));
+      return { ok: true };
+    }).catch(() => { showToast("Greška pri spremanju — provjeri internetsku vezu."); return { ok: false, greska: "Greška pri spremanju — provjeri internetsku vezu." }; });
   };
 
   // Matični brojevi se dodjeljuju na poslužitelju (od 3700, bez dupliciranja), pa se kod zaprimanja
@@ -2446,7 +2457,7 @@ export default function App() {
 
   // dodatnaZaglavlja: npr. razlog korekcije za povijest korekcija (X-Korekcija-Razlog, X-Korekcija-Zaposlenik — vidi poslužitelj).
   const update = (key, newArr, dodatnaZaglavlja = {}) => {
-    if (key === "otpremnice" || key === "cmr" || key === "slobodniZadaci" || key === "radniNalozi" || key === "materijali" || key === "rezervacije" || key === "maticnaKnjiga" || key === "upitiTransporta" || key === "narudzbeTransporta" || key === "narudzbenice" || key === "satiPoNalogu" || key === "ponude" || key === "ponudeLasera") { patchOtpremnice(newArr, key); return; }
+    if (key === "otpremnice" || key === "cmr" || key === "slobodniZadaci" || key === "radniNalozi" || key === "materijali" || key === "rezervacije" || key === "maticnaKnjiga" || key === "upitiTransporta" || key === "narudzbeTransporta" || key === "narudzbenice" || key === "satiPoNalogu" || key === "ponude" || key === "ponudeLasera") { return patchOtpremnice(newArr, key); }
     setDb((prev) => ({ ...prev, [key]: newArr }));
     fetch(`${API_URL}/api/data/${key}`, {
       method: "PUT",
@@ -8059,7 +8070,9 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, patchProjekt, show
   // Naručena količina po stavci — kod normativa je to ukupan broj komada tog tipa (iz Pod/Stranica
   // tablice), kod obične narudžbe kupca je to unesena kolicina na toj stavci narudžbe.
   const narucenoZaIsporuku = (i) => (i.grupa === "stavkePod" ? projekt.stavkePod : projekt.stavkeKomplet || []).find((s) => s.id === i.stavkaId)?.komada;
-  const dostupneIsporuke = koristiNormativ ? (projekt.isporuke || []).filter((i) => i.isporuceno && !i.uOtpremniciId) : [];
+  // Slobodni su komadi spremni za otpremu koji nisu ni na jednoj postojećoj otpremnici — provjera po otpremnicama, ne samo po oznaci
+  // uOtpremniciId (oznaka se izgubi ako je preglednik radio sa zastarjelom kopijom projekta, pa bi isti komad otišao na dvije otpremnice).
+  const dostupneIsporuke = koristiNormativ ? slobodneIsporuke(projekt, db.otpremnice) : [];
   // Više odvojenih isporuka istog tipa (npr. "Pod — Typ 4A" spreman u tri navrata) spajaju se u
   // JEDNU stavku otpremnice sa zbrojenom količinom, umjesto da se svaka pojedinačna isporuka
   // ispiše kao zaseban redak — sve pripadajuće isporukaId i dalje se pamte (isporukaIds) da bi se
@@ -8095,34 +8108,63 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, patchProjekt, show
   const [opisOtvoren, setOpisOtvoren] = useState({}); // { [stavkaId]: true } — red s dodatnim opisom stavke je otvoren
 
   const [bezTezine, setBezTezine] = useState(0); // broj stavki bez poznate težine — otvara upozorenje prije spremanja
-  const spremi = (preskociProvjeruTezine = false) => {
-    const stavke = form.stavke.filter((s) => Number(s.kolicina) > 0).map(({ pbBrojevi, ...s }) => ({ ...s, kolicina: Number(s.kolicina) }));
+  const [prekoNaruceno, setPrekoNaruceno] = useState([]); // obični projekti: količina veća od naručenog minus već otpremljeno — upozorenje uz potvrdu
+  const [greskaServera, setGreskaServera] = useState(""); // poslužitelj je odbio otpremnicu (komad već na drugoj otpremnici, preveliko…)
+  const [sprema, setSprema] = useState(false);
+  // Tipski projekti: količina ne smije biti veća od komada spremnih za otpremu ni od naručenog (zbroj po tipu); komad ne smije biti na drugoj otpremnici.
+  const provjeraNormativa = koristiNormativ && !sprema ? pripremiStavkeNormativa(form.stavke, projekt, db.otpremnice) : null;
+  const imaGresaka = !!provjeraNormativa && Object.keys(provjeraNormativa.greske).length > 0;
+  const spremi = async (preskociProvjeruTezine = false, preskociNaruceno = false) => {
+    if (sprema) return;
+    setGreskaServera("");
+    let stavke = form.stavke.filter((s) => Number(s.kolicina) > 0);
     if (stavke.length === 0) { showToast("Unesi količinu za barem jednu stavku."); return; }
+    if (koristiNormativ) {
+      const p = pripremiStavkeNormativa(form.stavke, projekt, db.otpremnice);
+      if (Object.keys(p.greske).length > 0) { showToast("Količine nisu ispravne — vidi crvene napomene uz stavke."); return; }
+      stavke = p.stavke.filter((s) => Number(s.kolicina) > 0); // isporukaIds skraćeni na upisanu količinu
+    } else if (!preskociNaruceno) {
+      const upozorenja = prekoNarucenogPoNarudzbi(stavke, projekt.id, db.otpremnice);
+      if (upozorenja.length > 0) { setPrekoNaruceno(upozorenja.map((u) => u.poruka)); return; }
+    }
+    stavke = stavke.map(({ pbBrojevi, ...s }) => ({ ...s, kolicina: Number(s.kolicina) }));
     const novaOtpremnica = { ...form, id: uid("otp"), stavke };
     // Težina ide u Statistiku isporuka (DZS): upozori ako za neku stavku nije poznata ni na otpremnici, ni u narudžbi, ni u projektu.
     if (!preskociProvjeruTezine) {
       const t = tezinaOtpremnice(novaOtpremnica, db);
       if (t.nedostaje > 0) { setBezTezine(t.nedostaje); return; }
     }
-    update("otpremnice", [...db.otpremnice, novaOtpremnica]);
-    if (koristiNormativ) {
-      const ukljucenIds = new Set(stavke.flatMap((s) => s.isporukaIds || []).filter(Boolean));
-      if (ukljucenIds.size > 0) {
-        patchProjekt(projekt.id, { isporuke: (projekt.isporuke || []).map((i) => (ukljucenIds.has(i.id) ? { ...i, uOtpremniciId: novaOtpremnica.id } : i)) });
-      }
-    }
+    // Čeka se odgovor poslužitelja: on provjerava na svježim podacima i sam označava komade kao uključene u otpremnicu (uOtpremniciId).
+    setSprema(true);
+    const rezultat = await update("otpremnice", [...db.otpremnice, novaOtpremnica]);
+    setSprema(false);
+    if (rezultat && rezultat.ok === false) { setGreskaServera(rezultat.greska); return; }
     showToast("Otpremnica kreirana.");
     onClose();
   };
 
   return (
-    <Modal wide title="Nova otpremnica" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={() => spremi(false)}>Kreiraj otpremnicu</Btn></>}>
+    <Modal wide title="Nova otpremnica" onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} disabled={sprema || imaGresaka} onClick={() => spremi(false)}>{sprema ? "Spremam…" : "Kreiraj otpremnicu"}</Btn></>}>
+      {greskaServera && (
+        <div className="card" style={{ padding: "10px 12px", marginBottom: 12, background: "#FDECEA", borderColor: "#F0B4AE", fontSize: 12.5 }}>
+          <strong>Otpremnica nije spremljena.</strong> {greskaServera}
+          <div style={{ marginTop: 4, color: "var(--ink-soft)" }}>Podaci su osvježeni — zatvorite ovaj prozor i ponovno složite otpremnicu.</div>
+        </div>
+      )}
+      {prekoNaruceno.length > 0 && (
+        <div className="card" style={{ padding: "10px 12px", marginBottom: 12, background: "#FFF6DE", borderColor: "#F5D98A", fontSize: 12.5 }}>
+          <strong>Količina premašuje naručeno:</strong>
+          <ul style={{ margin: "4px 0 6px 18px", padding: 0 }}>{prekoNaruceno.map((p) => <li key={p}>{p}</li>)}</ul>
+          <Btn size="sm" onClick={() => setPrekoNaruceno([])}>Vrati se i ispravi</Btn>{" "}
+          <Btn size="sm" variant="primary" onClick={() => { setPrekoNaruceno([]); spremi(false, true); }}>Ipak kreiraj</Btn>
+        </div>
+      )}
       {bezTezine > 0 && (
         <div className="card" style={{ padding: "10px 12px", marginBottom: 12, background: "#FFF6DE", borderColor: "#F5D98A", fontSize: 12.5 }}>
           Za <strong>{bezTezine}</strong> {bezTezine === 1 ? "stavku" : "stavki"} težina nije poznata (nije upisana u stupcu „Masa (kg)“, a nema je ni u narudžbi ni u projektu), pa neće biti u Statistici isporuka za DZS.
           <span style={{ marginLeft: 10 }}>
             <Btn size="sm" onClick={() => setBezTezine(0)}>Vrati se i upiši</Btn>{" "}
-            <Btn size="sm" variant="primary" onClick={() => { setBezTezine(0); spremi(true); }}>Kreiraj bez težine</Btn>
+            <Btn size="sm" variant="primary" onClick={() => { setBezTezine(0); spremi(true, true); }}>Kreiraj bez težine</Btn>
           </span>
         </div>
       )}
@@ -8166,9 +8208,12 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, patchProjekt, show
                     {koristiNormativ && <td className="f-mono">{fmtDate(s.datumPlan) || "—"}</td>}
                     <td className="f-mono">{s.jm}</td>
                     <td className="f-mono">{s.narucena ?? "—"}</td>
-                    <td><input className="input f-mono" type="number" min="0" max={koristiNormativ ? s.dostupno : undefined} style={{ padding: "5px 8px" }} value={s.kolicina} onChange={(e) => azurirajKolicinu(i, e.target.value)} /></td>
+                    <td><input className="input f-mono" type="number" min="0" max={koristiNormativ ? s.dostupno : undefined} style={{ padding: "5px 8px", ...(provjeraNormativa?.greske[s.id] ? { borderColor: "var(--rust)" } : {}) }} value={s.kolicina} onChange={(e) => azurirajKolicinu(i, e.target.value)} /></td>
                     <td><input className="input f-mono" type="number" min="0" step="0.1" style={{ padding: "5px 8px" }} placeholder={(() => { const nst = narudzba?.stavke?.find((x) => x.id === s.narudzbaStavkaId); const auto = (Number(nst?.masaJed) || 0) * (Number(s.kolicina) || 0); return auto > 0 ? String(Math.round(auto * 10) / 10) : "—"; })()} value={s.masaKg ?? ""} onChange={(e) => setForm({ ...form, stavke: form.stavke.map((st, idx) => (idx === i ? { ...st, masaKg: e.target.value } : st)) })} /></td>
                   </tr>
+                  {provjeraNormativa?.greske[s.id] && (
+                    <tr><td colSpan={koristiNormativ ? 6 : 5} style={{ fontSize: 12, color: "var(--rust)", padding: "2px 10px 8px" }}>{provjeraNormativa.greske[s.id]}</td></tr>
+                  )}
                   {(opisOtvoren[s.id] || (s.opis && opisOtvoren[s.id] === undefined)) && (
                     <tr>
                       <td colSpan={koristiNormativ ? 6 : 5} style={{ background: "var(--surface-alt)", padding: "8px 10px" }}>
@@ -8442,7 +8487,7 @@ function OtpremniceListModal({ projekt, narudzbe = [], db, update, patchProjekt,
   const [delOtp, setDelOtp] = useState(null);
   const koristiNormativ = !!projekt.koristiNormativ;
   const novaOtpremnica = () => (!koristiNormativ && narudzbe.length > 1 ? setOdabirNarudzbe(true) : setOtpModal({ narudzba: narudzbe[0] || null }));
-  const spremneZaOtpremu = koristiNormativ ? (projekt.isporuke || []).filter((i) => i.isporuceno && !i.uOtpremniciId).length : 0;
+  const spremneZaOtpremu = koristiNormativ ? slobodneIsporuke(projekt, db.otpremnice).length : 0;
   const nemaStavki = koristiNormativ ? spremneZaOtpremu === 0 : narudzbe.length === 0;
 
   return (
@@ -8474,8 +8519,8 @@ function OtpremniceListModal({ projekt, narudzbe = [], db, update, patchProjekt,
       {otpModal && <OtpremnicaFormModal narudzba={otpModal.narudzba} projekt={projekt} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} onClose={() => setOtpModal(false)} />}
       {printOtp && <OtpremnicaPrintModal otpremnica={printOtp} db={db} onClose={() => setPrintOtp(null)} />}
       {delOtp && <ConfirmDelete label={delOtp.broj} onCancel={() => setDelOtp(null)} onConfirm={() => {
+        // Poslužitelj sam oslobađa komade obrisane otpremnice (uOtpremniciId) i vraća ažurirane projekte.
         update("otpremnice", db.otpremnice.filter((o) => o.id !== delOtp.id));
-        if (koristiNormativ) patchProjekt(projekt.id, { isporuke: (projekt.isporuke || []).map((i) => (i.uOtpremniciId === delOtp.id ? { ...i, uOtpremniciId: null } : i)) });
         setDelOtp(null);
         showToast("Otpremnica obrisana.");
       }} />}
@@ -9808,6 +9853,7 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
   // Isporučeno prema otpremnicama (za stupac "Isporučeno" u tablicama Pod / Stranice)
   const isporucenoMapa = useMemo(() => isporucenoPoStavkama(projekt, db.otpremnice), [projekt, db.otpremnice]);
   const isporucenoZaStavku = (grupa, stavkaId) => isporucenoMapa.get(`${grupa}:${stavkaId}`) || { komada: 0, otpremnice: [] };
+  const dvostrukeIsporukeProjekta = useMemo(() => (koristiNormativ ? dvostrukeIsporuke(projekt, db.otpremnice) : []), [koristiNormativ, projekt, db.otpremnice]);
   const [uvozOtvoren, setUvozOtvoren] = useState(false); // false | narudžba iz koje se uvozi
   const uveziIzNarudzbe = (odabrane) => {
     const noviPod = [...stavkePod];
@@ -9951,6 +9997,20 @@ function ProjektDetaljModal({ projekt, db, update, patchProjekt: patchProjektAsy
 
             <StavkeNormativaTablica naslov="Pod (podna konstrukcija)" rezultat={izracunNorm.pod} rasporedjeno={(id) => rasporedjenoZaStavku("stavkePod", id)} isporuceno={(id) => isporucenoZaStavku("stavkePod", id)} onDodaj={() => dodajStavku("stavkePod")} onAzuriraj={(id, patch) => azurirajStavku("stavkePod", id, patch)} onObrisi={(id) => obrisiStavku("stavkePod", id)} />
             <StavkeNormativaTablica naslov="Stranice" rezultat={izracunNorm.komplet} rasporedjeno={(id) => rasporedjenoZaStavku("stavkeKomplet", id)} isporuceno={(id) => isporucenoZaStavku("stavkeKomplet", id)} onDodaj={() => dodajStavku("stavkeKomplet")} onAzuriraj={(id, patch) => azurirajStavku("stavkeKomplet", id, patch)} onObrisi={(id) => obrisiStavku("stavkeKomplet", id)} />
+
+            {dvostrukeIsporukeProjekta.length > 0 && (
+              <div className="card" style={{ padding: "10px 12px", marginBottom: 14, background: "#FDECEA", borderColor: "#F0B4AE", fontSize: 12.5 }}>
+                <strong>Upozorenje: na više otpremnica upisano je {dvostrukeIsporukeProjekta.length} {dvostrukeIsporukeProjekta.length === 1 ? "komad" : "komada"}</strong> — zato je stupac „Isporučeno“ prevelik, a komadi koji nikad nisu otpremljeni mogu izgledati isporučeno. Provjerite na kojoj su otpremnici stvarno otišli pa drugu ispravite ili obrišite.
+                <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+                  {Array.from(dvostrukeIsporukeProjekta.reduce((m, d) => {
+                    const kljuc = d.otpremnice.map((o) => o.broj).join(" i ");
+                    const tipovi = m.get(kljuc) || new Map();
+                    tipovi.set(d.tip, (tipovi.get(d.tip) || 0) + 1);
+                    return m.set(kljuc, tipovi);
+                  }, new Map())).map(([kljuc, tipovi]) => <li key={kljuc}><span className="f-mono">{kljuc}</span>: {Array.from(tipovi).map(([tip, n]) => `${tip} ×${n}`).join(", ")}</li>)}
+                </ul>
+              </div>
+            )}
 
             {izracunNorm.pod.ukupno.komada > 0 && izracunNorm.komplet.ukupno.komada > 0 && izracunNorm.pod.ukupno.komada !== izracunNorm.komplet.ukupno.komada && (
               <p style={{ fontSize: 11.5, color: "var(--rust)", marginTop: -6, marginBottom: 14 }}>
@@ -12436,12 +12496,9 @@ function OtpremniceTab({ db, update, patchProjekt, showToast, mozeMijenjati = tr
       {printOtp && <OtpremnicaPrintModal otpremnica={printOtp} db={db} onClose={() => setPrintOtp(null)} />}
       {del && (
         <ConfirmDelete label={del.broj} onCancel={() => setDel(null)} onConfirm={() => {
-          // Brisanje otpremnice mora osloboditi isporuke tipskog projekta koje je "zaključavala"
-          // (uOtpremniciId) — inače ostaju trajno prikazane kao "U otpremnici" s onemogućenom
-          // kvačicom, iako otpremnica na koju upućuju više ne postoji.
+          // Brisanje otpremnice mora osloboditi isporuke tipskog projekta koje je "zaključavala" (uOtpremniciId) — to sada radi poslužitelj
+          // u istoj transakciji i vraća ažurirane projekte (prije je to išlo drugim zahtjevom iz preglednika sa cijelim popisom isporuka).
           update("otpremnice", db.otpremnice.filter((o) => o.id !== del.id));
-          const projekt = db.projekti.find((p) => p.id === del.projektId);
-          if (projekt) patchProjekt(del.projektId, { isporuke: (projekt.isporuke || []).map((i) => (i.uOtpremniciId === del.id ? { ...i, uOtpremniciId: null } : i)) });
           setDel(null);
           showToast("Otpremnica obrisana, isporuke oslobođene.");
         }} />
@@ -12468,7 +12525,7 @@ function NovaOtpremnicaModal({ db, update, patchProjekt, showToast, onClose }) {
     // Nudi samo projekte koji stvarno imaju što otpremiti — ista provjera kao "nemaStavki" u
     // OtpremniceListModal (per-projektnom prikazu), da izbor ne vodi u prazan obrazac.
     const projektiZaOtpremu = db.projekti.filter((p) => (p.koristiNormativ
-      ? (p.isporuke || []).some((i) => i.isporuceno && !i.uOtpremniciId)
+      ? slobodneIsporuke(p, db.otpremnice).length > 0
       : db.narudzbe.some((n) => n.projektId === p.id)));
     const projekt = db.projekti.find((p) => p.id === projektId);
 
