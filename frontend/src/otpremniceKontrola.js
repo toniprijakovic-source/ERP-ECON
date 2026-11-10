@@ -67,17 +67,60 @@ export function pripremiStavkeNormativa(stavke = [], projekt, otpremnice = []) {
       ids = isporukeZaKolicinu(s.isporukaIds, isporuke, k);
       if (!ids) { greske[s.id] = `Količina ${k} se ne može složiti od cijelih isporuka — upišite ${dostupno} ili razdvojite isporuku u rasporedu.`; return s; }
     }
-    // ukupno otpremljeno po tipu (svaki komad jednom) ne smije premašiti naručeno
+    // Zbroj količina na otpremnicama po tipu ne smije premašiti naručeno — kupac zbraja otpremnice, pa se broje dokumenti (količine na otpremnicama),
+    // a ne različiti komadi: komad upisan na dvije otpremnice troši naručenu količinu dvaput.
     const prva = njihove[0];
-    const tip = (projekt?.[prva.grupa] || []).find((x) => x.id === prva.stavkaId);
-    const naruceno = Number(tip?.komada) || 0;
-    if (tip && naruceno > 0) {
-      const vec = zaokruziKom(isporuke.filter((i) => i.grupa === prva.grupa && i.stavkaId === prva.stavkaId && zauzete.has(i.id)).reduce((a, i) => a + komada(i), 0));
-      if (vec + k > naruceno) { greske[s.id] = `Naručeno ${naruceno}, na otpremnicama već ${vec} — još najviše ${Math.max(0, naruceno - vec)}. Povećajte naručenu količinu tipa ako je isporuka veća.`; return s; }
-    }
+    const ogranicenje = ogranicenjeTipa(projekt, otpremnice, prva.grupa, prva.stavkaId);
+    if (ogranicenje && k > ogranicenje.preostalo) { greske[s.id] = ogranicenje.poruka; return s; }
     return ids === s.isporukaIds ? s : { ...s, isporukaIds: ids };
   });
   return { stavke: izlaz, greske };
+}
+
+// Zbroj količina na otpremnicama po tipu: Map "grupa|stavkaId" → { komada, dupli }. Stavka otpremnice veže se uz tip preko prve postojeće isporuke u isporukaIds;
+// dupli = broj komada koji stoje na više otpremnica (višak iznad prvog pojavljivanja).
+export function zbrojPoTipu(projekt, otpremnice = []) {
+  const isporuke = new Map((projekt?.isporuke || []).map((i) => [i.id, i]));
+  const rezultat = new Map();
+  const viden = new Set();
+  otpremnice.forEach((o) => (o.stavke || []).forEach((st) => {
+    const isporuka = (st.isporukaIds || []).map((id) => isporuke.get(id)).find(Boolean);
+    if (!isporuka) return;
+    const kljuc = `${isporuka.grupa}|${isporuka.stavkaId}`;
+    const r = rezultat.get(kljuc) || { komada: 0, dupli: 0 };
+    r.komada += Number(st.kolicina) || 0;
+    [...new Set(st.isporukaIds)].forEach((id) => { const i = isporuke.get(id); if (!i) return; if (viden.has(id)) r.dupli += komada(i); viden.add(id); });
+    rezultat.set(kljuc, r);
+  }));
+  return rezultat;
+}
+
+// Koliko komada tipa se još smije otpremiti da zbroj otpremnica ne premaši naručeno: { naruceno, vec, dupli, preostalo, poruka } ili null (tip bez naručene količine).
+export function ogranicenjeTipa(projekt, otpremnice, grupa, stavkaId) {
+  const tip = (projekt?.[grupa] || []).find((x) => x.id === stavkaId);
+  const naruceno = Number(tip?.komada) || 0;
+  if (!tip || naruceno <= 0) return null;
+  const z = zbrojPoTipu(projekt, otpremnice).get(`${grupa}|${stavkaId}`) || { komada: 0, dupli: 0 };
+  const preostalo = Math.max(0, naruceno - z.komada);
+  return {
+    naruceno, vec: z.komada, dupli: z.dupli, preostalo,
+    poruka: `Naručeno ${naruceno}, na otpremnicama već ${z.komada} — još najviše ${preostalo}. Kupac ne smije dobiti otpremnice čiji zbroj premašuje narudžbu.${z.dupli > 0 ? ` Od toga na dvije otpremnice: ${z.dupli} ${z.dupli === 1 ? "komad" : "komada"}.` : ""}`,
+  };
+}
+
+// Ograničenje za stavku obrasca (po tipu prve njene isporuke) ili null.
+export function ogranicenjeStavke(stavka, projekt, otpremnice = []) {
+  const prva = (stavka?.isporukaIds || []).map((id) => (projekt?.isporuke || []).find((i) => i.id === id)).find(Boolean);
+  return prva ? ogranicenjeTipa(projekt, otpremnice, prva.grupa, prva.stavkaId) : null;
+}
+
+// Početna količina u obrascu: svi spremni komadi, ali najviše koliko do naručenog još smije (a da se može složiti od cijelih isporuka).
+export function pocetnaKolicina(stavka, projekt, otpremnice = []) {
+  const dostupno = Number(stavka.dostupno) || 0;
+  const o = ogranicenjeStavke(stavka, projekt, otpremnice);
+  let k = o ? Math.min(dostupno, o.preostalo) : dostupno;
+  while (k > 0 && k < dostupno && !isporukeZaKolicinu(stavka.isporukaIds, projekt?.isporuke, k)) k -= 1;
+  return Math.max(0, k);
 }
 
 // Obični projekti (stavke iz narudžbe kupca): upozorenje kad količina premašuje naručeno minus već otpremljeno. Vraća [{ stavkaId, poruka }].

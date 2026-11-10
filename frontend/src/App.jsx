@@ -10,7 +10,7 @@ import logoEcon from "./assets/logo-econ.jpg";
 import QRCode from "qrcode";
 import { napraviPdfUpitaMaterijala, napraviPdfPonude, napraviEml, preuzmiDatoteku, potpisEmail } from "./pdfNabave";
 import { statistikaIsporuka, statistikaGodine, tezinaOtpremnice as tezinaOtpremniceLogika, tezinaStavkeOtpremnice, isporucenoPoStavkama } from "./statistikaIsporuka";
-import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi } from "./otpremniceKontrola";
+import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, ogranicenjeStavke, pocetnaKolicina } from "./otpremniceKontrola";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
@@ -8098,7 +8098,7 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, patchProjekt, show
     broj: sljedeciBrojOtpremnice(db.otpremnice, todayISO()), datum: todayISO(), mjesto: "Prelog",
     projektId: projekt.id, kupacId: projekt?.kupacId || "", narudzbaId: narudzba?.id || null, izdaoId: "", napomena: "",
     stavke: koristiNormativ
-      ? grupirajIsporuke().map((s) => ({ ...s, kolicina: String(s.dostupno) }))
+      ? grupirajIsporuke().map((s) => ({ ...s, kolicina: String(pocetnaKolicina(s, projekt, db.otpremnice)) }))
       : (narudzba?.stavke || []).map((s) => ({ id: uid("ost"), narudzbaStavkaId: s.id, naziv: s.naziv, jm: s.jm, narucena: s.kolicina, kolicina: "" })),
   });
   const [form, setForm] = useState(emptyForm());
@@ -8214,6 +8214,14 @@ function OtpremnicaFormModal({ narudzba, projekt, db, update, patchProjekt, show
                   {provjeraNormativa?.greske[s.id] && (
                     <tr><td colSpan={koristiNormativ ? 6 : 5} style={{ fontSize: 12, color: "var(--rust)", padding: "2px 10px 8px" }}>{provjeraNormativa.greske[s.id]}</td></tr>
                   )}
+                  {koristiNormativ && !sprema && !provjeraNormativa?.greske[s.id] && (() => {
+                    const o = ogranicenjeStavke(s, projekt, db.otpremnice);
+                    return o && o.preostalo < s.dostupno ? (
+                      <tr><td colSpan={6} style={{ fontSize: 12, color: "var(--ink-soft)", padding: "2px 10px 8px" }}>
+                        Spremno je {s.dostupno} kom, ali do naručenog ({o.naruceno}) preostaje {o.preostalo}: na otpremnicama je već {o.vec}.{o.dupli > 0 ? ` Od toga na dvije otpremnice: ${o.dupli} ${o.dupli === 1 ? "komad" : "komada"}.` : ""} Ostali komadi ostaju slobodni.
+                      </td></tr>
+                    ) : null;
+                  })()}
                   {(opisOtvoren[s.id] || (s.opis && opisOtvoren[s.id] === undefined)) && (
                     <tr>
                       <td colSpan={koristiNormativ ? 6 : 5} style={{ background: "var(--surface-alt)", padding: "8px 10px" }}>

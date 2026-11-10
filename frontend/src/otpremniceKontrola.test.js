@@ -1,7 +1,7 @@
 // Provjere kontrole otpremnica tipskih projekata (komad ne smije na dvije otpremnice, količina ne smije biti veća od spremnog ni od naručenog). Svi podaci su izmišljeni.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isporukeNaOtpremnicama, slobodneIsporuke, dvostrukeIsporuke, isporukeZaKolicinu, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi } from "./otpremniceKontrola.js";
+import { isporukeNaOtpremnicama, slobodneIsporuke, dvostrukeIsporuke, isporukeZaKolicinu, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, zbrojPoTipu, ogranicenjeTipa, pocetnaKolicina } from "./otpremniceKontrola.js";
 
 const isp = (id, extra = {}) => ({ id, grupa: "stavkePod", stavkaId: "s1", komada: 1, datum: "2026-11-02", isporuceno: true, uOtpremniciId: null, redniBroj: Number(id.slice(1)), ...extra });
 const projekt = {
@@ -68,13 +68,34 @@ test("komad koji je u međuvremenu dospio na drugu otpremnicu blokira spremanje"
   assert.match(r.greske.f1, /Komad je već na otpremnici OTP-o1/);
 });
 
-test("ukupno otpremljeno po tipu ne smije premašiti naručeno (stare dvostruke upise ne računa dvaput)", () => {
-  // tip naručen 4; na otpremnicama jedinstveno i1, i2, i3 (i2 dvaput) → preostaje 1
+test("zbroj količina na otpremnicama po tipu ne smije premašiti naručeno — komad na dvije otpremnice troši naručeno dvaput", () => {
+  // tip naručen 4; i2 je na obje otpremnice → zbroj dokumenata 4 iako su različita samo 3 komada
   const otpremnice = [otp("o1", ["i1", "i2"]), otp("o2", ["i2", "i3"])];
-  let r = pripremiStavkeNormativa([stavka(["i4", "i5"], 2)], projekt, otpremnice);
-  assert.match(r.greske.f1, /Naručeno 4, na otpremnicama već 3 — još najviše 1/);
-  r = pripremiStavkeNormativa([stavka(["i4"], 1)], projekt, otpremnice);
+  let r = pripremiStavkeNormativa([stavka(["i4"], 1)], projekt, otpremnice);
+  assert.match(r.greske.f1, /Naručeno 4, na otpremnicama već 4 — još najviše 0/);
+  assert.match(r.greske.f1, /Od toga na dvije otpremnice: 1 komad/);
+  // bez dupliciranja ista količina prolazi
+  r = pripremiStavkeNormativa([stavka(["i4"], 1)], projekt, [otp("o1", ["i1", "i2"]), otp("o2", ["i3"])]);
   assert.deepEqual(r.greske, {});
+  r = pripremiStavkeNormativa([stavka(["i4", "i5"], 2)], projekt, [otp("o1", ["i1", "i2"]), otp("o2", ["i3"])]);
+  assert.match(r.greske.f1, /još najviše 1/);
+});
+
+test("zbrojPoTipu i ogranicenjeTipa", () => {
+  const otpremnice = [otp("o1", ["i1", "i2"]), otp("o2", ["i2", "i3"])];
+  const z = zbrojPoTipu(projekt, otpremnice);
+  assert.deepEqual(z.get("stavkePod|s1"), { komada: 4, dupli: 1 });
+  assert.equal(ogranicenjeTipa(projekt, otpremnice, "stavkePod", "s1").preostalo, 0);
+  assert.equal(ogranicenjeTipa(projekt, [], "stavkePod", "s1").preostalo, 4);
+  assert.equal(ogranicenjeTipa({ ...projekt, stavkePod: [{ id: "s1", oznaka: "A", komada: 0 }] }, [], "stavkePod", "s1"), null); // bez naručene količine nema ograničenja
+});
+
+test("početna količina u obrascu: spremno, ali najviše do naručenog (i složivo od cijelih isporuka)", () => {
+  const otpremnice = [otp("o1", ["i1", "i2"]), otp("o2", ["i2"])]; // zbroj 3 od naručenih 4, preostaje 1
+  const s = { id: "f1", isporukaIds: ["i3", "i4", "i5"], dostupno: 3 };
+  assert.equal(pocetnaKolicina(s, projekt, otpremnice), 1);
+  assert.equal(pocetnaKolicina(s, projekt, []), 3);
+  assert.equal(pocetnaKolicina(s, projekt, [otp("o3", ["i1", "i2", "i6"])]), 1); // zbroj 3, preostaje 1
 });
 
 test("stavke bez isporukaIds (obični projekti) i prazne količine se ne diraju", () => {
