@@ -8,7 +8,7 @@
     "start": "node server.js",
     "migrate": "node migrate.js",
     "seed": "node seed.js",
-    "test": "node test/zastita-api.test.js && node test/radni-nalozi.test.js"
+    "test": "node test/zastita-api.test.js && node test/radni-nalozi.test.js && node test/otpremnice-isporuke.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

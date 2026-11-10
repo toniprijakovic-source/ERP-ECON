@@ -1407,9 +1407,10 @@ const patchPoIdHandler = (kljuc, brojRegex, naziv, prilagodiUpsert = (upsert) =>
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
       [kljuc, JSON.stringify(rezultat)]
     );
-    if (poSpremanju) await poSpremanju(client, rezultat);
+    // poSpremanju (neobavezno) može vratiti dodatna polja za odgovor (npr. otpremnice: projekti s ažuriranim isporukama)
+    const dodatak = poSpremanju ? await poSpremanju(client, rezultat) : null;
     await client.query("COMMIT");
-    res.json({ ok: true, [kljuc]: rezultat, promijenjeniBrojevi });
+    res.json({ ok: true, [kljuc]: rezultat, promijenjeniBrojevi, ...(dodatak && typeof dodatak === "object" ? dodatak : {}) });
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
     // Provjere u prilagodiUpsert (npr. Zaštita na radu) vraćaju razumljivu poruku umjesto opće greške poslužitelja.
@@ -1420,7 +1421,102 @@ const patchPoIdHandler = (kljuc, brojRegex, naziv, prilagodiUpsert = (upsert) =>
     client.release();
   }
 };
-app.put("/api/otpremnice/patch", autentikacija, patchPoIdHandler("otpremnice", /^(OTP-\d{2}-\d{2}-)(\d+)(\/\d{2})$/, "otpremnica"));
+// ---------- Otpremnice tipskih projekata (kupaonice po normativu): provjera i vezanje isporuka na poslužitelju ----------
+// Stavka nove otpremnice nosi isporukaIds (komadi iz rasporeda isporuka projekta). Preglednik je znao raditi sa zastarjelom kopijom projekta
+// (isporuke bez oznake "već u otpremnici"), pa je isti komad dospio na dvije otpremnice (RN 180-73: OTP-16-10 i OTP-23-10), a drugi zahtjev
+// (oznaka na isporukama) prepisivao je cijeli popis isporuka. Zato poslužitelj na TRENUTNIM zaključanim podacima:
+//  1) odbija (409) novu otpremnicu čiji je komad već na drugoj otpremnici, nije spreman za otpremu, čija količina nije jednaka broju
+//     odabranih komada ili bi ukupno otpremljeno po tipu premašilo naručeno;
+//  2) sam postavlja uOtpremniciId na isporuke (i skida ga kad se otpremnica briše) u istoj transakciji.
+const greskaOtpremnice = (poruka) => Object.assign(new Error(poruka), { httpStatus: 409 });
+const nazivTipaIsporuke = (projekt, i) => `${i.grupa === "stavkePod" ? "Pod" : "Stranica"} — ${(projekt[i.grupa] || []).find((s) => s.id === i.stavkaId)?.oznaka || "(bez oznake)"}`;
+function provjeriIsporukeNoveOtpremnice(nova, projekt, ostale) {
+  const isporuke = new Map((projekt.isporuke || []).map((i) => [i.id, i]));
+  const brojeviOstalih = new Map(ostale.map((o) => [o.id, o.broj]));
+  const zauzete = new Map(); // isporukaId -> broj otpremnice na kojoj već stoji
+  ostale.forEach((o) => (o.stavke || []).forEach((st) => (st.isporukaIds || []).forEach((id) => { if (!zauzete.has(id)) zauzete.set(id, o.broj); })));
+  const uNovoj = new Set();
+  const novoPoTipu = new Map();
+  for (const st of nova.stavke || []) {
+    const ids = st.isporukaIds || [];
+    if (ids.length === 0) continue;
+    let zbroj = 0;
+    for (const id of ids) {
+      const i = isporuke.get(id);
+      if (!i) throw greskaOtpremnice("Neki odabrani komad više ne postoji u rasporedu isporuka projekta.");
+      const naziv = nazivTipaIsporuke(projekt, i);
+      const zauzeta = zauzete.get(id) || (i.uOtpremniciId && brojeviOstalih.has(i.uOtpremniciId) ? brojeviOstalih.get(i.uOtpremniciId) : null);
+      if (zauzeta) throw greskaOtpremnice(`Komad „${naziv}” već je na otpremnici ${zauzeta}.`);
+      if (uNovoj.has(id)) throw greskaOtpremnice(`Komad „${naziv}” upisan je dvaput na istoj otpremnici.`);
+      uNovoj.add(id);
+      if (!i.isporuceno) throw greskaOtpremnice(`Komad „${naziv}” nije označen kao spreman za otpremu.`);
+      const komada = Number(i.komada) || 0;
+      zbroj += komada;
+      const k = `${i.grupa}|${i.stavkaId}`;
+      novoPoTipu.set(k, (novoPoTipu.get(k) || 0) + komada);
+    }
+    const kolicina = Number(st.kolicina) || 0;
+    if (kolicina !== zbroj) throw greskaOtpremnice(`Količina (${kolicina}) stavke „${st.naziv || ""}” mora biti jednaka broju odabranih komada (${zbroj}).`);
+  }
+  // Ukupno otpremljeno po tipu (svaki komad jednom, bez obzira na stare dvostruke upise) ne smije premašiti naručeno.
+  for (const [k, komadaNova] of novoPoTipu) {
+    const [grupa, stavkaId] = k.split("|");
+    const tip = (projekt[grupa] || []).find((s) => s.id === stavkaId);
+    const naruceno = Number(tip?.komada) || 0;
+    if (!tip || naruceno <= 0) continue;
+    let vec = 0;
+    zauzete.forEach((_, id) => { const i = isporuke.get(id); if (i && i.grupa === grupa && i.stavkaId === stavkaId) vec += Number(i.komada) || 0; });
+    if (vec + komadaNova > naruceno) throw greskaOtpremnice(`Tip „${grupa === "stavkePod" ? "Pod" : "Stranica"} — ${tip.oznaka || "(bez oznake)"}”: s ovom otpremnicom bilo bi otpremljeno ${vec + komadaNova} od naručenih ${naruceno} komada.`);
+  }
+}
+// Nakon spremanja: isporuke u novim otpremnicama dobivaju uOtpremniciId; isporuke obrisanih otpremnica se oslobađaju. Vraća { projekti } za odgovor.
+async function vezIsporukaNaOtpremnice(client, nove, obrisaniIds, sveOtpremnice) {
+  const poIsporuci = new Map();
+  nove.forEach((o) => (o.stavke || []).forEach((st) => (st.isporukaIds || []).forEach((id) => poIsporuci.set(id, o.id))));
+  if (poIsporuci.size === 0 && obrisaniIds.size === 0) return null;
+  // komad koji je (zbog starih dvostrukih upisa) i na nekoj preostaloj otpremnici ne oslobađa se brisanjem druge, nego se oznaka prebacuje na nju
+  const preostale = new Map();
+  sveOtpremnice.forEach((o) => (o.stavke || []).forEach((st) => (st.isporukaIds || []).forEach((id) => { if (!preostale.has(id)) preostale.set(id, o.id); })));
+  const r = await client.query("SELECT value FROM app_data WHERE key = 'projekti' FOR UPDATE");
+  const projekti = r.rows[0]?.value;
+  if (!Array.isArray(projekti)) return null;
+  let promijenjeno = false;
+  const rezultat = projekti.map((p) => {
+    if (!Array.isArray(p.isporuke)) return p;
+    let tu = false;
+    const isporuke = p.isporuke.map((i) => {
+      if (poIsporuci.has(i.id)) { if (i.uOtpremniciId === poIsporuci.get(i.id)) return i; tu = true; return { ...i, uOtpremniciId: poIsporuci.get(i.id) }; }
+      if (i.uOtpremniciId && obrisaniIds.has(i.uOtpremniciId)) { tu = true; return { ...i, uOtpremniciId: preostale.get(i.id) || null }; }
+      return i;
+    });
+    if (!tu) return p;
+    promijenjeno = true;
+    return { ...p, isporuke };
+  });
+  if (!promijenjeno) return null;
+  await client.query("UPDATE app_data SET value = $1, updated_at = now() WHERE key = 'projekti'", [JSON.stringify(rezultat)]);
+  return { projekti: rezultat };
+}
+app.put("/api/otpremnice/patch", autentikacija, (req, res) => {
+  const obrisaniIds = new Set(Array.isArray(req.body.remove) ? req.body.remove : []);
+  let nove = []; // nove otpremnice (id još ne postoji u bazi) iz ovog zahtjeva
+  return patchPoIdHandler("otpremnice", /^(OTP-\d{2}-\d{2}-)(\d+)(\/\d{2})$/, "otpremnica", async (upsert, trenutno, client) => {
+    const postojeci = new Set(trenutno.map((o) => o.id));
+    nove = upsert.filter((o) => !postojeci.has(o.id) && o.vrsta !== "kooperant" && (o.stavke || []).some((st) => (st.isporukaIds || []).length > 0));
+    if (nove.length > 0) {
+      const r = await client.query("SELECT value FROM app_data WHERE key = 'projekti'");
+      const projekti = r.rows[0]?.value || [];
+      const vecProvjerene = []; // više novih otpremnica u istom zahtjevu ne smije dijeliti isti komad
+      for (const o of nove) {
+        const projekt = projekti.find((p) => p.id === o.projektId);
+        if (!projekt) continue; // bez projekta nema s čim usporediti
+        provjeriIsporukeNoveOtpremnice(o, projekt, [...trenutno.filter((x) => x.id !== o.id && !obrisaniIds.has(x.id)), ...vecProvjerene]);
+        vecProvjerene.push(o);
+      }
+    }
+    return upsert;
+  }, 0, (client, rezultat) => vezIsporukaNaOtpremnice(client, nove, obrisaniIds, rezultat))(req, res);
+});
 app.put("/api/cmr/patch", autentikacija, patchPoIdHandler("cmr", /^(CMR-\d{2}-\d{2}-)(\d+)(\/\d{2})$/, "CMR-a"));
 // Radni nalozi: oznaka "<šifra projekta>/<broj>" — novi nalog čija je oznaka već zauzeta dobiva
 // sljedeći slobodan broj tog projekta.
