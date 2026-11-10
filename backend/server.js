@@ -1450,6 +1450,7 @@ function provjeriIsporukeNoveOtpremnice(nova, projekt, ostale) {
       if (uNovoj.has(id)) throw greskaOtpremnice(`Komad „${naziv}” upisan je dvaput na istoj otpremnici.`);
       uNovoj.add(id);
       if (!i.isporuceno) throw greskaOtpremnice(`Komad „${naziv}” nije označen kao spreman za otpremu.`);
+      if (i.zatvorenoBezOtpremnice) throw greskaOtpremnice(`Komad „${naziv}” je zatvoren bez otpremnice (vratite ga u rasporedu isporuka ako ipak ide na otpremnicu).`);
       const komada = Number(i.komada) || 0;
       zbroj += komada;
       const k = `${i.grupa}|${i.stavkaId}`;

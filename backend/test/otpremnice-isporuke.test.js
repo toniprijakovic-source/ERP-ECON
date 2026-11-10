@@ -21,6 +21,7 @@ const seed = {
         isp("i1", "stavkePod", "s1"), isp("i2", "stavkePod", "s1"), isp("i3", "stavkePod", "s1"), isp("i4", "stavkePod", "s1"), // 4 isporuke za tip naručen 3 puta
         isp("i5", "stavkeKomplet", "k1"), isp("i6", "stavkeKomplet", "k1", { isporuceno: false }),
         isp("i7", "stavkeKomplet", "k1"),
+        isp("i8", "stavkePod", "s1", { zatvorenoBezOtpremnice: true }), // zatvoreno bez otpremnice
       ],
     },
     { id: "p2", sifra: "RN 99-02", koristiNormativ: false },
@@ -81,6 +82,10 @@ const provjeri = (naziv, uvjet, detalj) => { (uvjet ? ok++ : lose++); console.lo
   console.log("\n— Komad koji nije označen kao spreman za otpremu");
   r = await h("PUT", "/api/otpremnice/patch", { upsert: [otp("o4", "2026-11-06", [{ kolicina: 1, isporukaIds: ["i6"], naziv: "Stranica — Typ B" }])], remove: [] }, A);
   provjeri("  odbijeno", r.s === 409 && /nije označen kao spreman/.test(r.j?.error || ""), `HTTP ${r.s} ${r.j?.error}`);
+
+  console.log("\n— Komad zatvoren bez otpremnice");
+  r = await h("PUT", "/api/otpremnice/patch", { upsert: [otp("o4b", "2026-11-06", [{ kolicina: 1, isporukaIds: ["i8"] }])], remove: [] }, A);
+  provjeri("  odbijeno (zatvoren bez otpremnice)", r.s === 409 && /zatvoren bez otpremnice/.test(r.j?.error || ""), `HTTP ${r.s} ${r.j?.error}`);
 
   console.log("\n— Ukupno otpremljeno ne smije premašiti naručeno (tip naručen 3, raspoređene 4 isporuke)");
   r = await h("PUT", "/api/otpremnice/patch", { upsert: [otp("o5", "2026-11-07", [{ kolicina: 2, isporukaIds: ["i3", "i4"] }])], remove: [] }, A);
