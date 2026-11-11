@@ -12579,7 +12579,8 @@ function NovaOtpremnicaModal({ db, update, patchProjekt, showToast, onClose }) {
   if (vrsta === "kupac") {
     // Nudi samo projekte koji stvarno imaju što otpremiti — ista provjera kao "nemaStavki" u
     // OtpremniceListModal (per-projektnom prikazu), da izbor ne vodi u prazan obrazac.
-    const projektiZaOtpremu = db.projekti.filter((p) => (p.koristiNormativ
+    // Završeni projekti se ne nude (otpremnice za završen projekt se više ne izdaju).
+    const projektiZaOtpremu = db.projekti.filter((p) => p.status !== "Završen" && (p.koristiNormativ
       ? slobodneIsporuke(p, db.otpremnice).length > 0
       : db.narudzbe.some((n) => n.projektId === p.id)));
     const projekt = db.projekti.find((p) => p.id === projektId);
