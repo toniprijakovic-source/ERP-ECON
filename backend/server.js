@@ -979,6 +979,36 @@ app.put("/api/projekti/:projektId/zadatak/:zadId/izvrseno", autentikacija, async
   }
 });
 
+// ---------- Kooperanti: sati po projektima za mjesec (Obračun plaća → Kooperanti → trošak po projektima) ----------
+// Kartica Obračun plaća nema pravo čitati satiPoNalogu/radniNalozi/projekti (to bi otkrilo raspodjelu rada svih radnika), pa joj ova ruta daje SAMO
+// sate kooperanata po projektu za traženi mjesec (bez novca — satnicu pomnoži preglednik). Pravo: isto kao kartica Obračun plaća (smijeObracun).
+// Redak sati ide na projekt naloga; stalni posao s upisanim projektom (utovar, prijevozi…) na taj projekt; inače na stalni posao (ključ s:<id>).
+app.get("/api/obracun/kooperanti-po-projektima", autentikacija, async (req, res) => {
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  if (!smijeObracun(pozicija)) return res.status(403).json({ error: "Vaša pozicija nema pristup obračunu plaća." });
+  const mjesec = String(req.query.mjesec || "");
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mjesec)) return res.status(400).json({ error: "Neispravan mjesec." });
+  const [zaposlenici, pozicije, sati, nalozi, projekti] = await Promise.all(["zaposlenici", "pozicijeZaposlenika", "satiPoNalogu", "radniNalozi", "projekti"].map(ucitajKljuc));
+  const pozicijeKooperanata = new Set((pozicije || []).filter((p) => String(p.naziv || "").trim().toLowerCase() === "kooperant").map((p) => p.id));
+  const kooperanti = new Set((zaposlenici || []).filter((z) => pozicijeKooperanata.has(z.pozicijaId)).map((z) => z.id));
+  const projektNaloga = new Map((nalozi || []).map((n) => [n.id, n.projektId || ""]));
+  const projektiPoId = new Map((projekti || []).map((p) => [p.id, p]));
+  const zbroj = new Map(); // "zaposlenikId|ključ" -> sati
+  (sati || []).forEach((s) => {
+    const h = Number(s.sati) || 0;
+    if (!(h > 0) || !kooperanti.has(s.zaposlenikId) || String(s.datum || "").slice(0, 7) !== mjesec) return;
+    let kljuc;
+    if (projektNaloga.has(s.radniNalogId)) kljuc = projektiPoId.has(projektNaloga.get(s.radniNalogId)) ? `p:${projektNaloga.get(s.radniNalogId)}` : "bez-projekta";
+    else if (s.projektId && projektiPoId.has(s.projektId)) kljuc = `p:${s.projektId}`;
+    else kljuc = `s:${s.radniNalogId}`;
+    const k = `${s.zaposlenikId}|${kljuc}`;
+    zbroj.set(k, (zbroj.get(k) || 0) + h);
+  });
+  const redovi = [...zbroj.entries()].map(([k, h]) => { const [zaposlenikId, kljuc] = k.split("|"); return { zaposlenikId, kljuc, sati: Math.round(h * 100) / 100 }; });
+  const koristeni = new Set(redovi.filter((r) => r.kljuc.startsWith("p:")).map((r) => r.kljuc.slice(2)));
+  res.json({ mjesec, projekti: [...koristeni].map((id) => ({ id, sifra: projektiPoId.get(id).sifra, naziv: projektiPoId.get(id).naziv })), redovi });
+});
+
 // ---------- Podaci za Plan proizvodnje ----------
 // Plan treba (1) normativ kupaonica — samo učinak (kg/h) i raspodjelu sati po fazama, BEZ ugovorenih
 // cijena — i (2) tko je kojih dana odsutan (godišnji, bolovanje…) — samo zaposlenik i datum, BEZ
