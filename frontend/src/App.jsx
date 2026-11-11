@@ -11,6 +11,7 @@ import QRCode from "qrcode";
 import { napraviPdfUpitaMaterijala, napraviPdfPonude, napraviEml, preuzmiDatoteku, potpisEmail } from "./pdfNabave";
 import { statistikaIsporuka, statistikaGodine, tezinaOtpremnice as tezinaOtpremniceLogika, tezinaStavkeOtpremnice, isporucenoPoStavkama } from "./statistikaIsporuka";
 import { satiPoRadnicimaIOperacijama, projektiSaSatima } from "./satiPoProjektu";
+import { trosakKooperanataPoProjektima } from "./kooperantiTrosak";
 import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, ogranicenjeStavke, pocetnaKolicina, visakStavke, zatvoriIsporuke, vratiZatvoreneIsporuke } from "./otpremniceKontrola";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
 
@@ -16754,6 +16755,115 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true, d
 }
 
 /* ============================== OBRAČUN PLAĆA — TAB ============================== */
+// Trošak kooperanata po projektima za mjesec (Obračun plaća → Kooperanti). Poslužitelj daje samo sate kooperanata po projektu (bez novca); trošak = sati × satnica
+// iz obračuna. Ostatak sati iz evidencije koji nije raspoređen na naloge prikazan je zasebno, pa se ukupno slaže s isplatom kooperantima.
+function TrosakKooperanataPoProjektima({ mjesec, redoviKooperanti, nazivTvrtke, showToast }) {
+  const [stanje, setStanje] = useState({ status: "ucitavam", podaci: null, greska: "" });
+  const [otvoren, setOtvoren] = useState(true);
+  useEffect(() => {
+    let aktivan = true;
+    setStanje({ status: "ucitavam", podaci: null, greska: "" });
+    fetch(`${API_URL}/api/obracun/kooperanti-po-projektima?mjesec=${encodeURIComponent(mjesec)}`, { headers: { Authorization: `Bearer ${localStorage.getItem("erp_token")}` } })
+      .then(async (res) => { const d = await res.json().catch(() => ({})); if (!res.ok) throw new Error(d.error || `Greška ${res.status}`); return d; })
+      .then((d) => { if (aktivan) setStanje({ status: "ok", podaci: d, greska: "" }); })
+      .catch((e) => { if (aktivan) setStanje({ status: "greska", podaci: null, greska: e.message || "Greška pri učitavanju." }); });
+    return () => { aktivan = false; };
+  }, [mjesec]);
+  const kooperanti = useMemo(() => redoviKooperanti.map((r) => ({ id: r.zaposlenik.id, ime: `${r.zaposlenik.prezime} ${r.zaposlenik.ime}`, satnica: r.satnica, evSati: r.sati })), [redoviKooperanti]);
+  const rez = useMemo(() => (stanje.podaci ? trosakKooperanataPoProjektima({ redovi: stanje.podaci.redovi, projekti: stanje.podaci.projekti, kooperanti, nazivStalnog: (id) => { const sp = stalniPosao(id); return sp ? nazivStalnogPosla(sp) : id; } }) : null), [stanje.podaci, kooperanti]);
+  const h = (x) => (Math.round(x * 10) / 10).toLocaleString("hr-HR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  const imeKoop = (id) => kooperanti.find((k) => k.id === id)?.ime || "";
+  const udio = (t) => (rez && rez.ukupnoTrosak > 0 ? `${(Math.round((t / rez.ukupnoTrosak) * 1000) / 10).toLocaleString("hr-HR", { minimumFractionDigits: 1 })} %` : "");
+  const naslovMjeseca = `${NAZIVI_MJESECI_HR[Number(mjesec.slice(5, 7)) - 1]} ${mjesec.slice(0, 4)}.`;
+  const izvozCsv = () => {
+    const celija = (v) => (typeof v === "number" ? (Math.round(v * 100) / 100).toString().replace(".", ",") : `"${String(v ?? "").replace(/"/g, '""')}"`);
+    const zaglavlje = ["Projekt", "Sati", "Trošak (€)", "Udio troška (%)", ...kooperanti.map((k) => `${k.ime} (h)`)];
+    const redci = rez.stavke.map((s) => [s.naziv, s.sati, s.trosak, rez.ukupnoTrosak > 0 ? Math.round((s.trosak / rez.ukupnoTrosak) * 1000) / 10 : 0, ...kooperanti.map((k) => s.poOsobi[k.id] ?? "")]);
+    if (rez.nerasporedeno.sati > 0) redci.push(["Nije raspoređeno na projekte i poslove", rez.nerasporedeno.sati, rez.nerasporedeno.trosak, rez.ukupnoTrosak > 0 ? Math.round((rez.nerasporedeno.trosak / rez.ukupnoTrosak) * 1000) / 10 : 0, ...kooperanti.map((k) => rez.nerasporedeno.poOsobi[k.id] ?? "")]);
+    redci.push(["UKUPNO", rez.ukupnoSati, rez.ukupnoTrosak, 100, ...kooperanti.map((k) => rez.stavke.reduce((a, s) => a + (s.poOsobi[k.id] || 0), 0) + (rez.nerasporedeno.poOsobi[k.id] || 0))]);
+    const tekst = [zaglavlje.map((z) => `"${z}"`).join(";"), ...redci.map((l) => l.map(celija).join(";"))].join("\r\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob(["﻿" + tekst], { type: "text/csv;charset=utf-8" }));
+    a.download = `kooperanti-trosak-po-projektima-${mjesec}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+  const ispisi = () => ispisiTablicuPdf({
+    naslov: "Trošak kooperanata po projektima", podnaslov: naslovMjeseca,
+    zaglavlja: ["Projekt", "Kooperanti (sati)", ">Sati", ">Trošak (€)", ">Udio"],
+    redovi: [
+      ...rez.stavke.map((s) => [s.naziv, Object.entries(s.poOsobi).sort((a, b) => b[1] - a[1]).map(([id, sat]) => `${imeKoop(id)} ${h(sat)}`).join(", "), h(s.sati), fmtCurDec(s.trosak), udio(s.trosak)]),
+      ...(rez.nerasporedeno.sati > 0 ? [["Nije raspoređeno na projekte i poslove", Object.entries(rez.nerasporedeno.poOsobi).map(([id, sat]) => `${imeKoop(id)} ${h(sat)}`).join(", "), h(rez.nerasporedeno.sati), fmtCurDec(rez.nerasporedeno.trosak), udio(rez.nerasporedeno.trosak)]] : []),
+    ],
+    podnozje: ["UKUPNO (isplata kooperantima)", "", h(rez.ukupnoSati), fmtCurDec(rez.ukupnoTrosak), "100,0 %"],
+    nazivTvrtke, showToast,
+  });
+  return (
+    <div style={{ marginTop: 22 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+        <div className="label" style={{ cursor: "pointer", fontSize: 12.5 }} onClick={() => setOtvoren(!otvoren)}>{otvoren ? "▼" : "▶"} Trošak kooperanata po projektima — {naslovMjeseca}</div>
+        {otvoren && rez && rez.stavke.length > 0 && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn size="sm" icon={Download} onClick={izvozCsv}>Excel (CSV)</Btn>
+            <Btn size="sm" icon={Printer} onClick={ispisi}>Ispis / PDF</Btn>
+          </div>
+        )}
+      </div>
+      {otvoren && (stanje.status === "ucitavam" ? <EmptyState text="Učitavam sate po projektima…" />
+        : stanje.status === "greska" ? <div style={{ fontSize: 12.5, color: "var(--rust)" }}>Podaci o projektima nisu učitani: {stanje.greska}</div>
+        : rez.stavke.length === 0 ? <EmptyState text="Nema sati kooperanata raspoređenih na projekte za odabrani mjesec." /> : (
+          <>
+            <table className="erp-table">
+              <thead>
+                <tr>
+                  <th>Projekt</th>
+                  <th>Kooperanti (sati)</th>
+                  <th style={{ width: 80, textAlign: "right" }}>Sati</th>
+                  <th style={{ width: 110, textAlign: "right" }}>Trošak</th>
+                  <th style={{ width: 86, textAlign: "right" }}>Udio</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rez.stavke.map((s) => (
+                  <tr key={s.kljuc}>
+                    <td style={{ fontWeight: s.vrsta === "projekt" ? 600 : 400, color: s.vrsta === "projekt" ? "var(--ink)" : "var(--ink-soft)" }}>{s.naziv}</td>
+                    <td style={{ fontSize: 12 }}>{Object.entries(s.poOsobi).sort((a, b) => b[1] - a[1]).map(([id, sat]) => (
+                      <span key={id} style={{ display: "inline-block", margin: "1px 6px 1px 0", padding: "1px 7px", border: "1px solid var(--line)", borderRadius: 3, background: "var(--surface-alt)", whiteSpace: "nowrap" }}>{imeKoop(id)} <strong className="f-mono">{h(sat)}</strong></span>
+                    ))}</td>
+                    <td className="f-mono" style={{ textAlign: "right" }}>{h(s.sati)} h</td>
+                    <td className="f-mono" style={{ textAlign: "right", fontWeight: 700 }}>{fmtCurDec(s.trosak)}</td>
+                    <td className="f-mono" style={{ textAlign: "right", color: "var(--ink-soft)" }}>{udio(s.trosak)}</td>
+                  </tr>
+                ))}
+                {rez.nerasporedeno.sati > 0 && (
+                  <tr>
+                    <td style={{ color: "var(--rust)" }}>Nije raspoređeno na projekte i poslove</td>
+                    <td style={{ fontSize: 12 }}>{Object.entries(rez.nerasporedeno.poOsobi).map(([id, sat]) => `${imeKoop(id)} ${h(sat)}`).join(", ")}</td>
+                    <td className="f-mono" style={{ textAlign: "right" }}>{h(rez.nerasporedeno.sati)} h</td>
+                    <td className="f-mono" style={{ textAlign: "right", fontWeight: 700 }}>{fmtCurDec(rez.nerasporedeno.trosak)}</td>
+                    <td className="f-mono" style={{ textAlign: "right", color: "var(--ink-soft)" }}>{udio(rez.nerasporedeno.trosak)}</td>
+                  </tr>
+                )}
+                <tr style={{ fontWeight: 700, background: "var(--surface-alt)" }}>
+                  <td>UKUPNO (isplata kooperantima)</td>
+                  <td></td>
+                  <td className="f-mono" style={{ textAlign: "right" }}>{h(rez.ukupnoSati)} h</td>
+                  <td className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(rez.ukupnoTrosak)}</td>
+                  <td className="f-mono" style={{ textAlign: "right" }}>100,0 %</td>
+                </tr>
+              </tbody>
+            </table>
+            <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 8 }}>
+              Trošak = sati na projektu (Sati po nalozima) × satnica kooperanta; ukupno je jednako isplati u tablici iznad. Na projektima: {fmtCurDec(rez.trosakProjekti)} ({rez.brojProjekata} {brojOblik(rez.brojProjekata, "projekt", "projekta", "projekata")}). Ne uključuje putni trošak, smještaj ni alat.
+              {rez.visakRasporedenih > 0 && ` Pažnja: na naloge je raspoređeno ${h(rez.visakRasporedenih)} h više nego što je u evidenciji kooperanata.`}
+              {rez.izvanObracuna > 0 && ` Još ${h(rez.izvanObracuna)} h kooperanata koji nisu u obračunu tog mjeseca nije ubrojeno.`}
+            </p>
+          </>
+        ))}
+    </div>
+  );
+}
+
 function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true, mojId }) {
   const [mjesec, setMjesec] = useState(todayISO().slice(0, 7));
   const [goDanaUnos, setGoDanaUnos] = useState({}); // zamjena prekovremenih za godišnji: broj dana koji se upisuje, po zaposleniku
@@ -17011,6 +17121,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true, mojId })
           <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 10 }}>
             Kooperanti se ne obračunavaju po formuli plaće (bodovi/staž/putni/topli obrok) — plaćaju se isključivo po ugovorenoj satnici × stvarno odrađeni sati.
           </p>
+          <TrosakKooperanataPoProjektima mjesec={mjesec} redoviKooperanti={redoviKooperanti} nazivTvrtke={db.postavkeTvrtke?.naziv} showToast={showToast} />
         </>
       )}
 
