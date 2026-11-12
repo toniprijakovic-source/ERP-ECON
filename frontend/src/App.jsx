@@ -12,6 +12,7 @@ import { napraviPdfUpitaMaterijala, napraviPdfPonude, napraviEml, preuzmiDatotek
 import { statistikaIsporuka, statistikaGodine, tezinaOtpremnice as tezinaOtpremniceLogika, tezinaStavkeOtpremnice, isporucenoPoStavkama } from "./statistikaIsporuka";
 import { satiPoRadnicimaIOperacijama, projektiSaSatima } from "./satiPoProjektu";
 import { trosakKooperanataPoProjektima } from "./kooperantiTrosak";
+import { razlikaProgramaRezanja } from "./programiRezanjaPatch";
 import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, ogranicenjeStavke, pocetnaKolicina, visakStavke, zatvoriIsporuke, vratiZatvoreneIsporuke } from "./otpremniceKontrola";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
 
@@ -2413,22 +2414,22 @@ export default function App() {
   // server zaključava popis i dodjeljuje sljedeći slobodan broj ako je broj već zauzet. Isto vrijedi
   // za CMR, slobodne zadatke i radne naloge.
   const patchOtpremnice = (newArr, kljuc = "otpremnice") => {
-    const stare = new Map((db[kljuc] || []).map((o) => [o.id, JSON.stringify(o)]));
-    const noveIds = new Set(newArr.map((o) => o.id));
-    const upsert = newArr.filter((o) => stare.get(o.id) !== JSON.stringify(o));
-    const remove = (db[kljuc] || []).filter((o) => !noveIds.has(o.id)).map((o) => o.id);
+    // Programi rezanja: redoslijed popisa je red čekanja, pa se uz izmjene šalje i redoslijed — samo kad ga je ova izmjena promijenila.
+    const razlika = razlikaProgramaRezanja(db[kljuc] || [], newArr);
+    const { upsert, remove } = razlika;
+    const redoslijed = kljuc === "programiRezanja" ? razlika.redoslijed : undefined;
     setDb((prev) => ({ ...prev, [kljuc]: newArr }));
-    if (upsert.length === 0 && remove.length === 0) return Promise.resolve({ ok: true });
+    if (upsert.length === 0 && remove.length === 0 && !redoslijed) return Promise.resolve({ ok: true });
     // Vraća { ok, greska } da obrazac (npr. nova otpremnica) može pokazati razlog odbijanja. Poslužitelj otpremnicu tipskog projekta odbija (409)
     // ako je komad već na drugoj otpremnici ili je količina prevelika — tada se prikaz vraća na stvarno stanje (otpremnice i isporuke projekata).
     return fetch(`${API_URL}/api/${kljuc}/patch`, {
       method: "PUT",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` },
-      body: JSON.stringify({ upsert, remove }),
+      body: JSON.stringify({ upsert, remove, ...(redoslijed ? { redoslijed } : {}) }),
     }).then(async (res) => {
       if (!res.ok) {
         const podaci = await res.json().catch(() => ({}));
-        const opca = { cmr: "Greška pri spremanju CMR-a.", slobodniZadaci: "Greška pri spremanju zadatka.", radniNalozi: "Greška pri spremanju radnog naloga.", materijali: "Greška pri spremanju materijala.", rezervacije: "Greška pri spremanju rezervacija.", maticnaKnjiga: "Greška pri spremanju matične knjige.", upitiTransporta: "Greška pri spremanju upita za transport.", narudzbeTransporta: "Greška pri spremanju narudžbe za transport.", narudzbenice: "Greška pri spremanju narudžbenice.", satiPoNalogu: "Greška pri spremanju sati.", ponude: "Greška pri spremanju ponude.", ponudeLasera: "Greška pri spremanju ponude za laser." }[kljuc] || "Greška pri spremanju otpremnice.";
+        const opca = { programiRezanja: "Greška pri spremanju programa rezanja.", cmr: "Greška pri spremanju CMR-a.", slobodniZadaci: "Greška pri spremanju zadatka.", radniNalozi: "Greška pri spremanju radnog naloga.", materijali: "Greška pri spremanju materijala.", rezervacije: "Greška pri spremanju rezervacija.", maticnaKnjiga: "Greška pri spremanju matične knjige.", upitiTransporta: "Greška pri spremanju upita za transport.", narudzbeTransporta: "Greška pri spremanju narudžbe za transport.", narudzbenice: "Greška pri spremanju narudžbenice.", satiPoNalogu: "Greška pri spremanju sati.", ponude: "Greška pri spremanju ponude.", ponudeLasera: "Greška pri spremanju ponude za laser." }[kljuc] || "Greška pri spremanju otpremnice.";
         const poruka = res.status === 409 && podaci.error ? podaci.error : opca;
         showToast(poruka);
         if (res.status === 409) { refetchKljuc(kljuc).catch(() => {}); if (kljuc === "otpremnice") refetchKljuc("projekti").catch(() => {}); }
@@ -2462,7 +2463,7 @@ export default function App() {
 
   // dodatnaZaglavlja: npr. razlog korekcije za povijest korekcija (X-Korekcija-Razlog, X-Korekcija-Zaposlenik — vidi poslužitelj).
   const update = (key, newArr, dodatnaZaglavlja = {}) => {
-    if (key === "otpremnice" || key === "cmr" || key === "slobodniZadaci" || key === "radniNalozi" || key === "materijali" || key === "rezervacije" || key === "maticnaKnjiga" || key === "upitiTransporta" || key === "narudzbeTransporta" || key === "narudzbenice" || key === "satiPoNalogu" || key === "ponude" || key === "ponudeLasera") { return patchOtpremnice(newArr, key); }
+    if (key === "otpremnice" || key === "cmr" || key === "slobodniZadaci" || key === "radniNalozi" || key === "materijali" || key === "rezervacije" || key === "maticnaKnjiga" || key === "upitiTransporta" || key === "narudzbeTransporta" || key === "narudzbenice" || key === "satiPoNalogu" || key === "ponude" || key === "ponudeLasera" || key === "programiRezanja") { return patchOtpremnice(newArr, key); }
     setDb((prev) => ({ ...prev, [key]: newArr }));
     fetch(`${API_URL}/api/data/${key}`, {
       method: "PUT",
