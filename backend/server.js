@@ -1400,7 +1400,8 @@ app.put("/api/upiti/patch", autentikacija, async (req, res) => {
 // računao iz zastarjelog popisa). Zato server primjenjuje izmjenu na trenutni zaključani popis, a
 // novi dokument čiji je broj već zauzet dobiva sljedeći slobodan broj. prilagodiUpsert (neobavezno)
 // dobiva poslane zapise i trenutni popis prije spajanja (radni nalozi: zadrziNoveOznakeNaloga).
-const patchPoIdHandler = (kljuc, brojRegex, naziv, prilagodiUpsert = (upsert) => upsert, sirinaBroja = 0, poSpremanju = null) => async (req, res) => {
+// poredaj (neobavezno) dobiva popis nakon spajanja i tijelo zahtjeva te vraća popis u konačnom redoslijedu (programi rezanja: red čekanja).
+const patchPoIdHandler = (kljuc, brojRegex, naziv, prilagodiUpsert = (upsert) => upsert, sirinaBroja = 0, poSpremanju = null, poredaj = null) => async (req, res) => {
   const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
   const { pisivo } = izracunajDozvoljeneKljuceve(pozicija);
   if (!pisivo.has(kljuc)) return res.status(403).json({ error: `Vaša pozicija nema ovlaštenje za mijenjanje: ${naziv}.` });
@@ -1434,15 +1435,16 @@ const patchPoIdHandler = (kljuc, brojRegex, naziv, prilagodiUpsert = (upsert) =>
       }
     });
 
+    const konacno = poredaj ? poredaj(rezultat, req.body) : rezultat;
     await client.query(
       `INSERT INTO app_data (key, value, updated_at) VALUES ($1, $2, now())
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-      [kljuc, JSON.stringify(rezultat)]
+      [kljuc, JSON.stringify(konacno)]
     );
     // poSpremanju (neobavezno) može vratiti dodatna polja za odgovor (npr. otpremnice: projekti s ažuriranim isporukama)
-    const dodatak = poSpremanju ? await poSpremanju(client, rezultat) : null;
+    const dodatak = poSpremanju ? await poSpremanju(client, konacno) : null;
     await client.query("COMMIT");
-    res.json({ ok: true, [kljuc]: rezultat, promijenjeniBrojevi, ...(dodatak && typeof dodatak === "object" ? dodatak : {}) });
+    res.json({ ok: true, [kljuc]: konacno, promijenjeniBrojevi, ...(dodatak && typeof dodatak === "object" ? dodatak : {}) });
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
     // Provjere u prilagodiUpsert (npr. Zaštita na radu) vraćaju razumljivu poruku umjesto opće greške poslužitelja.
@@ -1574,6 +1576,24 @@ app.put("/api/upitiTransporta/patch", autentikacija, patchPoIdHandler("upitiTran
 app.put("/api/narudzbenice/patch", autentikacija, patchPoIdHandler("narudzbenice", /^(NAR-\d{4}-)(\d+)()$/, "narudžbenica", (upsert) => upsert, 3));
 app.put("/api/narudzbeTransporta/patch", autentikacija, patchPoIdHandler("narudzbeTransporta", /^(TN-\d{4}-)(\d+)()$/, "narudžbi za transport", (upsert) => upsert, 3));
 app.put("/api/rezervacije/patch", autentikacija, patchPoIdHandler("rezervacije", /^(?!)$/, "rezervacija"));
+// Programi rezanja (Plan rezanja → lasera): izmjena po id-u na trenutnom zaključanom popisu. Cijeli popis iz zastarjelog preglednika (netko je dodao
+// program dok je kartica bila otvorena odavno) vraćao je programe na staro stanje: 10.11.2026. program 180-74-90x90 vraćen je na "Pauzirano", pa se
+// oko 2 h 15 min rezanja nije zabilježilo. Redoslijed popisa je red čekanja, pa preglednik uz izmjene šalje i redoslijed (id-eve) — samo kad ga je
+// promijenio (pomak gore/dolje, nastavak umetnut iza podijeljenog programa). Redoslijed se primjenjuje samo na programe koje preglednik poznaje, na
+// mjestima koja već zauzimaju; programi koje je netko drugi u međuvremenu dodao ostaju gdje jesu.
+const poredajProgrameRezanja = (popis, tijelo) => {
+  const ids = Array.isArray(tijelo?.redoslijed) ? tijelo.redoslijed.filter((x) => typeof x === "string").slice(0, 5000) : [];
+  if (ids.length < 2) return popis;
+  const mjesto = new Map();
+  ids.forEach((id, i) => { if (!mjesto.has(id)) mjesto.set(id, i); });
+  const zauzeta = [];
+  popis.forEach((p, i) => { if (mjesto.has(p.id)) zauzeta.push(i); });
+  const poredani = zauzeta.map((i) => popis[i]).sort((a, b) => mjesto.get(a.id) - mjesto.get(b.id));
+  const rezultat = [...popis];
+  zauzeta.forEach((m, k) => { rezultat[m] = poredani[k]; });
+  return rezultat;
+};
+app.put("/api/programiRezanja/patch", autentikacija, patchPoIdHandler("programiRezanja", /^(?!)$/, "programa rezanja", (upsert) => upsert, 0, null, poredajProgrameRezanja));
 // Matična knjiga: matični broj (od 3700, uzlazno) dodjeljuje isključivo poslužitelj, pod zaključanim popisom —
 // preglednik sa zastarjelim popisom inače bi dvaput dobio isti broj. Broj postojećeg zapisa se ne može promijeniti.
 const POCETNI_MATICNI_BROJ = 3700;
