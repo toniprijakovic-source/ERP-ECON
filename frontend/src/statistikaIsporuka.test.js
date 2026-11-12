@@ -1,7 +1,7 @@
 // Provjere statistike isporuka (kg inozemstvo / tuzemstvo po mjesecu). Pokretanje: `npm test` u mapi frontend. Svi podaci su izmišljeni.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { statistikaIsporuka, statistikaGodine, tezinaOtpremnice, isporucenoPoStavkama } from "./statistikaIsporuka.js";
+import { statistikaIsporuka, statistikaGodine, tezinaOtpremnice, isporucenoPoStavkama, ulaziUStatistiku, zadanoUStatistici } from "./statistikaIsporuka.js";
 
 const tezina = (o) => ({ ukupno: (o.stavke || []).reduce((s, x) => s + (Number(x.masaKg) || 0), 0), nedostaje: (o.stavke || []).filter((x) => !(Number(x.masaKg) > 0)).length });
 const otp = (id, datum, kg, extra = {}) => ({ id, broj: `OTP-${id}`, datum, vrsta: "kupac", stavke: [{ masaKg: kg }], ...extra });
@@ -20,14 +20,65 @@ test("otpremnice u CMR-u su inozemstvo, ostale tuzemstvo; mjesec po datumu otpre
   assert.deepEqual(r.redovi.map((x) => x.otpremnica.id), ["1", "2", "3"]);
 });
 
-test("kooperantske otpremnice (dorade) se ne ubrajaju, ni kad su u CMR-u", () => {
-  const otpremnice = [otp("1", "2026-10-02", 1000), otp("2", "2026-10-03", 800, { vrsta: "kooperant" }), otp("3", "2026-10-04", 300, { vrsta: "kooperant" })];
+test("dorade kooperantima su u popisu, ali zadano ne ulaze u zbroj, ni kad su u CMR-u", () => {
+  const otpremnice = [otp("1", "2026-10-02", 1000), otp("2", "2026-10-03", 800, { vrsta: "kooperant", dobavljacId: "d1" }), otp("3", "2026-10-04", 300, { vrsta: "kooperant", dobavljacId: "d1" })];
   const cmr = [{ id: "c1", otpremniceIds: ["2"] }];
-  const r = statistikaIsporuka({ otpremnice, cmr }, "2026-10", tezina);
+  const dobavljaci = [{ id: "d1", naziv: "Cinčaonica d.o.o.", oib: "11111111111" }];
+  const r = statistikaIsporuka({ otpremnice, cmr, dobavljaci, tvrtka: { oib: "86456994897", naziv: "Econ d.o.o." } }, "2026-10", tezina);
+  assert.equal(r.redovi.length, 3); // sve otpremnice mjeseca su u popisu
+  assert.deepEqual(r.redovi.map((x) => x.ulazi), [true, false, false]);
   assert.equal(r.ukupno.broj, 1);
   assert.equal(r.ukupno.kg, 1000);
   assert.equal(r.inozemstvo.kg, 0);
-  assert.equal(r.kooperantske, 2);
+  assert.equal(r.izvanStatistike, 2);
+});
+
+test("otpremnica kooperantu koji je sama tvrtka (roba sebi na gradilište) zadano ulazi; smjer iz CMR-a ili iz države kupca projekta", () => {
+  const dobavljaci = [{ id: "dE", naziv: "ECON d.o.o.", oib: "86456994897" }, { id: "dX", naziv: "Cinčaonica", oib: "22222222222" }, { id: "dN", naziv: "Econ d.o.o.", oib: "" }];
+  const tvrtka = { naziv: "Econ d.o.o.", oib: "86456994897" };
+  const kupci = [{ id: "k1", drzava: "Njemačka" }, { id: "k2" }];
+  const projekti = [{ id: "p1", kupacId: "k1" }, { id: "p2", kupacId: "k2" }];
+  const sebi = (id, extra) => otp(id, "2026-10-10", 400, { vrsta: "kooperant", dobavljacId: "dE", projektId: "p1", ...extra });
+  const otpremnice = [
+    sebi("1"),                                      // sebi, projekt njemačkog kupca, bez CMR-a → inozemstvo (država kupca projekta)
+    sebi("2", { projektId: "p2" }),                 // sebi, projekt bez države → tuzemstvo
+    sebi("3", { projektId: "p2" }),                 // sebi, u CMR-u → inozemstvo
+    sebi("4", { dobavljacId: "dX" }),               // dorada drugom kooperantu → ne ulazi (i ne preuzima državu kupca projekta: zadani smjer tuzemstvo)
+    sebi("5", { dobavljacId: "dN" }),               // dobavljač bez OIB-a, isti naziv kao tvrtka → sebi
+  ];
+  const r = statistikaIsporuka({ otpremnice, cmr: [{ id: "c1", otpremniceIds: ["3"] }], kupci, dobavljaci, projekti, tvrtka }, "2026-10", tezina);
+  const po = Object.fromEntries(r.redovi.map((x) => [x.otpremnica.id, `${x.ulazi ? "DA" : "NE"}:${x.inozemstvo ? "INO" : "TUZ"}`]));
+  assert.deepEqual(po, { 1: "DA:INO", 2: "DA:TUZ", 3: "DA:INO", 4: "NE:TUZ", 5: "DA:INO" });
+  assert.equal(r.inozemstvo.kg, 400 + 400 + 400);
+  assert.equal(r.tuzemstvo.kg, 400);
+  assert.equal(r.redovi.find((x) => x.otpremnica.id === "1").sebi, true);
+  assert.equal(r.redovi.find((x) => x.otpremnica.id === "4").sebi, false);
+});
+
+test("kvačica na otpremnici (uStatistici) ima prednost pred zadanim: dorada se može uključiti, kupčeva isključiti", () => {
+  const otpremnice = [
+    otp("1", "2026-10-02", 1000),
+    otp("2", "2026-10-03", 800, { uStatistici: false }),                       // kupčeva, ali isključena
+    otp("3", "2026-10-04", 300, { vrsta: "kooperant", uStatistici: true }),    // dorada, ali uključena
+    otp("4", "2026-10-05", 50, { vrsta: "kooperant" }),                        // dorada bez kvačice → ne ulazi
+  ];
+  const r = statistikaIsporuka({ otpremnice, cmr: [] }, "2026-10", tezina);
+  assert.deepEqual(r.redovi.map((x) => [x.ulazi, x.zadano, x.rucno]), [[true, true, false], [false, true, true], [true, false, true], [false, false, false]]);
+  assert.equal(r.ukupno.kg, 1300);
+  assert.equal(r.ukupno.broj, 2);
+  assert.equal(r.izvanStatistike, 2);
+  assert.equal(ulaziUStatistiku(otpremnice[1], false), false);
+  assert.equal(zadanoUStatistici(otpremnice[2], false), false);
+});
+
+test("stavke bez težine broje se samo za otpremnice koje ulaze u statistiku", () => {
+  const otpremnice = [
+    { id: "1", broj: "OTP-1", datum: "2026-10-05", vrsta: "kupac", stavke: [{ masaKg: 100 }, {}] },
+    { id: "2", broj: "OTP-2", datum: "2026-10-06", vrsta: "kooperant", stavke: [{}, {}, {}] },
+  ];
+  const r = statistikaIsporuka({ otpremnice, cmr: [] }, "2026-10", tezina);
+  assert.equal(r.ukupno.bezTezine, 1);
+  assert.equal(r.redovi.find((x) => x.otpremnica.id === "2").nedostaje, 3); // u popisu se i dalje vidi
 });
 
 test("stavke bez težine se prijavljuju, prazan mjesec daje nule", () => {

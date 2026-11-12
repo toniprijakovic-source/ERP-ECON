@@ -1,6 +1,7 @@
-// Statistika isporuka (kartica u modulu Otpremnice i CMR): kilogrami poslani kupcima po mjesecu, odvojeno inozemstvo / tuzemstvo.
+// Statistika isporuka (kartica u modulu Otpremnice i CMR): kilogrami poslani po mjesecu, odvojeno inozemstvo / tuzemstvo.
 // Smjer (inozemstvo / tuzemstvo): ručno određen na otpremnici, inače otpremnica je u CMR-u, inače kupac ima stranu državu, inače tuzemstvo (vidi smjerOtpremnice).
-// Otpremnice kooperantu (dorade) nisu isporuka kupcu pa se ne ubrajaju. Mjesec se određuje po datumu otpremnice.
+// U popisu su sve otpremnice mjeseca; svaka ima kvačicu "ulazi u statistiku" (otpremnica.uStatistici). Zadano ulaze otpremnice kupcima i otpremnice
+// "sebi" na vlastito gradilište (kooperant = sama tvrtka, vidi jeSebi), a dorade kooperantima (cinčanje, plastifikacija…) ne. Mjesec se određuje po datumu otpremnice.
 
 const uMjesecu = (datum, mjesec) => String(datum || "").slice(0, 7) === mjesec;
 const zaokruzi = (n) => Math.round((Number(n) || 0) * 10) / 10;
@@ -86,33 +87,55 @@ export function smjerOtpremnice(otpremnica, cmr, kupac) {
   return { inozemstvo: false, izvor: "" };
 }
 
+// Otpremnica kooperantu čiji je primatelj sama tvrtka (roba se šalje "sebi" na vlastito gradilište): dobavljač ima isti OIB kao tvrtka
+// (Postavke tvrtke), a ako OIB nedostaje, isti naziv. Takva otpremnica je stvarna isporuka, za razliku od dorade (cinčanje, plastifikacija…).
+const samoZnamenke = (t) => String(t || "").replace(/\D/g, "");
+const normNazivTvrtke = (t) => String(t || "").toLowerCase().replace(/[^a-z0-9čćžšđ]+/g, " ").trim();
+export function jeSebi(otpremnica, dobavljaci = [], tvrtka = {}) {
+  if (otpremnica.vrsta !== "kooperant") return false;
+  const d = dobavljaci.find((x) => x.id === otpremnica.dobavljacId);
+  if (!d) return false;
+  const oibD = samoZnamenke(d.oib), oibT = samoZnamenke(tvrtka?.oib);
+  if (oibD && oibT) return oibD === oibT;
+  const nd = normNazivTvrtke(d.naziv);
+  return nd !== "" && nd === normNazivTvrtke(tvrtka?.naziv);
+}
+
+// Ulazi li otpremnica u statistiku: kvačica na otpremnici (uStatistici: true | false) ima prednost; inače (zadano) ulaze sve otpremnice kupcima
+// i otpremnice "sebi" na gradilište, a dorade kooperantima ne.
+export const zadanoUStatistici = (otpremnica, sebi) => otpremnica.vrsta !== "kooperant" || !!sebi;
+export const ulaziUStatistiku = (otpremnica, sebi) => (typeof otpremnica.uStatistici === "boolean" ? otpremnica.uStatistici : zadanoUStatistici(otpremnica, sebi));
+
 // tezina(otpremnica) -> { ukupno, nedostaje } (nedostaje = broj stavki bez poznate težine)
-export function statistikaIsporuka({ otpremnice = [], cmr = [], kupci = [] }, mjesec, tezina) {
+// Popis (redovi) sadrži SVE otpremnice mjeseca; u zbrojeve ulaze samo one s kvačicom "ulazi u statistiku" (ulazi). Otpremnica "sebi" bez kupca
+// preuzima državu kupca svog projekta (roba na stranom gradilištu je izvoz).
+export function statistikaIsporuka({ otpremnice = [], cmr = [], kupci = [], dobavljaci = [], projekti = [], tvrtka = {} }, mjesec, tezina) {
   const cmrZaOtpremnicu = new Map();
   cmr.forEach((c) => (c.otpremniceIds || []).forEach((id) => { if (!cmrZaOtpremnicu.has(id)) cmrZaOtpremnicu.set(id, c); }));
 
-  const redovi = [];
-  let kooperantske = 0;
-  otpremnice.filter((o) => uMjesecu(o.datum, mjesec)).forEach((o) => {
-    if (o.vrsta === "kooperant") { kooperantske += 1; return; }
+  const redovi = otpremnice.filter((o) => uMjesecu(o.datum, mjesec)).map((o) => {
     const c = cmrZaOtpremnicu.get(o.id) || null;
-    const s = smjerOtpremnice(o, c, kupci.find((k) => k.id === o.kupacId));
+    const sebi = jeSebi(o, dobavljaci, tvrtka);
+    const kupacId = o.kupacId || (sebi ? projekti.find((p) => p.id === o.projektId)?.kupacId : undefined);
+    const s = smjerOtpremnice(o, c, kupci.find((k) => k.id === kupacId));
     const t = tezina(o);
-    redovi.push({ otpremnica: o, cmr: c, inozemstvo: s.inozemstvo, izvorSmjera: s.izvor, kg: t.ukupno, nedostaje: t.nedostaje });
+    const zadano = zadanoUStatistici(o, sebi);
+    return { otpremnica: o, cmr: c, inozemstvo: s.inozemstvo, izvorSmjera: s.izvor, kg: t.ukupno, nedostaje: t.nedostaje, sebi, zadano, ulazi: ulaziUStatistiku(o, sebi), rucno: typeof o.uStatistici === "boolean" };
   });
   redovi.sort((a, b) => String(a.otpremnica.datum).localeCompare(String(b.otpremnica.datum)) || String(a.otpremnica.broj).localeCompare(String(b.otpremnica.broj), "hr", { numeric: true }));
 
   const zbroji = (lista) => ({ broj: lista.length, kg: zaokruzi(lista.reduce((s, r) => s + r.kg, 0)), bezTezine: lista.reduce((s, r) => s + r.nedostaje, 0) });
-  const inozemstvo = redovi.filter((r) => r.inozemstvo);
-  const tuzemstvo = redovi.filter((r) => !r.inozemstvo);
+  const uZbroju = redovi.filter((r) => r.ulazi);
+  const inozemstvo = uZbroju.filter((r) => r.inozemstvo);
+  const tuzemstvo = uZbroju.filter((r) => !r.inozemstvo);
 
   // Za usporedbu s dosadašnjim postupkom: bruto težina upisana na CMR-ovima čije su otpremnice u ovom mjesecu (svaki CMR jednom).
   const cmrovi = [...new Set(inozemstvo.map((r) => r.cmr).filter(Boolean))];
   const cmrBruto = zaokruzi(cmrovi.reduce((s, c) => s + (Number(String(c.brutoTezina || "").replace(",", ".")) || 0), 0));
 
   return {
-    redovi, kooperantske,
-    inozemstvo: zbroji(inozemstvo), tuzemstvo: zbroji(tuzemstvo), ukupno: zbroji(redovi),
+    redovi, izvanStatistike: redovi.length - uZbroju.length,
+    inozemstvo: zbroji(inozemstvo), tuzemstvo: zbroji(tuzemstvo), ukupno: zbroji(uZbroju),
     cmrBroj: cmrovi.length, cmrBruto,
   };
 }
@@ -121,10 +144,10 @@ export function statistikaIsporuka({ otpremnice = [], cmr = [], kupci = [] }, mj
 // mjesec zaključan nakon slanja DZS-u i ručno unesen mjesec (npr. prije nego što su otpremnice u ERP-u) imaju prednost pred izračunom iz otpremnica.
 // Ručni unos može imati samo ukupni iznos ({ izvor: "rucno", ukupno: { kg } } bez ino/tuz) — npr. izvješće DZS-u koje ne razdvaja inozemstvo i tuzemstvo;
 // takav mjesec ulazi u ukupno, a inozemstvo/tuzemstvo su nepoznati (samoUkupno) pa zbroj inozemstva i tuzemstva nije cjelovit (nepotpuno > 0).
-export function statistikaGodine({ otpremnice = [], cmr = [], kupci = [] }, godina, tezina, spremljeno = {}) {
+export function statistikaGodine(podaci, godina, tezina, spremljeno = {}) {
   const mjeseci = Array.from({ length: 12 }, (_, i) => `${godina}-${String(i + 1).padStart(2, "0")}`);
   const redovi = mjeseci.map((mjesec) => {
-    const r = statistikaIsporuka({ otpremnice, cmr, kupci }, mjesec, tezina);
+    const r = statistikaIsporuka(podaci, mjesec, tezina);
     const sp = spremljeno?.[mjesec] || null;
     const samoUkupno = !!sp && sp.izvor === "rucno" && !sp.ino && !sp.tuz && !!sp.ukupno;
     const ino = samoUkupno ? { kg: 0, broj: 0 } : sp ? { kg: zaokruzi(sp.ino?.kg), broj: Number(sp.ino?.broj) || 0 } : { kg: r.inozemstvo.kg, broj: r.inozemstvo.broj };
