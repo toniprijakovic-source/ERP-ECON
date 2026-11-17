@@ -57,3 +57,44 @@ test("projekti sa satima: zadnji datum unosa, uključujući stalni posao vezan u
   assert.equal(m.get("p2"), "2026-10-08");
   assert.equal(m.size, 2);
 });
+
+// Plan: prvotno planirani sati naloga po fazi (planiranoSatiPrvo, inace planiranoSati), samo za cijeli projekt
+const nalozPlan = [
+  { id: "n1", projektId: "p1", faza: "Pila", dodatakId: "", planiranoSati: 4 },
+  { id: "n2", projektId: "p1", faza: "Sklapanje - kupaonice", dodatakId: "", planiranoSati: 20, planiranoSatiPrvo: 10 }, // plan preracunat u Planu proizvodnje: vrijedi prvotni
+  { id: "n3", projektId: "p1", faza: "Zavarivanje", dodatakId: "d1", planiranoSati: 6 },
+  { id: "n5", projektId: "p1", faza: "Kontrola", dodatakId: "", planiranoSati: 2.5 }, // plan bez ijednog sata
+  { id: "n4", projektId: "p2", faza: "Pila", dodatakId: "", planiranoSati: 99 }, // drugi projekt
+];
+const ulazPlan = { ...ulaz, nalozi: nalozPlan };
+
+test("plan po fazama: prvotni plan naloga, faza s planom a bez sati dobiva stupac, ostvareno u fazama bez stalnih poslova", () => {
+  const r = satiPoRadnicimaIOperacijama(ulazPlan);
+  assert.equal(r.plan.vrijedi, true);
+  assert.deepEqual(r.plan.poFazi, { Pila: 4, "Sklapanje - kupaonice": 10, Zavarivanje: 6, Kontrola: 2.5 });
+  assert.equal(r.plan.ukupno, 22.5);
+  assert.equal(r.plan.ostvarenoUFazama, 20); // 22 ukupno − 2 h stalnog posla; plan nema stalnih poslova
+  assert.ok(r.stupci.includes("Kontrola")); // plan bez sati: stupac postoji
+  assert.deepEqual(r.stupci.slice(0, 3), ["Pila", "Zavarivanje", "Sklapanje - kupaonice"]); // redoslijed faza ostaje, nepoznata faza (Kontrola) na kraj faza
+  assert.equal(r.ukupno, 22); // sati se zbog plana ne mijenjaju
+});
+
+test("plan prati dio projekta (osnovna narudzba / dodatak) i ne ovisi o satima drugog projekta", () => {
+  assert.equal(satiPoRadnicimaIOperacijama({ ...ulazPlan, dio: "osnovna" }).plan.ukupno, 16.5); // bez dodatka d1 (6 h)
+  assert.deepEqual(satiPoRadnicimaIOperacijama({ ...ulazPlan, dio: "d1" }).plan.poFazi, { Zavarivanje: 6 });
+  assert.equal(satiPoRadnicimaIOperacijama({ ...ulazPlan, projektId: "p2" }).plan.ukupno, 99);
+});
+
+test("sa suzenim razdobljem plan se ne racuna i ne dodaje stupce", () => {
+  const r = satiPoRadnicimaIOperacijama({ ...ulazPlan, od: "2026-11-01" });
+  assert.equal(r.plan.vrijedi, false);
+  assert.deepEqual(r.plan.poFazi, {});
+  assert.equal(r.plan.ukupno, 0);
+  assert.deepEqual(r.stupci, ["Zavarivanje"]);
+});
+
+test("projekt bez naloga s planom: plan je 0, stupci kao prije", () => {
+  const r = satiPoRadnicimaIOperacijama(ulaz); // nalozi iz prvog bloka nemaju planiranoSati
+  assert.equal(r.plan.ukupno, 0);
+  assert.deepEqual(r.stupci, ["Pila", "Zavarivanje", "Sklapanje - kupaonice", "stalni:stalni-P"]);
+});

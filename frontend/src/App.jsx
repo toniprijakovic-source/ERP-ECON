@@ -11040,7 +11040,7 @@ function ispisiTablicuPdf({ naslov, zaglavlja, redovi, podnozje, podnaslov, nazi
   const css = "body{font-family:Arial,Helvetica,sans-serif;color:#111;font-size:10px;margin:0}h1{font-size:15px;margin:0 0 2px}.sub{color:#555;margin-bottom:8px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:3px 5px;text-align:left;vertical-align:top}th{background:#eee;font-size:9.5px}thead{display:table-header-group}tr{page-break-inside:avoid}.m{font-family:Consolas,monospace;white-space:nowrap}.d{font-family:Consolas,monospace;white-space:nowrap;text-align:right}tfoot td{font-weight:700;background:#f4f4f4}@page{size:A4 landscape;margin:10mm}";
   const klasa = zaglavlja.map((z) => (z.startsWith(">") ? " class=\"d\"" : z.startsWith("#") ? " class=\"m\"" : ""));
   const red = (r) => "<tr>" + r.map((c, i) => `<td${klasa[i]}>${escHtml(c)}</td>`).join("") + "</tr>";
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escHtml(naslov)}</title><style>${css}</style></head><body><h1>${escHtml(nazivTvrtke || "ECON d.o.o.")} — ${escHtml(naslov)}</h1><div class="sub">${podnaslov ? `${escHtml(podnaslov)} · ` : ""}Ispisano ${escHtml(fmtDate(todayISO()))} · ${redovi.length} zapisa</div><table><thead><tr>${zaglavlja.map((z, i) => `<th${klasa[i]}>${escHtml(z.replace(/^[#>]/, ""))}</th>`).join("")}</tr></thead><tbody>${redovi.map(red).join("")}</tbody>${podnozje ? `<tfoot>${red(podnozje)}</tfoot>` : ""}</table></body></html>`;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escHtml(naslov)}</title><style>${css}</style></head><body><h1>${escHtml(nazivTvrtke || "ECON d.o.o.")} — ${escHtml(naslov)}</h1><div class="sub">${podnaslov ? `${escHtml(podnaslov)} · ` : ""}Ispisano ${escHtml(fmtDate(todayISO()))} · ${redovi.length} zapisa</div><table><thead><tr>${zaglavlja.map((z, i) => `<th${klasa[i]}>${escHtml(z.replace(/^[#>]/, ""))}</th>`).join("")}</tr></thead><tbody>${redovi.map(red).join("")}</tbody>${podnozje ? `<tfoot>${(Array.isArray(podnozje[0]) ? podnozje : [podnozje]).map(red).join("")}</tfoot>` : ""}</table></body></html>`;
   const w = window.open("", "_blank");
   if (!w) { showToast("Preglednik je blokirao novi prozor — dozvoli skočne prozore za ovu stranicu i pokušaj ponovno."); return; }
   w.document.write(html);
@@ -18295,10 +18295,16 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
         const razdoblje = projektOd || projektDo ? `${projektOd ? fmtDate(projektOd) : "početak"} – ${projektDo ? fmtDate(projektDo) : "danas"}` : "cijeli projekt";
         const dioNaziv = dio === "sve" ? "" : dio === "osnovna" ? " · osnovna narudžba" : ` · dodatak: ${dodaci.find((d) => d.id === dio)?.naziv || ""}`;
         const podnaslov = projekt ? `${projekt.sifra} — ${projekt.naziv} · ${razdoblje}${dioNaziv}` : "";
+        // Planirano (prvotni plan radnih naloga) i razlika plan − ostvareno; samo za cijeli projekt (kad razdoblje nije suženo) i kad plan postoji.
+        const imaPlan = !!r && r.plan.vrijedi && r.plan.ukupno > 0;
+        const razlikaStupca = (k) => (k.startsWith("stalni:") ? null : Math.round(((r.plan.poFazi[k] || 0) - (r.ukupnoPoStupcu[k] || 0)) * 100) / 100);
+        const razlikaUkupno = imaPlan ? Math.round((r.plan.ukupno - r.plan.ostvarenoUFazama) * 100) / 100 : 0;
+        const imaStalnih = !!r && r.ukupno !== r.plan.ostvarenoUFazama;
         const izvozCsv = () => {
           const celija = (v) => (typeof v === "number" ? (Math.round(v * 10) / 10).toString().replace(".", ",") : `"${String(v ?? "").replace(/"/g, '""')}"`);
           const zaglavlje = ["Radnik", ...r.stupci.map(nazivStupca), "Ukupno (h)"];
-          const linije = [...r.redovi.map((x) => [x.ime, ...r.stupci.map((k) => x.poStupcu[k] ?? ""), x.ukupno]), ["UKUPNO", ...r.stupci.map((k) => r.ukupnoPoStupcu[k] ?? ""), r.ukupno]];
+          const linije = [...r.redovi.map((x) => [x.ime, ...r.stupci.map((k) => x.poStupcu[k] ?? ""), x.ukupno]), ["UKUPNO", ...r.stupci.map((k) => r.ukupnoPoStupcu[k] ?? ""), r.ukupno],
+            ...(imaPlan ? [["PLANIRANO", ...r.stupci.map((k) => r.plan.poFazi[k] ?? ""), r.plan.ukupno], ["RAZLIKA (plan - ostvareno)", ...r.stupci.map((k) => razlikaStupca(k) ?? ""), razlikaUkupno]] : [])];
           const tekst = [zaglavlje.map((z) => `"${z}"`).join(";"), ...linije.map((l) => l.map(celija).join(";"))].join("\r\n");
           const a = document.createElement("a");
           a.href = URL.createObjectURL(new Blob(["﻿" + tekst], { type: "text/csv;charset=utf-8" }));
@@ -18310,7 +18316,11 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
           naslov: "Sati po radnicima i operacijama", podnaslov,
           zaglavlja: ["Radnik", ...r.stupci.map((k) => `>${nazivStupca(k)}`), ">Ukupno (h)"],
           redovi: r.redovi.map((x) => [x.ime, ...r.stupci.map((k) => (x.poStupcu[k] ? h(x.poStupcu[k]) : "")), h(x.ukupno)]),
-          podnozje: ["UKUPNO", ...r.stupci.map((k) => h(r.ukupnoPoStupcu[k] || 0)), h(r.ukupno)],
+          podnozje: imaPlan
+            ? [["UKUPNO", ...r.stupci.map((k) => h(r.ukupnoPoStupcu[k] || 0)), h(r.ukupno)],
+              ["PLANIRANO", ...r.stupci.map((k) => (r.plan.poFazi[k] ? h(r.plan.poFazi[k]) : "")), h(r.plan.ukupno)],
+              ["RAZLIKA (plan − ostvareno)", ...r.stupci.map((k) => (razlikaStupca(k) == null ? "" : h(razlikaStupca(k)))), h(razlikaUkupno)]]
+            : ["UKUPNO", ...r.stupci.map((k) => h(r.ukupnoPoStupcu[k] || 0)), h(r.ukupno)],
           nazivTvrtke: db.postavkeTvrtke?.naziv, showToast,
         });
         return (
@@ -18363,11 +18373,27 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
                       {r.stupci.map((k) => <td key={k} className="f-mono" style={{ textAlign: "center" }}>{h(r.ukupnoPoStupcu[k] || 0)}</td>)}
                       <td className="f-mono" style={{ textAlign: "center" }}>{h(r.ukupno)}</td>
                     </tr>
+                    {imaPlan && (
+                      <>
+                        <tr style={{ fontWeight: 700 }}>
+                          <td style={{ position: "sticky", left: 0, background: "var(--surface)" }} title="Prvotno planirani sati radnih naloga projekta, po operaciji">PLANIRANO</td>
+                          {r.stupci.map((k) => <td key={k} className="f-mono" style={{ textAlign: "center", color: r.plan.poFazi[k] ? "var(--ink)" : "var(--ink-faint)" }}>{r.plan.poFazi[k] ? h(r.plan.poFazi[k]) : ""}</td>)}
+                          <td className="f-mono" style={{ textAlign: "center", background: "var(--surface-alt)" }}>{h(r.plan.ukupno)}</td>
+                        </tr>
+                        <tr style={{ fontWeight: 700 }}>
+                          <td style={{ position: "sticky", left: 0, background: "var(--surface)", whiteSpace: "nowrap" }} title="Planirano minus ostvareno; crveno = prekoračenje plana">RAZLIKA (plan − ostvareno)</td>
+                          {r.stupci.map((k) => { const d = razlikaStupca(k); return <td key={k} className="f-mono" style={{ textAlign: "center", color: d != null && d < 0 ? "var(--rust)" : "var(--ink)" }}>{d == null ? "" : h(d)}</td>; })}
+                          <td className="f-mono" style={{ textAlign: "center", background: "var(--surface-alt)", color: razlikaUkupno < 0 ? "var(--rust)" : "var(--ink)" }}>{h(razlikaUkupno)}</td>
+                        </tr>
+                      </>
+                    )}
                   </tbody>
                 </table>
               </div>
             )}
-            {r && r.bezRadnika > 0 && <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 10 }}>Uz ovo je na projekt upisano još {h(r.bezRadnika)} h ukupno (bez radnika, od voditelja u Planu proizvodnje) — nije u tablici.</p>}
+            {imaPlan && <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 10 }}>Planirano = prvotno planirani sati radnih naloga projekta po operaciji. Razlika = planirano − ostvareno (crveno: prekoračenje){imaStalnih ? "; u razliku ulaze samo sati operacija, jer stalni poslovi nemaju plan" : ""}.</p>}
+            {r && r.redovi.length > 0 && (projektOd || projektDo) && <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 10 }}>Planirani sati prikazuju se samo za cijeli projekt — za suženo razdoblje (Od / Do) plan se ne prikazuje.</p>}
+            {r && r.bezRadnika > 0 &&<p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 10 }}>Uz ovo je na projekt upisano još {h(r.bezRadnika)} h ukupno (bez radnika, od voditelja u Planu proizvodnje) — nije u tablici.</p>}
           </>
         );
       })()}
