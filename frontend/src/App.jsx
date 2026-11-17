@@ -1270,7 +1270,7 @@ const uskladiSatSPosluziteljem = async () => {
 };
 
 const STATUS_TONE = {
-  "Nacrt": "muted", "Ponuda": "muted", "Planiran": "muted",
+  "Nacrt": "muted", "Ponuda": "muted", "Planiran": "muted", "Nismo nudili": "muted",
   "Poslano": "info", "Poslana": "info", "Odobren": "info",
   "Djelomično primljeno": "warning", "U izradi": "warning", "Montaža": "warning",
   "U tijeku": "warning", "Pauziran": "warning", "Djelomično plaćeno": "warning",
@@ -1282,6 +1282,20 @@ const STATUS_TONE = {
   "Čeka rezultat": "warning", "Obavljeno": "success", "Poništena": "muted", "Odobreno": "success",
 };
 const Badge = ({ status, label }) => <span className={`badge badge-${STATUS_TONE[status] || "muted"}`}>{label || status}</span>;
+
+// Statusi ponude (isti popis u obrascu ponude, ponude za laser i u popisu). "Nismo nudili" = upit za koji ponuda nikad nije poslana
+// (nema revizije ni "već poslana" obavijesti); ne ulazi u popis otvorenih ponuda jer to ostaje samo "Poslana".
+const STATUSI_PONUDE = ["U izradi", "Poslana", "Prihvaćena", "Odbijena", "Nismo nudili"];
+const ponudaNijePoslana = (ponuda) => ponuda?.status === "U izradi" || ponuda?.status === "Nismo nudili";
+// Status izravno u popisu ponuda (bez ulaska u ponudu): izgleda kao oznaka statusa, a klik otvara izbor. Bez ovlasti za izmjene prikazuje se samo oznaka.
+const StatusPonudeIzbor = ({ ponuda, onPromijeni, disabled }) => (disabled ? <Badge status={ponuda.status} /> : (
+  <select
+    className={`badge badge-${STATUS_TONE[ponuda.status] || "muted"}`} style={{ cursor: "pointer" }}
+    aria-label={`Status ponude ${ponuda.broj}`} value={ponuda.status} onChange={(e) => onPromijeni(ponuda, e.target.value)}
+  >
+    {(STATUSI_PONUDE.includes(ponuda.status) ? STATUSI_PONUDE : [ponuda.status, ...STATUSI_PONUDE]).map((s) => <option key={s} value={s}>{s}</option>)}
+  </select>
+));
 
 /* ============================== SEED DATA ============================== */
 
@@ -10737,7 +10751,7 @@ function PonudaLaseraModal({ form, setForm, db, onSave, onClose, onRevizija }) {
     <Modal wide title={form.id ? `Ponuda za laser ${form.broj}` : "Nova ponuda za laser"} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={onSave}>Spremi</Btn></>}>
       {(() => {
         const spremljena = form.id ? (db.ponudeLasera || []).find((p) => p.id === form.id) : null;
-        if (!spremljena || spremljena.status === "U izradi" || imaNovijuReviziju(db.ponudeLasera, spremljena)) return null;
+        if (!spremljena || ponudaNijePoslana(spremljena) || imaNovijuReviziju(db.ponudeLasera, spremljena)) return null;
         return (
           <div className="card" style={{ padding: "8px 12px", marginBottom: 10, background: "#EEF3F7", fontSize: 12.5, display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ flex: 1 }}>Ova je ponuda već poslana. Za doradu napravite <strong>reviziju</strong>: poslana verzija ostaje sačuvana, a dorada se sprema kao <span className="f-mono">{brojRevizijePonude(db.ponudeLasera, spremljena)}</span>. (Status ponude i dalje možete mijenjati ovdje.)</span>
@@ -10751,7 +10765,7 @@ function PonudaLaseraModal({ form, setForm, db, onSave, onClose, onRevizija }) {
         <Field label="Datum"><input className="input" type="date" value={form.datum} onChange={(e) => setForm({ ...form, datum: e.target.value })} /></Field>
       </div>
       <div style={{ display: "flex", gap: 24, alignItems: "flex-end", flexWrap: "wrap" }}>
-        <Field label="Status"><select className="select" style={{ maxWidth: 220 }} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{["U izradi", "Poslana", "Prihvaćena", "Odbijena"].map((s) => <option key={s}>{s}</option>)}</select></Field>
+        <Field label="Status"><select className="select" style={{ maxWidth: 220 }} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{STATUSI_PONUDE.map((s) => <option key={s}>{s}</option>)}</select></Field>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, paddingBottom: 14, cursor: "pointer" }}>
           <input type="checkbox" checked={!!form.sPdv} onChange={(e) => setForm({ ...form, sPdv: e.target.checked })} />
           Na ispisu obračunaj PDV
@@ -11252,6 +11266,13 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
     update("ponudeLasera", [...db.ponudeLasera, kopija]);
     showToast(`Ponuda za laser kopirana kao ${kopija.broj}.`);
   };
+  // Promjena statusa izravno iz popisa (bez otvaranja ponude); sprema se po ponudi (patch), kao i ostale izmjene ponuda.
+  const promijeniStatusPonude = (ponuda, status, laser = false) => {
+    if (!status || status === ponuda.status) return;
+    const kljuc = laser ? "ponudeLasera" : "ponude";
+    update(kljuc, (db[kljuc] || []).map((p) => (p.id === ponuda.id ? { ...p, status } : p)));
+    showToast(`Ponuda ${ponuda.broj}: status „${status}“.`);
+  };
   const saveCjenik = (novi) => {
     const cleaned = Object.fromEntries(Object.entries(novi).map(([k, v]) => [k, Number(v) || 0]));
     update("cjenikRada", cleaned);
@@ -11510,11 +11531,11 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
             { key: "kupac", label: "Kupac", render: (r) => kupacNaziv(r.kupacId) },
             { key: "sati", label: "Sati", render: (r) => <span className="f-mono">{fmtSatiPonude(izracunPonude(r, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala).ukupnoSati)} h</span> },
             { key: "ukupno", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCurDec(izracunPonude(r, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala).cijenaKonacna)}</span> },
-            { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
+            { key: "status", label: "Status", render: (r) => <StatusPonudeIzbor ponuda={r} disabled={!mozePonude} onPromijeni={promijeniStatusPonude} /> },
             { key: "pdf", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrintPonuda(r)}>PDF ponude</Btn> },
             { key: "email", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Mail} onClick={() => setSlanjePonude(r)}>E-mail kupcu</Btn> },
             { key: "kopiraj", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Copy} onClick={() => kopirajPonudu(r)}>Kopiraj</Btn> },
-            { key: "revizija", label: "", render: (r) => (r.status !== "U izradi" && !imaNovijuReviziju(db.ponude, r) ? <Btn size="sm" variant="ghost" icon={HistoryIcon} disabled={!mozePonude} onClick={() => napraviReviziju(r)}>Revizija</Btn> : null) },
+            { key: "revizija", label: "", render: (r) => (!ponudaNijePoslana(r) && !imaNovijuReviziju(db.ponude, r) ? <Btn size="sm" variant="ghost" icon={HistoryIcon} disabled={!mozePonude} onClick={() => napraviReviziju(r)}>Revizija</Btn> : null) },
             {
               key: "akcija", label: "", render: (r) =>
                 r.projektId && db.projekti.some((p) => p.id === r.projektId) ? <span style={{ fontSize: 11, color: "var(--green)" }}>→ {projSifra(r.projektId)}</span>
@@ -11537,10 +11558,10 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
             { key: "naziv", label: "Naziv posla" },
             { key: "kupac", label: "Kupac", render: (r) => kupacNaziv(r.kupacId) },
             { key: "ukupno", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCurDec(izracunPonudeLasera(r, db.kvaliteteMaterijala).cijenaKonacna)}</span> },
-            { key: "status", label: "Status", render: (r) => <Badge status={r.status} /> },
+            { key: "status", label: "Status", render: (r) => <StatusPonudeIzbor ponuda={r} disabled={!mozeLaser} onPromijeni={(p, s) => promijeniStatusPonude(p, s, true)} /> },
             { key: "pdf", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrintLaser(r)}>PDF ponude</Btn> },
             { key: "kopiraj", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Copy} onClick={() => kopirajLaser(r)}>Kopiraj</Btn> },
-            { key: "revizija", label: "", render: (r) => (r.status !== "U izradi" && !imaNovijuReviziju(db.ponudeLasera, r) ? <Btn size="sm" variant="ghost" icon={HistoryIcon} disabled={!mozeLaser} onClick={() => napraviReviziju(r, true)}>Revizija</Btn> : null) },
+            { key: "revizija", label: "", render: (r) => (!ponudaNijePoslana(r) && !imaNovijuReviziju(db.ponudeLasera, r) ? <Btn size="sm" variant="ghost" icon={HistoryIcon} disabled={!mozeLaser} onClick={() => napraviReviziju(r, true)}>Revizija</Btn> : null) },
             {
               key: "akcija", label: "", render: (r) =>
                 r.projektId && db.projekti.some((p) => p.id === r.projektId) ? <span style={{ fontSize: 11, color: "var(--green)" }}>→ {projSifra(r.projektId)}</span>
@@ -11646,7 +11667,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
         const azurirajOtpadLima = (katalogId, postotak) => setPonForm({ ...ponForm, otpadLimPoTipu: { ...(ponForm.otpadLimPoTipu || {}), [katalogId]: postotak } });
 
         const spremljenaPon = ponForm.id ? db.ponude.find((p) => p.id === ponForm.id) : null;
-        const zaReviziju = !!spremljenaPon && spremljenaPon.status !== "U izradi" && !imaNovijuReviziju(db.ponude, spremljenaPon);
+        const zaReviziju = !!spremljenaPon && !ponudaNijePoslana(spremljenaPon) && !imaNovijuReviziju(db.ponude, spremljenaPon);
         return (
           <Modal xwide title={ponForm.id ? `Ponuda ${ponForm.broj}` : "Nova ponuda"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={savePon}>Spremi</Btn></>}>
             {zaReviziju && (
@@ -11669,7 +11690,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
               <Field label="Datum"><input className="input" type="date" value={ponForm.datum} onChange={(e) => setPonForm({ ...ponForm, datum: e.target.value })} /></Field>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-              <Field label="Status"><select className="select" value={ponForm.status} onChange={(e) => setPonForm({ ...ponForm, status: e.target.value })}>{["U izradi", "Poslana", "Prihvaćena", "Odbijena"].map((s) => <option key={s}>{s}</option>)}</select></Field>
+              <Field label="Status"><select className="select" value={ponForm.status} onChange={(e) => setPonForm({ ...ponForm, status: e.target.value })}>{STATUSI_PONUDE.map((s) => <option key={s}>{s}</option>)}</select></Field>
               <Field label="Izradio (potpis na ponudi)">
                 <select className="select" value={ponForm.izradioId || ""} onChange={(e) => setPonForm({ ...ponForm, izradioId: e.target.value })}>
                   <option value="">— odaberi —</option>
