@@ -928,6 +928,109 @@ app.put("/api/projekti/:id/patch", autentikacija, async (req, res) => {
   }
 });
 
+// ---------- Pridruživanje prihvaćene ponude POSTOJEĆEM projektu (dodatak umjesto novog projekta) ----------
+// Dodatak iz ponude (vrijednost, planirani sati po fazama, pozicije, materijal, ostale stavke) računa preglednik (isti izračun kao pri
+// "Pretvori u projekt"), a OVDJE se PRIBRAJA na zaključani, aktualni zapis projekta — ne zamjenjuje ga. Tako dva istodobna pridruživanja na
+// zastarjelim kopijama preglednika ne mogu jedno drugom pregaziti vrijednost ili sate, a ista ponuda ne može dvaput ući u projekt.
+// Radne naloge i vezu na ponudi (projektId) preglednik zatim sprema svojim ciljanim rutama (kao pri pretvorbi u projekt).
+const ZATVORENI_STATUSI_PROJEKTA = ["Završen", "Otkazan"];
+const ZABRANJENI_KLJUCEVI_FAZA = new Set(["__proto__", "constructor", "prototype"]);
+const zaokruzi2Dodatak = (n) => Math.round(n * 100) / 100;
+const greskaDodatka = (status, poruka) => Object.assign(new Error(poruka), { httpStatus: status });
+const jeObjektDodatka = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
+const konacanBroj = (x, naziv, najvise) => {
+  const n = Number(x);
+  if (x === "" || x === null || x === undefined || !Number.isFinite(n) || n < 0 || n > najvise) throw greskaDodatka(400, `Neispravan podatak: ${naziv}.`);
+  return n;
+};
+// Provjera i čišćenje dodatka iz zahtjeva (ne vjeruje se obliku koji pošalje preglednik).
+function ocistiDodatakPonude(dodatak) {
+  if (!jeObjektDodatka(dodatak)) throw greskaDodatka(400, "Nedostaje dodatak iz ponude.");
+  const vrijednost = konacanBroj(dodatak.vrijednost ?? 0, "vrijednost", 1e9);
+  const faze = {};
+  if (dodatak.faze !== undefined) {
+    if (!jeObjektDodatka(dodatak.faze) || Object.keys(dodatak.faze).length > 60) throw greskaDodatka(400, "Neispravni planirani sati po fazama.");
+    for (const [k, v] of Object.entries(dodatak.faze)) {
+      if (ZABRANJENI_KLJUCEVI_FAZA.has(k) || k.length > 80) throw greskaDodatka(400, "Neispravan naziv faze.");
+      faze[k] = konacanBroj(v, `sati faze ${k}`, 1e6);
+    }
+  }
+  const popis = (kljuc) => {
+    const a = dodatak[kljuc] ?? [];
+    if (!Array.isArray(a) || a.length > 500 || !a.every(jeObjektDodatka)) throw greskaDodatka(400, `Neispravan popis: ${kljuc}.`);
+    return a;
+  };
+  return { vrijednost, faze, pozicije: popis("pozicije"), materijalStavke: popis("materijalStavke"), ostaleStavke: popis("ostaleStavke") };
+}
+// Ponuda mora postojati, biti prihvaćena i ne smije već biti povezana s (postojećim) projektom.
+function provjeriPonuduZaPridruzivanje(ponuda, projekti) {
+  if (!ponuda) throw greskaDodatka(404, "Ponuda nije pronađena.");
+  if (ponuda.status !== "Prihvaćena") throw greskaDodatka(409, `Ponuda ${ponuda.broj} nije prihvaćena.`);
+  const povezan = ponuda.projektId ? (projekti || []).find((p) => p.id === ponuda.projektId) : null;
+  if (povezan) throw greskaDodatka(409, `Ponuda ${ponuda.broj} je već povezana s projektom ${povezan.sifra}.`);
+}
+// Novi zapis projekta s pribrojenim dodatkom (ulazni projekt se ne mijenja). tip: "standard" | "laser".
+function pridruziPonuduProjektu(projekt, ponuda, tip, dodatakIzZahtjeva, { danas, zaposlenikId } = {}) {
+  if (!projekt) throw greskaDodatka(404, "Projekt nije pronađen.");
+  if (ZATVORENI_STATUSI_PROJEKTA.includes(projekt.status)) throw greskaDodatka(409, `Projekt ${projekt.sifra} je ${projekt.status === "Završen" ? "završen" : "otkazan"} — ponuda se može pridružiti samo aktivnom projektu.`);
+  if ((projekt.pridruzenePonude || []).some((p) => p.id === ponuda.id) || projekt.izvorPonudaId === ponuda.id || projekt.izvorPonudaLaseraId === ponuda.id) {
+    throw greskaDodatka(409, `Ponuda ${ponuda.broj} je već u projektu ${projekt.sifra}.`);
+  }
+  const dodatak = ocistiDodatakPonude(dodatakIzZahtjeva);
+  const oznaci = (stavke) => stavke.map((s) => ({ ...s, izPonudeBroj: ponuda.broj }));
+  const faze = { ...(jeObjektDodatka(projekt.faze) ? projekt.faze : {}) };
+  for (const [k, sati] of Object.entries(dodatak.faze)) if (sati > 0) faze[k] = zaokruzi2Dodatak((Number(faze[k]) || 0) + sati);
+  return {
+    ...projekt,
+    vrijednost: zaokruzi2Dodatak((Number(projekt.vrijednost) || 0) + dodatak.vrijednost),
+    faze,
+    pozicije: [...(projekt.pozicije || []), ...oznaci(dodatak.pozicije)],
+    materijalStavke: [...(projekt.materijalStavke || []), ...oznaci(dodatak.materijalStavke)],
+    ostaleStavke: [...(projekt.ostaleStavke || []), ...oznaci(dodatak.ostaleStavke)],
+    pridruzenePonude: [...(projekt.pridruzenePonude || []), { id: ponuda.id, broj: ponuda.broj, tip: tip === "laser" ? "laser" : "standard", datum: ponuda.datum || "", vrijednost: dodatak.vrijednost, pridruzenoDatum: danas || "", pridruzioId: zaposlenikId || "" }],
+  };
+}
+app.put("/api/projekti/:id/pridruzi-ponudu", autentikacija, async (req, res) => {
+  const pozicija = await ucitajPozicijuZaposlenika(req.zaposlenikId);
+  const { pisivo } = izracunajDozvoljeneKljuceve(pozicija);
+  if (!pisivo.has("projekti")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za mijenjanje projekata." });
+
+  const tip = req.body.tip === "laser" ? "laser" : "standard";
+  const kljucPonuda = tip === "laser" ? "ponudeLasera" : "ponude";
+  const ponudaId = String(req.body.ponudaId || "");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query("SELECT value FROM app_data WHERE key = 'projekti' FOR UPDATE");
+    const trenutno = r.rows[0]?.value || [];
+    const projekt = trenutno.find((p) => p.id === req.params.id);
+    const rp = await client.query("SELECT value FROM app_data WHERE key = $1 FOR UPDATE", [kljucPonuda]);
+    const svePonude = rp.rows[0]?.value || [];
+    const ponuda = svePonude.find((p) => p.id === ponudaId);
+    provjeriPonuduZaPridruzivanje(ponuda, trenutno);
+    const novi = pridruziPonuduProjektu(projekt, ponuda, tip, req.body.dodatak, { danas: new Date().toISOString().slice(0, 10), zaposlenikId: req.zaposlenikId });
+    const rezultat = trenutno.map((p) => (p.id === novi.id ? novi : p));
+    // Veza ponude s projektom upisuje se u ISTOJ transakciji, pa ponuda ne može ostati bez veze (ni ući u drugi projekt) ako preglednik prekine zahtjeve.
+    const novePonude = svePonude.map((p) => (p.id === ponudaId ? { ...p, projektId: novi.id } : p));
+    const upisi = (kljuc, vrijednost) => client.query(
+      `INSERT INTO app_data (key, value, updated_at) VALUES ($1, $2, now())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [kljuc, JSON.stringify(vrijednost)]
+    );
+    await upisi("projekti", rezultat);
+    await upisi(kljucPonuda, novePonude);
+    await client.query("COMMIT");
+    res.json({ ok: true, projekti: rezultat, [kljucPonuda]: novePonude, projekt: novi });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    if (e?.httpStatus) return res.status(e.httpStatus).json({ error: e.message });
+    console.error("Greška kod pridruživanja ponude projektu:", e);
+    res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+  } finally {
+    client.release();
+  }
+});
+
 // ---------- Ciljano označavanje zadatka projekta kao izvršenog (self-service) ----------
 // Za razliku od /api/projekti/:id/patch (traži ovlaštenje za cijeli modul "projekti"), ovo
 // dopušta zaposleniku da označi SVOJ dodijeljeni zadatak izvršenim bez obzira ima li uopće
