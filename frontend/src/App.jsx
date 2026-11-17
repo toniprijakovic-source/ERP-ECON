@@ -520,7 +520,10 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0, maxSati
   const dodatakSmjene = vrsta === "rad" ? 1 + (Number(smjena?.dodatakPostotak) || 0) / 100 : 1;
   // Sati se obračunavaju zaokruženo na obračunsku jedinicu (raniji dolazak se ne priznaje)
   // maxSati (samo praktikant): sati iznad dnevnog ograničenja brišu se iz obračuna (vidi obracunMjeseca)
-  const odradjeniSati = vrsta === "rad" ? Math.min(obracunskiSati(zapis.vrijemeDolaska, zapis.vrijemeOdlaska, smjena, postavke), maxSati ?? Infinity) : 0;
+  // MONTAŽA HR: dan može imati upisane sate (dolazak–odlazak na zapisu): plaćaju se kao rad (redovni / prekovremeni), ali bez putnog, toplog obroka i gableca,
+  // bez dodatka za smjenu, a dan nosi terenski dodatak (vidi obracunMjeseca). Zapis bez sati (dolazak = odlazak) ostaje samo evidencija, kao dosad.
+  const jeMontazaHR = vrsta === "montazaHR";
+  const odradjeniSati = vrsta === "rad" || jeMontazaHR ? Math.min(obracunskiSati(zapis.vrijemeDolaska, zapis.vrijemeOdlaska, smjena, postavke), maxSati ?? Infinity) : 0;
 
   // Kategorije plaćenih neradnih sati vode se odvojeno (praznik/godišnji/dopust/bolovanje) —
   // isti ukupni "placeniNerad" ostaje zbroj svih plaćenih (bolovanje se evidentira, ali NE
@@ -549,8 +552,8 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0, maxSati
   } else if (vrsta === "roditeljski") {
     placeniNerad = 0; // kao bolovanje: evidentira se, ne ulazi u obračun
     roditeljskiSati = normaDana;
-  } else if (vrsta === "montazaHR") {
-    montazaHRSati = normaDana; // MONTAŽA HR: obračun još nije dogovoren — evidentira se, ne ulazi u obračun plaće
+  } else if (jeMontazaHR && !(odradjeniSati > 0)) {
+    montazaHRSati = normaDana; // MONTAŽA HR bez upisanih sati: samo se evidentira (sati se ne plaćaju dok se ne upišu), terenski dodatak se ipak računa
   } else if (vrsta === "detasmanGodisnji") {
     // godišnji odmor za vrijeme detašmana: samo se evidentira (za evidenciju godišnjeg), ne ulazi u obračun plaće
 
@@ -566,7 +569,7 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0, maxSati
   // (detašman se ne isplaćuje u plaći), i samo od ponedjeljka do petka (radne subote se ne računaju).
   // Odluka se donosi po DATUMU (ne po zapisu) u obracunMjeseca, jer dan može imati više zapisa.
   const placenIzostanak = praznik || (vrsta !== "rad" && !["bolovanje", "ocinski", "roditeljski", "detasmanGodisnji", "detasman", "montazaHR"].includes(vrsta));
-  const satiZaStaz = vrsta === "rad" && !praznik ? odradjeniSati : 0;
+  const satiZaStaz = (vrsta === "rad" || jeMontazaHR) && !praznik ? odradjeniSati : 0;
 
   // Zaposlenici na pola radnog vremena dobivaju putni trošak i topli obrok prepolovljene.
   const faktorRadnogVremena = zaposlenik?.radnoVrijeme === "pola" ? 0.5 : 1;
@@ -589,7 +592,7 @@ const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0, maxSati
   return {
     datum, vrsta, danUTjednu, praznik, smjena, dodatakSmjene, faktorPrekSaSmjenom,
     odradjeniSati, redovni, prekovremeni, placeniNerad, putni, topliObrok, gablecStimulacija, obrokaBroj,
-    praznikSati, godisnjiSati, dopustSati, detasmanSati, bolovanjeSati, ocinskiSati, roditeljskiSati, montazaHRSati, jeSluzbeniPut, placenIzostanak, satiZaStaz,
+    praznikSati, godisnjiSati, dopustSati, detasmanSati, bolovanjeSati, ocinskiSati, roditeljskiSati, montazaHRSati, jeMontazaHR, jeSluzbeniPut, placenIzostanak, satiZaStaz,
     iznosRedovni, iznosPrekovremeni, iznosNerad, dodatakSmjeneRedovni, dodatakSmjenePrek,
     ukupnoDan: iznosRedovni + iznosPrekovremeni + iznosNerad + putni + topliObrok + dodatakSmjeneRedovni + dodatakSmjenePrek + gablecStimulacija,
   };
@@ -748,7 +751,9 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     roditeljskiSati: s.roditeljskiSati + d.roditeljskiSati,
     montazaHRSati: s.montazaHRSati + d.montazaHRSati,
     danaSluzbenogPuta: s.danaSluzbenogPuta + (d.jeSluzbeniPut ? 1 : 0),
-  }), { redovni: 0, prekovremeni: 0, placeniNerad: 0, putni: 0, topliObrok: 0, gablecStimulacija: 0, dodatakSmjeneRedovni: 0, dodatakSmjenePrek: 0, odradjeni: 0, satiSDodatkom: 0, iznosRedovni: 0, iznosPrekovremeni: 0, iznosNerad: 0, praznikSati: 0, godisnjiSati: 0, dopustSati: 0, detasmanSati: 0, bolovanjeSati: 0, ocinskiSati: 0, roditeljskiSati: 0, montazaHRSati: 0, danaSluzbenogPuta: 0 });
+    daniMontazeHR: s.daniMontazeHR + (d.jeMontazaHR ? 1 : 0),
+    daniMontazeHRBezSati: s.daniMontazeHRBezSati + (d.jeMontazaHR && !(d.odradjeniSati > 0) ? 1 : 0),
+  }), { redovni: 0, prekovremeni: 0, placeniNerad: 0, putni: 0, topliObrok: 0, gablecStimulacija: 0, dodatakSmjeneRedovni: 0, dodatakSmjenePrek: 0, odradjeni: 0, satiSDodatkom: 0, iznosRedovni: 0, iznosPrekovremeni: 0, iznosNerad: 0, praznikSati: 0, godisnjiSati: 0, dopustSati: 0, detasmanSati: 0, bolovanjeSati: 0, ocinskiSati: 0, roditeljskiSati: 0, montazaHRSati: 0, danaSluzbenogPuta: 0, daniMontazeHR: 0, daniMontazeHRBezSati: 0 });
 
   // PREBIJANJE MANJKA PO MJESECU: radni dan (pon-pet) s manje sati od norme ("manjak") namiruje se prekovremenima
   // ISTOG mjeseca — prvo onima radnim danom, pa subotnjima. Prebačeni sat plaća se kao redovni, ostatak ostaje
@@ -865,6 +870,8 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   const iznosRedovni = jeUred ? fiksnaPlaca : zbroj.iznosRedovni;
   const iznosNerad = jeUred ? 0 : zbroj.iznosNerad;
   const dnevnicaTeren = zbroj.danaSluzbenogPuta * (Number(postavke?.dnevnicaTerenEurDan) || 0);
+  // Terenski dodatak za dane Montaže HR: iznos po danu iz postavki, neovisno o satima (dan bez upisanih sati ima dodatak, ali se sati ne plaćaju).
+  const terenskiHR = zbroj.daniMontazeHR * (Number(postavke?.terenskiHrEurDan) || 0);
 
   // "Prikaz prekovremenih (h)" — koliko od stvarno ostvarenih prekovremenih sati se PRIKAZUJE u
   // obračunu/PDF-u; prazno polje ili 0 znači da se ništa ne prikazuje kao prekovremeni, nego se
@@ -906,7 +913,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   // Ostali odbici: jednokratni odbici za taj mjesec (predujam, ovrha, sindikat…) — razlog se vodi samo u ERP-u, na ispisu ide ukupni iznos.
   const odbici = Array.isArray(doplatak.odbici) ? doplatak.odbici : [];
   const ostaliOdbici = odbici.reduce((z, o) => z + (Number(o.iznos) || 0), 0);
-  const dodaciUkupno = topliObrok + dnevnicaTeren + putni;
+  const dodaciUkupno = topliObrok + dnevnicaTeren + terenskiHR + putni;
   const isplata = iznosRedovni + iznosPrekovremeniPrikaz + iznosNerad + dodatakStaz + stimulacija + dodaciUkupno - kredit - ustegPrehrane - ostaliOdbici;
 
   return {
@@ -919,7 +926,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     putni, topliObrok, daniObroka, prebacenoPutni, prebacenoObrok, prebacenoSubota,
     manjakSati, prebijenoSati, manjakPreostalo, obrokPrilagodbe, redovniPrikaz: zbroj.redovni + manjakZaPrikaz, dodatakSmjene,
     jeUred, polaRadnoVrijeme: zaposlenik.radnoVrijeme === "pola", polaFiksnaPolovica, iznosRedovni, iznosNerad, fiksnaPlacaPuna, fiksnaPlaca, faktorFiksne, neplaceniDaniUred, manjakUredSati, satnicaIzIznosa,
-    ukupno, brojDana: dani.length, dani, dnevnicaTeren, stimulacija, stimulacijaRucno, kredit, ustegPrehrane, odbici, ostaliOdbici, dodaciUkupno, isplata,
+    ukupno, brojDana: dani.length, dani, dnevnicaTeren, terenskiHR, stimulacija, stimulacijaRucno, kredit, ustegPrehrane, odbici, ostaliOdbici, dodaciUkupno, isplata,
   };
 };
 
@@ -962,7 +969,7 @@ const obracunMjesecaMontazaDE = (zaposlenik, mjesec, db) => {
 };
 // Nulti redak obračuna u obliku koji očekuju tablica i A4 ispis (ObracunPlacaPrintModal): za skupine koje nemaju formulu plaće
 // (vanjski suradnik, Montaža DE) preostaje popuniti samo sate, iznos i isplatu.
-const PRAZAN_REDAK_OBRACUNA = { prekovremeni: 0, prekovremeniStvarno: 0, placeniNerad: 0, praznikSati: 0, dopustSati: 0, godisnjiSati: 0, bolovanjeSati: 0, ocinskiSati: 0, roditeljskiSati: 0, detasmanSati: 0, stimulacija: 0, dodatakStaz: 0, iznosNerad: 0, iznosPrekovremeni: 0, topliObrok: 0, daniObroka: 0, dnevnicaTeren: 0, kredit: 0, ustegPrehrane: 0, ostaliOdbici: 0, odbici: [], visakPrekovremenihSati: 0, prikazPrekovremenihSati: "", satiSDodatkom: 0 };
+const PRAZAN_REDAK_OBRACUNA = { prekovremeni: 0, prekovremeniStvarno: 0, placeniNerad: 0, praznikSati: 0, dopustSati: 0, godisnjiSati: 0, bolovanjeSati: 0, ocinskiSati: 0, roditeljskiSati: 0, detasmanSati: 0, stimulacija: 0, dodatakStaz: 0, iznosNerad: 0, iznosPrekovremeni: 0, topliObrok: 0, daniObroka: 0, dnevnicaTeren: 0, terenskiHR: 0, kredit: 0, ustegPrehrane: 0, ostaliOdbici: 0, odbici: [], visakPrekovremenihSati: 0, prikazPrekovremenihSati: "", satiSDodatkom: 0 };
 // Operater na laseru ima svedeni prikaz (samo Plan rezanja) i ne vidi administrativne alate poput Backupa.
 const jeOperaterLasera = (pozicija) => (pozicija?.naziv || "").trim().toLowerCase() === "operater na laseru";
 
@@ -16289,6 +16296,7 @@ function PostavkePlacaModal({ db, update, showToast, onClose }) {
     ["autoOdjavaSati", "Automatska odjava nakon (h)", 1],
     ["obracunskaJedinicaMin", "Obračunska jedinica (min)", 5],
     ["dnevnicaTerenEurDan", "Dnevnica za službeni put (€/dan)", 1],
+    ["terenskiHrEurDan", "Terenski dodatak za dan Montaže HR (€/dan)", 1],
   ];
 
   const spremi = () => {
@@ -16368,7 +16376,11 @@ const hhmmISO = (iso) => (iso ? new Date(iso).toTimeString().slice(0, 5) : "—"
 const sazetakDanaEvidencije = (zapisi, postavkePlaca) => {
   if (!zapisi.length) return null;
   const posebna = zapisi.find((z) => z.vrsta !== "rad");
-  if (posebna) return { posebna: posebna.vrsta };
+  if (posebna) {
+    // Montaža HR može imati upisane sate (dolazak–odlazak na samom zapisu); stariji zapisi bez sati imaju sati = 0
+    const sati = posebna.vrsta === "montazaHR" ? obracunskiSati(posebna.vrijemeDolaska, posebna.vrijemeOdlaska, odrediSmjenu(posebna.vrijemeDolaska, postavkePlaca), postavkePlaca) : 0;
+    return sati > 0 ? { posebna: posebna.vrsta, sati, prvi: posebna.vrijemeDolaska, zadnji: posebna.vrijemeOdlaska } : { posebna: posebna.vrsta };
+  }
   const radni = zapisi.filter((z) => z.vrsta === "rad").sort((a, b) => a.vrijemeDolaska.localeCompare(b.vrijemeDolaska));
   const sati = radni.reduce((s, z) => s + obracunskiSati(z.vrijemeDolaska, z.vrijemeOdlaska, odrediSmjenu(z.vrijemeDolaska, postavkePlaca), postavkePlaca), 0);
   return {
@@ -16435,7 +16447,7 @@ const evidencijaPrintHtml = ({ mjesec, grupe, dani, zapisiMapa, sazetci, db }) =
     if (!sd) return `<td class="${razred}">${d.praznik ? "P" : ""}</td>`;
     if (sd.posebna) {
       const o = OZNAKA_VRSTE_DANA[sd.posebna];
-      return `<td style="background:${o?.bg || "#eee"};color:${o?.boja || "#000"};font-weight:700">${escHtml(o?.kratica || "?")}</td>`;
+      return `<td style="background:${o?.bg || "#eee"};color:${o?.boja || "#000"};font-weight:700">${escHtml(o?.kratica || "?")}${sd.sati > 0 ? `<div style="color:${o?.boja || "#000"}"><b>${sd.sati.toFixed(1)}</b></div>` : ""}</td>`;
     }
     const cls = sd.autoOdjava ? "evp-auto" : sd.popodne ? "evp-pod" : razred;
     return `<td class="${cls}"><div>${hhmmISO(sd.prvi)}</div><div>${hhmmISO(sd.zadnji)}</div><b>${sd.sati.toFixed(1)}</b></td>`;
@@ -16593,6 +16605,9 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true, d
       zaposlenikId, datum,
       vrsta: posebna?.vrsta || "rad",
       napomena: posebna?.napomena || "",
+      // Montaža HR: sati su vrijeme dolaska i odlaska na samom zapisu; stariji zapisi (00:00–00:00) nemaju sate pa su polja prazna
+      montazaOd: posebna?.vrsta === "montazaHR" && posebna.vrijemeOdlaska && posebna.vrijemeOdlaska !== posebna.vrijemeDolaska ? new Date(posebna.vrijemeDolaska).toTimeString().slice(0, 5) : "",
+      montazaDo: posebna?.vrsta === "montazaHR" && posebna.vrijemeOdlaska && posebna.vrijemeOdlaska !== posebna.vrijemeDolaska ? new Date(posebna.vrijemeOdlaska).toTimeString().slice(0, 5) : "",
       segmenti: radni.length
         ? radni.map((z) => ({ id: z.id, od: new Date(z.vrijemeDolaska).toTimeString().slice(0, 5), do: z.vrijemeOdlaska ? new Date(z.vrijemeOdlaska).toTimeString().slice(0, 5) : "" }))
         : [{ id: null, od: "06:00", do: "14:00" }],
@@ -16608,7 +16623,12 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true, d
   // zadnji put dohvatio podatke), šalje se samo TOČNO ono što se za ovaj dan mijenja —
   // patchEvidencija to primjenjuje na trenutni popis u bazi, zaključan za vrijeme izmjene.
   const spremiCeliju = async () => {
-    const { zaposlenikId, datum, vrsta, segmenti, napomena } = urediCeliju;
+    const { zaposlenikId, datum, vrsta, segmenti, napomena, montazaOd, montazaDo } = urediCeliju;
+    // Montaža HR: sati se upisuju kao prijava i odjava ili se oba polja ostave prazna (dan samo evidentiran, bez sati)
+    if (vrsta === "montazaHR") {
+      if (!!montazaOd !== !!montazaDo) { showToast("Upišite i prijavu i odjavu (ili oba polja ostavite prazna)."); return; }
+      if (montazaOd && montazaDo <= montazaOd) { showToast("Odjava mora biti nakon prijave."); return; }
+    }
     const postojeciZaDan = db.evidencijaRada.filter((e) => e.zaposlenikId === zaposlenikId && e.vrijemeDolaska.slice(0, 10) === datum);
     const noviZapisi = vrsta === "rad"
       ? segmenti.filter((s) => s.od).map((s) => ({
@@ -16616,7 +16636,7 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true, d
           vrijemeDolaska: `${datum}T${s.od}:00`, vrijemeOdlaska: s.do ? `${datum}T${s.do}:00` : null,
           vrsta: "rad", autoOdjava: false, potvrdenoRacunovodstvo: true, unioRucnoId: "racunovodstvo",
         }))
-      : [{ id: uid("evr"), zaposlenikId, vrijemeDolaska: `${datum}T00:00:00`, vrijemeOdlaska: `${datum}T00:00:00`, vrsta, autoOdjava: false, potvrdenoRacunovodstvo: true, unioRucnoId: "racunovodstvo", ...(napomena?.trim() ? { napomena: napomena.trim() } : {}) }];
+      : [{ id: uid("evr"), zaposlenikId, vrijemeDolaska: `${datum}T${vrsta === "montazaHR" && montazaOd ? montazaOd : "00:00"}:00`, vrijemeOdlaska: `${datum}T${vrsta === "montazaHR" && montazaDo ? montazaDo : "00:00"}:00`, vrsta, autoOdjava: false, potvrdenoRacunovodstvo: true, unioRucnoId: "racunovodstvo", ...(napomena?.trim() ? { napomena: napomena.trim() } : {}) }];
     const zadrzaniIds = new Set(noviZapisi.map((z) => z.id));
     const zaUkloniti = postojeciZaDan.filter((e) => !zadrzaniIds.has(e.id)).map((e) => e.id);
     const ok = await patchEvidencija(noviZapisi, zaUkloniti);
@@ -16654,8 +16674,9 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true, d
     const sd = sazetakDanaEvidencije(zapisi, db.postavkePlaca);
     const oznaka = sd.posebna && OZNAKA_VRSTE_DANA[sd.posebna];
     if (oznaka) {
-      return <td style={{ ...stil, background: oznaka.bg }} onClick={() => otvoriCeliju(zaposlenik.id, dan.datum)} title={oznaka.naziv}>
+      return <td style={{ ...stil, background: oznaka.bg }} onClick={() => otvoriCeliju(zaposlenik.id, dan.datum)} title={sd.sati > 0 ? `${oznaka.naziv}: ${hhmmISO(sd.prvi)}–${hhmmISO(sd.zadnji)}, ${sd.sati.toFixed(1)} h` : oznaka.naziv}>
         <span className="f-mono" style={{ fontSize: 11, fontWeight: 700, color: oznaka.boja }}>{oznaka.kratica}</span>
+        {sd.sati > 0 && <div className="f-mono" style={{ fontSize: 10.5, fontWeight: 700, color: oznaka.boja, lineHeight: 1.3 }}>{sd.sati.toFixed(1)}</div>}
       </td>;
     }
 
@@ -16846,6 +16867,24 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true, d
               <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 3 }}>Ispisuje se ispod obračuna plaće uz plaćeni dopust.</div>
             </Field>
           )}
+          {urediCeliju.vrsta === "montazaHR" && (() => {
+            const od = urediCeliju.montazaOd || "", odjava = urediCeliju.montazaDo || "";
+            const dolazakISO = `${urediCeliju.datum}T${od}:00`;
+            const h = od && odjava && odjava > od ? obracunskiSati(dolazakISO, `${urediCeliju.datum}T${odjava}:00`, odrediSmjenu(dolazakISO, db.postavkePlaca), db.postavkePlaca) : 0;
+            return (
+              <div className="card" style={{ padding: 10, marginBottom: 8, background: "var(--surface-alt)" }}>
+                <div className="label">Radno vrijeme na montaži (prijava — odjava)</div>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                  <Field label="Prijava"><input className="input f-mono" type="time" value={od} onChange={(e) => setUrediCeliju({ ...urediCeliju, montazaOd: e.target.value })} /></Field>
+                  <Field label="Odjava"><input className="input f-mono" type="time" value={odjava} onChange={(e) => setUrediCeliju({ ...urediCeliju, montazaDo: e.target.value })} /></Field>
+                </div>
+                <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 6 }}>
+                  {h > 0 ? <>Obračunski sati: <strong className="f-mono">{h.toFixed(1)} h</strong></> : "Oba polja ostavite prazna ako sati još nisu poznati — dan se samo evidentira, a sati se ne plaćaju dok se ne upišu."}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 4 }}>Sati se plaćaju kao rad (redovni / prekovremeni). Za ovaj dan se ne računa putni, topli obrok ni gablec, a dan nosi terenski dodatak.</div>
+              </div>
+            );
+          })()}
           {urediCeliju.vrsta === "rad" && (
             <>
               <div className="label" style={{ marginTop: 6 }}>Radni segmenti (dolazak — odjava)</div>
@@ -17410,7 +17449,8 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true, mojId })
               {detaljZaposlenik.danaSluzbenogPuta > 0 && <><span>Službeni put ({detaljZaposlenik.danaSluzbenogPuta} dana plaćeno kao 8 h rada{Number(db.postavkePlaca?.dnevnicaTerenEurDan) > 0 ? ", dnevnica" : "; dnevnica ide kroz putni nalog"})</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.dnevnicaTeren)}</span></>}
               {detaljZaposlenik.ocinskiSati > 0 && <><span style={{ color: "var(--ink-faint)" }}>Očinski ({detaljZaposlenik.ocinskiSati.toFixed(1)} h, evidentirano)</span><span className="f-mono" style={{ textAlign: "right", color: "var(--ink-faint)" }}>0,00 €</span></>}
               {detaljZaposlenik.roditeljskiSati > 0 && <><span style={{ color: "var(--ink-faint)" }}>Roditeljski ({detaljZaposlenik.roditeljskiSati.toFixed(1)} h, evidentirano)</span><span className="f-mono" style={{ textAlign: "right", color: "var(--ink-faint)" }}>0,00 €</span></>}
-              {detaljZaposlenik.montazaHRSati > 0 && <><span style={{ color: "var(--ink-faint)" }}>Montaža HR ({detaljZaposlenik.montazaHRSati.toFixed(1)} h, evidentirano — obračun još nije dogovoren)</span><span className="f-mono" style={{ textAlign: "right", color: "var(--ink-faint)" }}>0,00 €</span></>}
+              {detaljZaposlenik.daniMontazeHR > 0 && <><span>Terenski dodatak — Montaža HR ({detaljZaposlenik.daniMontazeHR} {detaljZaposlenik.daniMontazeHR === 1 ? "dan" : "dana"}{Number(db.postavkePlaca?.terenskiHrEurDan) > 0 ? ` × ${fmtCurDec(Number(db.postavkePlaca.terenskiHrEurDan))}` : "; iznos po danu nije upisan u Postavkama plaća"}; sati se plaćaju kao rad, bez putnog i toplog obroka)</span><span className="f-mono" style={{ textAlign: "right" }}>{fmtCurDec(detaljZaposlenik.terenskiHR)}</span></>}
+              {detaljZaposlenik.daniMontazeHRBezSati > 0 && <><span style={{ color: "var(--rust)", fontSize: 11 }}>— Montaža HR: za {detaljZaposlenik.daniMontazeHRBezSati} {detaljZaposlenik.daniMontazeHRBezSati === 1 ? "dan" : "dana"} nisu upisani sati ({detaljZaposlenik.montazaHRSati.toFixed(1)} h samo evidentirano, ne plaća se) — upišite ih u Evidenciji rada</span><span></span></>}
               {detaljZaposlenik.bolovanjeSati > 0 && <><span style={{ color: "var(--ink-faint)" }}>Bolovanje ({detaljZaposlenik.bolovanjeSati.toFixed(1)} h, evidentirano)</span><span className="f-mono" style={{ textAlign: "right", color: "var(--ink-faint)" }}>0,00 €</span></>}
               <span style={{ fontWeight: 700, borderTop: "1px solid var(--line)", paddingTop: 6 }}>UKUPNO NETO</span>
               <span className="f-mono" style={{ textAlign: "right", fontWeight: 700, borderTop: "1px solid var(--line)", paddingTop: 6 }}>{fmtCurDec(detaljZaposlenik.ukupno)}</span>
@@ -17655,6 +17695,7 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose, nasl
   const imaUsteg = redovi.some((r) => Math.abs(r.ustegPrehrane) > 0.005);
   // stupac "Terenski Njemačka" treba se rijetko: uključuje se kvačicom, a pojavi se sam ako je netko ima iznos
   const prikaziTerenStupac = prikaziTeren || redovi.some((r) => Math.abs(r.dnevnicaTeren) > 0.005);
+  const prikaziTerenHR = redovi.some((r) => Math.abs(r.terenskiHR || 0) > 0.005); // terenski dodatak za dane Montaže HR: stupac se pojavi sam kad netko ima iznos
 
   const stupci = [
     { naslov: "Red. br.", v: (r, i) => i + 1 },
@@ -17675,6 +17716,7 @@ function ObracunPlacaPrintModal({ redovi, naslovGrupe, mjesec, db, onClose, nasl
     { naslov: "Prehrana dana", v: (r) => r.daniObroka },
     { naslov: "Prehrana €", v: (r) => eur(r.topliObrok) },
     { naslov: "Terenski Njemačka €", v: (r) => eur(r.dnevnicaTeren), uvjet: prikaziTerenStupac },
+    { naslov: "Terenski Montaža HR €", v: (r) => eur(r.terenskiHR || 0), uvjet: prikaziTerenHR },
     { naslov: "Prijevoz €", v: (r) => eur(r.putni) },
     { naslov: "DODACI ukupno €", v: (r) => eur(r.dodaciUkupno) },
     { naslov: "ODBICI kredit €", v: (r) => eur(r.kredit) },
@@ -17870,6 +17912,8 @@ const dodajDane = (iso, n) => { const d = new Date(`${iso}T12:00:00`); d.setDate
 // (sate je računovodstvo platilo drukčije, npr. kroz stimulaciju, a zapis "rad" zamijenilo izostankom). To nije greška u razduženju: takav se dan
 // ne prikazuje kao neusklađen, a razduženi sati pribrajaju se evidenciji tog radnika (vidi "djelomicni" u povratnoj vrijednosti).
 const IZOSTANCI_DJELOMICNI_RAD = ["bolovanje", "godisnji", "placeniDopust", "ocinski", "roditeljski"];
+// Zapis koji nosi sate prisutnosti: rad, ili Montaža HR s upisanim satima (dolazak ≠ odlazak; stariji zapisi 00:00–00:00 nemaju sate). Za razduženje sati po nalozima.
+const zapisSaSatima = (e) => (e.vrsta || "rad") === "rad" || (e.vrsta === "montazaHR" && !!e.vrijemeOdlaska && e.vrijemeOdlaska !== e.vrijemeDolaska);
 const uskladenostSati = (db, od, do_, grupa = "radiona") => {
   const radnici = (db.zaposlenici || []).filter((z) => z.status === "Aktivan" && grupaEvidencije(z, db.pozicijeZaposlenika) === grupa);
   const ids = new Set(radnici.map((z) => z.id));
@@ -17880,7 +17924,7 @@ const uskladenostSati = (db, od, do_, grupa = "radiona") => {
     const vrsta = e.vrsta || "rad";
     const d = e.vrijemeDolaska.slice(0, 10);
     if (d < od || d > do_) return;
-    if (vrsta !== "rad") {
+    if (!zapisSaSatima(e)) {
       if (IZOSTANCI_DJELOMICNI_RAD.includes(vrsta)) { const m = izostanci.get(e.zaposlenikId) || new Map(); m.set(d, vrsta); izostanci.set(e.zaposlenikId, m); }
       return;
     }
@@ -17972,7 +18016,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
   const radnici = useMemo(() => db.zaposlenici
     .filter((z) => z.status === "Aktivan")
     .map((z) => {
-      const zapisi = db.evidencijaRada.filter((e) => e.zaposlenikId === z.id && e.vrijemeDolaska.slice(0, 10) === datum && (e.vrsta || "rad") === "rad");
+      const zapisi = db.evidencijaRada.filter((e) => e.zaposlenikId === z.id && e.vrijemeDolaska.slice(0, 10) === datum && zapisSaSatima(e));
       if (zapisi.length === 0) return null;
       const satiPrijave = zapisi.reduce((s, e) => s + obracunskiSati(e.vrijemeDolaska, e.vrijemeOdlaska, odrediSmjenu(e.vrijemeDolaska, db.postavkePlaca), db.postavkePlaca), 0);
       const uneseno = db.satiPoNalogu.filter((s) => s.zaposlenikId === z.id && s.datum === datum);
