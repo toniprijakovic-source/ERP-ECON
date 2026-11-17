@@ -1270,7 +1270,7 @@ const uskladiSatSPosluziteljem = async () => {
 };
 
 const STATUS_TONE = {
-  "Nacrt": "muted", "Ponuda": "muted", "Planiran": "muted", "Nismo nudili": "muted",
+  "Nacrt": "muted", "Ponuda": "muted", "Planiran": "muted", "Nismo nudili": "muted", "Revizija": "muted",
   "Poslano": "info", "Poslana": "info", "Odobren": "info",
   "Djelomično primljeno": "warning", "U izradi": "warning", "Montaža": "warning",
   "U tijeku": "warning", "Pauziran": "warning", "Djelomično plaćeno": "warning",
@@ -1285,7 +1285,8 @@ const Badge = ({ status, label }) => <span className={`badge badge-${STATUS_TONE
 
 // Statusi ponude (isti popis u obrascu ponude, ponude za laser i u popisu). "Nismo nudili" = upit za koji ponuda nikad nije poslana
 // (nema revizije ni "već poslana" obavijesti); ne ulazi u popis otvorenih ponuda jer to ostaje samo "Poslana".
-const STATUSI_PONUDE = ["U izradi", "Poslana", "Prihvaćena", "Odbijena", "Nismo nudili"];
+// "Revizija" = poslana verzija koju je zamijenila novija (_revN); postavlja se sama kad se napravi revizija poslane ponude (vidi napraviReviziju).
+const STATUSI_PONUDE = ["U izradi", "Poslana", "Revizija", "Prihvaćena", "Odbijena", "Nismo nudili"];
 const ponudaNijePoslana = (ponuda) => ponuda?.status === "U izradi" || ponuda?.status === "Nismo nudili";
 // Status izravno u popisu ponuda (bez ulaska u ponudu): izgleda kao oznaka statusa, a klik otvara izbor. Bez ovlasti za izmjene prikazuje se samo oznaka.
 const StatusPonudeIzbor = ({ ponuda, onPromijeni, disabled }) => (disabled ? <Badge status={ponuda.status} /> : (
@@ -2630,6 +2631,23 @@ export default function App() {
     }).catch(() => showToast("Greška pri spremanju — provjeri internetsku vezu."));
   };
 
+  // Pridruživanje prihvaćene ponude postojećem projektu: poslužitelj PRIBRAJA dodatak (vrijednost, sati, pozicije…) na aktualni zapis projekta i u istoj
+  // transakciji upisuje vezu na ponudi, pa zastarjela kopija preglednika ne može pregaziti tuđe izmjene. Vraća { ok, greska }.
+  const pridruziPonudu = (projektId, ponudaId, tip, dodatak) => {
+    const token = localStorage.getItem("erp_token");
+    return fetch(`${API_URL}/api/projekti/${projektId}/pridruzi-ponudu`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ponudaId, tip, dodatak }),
+    }).then(async (res) => {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, greska: data.error || "Greška pri pridruživanju ponude projektu." };
+      const kljucPonuda = tip === "laser" ? "ponudeLasera" : "ponude";
+      setDb((prev) => ({ ...prev, projekti: data.projekti, ...(data[kljucPonuda] ? { [kljucPonuda]: data[kljucPonuda] } : {}) }));
+      return { ok: true };
+    }).catch(() => ({ ok: false, greska: "Greška pri spremanju — provjeri internetsku vezu." }));
+  };
+
   // Ponovno učitava jedan ključ s backenda i osvježava lokalni state BEZ ponovnog PUT-a —
   // koristi se nakon promjena koje backend napravi izravno (npr. hashiranje lozinke), gdje
   // bi obični update() prepisao stvarni hash lokalnom (nepotpunom) kopijom podataka.
@@ -2841,7 +2859,7 @@ export default function App() {
           {aktivnaStranica === "transporti" && <TransportiPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} pocetniTab={transportiTab} ocistiTab={() => setTransportiTab(null)} />}
           {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} dodajMaticne={dodajMaticne} />}
           {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage refetchKljuc={refetchKljuc} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjekt={dopusteniKljucevi.includes("projekti") ? (id) => { setOtvoriProjektId(id); setPage("projekti"); } : undefined} />}
-          {(aktivnaStranica === "projekti" || aktivnaStranica === "ponude") && <ProjektiPage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} spremiNormativ={spremiNormativ} patchProjekt={patchProjekt} patchProjekti={patchProjekti} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjektId={otvoriProjektId} ocistiOtvoriProjekt={() => setOtvoriProjektId(null)} otvoriKvalitetu={dopusteniKljucevi.includes("kontrola") ? (id) => { setKkProjektId(id); setPage("kontrola"); } : undefined} />}
+          {(aktivnaStranica === "projekti" || aktivnaStranica === "ponude") && <ProjektiPage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} spremiNormativ={spremiNormativ} patchProjekt={patchProjekt} patchProjekti={patchProjekti} pridruziPonudu={pridruziPonudu} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjektId={otvoriProjektId} ocistiOtvoriProjekt={() => setOtvoriProjektId(null)} otvoriKvalitetu={dopusteniKljucevi.includes("kontrola") ? (id) => { setKkProjektId(id); setPage("kontrola"); } : undefined} />}
           {(aktivnaStranica === "otpremnice" || aktivnaStranica === "fakturiranje") && <FakturiranjePage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} />}
           {aktivnaStranica === "partneri" && <PartneriPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} mojaPozicija={mojaPozicija} mojId={prijavljenId} />}
@@ -10022,6 +10040,7 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
           )}
           {projekt.mjestoIsporuke && <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>Mjesto isporuke: <strong style={{ color: "var(--ink)" }}>{projekt.mjestoIsporuke}</strong></div>}
           {projekt.izvorPonudaId && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2 }}>Kreirano iz ponude {db.ponude.find((p) => p.id === projekt.izvorPonudaId)?.broj || projekt.izvorPonudaId}</div>}
+          {(projekt.pridruzenePonude || []).length > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2 }}>Pridružene ponude (dodatak): {projekt.pridruzenePonude.map((x) => `${x.broj} (+${fmtCur(x.vrijednost)})`).join(", ")}</div>}
           {projekt.kopiranoIzProjektaId && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2 }}>Kopirano iz projekta {db.projekti.find((p) => p.id === projekt.kopiranoIzProjektaId)?.sifra || "(obrisan projekt)"}</div>}
         </div>
         <div style={{ textAlign: "right" }}>
@@ -11032,7 +11051,7 @@ function ispisiTablicuPdf({ naslov, zaglavlja, redovi, podnozje, podnaslov, nazi
 
 // Jedna stranica za dva modula: "projekti" (Projekti, Završeni projekti) i "ponude" (Ponude,
 // Ponude - Laser) — dijele obrasce i pretvorbu ponude u projekt.
-function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchProjekt, patchProjekti, patchUpiti, showToast, setPage, mojaPozicija, mojId, otvoriProjektId, ocistiOtvoriProjekt, otvoriKvalitetu }) {
+function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchProjekt, patchProjekti, pridruziPonudu, patchUpiti, showToast, setPage, mojaPozicija, mojId, otvoriProjektId, ocistiOtvoriProjekt, otvoriKvalitetu }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, modul);
   const [tab, setTab] = useState(dozvKartice[0]?.key || modul);
   useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || modul); }, [dozvKartice, tab, modul]);
@@ -11250,7 +11269,9 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
     const kljuc = laser ? "ponudeLasera" : "ponude";
     const lista = db[kljuc] || [];
     const rev = { ...JSON.parse(JSON.stringify(izvor)), id: uid(laser ? "las" : "pon"), broj: brojRevizijePonude(lista, izvor), status: "U izradi", projektId: null, datum: todayISO(), revizijaOd: izvor.id };
-    update(kljuc, [...lista, rev]);
+    // Poslana verzija dobiva status "Revizija" (zamijenjena je novom, nije odbijena); prihvaćena ili odbijena ostaje kakva jest.
+    const novaLista = lista.map((p) => (p.id === izvor.id && p.status === "Poslana" ? { ...p, status: "Revizija" } : p));
+    update(kljuc, [...novaLista, rev]);
     showToast(`Revizija spremljena kao ${rev.broj}.`);
     if (laser) urediLaser(rev); else urediPonudu(rev);
   };
@@ -11279,7 +11300,25 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
     setCjenikOpen(false);
     showToast("Cjenik rada ažuriran.");
   };
-  const pretvoriUProjekt = (ponuda, sifra, naziv) => {
+  // Što ponuda donosi projektu: vrijednost, planirani sati po fazama, pozicije/materijal/ostale stavke i popis radnih naloga (jedan po fazi).
+  // Isti izračun služi za novi projekt ("Pretvori u projekt") i za pridruživanje ponude postojećem projektu (dodatak), da se ne računa na dva načina.
+  const planIzPonude = (ponuda, laser = false) => {
+    if (laser) {
+      // Usluga laserskog rezanja: nema pozicija/AKZ/montaže, samo radni nalog(i) za sam posao rezanja — jedan za "Laser za profile" i/ili jedan za
+      // "Laser za limove", ovisno koje vrste stavki ponuda uopće ima, s planiranim satima = zbroj rezanja + pripreme svih stavki tog tipa.
+      const calc = izracunPonudeLasera(ponuda, db.kvaliteteMaterijala);
+      const minPoTipu = { cijevni: 0, plocasti: 0 };
+      calc.stavke.forEach((s) => { minPoTipu[s.tipLasera === "cijevni" ? "cijevni" : "plocasti"] += (Number(s.rezanjeMin) || 0) + (Number(s.pripremaMin) || 0); });
+      const faze = {};
+      const nalozi = [];
+      [{ tip: "cijevni", faza: "Laser za profile" }, { tip: "plocasti", faza: "Laser za limove" }].forEach(({ tip, faza }) => {
+        const sati = Math.round((minPoTipu[tip] / 60) * 100) / 100;
+        if (sati <= 0) return;
+        faze[faza] = sati;
+        nalozi.push({ faza, sati, stavke: [] });
+      });
+      return { vrijednost: Math.round(calc.cijenaKonacna), faze, pozicije: [], materijalStavke: [], ostaleStavke: ponuda.ostaleStavke || [], nalozi, planiraniMaterijal: 0 };
+    }
     const izracun = izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala);
     // Sati iz minuta po komadu imaju puno decimala — u projekt i naloge idu zaokruženi na 2 decimale.
     const h2 = (h) => Math.round((Number(h) || 0) * 100) / 100;
@@ -11304,92 +11343,86 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
         return { materijalId: "", katalogId: l.katalogId, nacinUnosa: "lim", duzinaM: 3, sirinaM: 1.5, komada, kolicina: Math.round(ploca * komada * kgPoM(l.katalogId) * 100) / 100, cijenaPoJed: 1.25, kvaliteta: "", izPonude: true };
       }),
     ];
+    const faze = { ...Object.fromEntries(OPERACIJE.map((o) => [o.label, calc.satiPoOperaciji[o.key]])), "Montaža (teren)": calc.satiMontaze };
+    calc.dodatneOperacije.forEach((o) => { faze[o.faza] = (Number(faze[o.faza]) || 0) + o.sati; });
+    let nalozi = OPERACIJE.filter((o) => calc.satiPoOperaciji[o.key] > 0).map((o) => ({ faza: o.label, sati: calc.satiPoOperaciji[o.key], stavke: o.key === "pripremaPozicija" ? sviMaterijalStavke : [] }));
+    // Osiguraj da materijal iz ponude uvijek završi na nekom radnom nalogu, čak i ako "priprema pozicija" nema planiranih sati
+    if (!nalozi.some((n) => n.faza === "Priprema pozicija za sklapanje") && sviMaterijalStavke.length > 0) nalozi = [...nalozi, { faza: "Priprema pozicija za sklapanje", sati: 0, stavke: sviMaterijalStavke }];
+    if (calc.satiMontaze > 0) nalozi = [...nalozi, { faza: "Montaža (teren)", sati: calc.satiMontaze, stavke: [] }];
+    // Dodatne operacije iz ponude: svaka (po fazi i nazivu) svoj radni nalog, naziv operacije uz fazu naloga.
+    calc.dodatneOperacije.forEach((o) => { nalozi = [...nalozi, { faza: o.faza, ...(o.naziv ? { operacija: o.naziv } : {}), sati: o.sati, stavke: [] }]; });
+    return { vrijednost: Math.round(calc.cijenaKonacna), faze, pozicije: ponuda.pozicije || [], materijalStavke: [...sviMaterijalStavke, ...materijalIzPonude], ostaleStavke: sveOstaleStavke, nalozi, planiraniMaterijal: materijalIzPonude.length };
+  };
+  // Radni nalozi iz plana ponude (jedan po fazi, neizvršeni); brojevi nastavljaju brojeve naloga projekta. ponudaBroj = nalozi dodatka postojećem projektu.
+  const naloziIzPlana = (plan, projekt, naziv, ponudaBroj = "") => {
+    let rnBrojac = parseInt(sljedeciBrojRadnogNaloga(db.radniNalozi, projekt.sifra).split("/").pop(), 10);
+    return plan.nalozi.map((n) => ({
+      id: uid("rn"), broj: `${projekt.sifra}/${rnBrojac++}`, projektId: projekt.id,
+      naziv, faza: n.faza, ...(n.operacija ? { operacija: n.operacija } : {}), ...(ponudaBroj ? { izPonudeBroj: ponudaBroj } : {}), zaduzenTim: "", status: "Planiran",
+      planiranoSati: n.sati, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: addDays(todayISO(), 14),
+      stavke: n.stavke || [], materijalIzdan: false,
+    }));
+  };
+  const pretvoriUProjekt = (ponuda, sifra, naziv) => {
+    const plan = planIzPonude(ponuda);
     const noviProjekt = {
       id: uid("proj"), sifra, naziv, kupacId: ponuda.kupacId,
-      status: "Odobren", vrijednost: Math.round(calc.cijenaKonacna), rokPocetka: todayISO(), rokZavrsetka: addDays(todayISO(), 60),
+      status: "Odobren", vrijednost: plan.vrijednost, rokPocetka: todayISO(), rokZavrsetka: addDays(todayISO(), 60),
       opis: `Kreirano iz ponude ${ponuda.broj}.`,
-      izvorPonudaId: ponuda.id, pozicije: ponuda.pozicije || [], materijalStavke: [...sviMaterijalStavke, ...materijalIzPonude], ostaleStavke: sveOstaleStavke,
+      izvorPonudaId: ponuda.id, pozicije: plan.pozicije, materijalStavke: plan.materijalStavke, ostaleStavke: plan.ostaleStavke,
       voditeljId: "", zadaci: noviZadaciIzStandarda(),
-      faze: { ...praznaFazaSati(), ...Object.fromEntries(OPERACIJE.map((o) => [o.label, calc.satiPoOperaciji[o.key]])), "Montaža (teren)": calc.satiMontaze },
+      faze: { ...praznaFazaSati(), ...plan.faze },
     };
-    calc.dodatneOperacije.forEach((o) => { noviProjekt.faze[o.faza] = (Number(noviProjekt.faze[o.faza]) || 0) + o.sati; });
-    let rnBrojac = parseInt(sljedeciBrojRadnogNaloga(db.radniNalozi, noviProjekt.sifra).split("/").pop(), 10);
-    const sljedeciRnBroj = () => `${noviProjekt.sifra}/${rnBrojac++}`;
-    let noviNalozi = OPERACIJE.filter((o) => calc.satiPoOperaciji[o.key] > 0).map((o) => ({
-      id: uid("rn"), broj: sljedeciRnBroj(), projektId: noviProjekt.id,
-      naziv: noviProjekt.naziv, faza: o.label, zaduzenTim: "", status: "Planiran",
-      planiranoSati: calc.satiPoOperaciji[o.key], utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: addDays(todayISO(), 14),
-      stavke: o.key === "pripremaPozicija" ? sviMaterijalStavke : [], materijalIzdan: false,
-    }));
-    // Osiguraj da materijal iz ponude uvijek završi na nekom radnom nalogu, čak i ako "priprema pozicija" nema planiranih sati
-    const imaPripremuNalog = noviNalozi.some((n) => n.faza === "Priprema pozicija za sklapanje");
-    if (!imaPripremuNalog && sviMaterijalStavke.length > 0) {
-      noviNalozi = [...noviNalozi, {
-        id: uid("rn"), broj: sljedeciRnBroj(), projektId: noviProjekt.id,
-        naziv: noviProjekt.naziv, faza: "Priprema pozicija za sklapanje", zaduzenTim: "", status: "Planiran",
-        planiranoSati: 0, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: addDays(todayISO(), 14),
-        stavke: sviMaterijalStavke, materijalIzdan: false,
-      }];
-    }
-    if (calc.satiMontaze > 0) {
-      noviNalozi = [...noviNalozi, {
-        id: uid("rn"), broj: sljedeciRnBroj(), projektId: noviProjekt.id,
-        naziv: noviProjekt.naziv, faza: "Montaža (teren)", zaduzenTim: "", status: "Planiran",
-        planiranoSati: calc.satiMontaze, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: addDays(todayISO(), 14),
-        stavke: [], materijalIzdan: false,
-      }];
-    }
-    // Dodatne operacije iz ponude: svaka (po fazi i nazivu) svoj radni nalog, naziv operacije uz fazu naloga.
-    calc.dodatneOperacije.forEach((o) => {
-      noviNalozi = [...noviNalozi, {
-        id: uid("rn"), broj: sljedeciRnBroj(), projektId: noviProjekt.id,
-        naziv: noviProjekt.naziv, faza: o.faza, ...(o.naziv ? { operacija: o.naziv } : {}), zaduzenTim: "", status: "Planiran",
-        planiranoSati: o.sati, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: addDays(todayISO(), 14),
-        stavke: [], materijalIzdan: false,
-      }];
-    });
+    const noviNalozi = naloziIzPlana(plan, noviProjekt, noviProjekt.naziv);
     patchProjekti([noviProjekt], []);
     update("radniNalozi", [...db.radniNalozi, ...noviNalozi]);
     update("ponude", db.ponude.map((p) => (p.id === ponuda.id ? { ...p, projektId: noviProjekt.id } : p)));
-    showToast(`Projekt ${noviProjekt.sifra} kreiran s ${noviNalozi.length} radnih naloga${materijalIzPonude.length ? ` i ${materijalIzPonude.length} stavki planiranog materijala (profili i limovi iz ponude)` : ""}.`);
+    showToast(`Projekt ${noviProjekt.sifra} kreiran s ${noviNalozi.length} radnih naloga${plan.planiraniMaterijal ? ` i ${plan.planiraniMaterijal} stavki planiranog materijala (profili i limovi iz ponude)` : ""}.`);
     if (imaModulProjekti) setPage("projekti");
   };
 
-  // Analogno pretvoriUProjekt, ali za uslugu laserskog rezanja: nema pozicija/AKZ/montaže, samo
-  // radni nalog(i) za sam posao rezanja — jedan za "Laser za profile" i/ili jedan za "Laser za
-  // limove", ovisno koje vrste stavki ponuda uopće ima, s planiranim satima = zbroj rezanja +
-  // pripreme svih stavki tog tipa.
+  // Analogno pretvoriUProjekt, ali za uslugu laserskog rezanja (vidi planIzPonude).
   const pretvoriUProjektLaser = (ponuda, sifra, naziv) => {
-    const calc = izracunPonudeLasera(ponuda, db.kvaliteteMaterijala);
+    const plan = planIzPonude(ponuda, true);
     const noviProjekt = {
       id: uid("proj"), sifra, naziv, kupacId: ponuda.kupacId,
-      status: "Odobren", vrijednost: Math.round(calc.cijenaKonacna), rokPocetka: todayISO(), rokZavrsetka: addDays(todayISO(), 30),
+      status: "Odobren", vrijednost: plan.vrijednost, rokPocetka: todayISO(), rokZavrsetka: addDays(todayISO(), 30),
       opis: `Kreirano iz ponude za laser ${ponuda.broj}.`,
-      izvorPonudaLaseraId: ponuda.id, pozicije: [], materijalStavke: [], ostaleStavke: ponuda.ostaleStavke || [],
-      voditeljId: "", zadaci: noviZadaciIzStandarda(), faze: praznaFazaSati(),
+      izvorPonudaLaseraId: ponuda.id, pozicije: plan.pozicije, materijalStavke: plan.materijalStavke, ostaleStavke: plan.ostaleStavke,
+      voditeljId: "", zadaci: noviZadaciIzStandarda(), faze: { ...praznaFazaSati(), ...plan.faze },
     };
-    const minPoTipu = { cijevni: 0, plocasti: 0 };
-    calc.stavke.forEach((s) => { minPoTipu[s.tipLasera === "cijevni" ? "cijevni" : "plocasti"] += (Number(s.rezanjeMin) || 0) + (Number(s.pripremaMin) || 0); });
-    let rnBrojac = parseInt(sljedeciBrojRadnogNaloga(db.radniNalozi, noviProjekt.sifra).split("/").pop(), 10);
-    const sljedeciRnBroj = () => `${noviProjekt.sifra}/${rnBrojac++}`;
-    const noviNalozi = [];
-    [{ tip: "cijevni", faza: "Laser za profile" }, { tip: "plocasti", faza: "Laser za limove" }].forEach(({ tip, faza }) => {
-      const sati = Math.round((minPoTipu[tip] / 60) * 100) / 100;
-      if (sati <= 0) return;
-      noviProjekt.faze[faza] = sati;
-      noviNalozi.push({
-        id: uid("rn"), broj: sljedeciRnBroj(), projektId: noviProjekt.id,
-        naziv: noviProjekt.naziv, faza, zaduzenTim: "", status: "Planiran",
-        planiranoSati: sati, utrosenoSati: 0, datumPocetka: todayISO(), datumZavrsetka: addDays(todayISO(), 14),
-        stavke: [], materijalIzdan: false,
-      });
-    });
+    const noviNalozi = naloziIzPlana(plan, noviProjekt, noviProjekt.naziv);
     patchProjekti([noviProjekt], []);
     update("radniNalozi", [...db.radniNalozi, ...noviNalozi]);
     update("ponudeLasera", db.ponudeLasera.map((p) => (p.id === ponuda.id ? { ...p, projektId: noviProjekt.id } : p)));
     showToast(`Projekt ${noviProjekt.sifra} kreiran${noviNalozi.length ? ` s ${noviNalozi.length} radnih naloga` : ""}.`);
     if (imaModulProjekti) setPage("projekti");
   };
+
+  // Pridruživanje prihvaćene ponude POSTOJEĆEM aktivnom projektu (dodatak umjesto novog projekta): poslužitelj PRIBRAJA vrijednost, planirane sate,
+  // pozicije/materijal/ostale stavke na aktualni zapis projekta i u istoj transakciji upisuje vezu na ponudi; ovdje se još otvaraju NOVI radni nalozi
+  // (nastavljaju brojeve projekta, u nazivu je broj ponude) pa se postojeći nalozi i već upisani sati ne diraju.
+  const [pridruzivanje, setPridruzivanje] = useState(null); // { ponuda, tip: "standard"|"laser", projektId, radim }
+  const pridruziPonuduPostojecem = async () => {
+    const { ponuda, tip, projektId } = pridruzivanje;
+    const projekt = db.projekti.find((p) => p.id === projektId);
+    if (!projekt) { showToast("Odaberi projekt."); return; }
+    const plan = planIzPonude(ponuda, tip === "laser");
+    setPridruzivanje((s) => (s ? { ...s, radim: true } : s));
+    const res = await pridruziPonudu(projekt.id, ponuda.id, tip, { vrijednost: plan.vrijednost, faze: plan.faze, pozicije: plan.pozicije, materijalStavke: plan.materijalStavke, ostaleStavke: plan.ostaleStavke });
+    if (!res.ok) { setPridruzivanje((s) => (s ? { ...s, radim: false } : s)); showToast(res.greska); return; }
+    const noviNalozi = naloziIzPlana(plan, projekt, `${String(projekt.naziv || "").trim()} — dodatak ${ponuda.broj}`, ponuda.broj);
+    if (noviNalozi.length) update("radniNalozi", [...db.radniNalozi, ...noviNalozi]);
+    setPridruzivanje(null);
+    showToast(`Ponuda ${ponuda.broj} pridružena projektu ${projekt.sifra}: +${fmtCur(plan.vrijednost)}${noviNalozi.length ? `, ${noviNalozi.length} novih radnih naloga` : ""}.`);
+  };
+  // Gumbi uz prihvaćenu ponudu bez projekta: novi projekt ili dodatak postojećem (tip: "standard" | "laser").
+  const gumbiPrihvacene = (r, tip) => (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      <Btn size="sm" icon={FolderInput} onClick={() => setPretvorba({ ponuda: r, tip, broj: "", naziv: r.naziv })}>Pretvori u projekt</Btn>
+      <Btn size="sm" variant="ghost" onClick={() => setPridruzivanje({ ponuda: r, tip, projektId: "", radim: false })}>Pridruži postojećem</Btn>
+    </div>
+  );
 
   const potvrdiPretvorbu = () => {
     const sifra = pretvorba.broj.trim();
@@ -11417,7 +11450,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
     if (!sifra) { showToast("Upiši broj naloga."); return; }
     if (!naziv) { showToast("Upiši naziv projekta."); return; }
     if (db.projekti.some((p) => p.sifra.trim().toLowerCase() === sifra.toLowerCase())) { showToast(`Broj naloga ${sifra} je već iskorišten na drugom projektu.`); return; }
-    const { izvorPonudaId, izvorPonudaLaseraId, poredak, planStatus, autoZavrsenoNalozi, statusPrijeZavrsetka, zavrsenDatum, vanjskiTroskovi, mapa, ...sadrzaj } = JSON.parse(JSON.stringify(izvor));
+    const { izvorPonudaId, izvorPonudaLaseraId, pridruzenePonude, poredak, planStatus, autoZavrsenoNalozi, statusPrijeZavrsetka, zavrsenDatum, vanjskiTroskovi, mapa, ...sadrzaj } = JSON.parse(JSON.stringify(izvor));
     const bezVezeNaNarudzbu = (stavke) => (stavke || []).map(({ izNarudzbeId, ...s }) => s);
     const noviProjekt = {
       ...sadrzaj,
@@ -11539,7 +11572,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
             {
               key: "akcija", label: "", render: (r) =>
                 r.projektId && db.projekti.some((p) => p.id === r.projektId) ? <span style={{ fontSize: 11, color: "var(--green)" }}>→ {projSifra(r.projektId)}</span>
-                : r.status === "Prihvaćena" ? <Btn size="sm" icon={FolderInput} onClick={() => setPretvorba({ ponuda: r, tip: "standard", broj: "", naziv: r.naziv })}>Pretvori u projekt</Btn>
+                : r.status === "Prihvaćena" ? gumbiPrihvacene(r, "standard")
                 : null
             },
           ]}
@@ -11565,7 +11598,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
             {
               key: "akcija", label: "", render: (r) =>
                 r.projektId && db.projekti.some((p) => p.id === r.projektId) ? <span style={{ fontSize: 11, color: "var(--green)" }}>→ {projSifra(r.projektId)}</span>
-                : r.status === "Prihvaćena" ? <Btn size="sm" icon={FolderInput} onClick={() => setPretvorba({ ponuda: r, tip: "laser", broj: "", naziv: r.naziv })}>Pretvori u projekt</Btn>
+                : r.status === "Prihvaćena" ? gumbiPrihvacene(r, "laser")
                 : null
             },
           ]}
@@ -11760,6 +11793,48 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
           <p style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Broj naloga je šifra pod kojom će se voditi projekt i svi njegovi radni nalozi (npr. RN 170-322/1, /2, …) — upiši ga po vašoj uobičajenoj numeraciji.</p>
         </Modal>
       )}
+      {pridruzivanje && (() => {
+        const { ponuda, tip, projektId, radim } = pridruzivanje;
+        const poSifri = (a, b) => String(a.sifra || "").localeCompare(String(b.sifra || ""), "hr", { numeric: true });
+        const aktivni = db.projekti.filter((p) => !["Završen", "Otkazan"].includes(p.status));
+        const istiKupac = aktivni.filter((p) => p.kupacId === ponuda.kupacId).sort(poSifri);
+        const ostali = aktivni.filter((p) => p.kupacId !== ponuda.kupacId).sort(poSifri);
+        const projekt = aktivni.find((p) => p.id === projektId) || null;
+        const plan = projekt ? planIzPonude(ponuda, tip === "laser") : null;
+        const prviBroj = projekt ? parseInt(sljedeciBrojRadnogNaloga(db.radniNalozi, projekt.sifra).split("/").pop(), 10) : 0;
+        const poFazama = plan ? Object.entries(plan.faze).filter(([, v]) => Number(v) > 0) : [];
+        const ukupnoSati = poFazama.reduce((s, [, v]) => s + Number(v), 0);
+        const opcija = (p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>;
+        return (
+          <Modal title="Pridruži ponudu postojećem projektu" onClose={() => { if (!radim) setPridruzivanje(null); }}
+            footer={<>
+              <Btn onClick={() => setPridruzivanje(null)} disabled={radim}>Odustani</Btn>
+              <Btn variant="primary" icon={FolderInput} disabled={!projekt || radim} onClick={pridruziPonuduPostojecem}>{radim ? "Pridružujem…" : "Pridruži projektu"}</Btn>
+            </>}>
+            <p style={{ fontSize: 12.5, marginTop: 0 }}>Ponuda <strong className="f-mono">{ponuda.broj}</strong> — {ponuda.naziv} ({kupacNaziv(ponuda.kupacId)}) postaje dodatak odabranom aktivnom projektu, umjesto da se otvara novi projekt.</p>
+            <Field label="Projekt">
+              <select className="select" value={projektId || ""} onChange={(e) => setPridruzivanje({ ...pridruzivanje, projektId: e.target.value })}>
+                <option value="">— odaberi projekt —</option>
+                {istiKupac.length > 0 && <optgroup label="Isti kupac">{istiKupac.map(opcija)}</optgroup>}
+                {ostali.length > 0 && <optgroup label="Ostali aktivni projekti">{ostali.map(opcija)}</optgroup>}
+              </select>
+            </Field>
+            {projekt && plan && (
+              <div className="card" style={{ padding: "10px 12px", fontSize: 12.5, marginTop: 4 }}>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Što se dodaje projektu {projekt.sifra}</div>
+                <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.6 }}>
+                  <li>Vrijednost: <span className="f-mono">{fmtCur(projekt.vrijednost)}</span> → <strong className="f-mono">{fmtCur((Number(projekt.vrijednost) || 0) + plan.vrijednost)}</strong> (+{fmtCur(plan.vrijednost)})</li>
+                  <li>Planirani sati: +{fmtSatiPonude(ukupnoSati)} h{poFazama.length ? ` (${poFazama.map(([f, v]) => `${nazivFaze(f)} ${fmtSatiPonude(v)} h`).join(", ")})` : ""}</li>
+                  <li>Novi radni nalozi: {plan.nalozi.length ? `${plan.nalozi.length} (${projekt.sifra}/${prviBroj}${plan.nalozi.length > 1 ? ` – ${projekt.sifra}/${prviBroj + plan.nalozi.length - 1}` : ""})` : "nema (ponuda nema planiranih sati)"}</li>
+                  {plan.pozicije.length > 0 && <li>Pozicije iz ponude: +{plan.pozicije.length}</li>}
+                  {plan.planiraniMaterijal > 0 && <li>Planirani materijal iz ponude: +{plan.planiraniMaterijal} stavki</li>}
+                </ul>
+                <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>Postojeći radni nalozi i već upisani sati ostaju nedirnuti; za dodatak se otvaraju novi radni nalozi s brojem ponude u nazivu. Ponuda ostaje prihvaćena i povezana s ovim projektom.</div>
+              </div>
+            )}
+          </Modal>
+        );
+      })()}
       {kopija && (() => {
         const brojNaloga = db.radniNalozi.filter((r) => r.projektId === kopija.izvor.id).length;
         const brojZadataka = (kopija.izvor.zadaci || []).length;
@@ -11833,8 +11908,9 @@ function ZavrsenProjektAnalizaModal({ projekt, db, onClose }) {
   const ukPlanirano = poFazi.reduce((s, r) => s + r.planirano, 0);
   const ukStvarno = poFazi.reduce((s, r) => s + r.stvarno, 0);
 
-  const ponuda = projekt.izvorPonudaId ? db.ponude.find((p) => p.id === projekt.izvorPonudaId) : null;
-  const planiranoMaterijal = ponuda ? izracunPonude(ponuda, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala).trosakMaterijala : null;
+  // Planirani materijal = zbroj iz izvorne ponude i pridruženih (dodatnih) standardnih ponuda; ponude za laser nemaju materijala iz kalkulacije.
+  const ponudeProjekta = [projekt.izvorPonudaId, ...(projekt.pridruzenePonude || []).filter((x) => x.tip !== "laser").map((x) => x.id)].filter(Boolean).map((id) => db.ponude.find((p) => p.id === id)).filter(Boolean);
+  const planiranoMaterijal = ponudeProjekta.length ? ponudeProjekta.reduce((s, po) => s + izracunPonude(po, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala).trosakMaterijala, 0) : null;
 
   const izdatniceZaProjekt = (db.izdatnice || []).filter((i) => i.projektId === projekt.id);
   const stvarnoMaterijal = izdatniceZaProjekt.reduce((s, izd) => s + (izd.stavke || []).reduce((s2, st) => {
@@ -14387,8 +14463,13 @@ function izracunProjekcije(db, { od, doMjeseca, danas, trosakSata, materijalPost
   const sata = Number(trosakSata) || 0;
   const izracunPon = (pon) => izracunPonude(pon, db.materijali, db.cjenikRada, db.katalogProfila, db.kvaliteteMaterijala);
   const udioMaterijala = (p) => {
-    const pon = p.izvorPonudaId && ponudaPoId.get(p.izvorPonudaId);
-    if (pon) { const c = izracunPon(pon); if (c.cijenaKonacna > 0) return { udio: c.trosakMaterijala / c.cijenaKonacna, izvorMaterijala: `ponuda ${pon.broj}` }; }
+    // Izvorna ponuda i pridružene standardne ponude (dodatak projektu): udio materijala = zbroj materijala / zbroj cijena tih ponuda.
+    const pons = [p.izvorPonudaId, ...(p.pridruzenePonude || []).filter((x) => x.tip !== "laser").map((x) => x.id)].filter(Boolean).map((id) => ponudaPoId.get(id)).filter(Boolean);
+    if (pons.length) {
+      const c = pons.map(izracunPon);
+      const cijena = c.reduce((s, x) => s + x.cijenaKonacna, 0);
+      if (cijena > 0) return { udio: c.reduce((s, x) => s + x.trosakMaterijala, 0) / cijena, izvorMaterijala: `ponuda ${pons.map((x) => x.broj).join(" + ")}` };
+    }
     return { udio: (Number(materijalPostotak) || 0) / 100, izvorMaterijala: "postotak" };
   };
 
