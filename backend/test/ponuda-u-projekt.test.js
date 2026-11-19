@@ -18,6 +18,7 @@ const seed = {
     { id: "p2", sifra: "RN 99-02", naziv: "Završeni", status: "Završen", vrijednost: 500, faze: {} },
     { id: "p3", sifra: "RN 99-03", naziv: "Otkazani", status: "Otkazan", vrijednost: 500, faze: {} },
     { id: "p4", sifra: "RN 99-04", naziv: "Drugi aktivni", status: "Odobren", vrijednost: 200 },
+    { id: "p5", sifra: "RN 99-05", naziv: "Arhivirani", status: "Arhiviran", vrijednost: 300, faze: {} },
   ],
   ponude: [
     pon("o1", "PON-2026-901"),
@@ -27,6 +28,7 @@ const seed = {
     pon("o5", "PON-2026-905"),
   ],
   ponudeLasera: [pon("l1", "LAS-2026-901")],
+  cmr: [{ id: "c1", broj: "CMR-14-10-1/26", projektId: "p1", datum: "2026-10-14" }],
 };
 const mapa = fs.mkdtempSync(path.join(os.tmpdir(), "erp-test-pup-"));
 const seedPutanja = path.join(mapa, "seed.json");
@@ -99,6 +101,8 @@ const provjeri = (naziv, uvjet, detalj) => { (uvjet ? ok++ : lose++); console.lo
   console.log("\n— Odbijanja");
   r = await pridruzi("p2", { ponudaId: "o5", tip: "standard", dodatak: dodatak() });
   provjeri("  završen projekt → 409", r.s === 409, `HTTP ${r.s}`);
+  r = await pridruzi("p5", { ponudaId: "o5", tip: "standard", dodatak: dodatak() });
+  provjeri("  arhiviran projekt → 409 uz objašnjenje", r.s === 409 && /arhiviran/.test(r.j?.error || ""), `HTTP ${r.s} ${r.j?.error}`);
   r = await pridruzi("p3", { ponudaId: "o5", tip: "standard", dodatak: dodatak() });
   provjeri("  otkazan projekt → 409", r.s === 409, `HTTP ${r.s}`);
   provjeri("  ponuda o5 ostaje slobodna", (await ponude()).find((x) => x.id === "o5")?.projektId === null);
@@ -124,6 +128,10 @@ const provjeri = (naziv, uvjet, detalj) => { (uvjet ? ok++ : lose++); console.lo
     provjeri(`  ${naziv} → 400`, r.s === 400, `HTTP ${r.s} ${r.j?.error || ""}`);
   }
   provjeri("  projekt nepromijenjen, ponuda o5 slobodna", JSON.stringify(await projekt("p1")) === prije && (await ponude()).find((x) => x.id === "o5")?.projektId === null);
+
+  console.log("\n— Rokovi i statusi: isporuke");
+  r = await h("GET", "/api/data/cmr", undefined, A);
+  provjeri("  pozicija s modulom Projekti čita CMR (prijedlog statusa po isporuci)", r.s === 200 && Array.isArray(r.j) && r.j.length === 1, `HTTP ${r.s}`);
 
   console.log("\n— Ovlasti");
   r = await pridruzi("p1", { ponudaId: "o5", tip: "standard", dodatak: dodatak() }, B);

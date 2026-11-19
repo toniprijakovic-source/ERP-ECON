@@ -129,7 +129,7 @@ const KARTICE_MODULA = {
   // Projekti i Ponude su od 2026-10 zasebni moduli (prije jedan "Projekti i ponude"), kao i
   // Otpremnice i CMR naspram Financija (prije jedan "Otpremnice i fakturiranje").
   projekti: {
-    projekti: { citanje: ["cjenikRada", "katalogProfila", "kupci", "materijali", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "zaposlenici", "upitiNabave", "kvaliteteMaterijala", "narudzbenice", "dobavljaci", "narudzbeTransporta"], pisanje: ["projekti", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "materijali", "radniNalozi", "upitiNabave"] },
+    projekti: { citanje: ["cjenikRada", "katalogProfila", "kupci", "materijali", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "zaposlenici", "upitiNabave", "kvaliteteMaterijala", "narudzbenice", "dobavljaci", "narudzbeTransporta", "cmr"], pisanje: ["projekti", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "materijali", "radniNalozi", "upitiNabave"] },
     zavrseni: { citanje: ["projekti", "radniNalozi", "kupci", "narudzbe"], pisanje: [] },
     // Popis potvrda narudžbe (Auftragsbestätigung) — potvrda se sprema na narudžbu kupca.
     potvrde: { citanje: ["narudzbe", "projekti", "kupci", "zaposlenici", "postavkeTvrtke"], pisanje: ["narudzbe"] },
@@ -933,7 +933,7 @@ app.put("/api/projekti/:id/patch", autentikacija, async (req, res) => {
 // "Pretvori u projekt"), a OVDJE se PRIBRAJA na zaključani, aktualni zapis projekta — ne zamjenjuje ga. Tako dva istodobna pridruživanja na
 // zastarjelim kopijama preglednika ne mogu jedno drugom pregaziti vrijednost ili sate, a ista ponuda ne može dvaput ući u projekt.
 // Radne naloge i vezu na ponudi (projektId) preglednik zatim sprema svojim ciljanim rutama (kao pri pretvorbi u projekt).
-const ZATVORENI_STATUSI_PROJEKTA = ["Završen", "Otkazan"];
+const ZATVORENI_STATUSI_PROJEKTA = ["Završen", "Arhiviran", "Otkazan"];
 const ZABRANJENI_KLJUCEVI_FAZA = new Set(["__proto__", "constructor", "prototype"]);
 const zaokruzi2Dodatak = (n) => Math.round(n * 100) / 100;
 const greskaDodatka = (status, poruka) => Object.assign(new Error(poruka), { httpStatus: status });
@@ -972,7 +972,7 @@ function provjeriPonuduZaPridruzivanje(ponuda, projekti) {
 // Novi zapis projekta s pribrojenim dodatkom (ulazni projekt se ne mijenja). tip: "standard" | "laser".
 function pridruziPonuduProjektu(projekt, ponuda, tip, dodatakIzZahtjeva, { danas, zaposlenikId } = {}) {
   if (!projekt) throw greskaDodatka(404, "Projekt nije pronađen.");
-  if (ZATVORENI_STATUSI_PROJEKTA.includes(projekt.status)) throw greskaDodatka(409, `Projekt ${projekt.sifra} je ${projekt.status === "Završen" ? "završen" : "otkazan"} — ponuda se može pridružiti samo aktivnom projektu.`);
+  if (ZATVORENI_STATUSI_PROJEKTA.includes(projekt.status)) throw greskaDodatka(409, `Projekt ${projekt.sifra} je ${{ "Završen": "završen", "Arhiviran": "arhiviran" }[projekt.status] || "otkazan"} — ponuda se može pridružiti samo aktivnom projektu.`);
   if ((projekt.pridruzenePonude || []).some((p) => p.id === ponuda.id) || projekt.izvorPonudaId === ponuda.id || projekt.izvorPonudaLaseraId === ponuda.id) {
     throw greskaDodatka(409, `Ponuda ${ponuda.broj} je već u projektu ${projekt.sifra}.`);
   }

@@ -16,6 +16,8 @@ import { razlikaProgramaRezanja } from "./programiRezanjaPatch";
 import { cjenikZaPonudu, prilagodjeneSatnice, postotakPopustaPonude, primijeniPopust, tekstPostotka } from "./ponudaCijena";
 import { prefiksGodine, sljedeciBroj, sljedeciBrojUpita } from "./brojeviDokumenata";
 import { praznikaZaDodati, praznikaIzvanZakona, imaPraznikeGodine } from "./praznici";
+import { STATUSI_PROJEKTA, projektDovrsen, projektAktivan, projektPrimaDokumente, prijelazStatusa } from "./statusProjekta";
+import { RAZLOZI_POMAKA_ROKA, analizaRokova, kasneProjekti, zapisPromjeneRoka, dodajPromjenuRoka } from "./rokoviProjekata";
 import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, ogranicenjeStavke, pocetnaKolicina, visakStavke, zatvoriIsporuke, vratiZatvoreneIsporuke } from "./otpremniceKontrola";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
 
@@ -1288,7 +1290,7 @@ const STATUS_TONE = {
   "Poslano": "info", "Poslana": "info", "Odobren": "info",
   "Djelomično primljeno": "warning", "U izradi": "warning", "Montaža": "warning",
   "U tijeku": "warning", "Pauziran": "warning", "Djelomično plaćeno": "warning",
-  "Primljeno": "success", "Prevezeno": "success", "Završen": "success", "Prihvaćena": "success", "Plaćeno": "success",
+  "Primljeno": "success", "Prevezeno": "success", "Završen": "success", "Arhiviran": "muted", "Prihvaćena": "success", "Plaćeno": "success",
   "Otkazan": "danger", "Odbijena": "danger", "Kasni": "danger",
   "Aktivan": "success", "Neaktivan": "muted",
   "Čeka": "muted", "Obrada": "warning", "Valjano": "success", "Nevaljano": "danger", "Greška": "danger", "Otkazano": "muted", "Gotovo": "success",
@@ -1917,7 +1919,7 @@ const KARTICE_MODULA = {
   kontrola: { kartice: [{ key: "maticna", naziv: "Matična knjiga" }, { key: "ugradeni", naziv: "Ugrađeni materijal" }] },
   nabava: { kartice: [{ key: "narudzbenice", naziv: "Narudžbenice" }, { key: "upiti", naziv: "Upiti materijala" }, { key: "postavke", naziv: "Postavke tvrtke" }] },
   proizvodnja: { kartice: [{ key: "tablica", naziv: "Tablica" }, { key: "gantogram", naziv: "Plan proizvodnje" }, { key: "rezanje", naziv: "Plan rezanja" }, { key: "isporuke", naziv: "Isporuke kupaonica" }] },
-  projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "potvrde", naziv: "Potvrde narudžbe" }, { key: "zavrseni", naziv: "Završeni projekti" }] },
+  projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "potvrde", naziv: "Potvrde narudžbe" }, { key: "zavrseni", naziv: "Arhivirani projekti" }] },
   ponude: { kartice: [{ key: "ponude", naziv: "Ponude" }, { key: "laser", naziv: "Ponude - Laser" }] },
   otpremnice: { kartice: [{ key: "otpremnice", naziv: "Otpremnice" }, { key: "cmr", naziv: "CMR" }, { key: "statistika", naziv: "Statistika isporuka" }] },
   fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "podloge", naziv: "Podloge za fakturu" }, { key: "fakturirano", naziv: "Fakturirano po mjesecima" }, { key: "xrechnung", naziv: "XRechnung" }, { key: "nedovrsena", naziv: "Nedovršena proizvodnja" }, { key: "analiza", naziv: "Analiza projekata" }, { key: "produktivnost", naziv: "Produktivnost (kg/h)" }, { key: "projekcija", naziv: "Projekcija" }] },
@@ -3065,7 +3067,10 @@ function Dashboard({ db, update, showToast, setPage, otvoriProjekt, mojId, mojaP
   const [noviSlobodni, setNoviSlobodni] = useState({ naziv: "", datum: "", kome: "" });
   const aktivniProjekti = db.projekti.filter((p) => ["U izradi", "Montaža"].includes(p.status));
   const radniNaloziUTijeku = db.radniNalozi.filter((r) => r.status === "U tijeku");
-  const uskoroRokovi = db.projekti.filter((p) => !["Završen", "Otkazan"].includes(p.status) && daysUntil(p.rokZavrsetka) <= 30 && daysUntil(p.rokZavrsetka) >= 0).sort((a, b) => daysUntil(a.rokZavrsetka) - daysUntil(b.rokZavrsetka));
+  const uskoroRokovi = db.projekti.filter((p) => projektAktivan(p) && daysUntil(p.rokZavrsetka) <= 30 && daysUntil(p.rokZavrsetka) >= 0).sort((a, b) => daysUntil(a.rokZavrsetka) - daysUntil(b.rokZavrsetka));
+  // Projekti koji već kasne (rok prošao, a nisu Završen/Arhiviran) i oni koji čekaju konačni obračun — ranije se nisu vidjeli nigdje.
+  const kasniProjekti = kasneProjekti(db.projekti, todayISO());
+  const cekaObracunProjekata = db.projekti.filter((p) => p.status === "Završen");
 
   // Zadaci dodijeljeni MENI, na bilo kojem projektu, koji još nisu izvršeni — čim ih netko
   // označi izvršenima, nestaju odavde (nema arhive na nadzornoj ploči).
@@ -3266,17 +3271,25 @@ function Dashboard({ db, update, showToast, setPage, otvoriProjekt, mojId, mojaP
         <div className="card" style={{ padding: 16 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
             <Clock size={15} color="var(--steel)" />
-            <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600 }}>Rokovi projekata (30 dana)</h3>
+            <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600 }}>Rokovi projekata</h3>
           </div>
-          {uskoroRokovi.length === 0 ? <EmptyState text="Nema nadolazećih rokova." /> : (
+          {uskoroRokovi.length === 0 && kasniProjekti.length === 0 ? <EmptyState text="Nema nadolazećih rokova." /> : (
             <table className="erp-table">
               <thead><tr><th>Projekt</th><th>Rok</th><th>Preostalo</th></tr></thead>
               <tbody>
+                {kasniProjekti.map(({ projekt: p, danaKasni }) => (
+                  <tr key={p.id} onClick={() => otvoriProjekt(p.id)} style={{ cursor: "pointer" }} title="Otvori projekt (Rokovi i statusi)"><td>{p.naziv}</td><td className="f-mono">{fmtDate(p.rokZavrsetka)}</td><td className="f-mono" style={{ color: "var(--rust)", fontWeight: 600 }}>kasni {danaKasni} d.</td></tr>
+                ))}
                 {uskoroRokovi.map((p) => (
                   <tr key={p.id}><td>{p.naziv}</td><td className="f-mono">{fmtDate(p.rokZavrsetka)}</td><td className="f-mono">{daysUntil(p.rokZavrsetka)} d.</td></tr>
                 ))}
               </tbody>
             </table>
+          )}
+          {cekaObracunProjekata.length > 0 && (
+            <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--line)" }}>
+              Čeka konačni obračun: <strong>{cekaObracunProjekata.length}</strong> {(() => { const n = cekaObracunProjekata.length; return n % 10 === 1 && n % 100 !== 11 ? "projekt" : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? "projekta" : "projekata"; })()} ({fmtCur(cekaObracunProjekata.reduce((a, p) => a + (Number(p.vrijednost) || 0), 0))}) — popis je u Projekti → Rokovi i statusi.
+            </div>
           )}
         </div>
 
@@ -3892,7 +3905,7 @@ function RezervacijeMaterijalaModal({ materijal, db, update, showToast, mozeMije
   };
   const promijeniKolicinu = (id, v) => { const k = Number(String(v).replace(",", ".")); if (!(k > 0)) return; update("rezervacije", sve.map((r) => (r.id === id ? { ...r, kolicina: k } : r))); };
   const ukloni = (id) => update("rezervacije", sve.filter((r) => r.id !== id));
-  const aktivni = db.projekti.filter((p) => !["Završen", "Otkazan"].includes(p.status));
+  const aktivni = db.projekti.filter((p) => projektAktivan(p));
   return (
     <Modal wide title={`Rezervacije — ${formatSifre(materijal.sifra)} ${materijal.naziv}`} onClose={onClose} footer={<Btn onClick={onClose}>Zatvori</Btn>}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 14 }}>
@@ -4859,8 +4872,8 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne }) {
 // količine (ograničene na trenutno stanje), stvara se Izdatnica koja se poslije može ispisati i
 // dati u proizvodnju; povrat ostatka rješava se posebno kroz ZaprimiPovratModal.
 function IzdatnicaModal({ db, update, showToast, initialMaterijalId, onClose, onCreated }) {
-  // Projekti za koje je odabrani materijal rezerviran idu prvi; završeni/otkazani projekti se ne nude.
-  const aktualniProjekti = db.projekti.filter((p) => !["Završen", "Otkazan"].includes(p.status));
+  // Projekti za koje je odabrani materijal rezerviran idu prvi; arhivirani/otkazani projekti se ne nude (Završen — čeka obračun — se nudi).
+  const aktualniProjekti = db.projekti.filter(projektPrimaDokumente);
   const rezerviraniZa = (materijalIds) => {
     const m = new Map();
     (db.rezervacije || []).filter((r) => materijalIds.includes(r.materijalId)).forEach((r) => m.set(r.projektId, (m.get(r.projektId) || 0) + (Number(r.kolicina) || 0)));
@@ -5983,7 +5996,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
             </Field>
           </div>
           <Field label="Stavke narudžbe">
-            <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} dozvoliKatalog kvalitete={db.kvaliteteMaterijala} projekti={db.projekti.filter((p) => !["Završen", "Otkazan"].includes(p.status) || form.stavke.some((st) => st.projektId === p.id))} />
+            <LineItemsEditor mode="materijal" rows={form.stavke} setRows={(rows) => setForm({ ...form, stavke: rows })} materijali={db.materijali} katalog={db.katalogProfila} narudzbenice={db.narudzbenice} dozvoliKatalog kvalitete={db.kvaliteteMaterijala} projekti={db.projekti.filter((p) => projektPrimaDokumente(p) || form.stavke.some((st) => st.projektId === p.id))} />
           </Field>
           {form.id && (() => { const spremljena = db.narudzbenice.find((x) => x.id === form.id); return spremljena ? <NaruceneCijenePanel narudzbenica={spremljena} db={db} /> : null; })()}
           <Field label="Napomena"><textarea className="textarea" rows={2} value={form.napomena} onChange={(e) => setForm({ ...form, napomena: e.target.value })} /></Field>
@@ -6213,7 +6226,7 @@ function izracunajPlanProizvodnje({ db, normativ, poProjektima, odsutnosti, dana
   radnici.forEach((r) => r.komp.forEach((k) => { brojPoKomp[k] = (brojPoKomp[k] || 0) + 1; }));
   radnici.forEach((r) => { r.vrijednost = [...r.komp].reduce((a, k) => a + 1 / brojPoKomp[k], 0); });
 
-  const aktivni = (db.projekti || []).filter((p) => !["Završen", "Otkazan"].includes(p.status));
+  const aktivni = (db.projekti || []).filter((p) => projektAktivan(p));
   const naCekanju = aktivni.filter((p) => p.planStatus === "cekanje");
   const uPlanu = aktivni.filter((p) => p.planStatus !== "cekanje");
   const poslovi = [];
@@ -6420,7 +6433,7 @@ function PlanProizvodnjeView({ db, update, patchProjekt, showToast, mozeMijenjat
   if (!plan) return <EmptyState text="Računam plan proizvodnje…" />;
   const tabovi = [
     { key: "projekt", naziv: "Po projektu" },
-    { key: "aktivni", naziv: `Aktivni projekti (${db.projekti.filter((p) => !["Završen", "Otkazan"].includes(p.status)).length})` },
+    { key: "aktivni", naziv: `Aktivni projekti (${db.projekti.filter((p) => projektAktivan(p)).length})` },
     { key: "opterecenje", naziv: "Opterećenje i smjene" },
     { key: "danas", naziv: "Danas – unos" },
     { key: "bezFaza", naziv: `Projekti bez faza (${plan.bezFaza.length})` },
@@ -6448,7 +6461,7 @@ function PlanProizvodnjeView({ db, update, patchProjekt, showToast, mozeMijenjat
 function PlanAktivniProjekti({ db, podaci, otvoriProjekt }) {
   const pregled = podaci?.projektiPregled || {};
   const lista = useMemo(() => {
-    const aktivni = db.projekti.filter((p) => !["Završen", "Otkazan"].includes(p.status));
+    const aktivni = db.projekti.filter((p) => projektAktivan(p));
     const imaRucniPoredak = db.projekti.some((p) => p.poredak != null);
     return aktivni.sort(imaRucniPoredak ? (a, b) => (a.poredak ?? Infinity) - (b.poredak ?? Infinity) : (a, b) => usporediPrirodno(a.sifra, b.sifra));
   }, [db.projekti]);
@@ -6941,7 +6954,7 @@ function PlanDanasUnos({ plan, db, update, patchProjekt, showToast, mozeMijenjat
   const upisano = redovi.reduce((s, r) => s + r.uBroj, 0);
   const poPlanuUkupno = [...poPlanuDanas.values()].reduce((s, v) => s + v.sati, 0);
   const kupDanas = plan.poslovi.filter((p) => p.tip === "kupaonice").reduce((s, p) => s + p.faze.reduce((a, f) => a + (f.dani[datum]?.sati || 0), 0), 0);
-  const ponudaZaDodati = db.radniNalozi.filter((n) => n.status !== "Završen" && !idsRedova.includes(n.id) && !PLAN_IZVAN_KAPACITETA.has(n.faza) && projektPoId.get(n.projektId) && !projektPoId.get(n.projektId).koristiNormativ && !["Završen", "Otkazan"].includes(projektPoId.get(n.projektId).status)).sort((a, b) => usporediPrirodno(a.broj, b.broj));
+  const ponudaZaDodati = db.radniNalozi.filter((n) => n.status !== "Završen" && !idsRedova.includes(n.id) && !PLAN_IZVAN_KAPACITETA.has(n.faza) && projektPoId.get(n.projektId) && !projektPoId.get(n.projektId).koristiNormativ && projektAktivan(projektPoId.get(n.projektId))).sort((a, b) => usporediPrirodno(a.broj, b.broj));
 
   const spremi = () => {
     if (promijenjeni.length === 0) { showToast("Nema promjena za spremiti."); return; }
@@ -7096,7 +7109,7 @@ function StalniPosloviDanas({ db, update, datum, showToast, mozeMijenjati }) {
     const redovi = sati.filter((s) => s.radniNalogId === p.id && s.datum === datum && !s.zaposlenikId && s.izvor === "plan").map((s) => ({ sati: String(s.sati), projektId: s.projektId || "" }));
     return [p.id, redovi.length ? redovi : [prazanRed()]];
   })));
-  const projekti = [...db.projekti].filter((p) => !["Završen", "Otkazan"].includes(p.status)).sort((a, b) => String(b.sifra).localeCompare(String(a.sifra), "hr", { numeric: true }));
+  const projekti = [...db.projekti].filter((p) => projektAktivan(p)).sort((a, b) => String(b.sifra).localeCompare(String(a.sifra), "hr", { numeric: true }));
   const postavi = (id, i, patch) => setUnos((u) => ({ ...u, [id]: u[id].map((r, idx) => (idx === i ? { ...r, ...patch } : r)) }));
   const dodaj = (id) => setUnos((u) => ({ ...u, [id]: [...u[id], prazanRed()] }));
   const ukloni = (id, i) => setUnos((u) => ({ ...u, [id]: u[id].length > 1 ? u[id].filter((_, idx) => idx !== i) : [prazanRed()] }));
@@ -7182,7 +7195,7 @@ function PlanBezFaza({ plan, db, update, patchProjekt, showToast, mozeMijenjati 
     setUnos({});
     showToast(`Kreirano ${kreirano} radnih naloga za ${projekata} ${projekata === 1 ? "projekt" : "projekta"} — projekti su ušli u plan.`);
   };
-  const kupaonice = db.projekti.filter((p) => p.koristiNormativ && !["Završen", "Otkazan"].includes(p.status));
+  const kupaonice = db.projekti.filter((p) => p.koristiNormativ && projektAktivan(p));
   const sortirani = [...plan.bezFaza].sort((a, b) => (a.rokZavrsetka || "9999").localeCompare(b.rokZavrsetka || "9999"));
   return (
     <div className="card" style={{ padding: 0 }}>
@@ -10047,6 +10060,11 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
         <div>
           <div style={{ fontSize: 17, fontWeight: 600 }} className="f-display">{projekt.naziv}</div>
           <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>{kupac?.naziv || "—"} · Rok: {fmtDate(projekt.rokPocetka)} – {fmtDate(projekt.rokZavrsetka)}</div>
+          {(projekt.promjeneRoka || []).length > 0 && (() => {
+            const z = projekt.promjeneRoka[projekt.promjeneRoka.length - 1];
+            const svi = projekt.promjeneRoka.map((x) => `${fmtDate(x.datum)}: ${x.stariRok ? fmtDate(x.stariRok) : "—"} → ${fmtDate(x.noviRok)}${x.razlog ? ` (${x.razlog}${x.napomena ? `, ${x.napomena}` : ""})` : ""}`).join("\n");
+            return <div title={svi} style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2, cursor: "help" }}>Rok je pomican {projekt.promjeneRoka.length}× — zadnje {fmtDate(z.datum)}: {z.stariRok ? fmtDate(z.stariRok) : "—"} → {fmtDate(z.noviRok)}{z.razlog ? ` · ${z.razlog}` : ""}</div>;
+          })()}
           {projekt.mapa ? <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2, wordBreak: "break-all" }}>Mapa projekta: <span className="f-mono" style={{ fontSize: 11.5 }}>{projekt.mapa}</span><MapaGumbi putanja={projekt.mapa} /></div>
             : <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>Mapa projekta: <a href={urlMapeProjekta(projekt)} style={{ ...STIL_LINK_GUMBA, textDecoration: "none" }}>Otvori mapu</a> <span style={{ fontSize: 11, color: "var(--ink-faint)" }}>(Econ_{GODINA_MAPA}_Projekti\{projekt.sifra}_…)</span></div>}
           <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2, display: "flex", alignItems: "center", gap: 8 }}>
@@ -11089,7 +11107,148 @@ function ispisiTablicuPdf({ naslov, zaglavlja, redovi, podnozje, podnaslov, nazi
   setTimeout(() => w.print(), 400);
 }
 
-// Jedna stranica za dva modula: "projekti" (Projekti, Završeni projekti) i "ponude" (Ponude,
+// Kartica "Rokovi i statusi" na vrhu popisa projekata: što traži pažnju (projekti koji kasne s rokom, s prijedlogom
+// statusa iz podataka), što čeka konačni obračun (status Završen) i projekti bez roka. Aplikacija samo PREDLAŽE —
+// status i rok mijenja čovjek jednim klikom; svaka promjena roka ostaje zapisana s razlogom.
+function RokoviIStatusiKartica({ analiza, db, mozeMijenjati, mojId, promijeniStatusProjekta, patchProjekt, showToast, otvoriDetalj }) {
+  const [otvoreno, setOtvoreno] = useState(true);
+  const [rokModal, setRokModal] = useState(null); // { projekt, noviRok, razlog, napomena }
+  const { kasne, bezRoka, cekaObracun, ukupnoCekaObracun } = analiza;
+  const ukupno = kasne.length + bezRoka.length + cekaObracun.length;
+  if (!ukupno) return null;
+  const imeZ = (id) => { const z = db.zaposlenici.find((x) => x.id === id); return z ? `${z.ime} ${z.prezime}` : ""; };
+  const naslovProjekta = (p) => <><span className="f-mono" style={{ fontWeight: 600 }}>{p.sifra}</span> <span>{p.naziv}</span></>;
+  const kupac = (p) => db.kupci.find((k) => k.id === p.kupacId)?.naziv || "";
+  const oznaciZavrsen = (red) => {
+    const otvoreni = red.nalozi.ukupno - red.nalozi.zavrseno;
+    if (otvoreni > 0 && !window.confirm(`Projekt ${red.projekt.sifra} ima ${otvoreni} ${otvoreni === 1 ? "otvoreni radni nalog" : "otvorenih radnih naloga"} — označavanjem Završen svi se završavaju (a „Vrati u aktivne" ih vraća). Nastaviti?`)) return;
+    promijeniStatusProjekta(red.projekt, "Završen", `Projekt ${red.projekt.sifra} je Završen — čeka konačni obračun.`);
+  };
+  const otvoriRokModal = (red) => setRokModal({ projekt: red.projekt, noviRok: red.predlozeniRok || "", razlog: "", napomena: "" });
+  const spremiRok = () => {
+    const { projekt, noviRok, razlog, napomena } = rokModal;
+    if (!noviRok) { showToast("Upišite novi rok."); return; }
+    if (noviRok === projekt.rokZavrsetka) { showToast("Novi rok je isti kao stari."); return; }
+    if (!razlog) { showToast("Odaberite razlog promjene roka."); return; }
+    const zapis = zapisPromjeneRoka({ id: uid("rok"), stariRok: projekt.rokZavrsetka, noviRok, razlog, napomena, izmijenioId: mojId, danas: todayISO() });
+    patchProjekt(projekt.id, { rokZavrsetka: noviRok, promjeneRoka: dodajPromjenuRoka(projekt, zapis) });
+    setRokModal(null);
+    showToast(`Rok projekta ${projekt.sifra} je ${fmtDate(noviRok)}.${noviRok < todayISO() ? " Rok je i dalje u prošlosti." : ""}`);
+  };
+  const th = { fontSize: 11, color: "var(--ink-faint)", textAlign: "left", padding: "4px 8px", fontWeight: 600 };
+  const td = { padding: "7px 8px", borderTop: "1px solid var(--line)", verticalAlign: "top", fontSize: 12.5 };
+  const naslovSekcije = (tekst) => <div className="label" style={{ margin: "12px 0 4px" }}>{tekst}</div>;
+  return (
+    <div className="card" style={{ padding: 14, marginBottom: 14, borderLeft: `3px solid ${kasne.length ? "var(--rust)" : "var(--steel)"}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <AlertTriangle size={15} color={kasne.length ? "var(--rust)" : "var(--steel)"} />
+        <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600 }}>Rokovi i statusi</h3>
+        <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+          {[kasne.length ? `${kasne.length} kasni s rokom` : "", cekaObracun.length ? `${cekaObracun.length} čeka obračun` : "", bezRoka.length ? `${bezRoka.length} bez roka` : ""].filter(Boolean).join(" · ")}
+        </span>
+        <Btn size="sm" variant="ghost" style={{ marginLeft: "auto" }} onClick={() => setOtvoreno(!otvoreno)}>{otvoreno ? "Sakrij" : "Prikaži"}</Btn>
+      </div>
+      {otvoreno && (
+        <>
+          {kasne.length > 0 && (
+            <>
+              {naslovSekcije(`Kasne s rokom (${kasne.length})`)}
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr><th style={th}>Projekt</th><th style={th}>Rok</th><th style={th}>Kasni</th><th style={th}>Radni nalozi</th><th style={th}>Isporuka</th><th style={th}></th></tr></thead>
+                  <tbody>
+                    {kasne.map((r) => (
+                      <tr key={r.projekt.id}>
+                        <td style={td}>
+                          {naslovProjekta(r.projekt)}
+                          <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{kupac(r.projekt)} · {r.projekt.status}</div>
+                          <div style={{ fontSize: 11.5, marginTop: 3, color: r.prijedlog ? "var(--steel)" : "var(--ink-soft)" }}>{r.prijedlog ? r.prijedlog.tekst : r.napomena}</div>
+                        </td>
+                        <td style={td} className="f-mono">{fmtDate(r.projekt.rokZavrsetka)}</td>
+                        <td style={{ ...td, color: "var(--rust)", fontWeight: 600 }} className="f-mono">{r.danaKasni} d.</td>
+                        <td style={td} className="f-mono">{r.nalozi.zavrseno}/{r.nalozi.ukupno}</td>
+                        <td style={td}>{r.isporuka.broj ? <span className="f-mono">{r.isporuka.broj}× · {fmtDate(r.isporuka.zadnja)}</span> : <span style={{ color: "var(--ink-faint)" }}>—</span>}</td>
+                        <td style={{ ...td, whiteSpace: "nowrap", textAlign: "right" }}>
+                          {mozeMijenjati && <Btn size="sm" variant={r.prijedlog ? "primary" : "ghost"} onClick={() => oznaciZavrsen(r)}>Završen</Btn>}{" "}
+                          {mozeMijenjati && <Btn size="sm" variant={r.prijedlog ? "ghost" : "primary"} onClick={() => otvoriRokModal(r)}>Novi rok</Btn>}{" "}
+                          <Btn size="sm" variant="ghost" icon={Eye} onClick={() => otvoriDetalj(r.projekt)}>Detalji</Btn>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+          {cekaObracun.length > 0 && (
+            <>
+              {naslovSekcije(`Čeka konačni obračun (${cekaObracun.length}) · ukupno ${fmtCur(ukupnoCekaObracun)}`)}
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr><th style={th}>Projekt</th><th style={th}>Vrijednost</th><th style={th}>Završen</th><th style={th}>Čeka</th><th style={th}></th></tr></thead>
+                  <tbody>
+                    {cekaObracun.map((r) => (
+                      <tr key={r.projekt.id}>
+                        <td style={td}>{naslovProjekta(r.projekt)}<div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{kupac(r.projekt)}</div></td>
+                        <td style={td} className="f-mono">{fmtCur(r.vrijednost)}</td>
+                        <td style={td} className="f-mono">{r.zavrsenDatum ? fmtDate(r.zavrsenDatum) : "—"}</td>
+                        <td style={td} className="f-mono">{r.danaOdZavrsetka != null ? `${r.danaOdZavrsetka} d.` : "—"}</td>
+                        <td style={{ ...td, whiteSpace: "nowrap", textAlign: "right" }}>
+                          {mozeMijenjati && <Btn size="sm" variant="primary" onClick={() => promijeniStatusProjekta(r.projekt, "Arhiviran", `Projekt ${r.projekt.sifra} je arhiviran.`)}>Arhiviraj</Btn>}{" "}
+                          {mozeMijenjati && <Btn size="sm" variant="ghost" onClick={() => promijeniStatusProjekta(r.projekt, r.projekt.statusPrijeZavrsetka || "U izradi", "Projekt vraćen u aktivne.")}>Vrati u aktivne</Btn>}{" "}
+                          <Btn size="sm" variant="ghost" icon={Eye} onClick={() => otvoriDetalj(r.projekt)}>Detalji</Btn>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 4 }}>Završen = posao je gotov, ali konačni obračun još nije napravljen. Kad je obračun gotov, „Arhiviraj" ga seli u karticu Arhivirani projekti.</div>
+            </>
+          )}
+          {bezRoka.length > 0 && (
+            <>
+              {naslovSekcije(`Bez upisanog roka (${bezRoka.length})`)}
+              {bezRoka.map((r) => (
+                <div key={r.projekt.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 8px", borderTop: "1px solid var(--line)", fontSize: 12.5 }}>
+                  <span style={{ flex: 1 }}>{naslovProjekta(r.projekt)} <span style={{ fontSize: 11, color: "var(--ink-faint)" }}>· {r.projekt.status}</span></span>
+                  {mozeMijenjati && <Btn size="sm" variant="ghost" onClick={() => otvoriRokModal(r)}>Postavi rok</Btn>}
+                </div>
+              ))}
+            </>
+          )}
+        </>
+      )}
+      {rokModal && (
+        <Modal title={`Rok projekta ${rokModal.projekt.sifra}`} onClose={() => setRokModal(null)} footer={<><Btn onClick={() => setRokModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremiRok}>Spremi rok</Btn></>}>
+          <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 10 }}>{rokModal.projekt.naziv} · trenutni rok: <strong className="f-mono">{rokModal.projekt.rokZavrsetka ? fmtDate(rokModal.projekt.rokZavrsetka) : "nije upisan"}</strong></div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12 }}>
+            <Field label="Novi rok"><input className="input" type="date" value={rokModal.noviRok} onChange={(e) => setRokModal({ ...rokModal, noviRok: e.target.value })} /></Field>
+            <Field label="Razlog">
+              <select className="select" value={rokModal.razlog} onChange={(e) => setRokModal({ ...rokModal, razlog: e.target.value })}>
+                <option value="">— odaberite razlog —</option>
+                {RAZLOZI_POMAKA_ROKA.map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </Field>
+          </div>
+          <Field label="Napomena (neobavezno)"><input className="input" value={rokModal.napomena} onChange={(e) => setRokModal({ ...rokModal, napomena: e.target.value })} placeholder="npr. kupac čeka odobrenje crteža do 25.11." /></Field>
+          {(rokModal.projekt.promjeneRoka || []).length > 0 && (
+            <>
+              <div className="label" style={{ marginTop: 10 }}>Dosadašnje promjene roka</div>
+              {[...rokModal.projekt.promjeneRoka].reverse().map((z) => (
+                <div key={z.id} style={{ fontSize: 12, padding: "4px 0", borderTop: "1px solid var(--line)" }}>
+                  <span className="f-mono">{fmtDate(z.datum)}</span> · {z.stariRok ? fmtDate(z.stariRok) : "—"} → <strong>{fmtDate(z.noviRok)}</strong>{z.razlog ? ` · ${z.razlog}` : ""}{z.napomena ? ` (${z.napomena})` : ""}{imeZ(z.izmijenioId) ? ` · ${imeZ(z.izmijenioId)}` : ""}
+                </div>
+              ))}
+            </>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// Jedna stranica za dva modula: "projekti" (Projekti, Arhivirani projekti) i "ponude" (Ponude,
 // Ponude - Laser) — dijele obrasce i pretvorbu ponude u projekt.
 function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchProjekt, patchProjekti, pridruziPonudu, patchUpiti, showToast, setPage, mojaPozicija, mojId, otvoriProjektId, ocistiOtvoriProjekt, otvoriKvalitetu }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, modul);
@@ -11115,15 +11274,20 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
   // "poredak" (potpuni snapshot trenutnog redoslijeda) i taj poredak od tad vrijedi umjesto
   // automatskog sortiranja — dok ga netko ne vrati na automatski.
   const imaRucniPoredak = db.projekti.some((p) => p.poredak != null);
-  // Završeni projekti se ne prikazuju među aktivnim (lista bi inače samo rasla) — imaju svoju
-  // zasebnu karticu "Završeni projekti".
+  // Arhivirani projekti se ne prikazuju u popisu (lista bi inače samo rasla) — imaju svoju zasebnu karticu "Arhivirani
+  // projekti". Završen (posao gotov, čeka konačni obračun) ostaje u popisu Projekti dok se ne arhivira.
   const projektiSortirani = useMemo(() => {
-    const lista = db.projekti.filter((p) => p.status !== "Završen");
+    const lista = db.projekti.filter((p) => p.status !== "Arhiviran");
     lista.sort(imaRucniPoredak ? (a, b) => (a.poredak ?? Infinity) - (b.poredak ?? Infinity) : (a, b) => usporediPrirodno(a.sifra, b.sifra));
     return lista;
   }, [db.projekti, imaRucniPoredak]);
-  // Završeni projekti imaju isti redoslijed kao aktualni: ručni poredak ako postoji, inače po šifri.
-  const projektiZavrseni = useMemo(() => [...db.projekti].filter((p) => p.status === "Završen").sort(imaRucniPoredak ? (a, b) => (a.poredak ?? Infinity) - (b.poredak ?? Infinity) || usporediPrirodno(a.sifra, b.sifra) : (a, b) => usporediPrirodno(a.sifra, b.sifra)), [db.projekti, imaRucniPoredak]);
+  // Arhivirani projekti imaju isti redoslijed kao aktualni: ručni poredak ako postoji, inače po šifri.
+  const projektiZavrseni = useMemo(() => [...db.projekti].filter((p) => p.status === "Arhiviran").sort(imaRucniPoredak ? (a, b) => (a.poredak ?? Infinity) - (b.poredak ?? Infinity) || usporediPrirodno(a.sifra, b.sifra) : (a, b) => usporediPrirodno(a.sifra, b.sifra)), [db.projekti, imaRucniPoredak]);
+  // Rokovi i statusi: tko kasni (uz prijedlog statusa iz naloga i isporuka), što čeka konačni obračun, tko nema rok.
+  const analizaRokovaProjekata = useMemo(
+    () => analizaRokova({ projekti: db.projekti, radniNalozi: db.radniNalozi, otpremnice: db.otpremnice, cmr: db.cmr, danas: todayISO() }),
+    [db.projekti, db.radniNalozi, db.otpremnice, db.cmr]
+  );
   const ispisiTablicu = (naslov, zaglavlja, redovi) => ispisiTablicuPdf({ naslov, zaglavlja, redovi, nazivTvrtke: db.postavkeTvrtke?.naziv, showToast });
   const ispisiProjekte = (lista, naslov) => {
     const imeVoditelja = (id) => { const v = db.zaposlenici.find((z) => z.id === id); return v ? `${v.prezime} ${v.ime}` : ""; };
@@ -11204,18 +11368,16 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
     const payload = { ...projForm, vrijednost: Number(projForm.vrijednost) };
     const stariProjekt = projForm.id ? db.projekti.find((p) => p.id === projForm.id) : null;
     const voditeljPromijenjen = payload.voditeljId && payload.voditeljId !== stariProjekt?.voditeljId;
-    // Kad projekt prijeđe u "Završen", svi njegovi radni nalozi koji to već nisu automatski dobiju
-    // isti status — projekt time seli u karticu "Završeni projekti", a njegovi radni nalozi nestaju
-    // iz aktivne tablice Radnih naloga (vidi filtar u ProizvodnjaPage). Prije toga se pamti TOČNO
-    // koji su nalozi i s kojeg statusa promijenjeni (autoZavrsenoNalozi) te izvorni status projekta
-    // (statusPrijeZavrsetka) — isključivo da "Vrati u aktivne" (u slučaju pogrešnog klika) može
-    // precizno vratiti SAMO ono što je ova akcija stvarno promijenila, ne i naloge koji su već bili
-    // završeni i prije ovog klika.
-    const prelaziUZavrseno = projForm.id && stariProjekt && stariProjekt.status !== "Završen" && payload.status === "Završen";
-    if (prelaziUZavrseno) {
-      payload.statusPrijeZavrsetka = stariProjekt.status;
-      payload.autoZavrsenoNalozi = db.radniNalozi.filter((r) => r.projektId === projForm.id && r.status !== "Završen").map((r) => ({ id: r.id, staviStatus: r.status }));
-      payload.zavrsenDatum = todayISO(); // od tog dana projekt više nije nedovršena proizvodnja
+    // Kad projekt prijeđe u "Završen" (ili izravno "Arhiviran"), svi njegovi radni nalozi koji to već nisu automatski
+    // dobiju isti status — njihove nestaju iz aktivne tablice Radnih naloga (vidi filtar u ProizvodnjaPage). Prije toga
+    // se pamti TOČNO koji su nalozi i s kojeg statusa promijenjeni (autoZavrsenoNalozi) te izvorni status projekta
+    // (statusPrijeZavrsetka) — isključivo da "Vrati u aktivne" (u slučaju pogrešnog klika) može precizno vratiti SAMO
+    // ono što je ova akcija stvarno promijenila. Sva pravila prijelaza su u statusProjekta.js (prijelazStatusa).
+    const prijelaz = projForm.id && stariProjekt && stariProjekt.status !== payload.status ? prijelazStatusa(stariProjekt, payload.status, db.radniNalozi, todayISO()) : null;
+    if (prijelaz) Object.assign(payload, prijelaz.patch);
+    // Promjena roka završetka ostaje zapisana (stari rok → novi rok, tko i kada); razlog se upisuje u kartici "Rokovi i statusi".
+    if (stariProjekt && payload.rokZavrsetka && stariProjekt.rokZavrsetka !== payload.rokZavrsetka) {
+      payload.promjeneRoka = dodajPromjenuRoka(stariProjekt, zapisPromjeneRoka({ id: uid("rok"), stariRok: stariProjekt.rokZavrsetka, noviRok: payload.rokZavrsetka, razlog: "", izmijenioId: mojId, danas: todayISO() }));
     }
     if (projForm.id) patchProjekti([payload], []);
     else patchProjekti([{ ...payload, id: uid("proj") }], []);
@@ -11225,14 +11387,16 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
     // (vidi zadrziNoveOznakeNaloga u server.js). Sve izmjene naloga idu u jednom spremanju.
     const promijenjenNaziv = projForm.id && stariProjekt && stariProjekt.naziv !== payload.naziv;
     const promijenjenaSifra = projForm.id && stariProjekt && stariProjekt.sifra !== payload.sifra;
-    const zavrseniIds = new Set(prelaziUZavrseno ? payload.autoZavrsenoNalozi.map((n) => n.id) : []);
-    if (promijenjenNaziv || promijenjenaSifra || zavrseniIds.size > 0) {
+    const zavrseniIds = new Set(prijelaz ? prijelaz.zavrsiNaloge : []);
+    const vraceniStatusi = new Map(prijelaz ? prijelaz.vratiNaloge.map((n) => [n.id, n.status]) : []);
+    if (promijenjenNaziv || promijenjenaSifra || zavrseniIds.size > 0 || vraceniStatusi.size > 0) {
       const stariPrefiks = `${stariProjekt.sifra}/`;
       update("radniNalozi", db.radniNalozi.map((r) => {
         let n = r;
         if (r.projektId === projForm.id && promijenjenNaziv) n = { ...n, naziv: payload.naziv, prethodniNaziv: r.naziv };
         if (r.projektId === projForm.id && promijenjenaSifra && (r.broj || "").startsWith(stariPrefiks)) n = { ...n, broj: `${payload.sifra}/${r.broj.slice(stariPrefiks.length)}`, prethodniBroj: r.broj };
         if (zavrseniIds.has(r.id)) n = { ...n, status: "Završen" };
+        if (vraceniStatusi.has(r.id)) n = { ...n, status: vraceniStatusi.get(r.id) };
         return n;
       }));
     }
@@ -11246,38 +11410,23 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
     }
   };
 
-  // Vraća projekt pogrešno označen kao "Završen" natrag u aktivne — precizno poništava SAMO ono
-  // što je taj klik promijenio: status projekta ide natrag na onaj koji je imao TOČNO prije (ne
-  // uvijek "U izradi"), a nazad se vraćaju SAMO oni radni nalozi koje je taj klik automatski
-  // završio (svaki na svoj točan raniji status) — nalozi koji su bili završeni i prije ostaju
-  // netaknuti.
-  const vratiUAktivne = (projekt) => {
-    const dotaknuti = projekt.autoZavrsenoNalozi || [];
-    if (dotaknuti.length > 0) {
-      const statusPoNalogu = new Map(dotaknuti.map((n) => [n.id, n.staviStatus]));
-      update("radniNalozi", db.radniNalozi.map((r) => (statusPoNalogu.has(r.id) ? { ...r, status: statusPoNalogu.get(r.id) } : r)));
-    }
-    patchProjekti([{ ...projekt, status: projekt.statusPrijeZavrsetka || "U izradi", statusPrijeZavrsetka: null, autoZavrsenoNalozi: [], zavrsenDatum: null }], []);
-    showToast("Projekt vraćen u aktivne.");
-  };
-  // Izravna promjena statusa iz tablice — ista pravila kao u obrascu (prelazak u "Završen"
-  // automatski završava otvorene radne naloge i pamti što je promijenjeno za "Vrati u aktivne").
-  const promijeniStatusProjekta = (projekt, noviStatus) => {
+  // Promjena statusa (zajednička za tablicu, karticu "Rokovi i statusi" i "Vrati u aktivne"): pravila prijelaza su u
+  // statusProjekta.js (prijelazStatusa). Na projekt ide samo ono što se mijenja (patchProjekt = ciljana izmjena polja na
+  // trenutnom zapisu), a radni nalozi se završavaju odnosno vraćaju na raniji status samo kad to prijelaz traži.
+  const promijeniStatusProjekta = (projekt, noviStatus, poruka) => {
     if (noviStatus === projekt.status) return;
-    const payload = { ...projekt, status: noviStatus };
-    const prelaziUZavrseno = projekt.status !== "Završen" && noviStatus === "Završen";
-    if (prelaziUZavrseno) {
-      payload.statusPrijeZavrsetka = projekt.status;
-      payload.autoZavrsenoNalozi = db.radniNalozi.filter((r) => r.projektId === projekt.id && r.status !== "Završen").map((r) => ({ id: r.id, staviStatus: r.status }));
-      payload.zavrsenDatum = todayISO();
+    const { patch, zavrsiNaloge, vratiNaloge } = prijelazStatusa(projekt, noviStatus, db.radniNalozi, todayISO());
+    patchProjekt(projekt.id, patch);
+    if (zavrsiNaloge.length || vratiNaloge.length) {
+      const zavrsiIds = new Set(zavrsiNaloge);
+      const vraceni = new Map(vratiNaloge.map((n) => [n.id, n.status]));
+      update("radniNalozi", db.radniNalozi.map((r) => (zavrsiIds.has(r.id) ? { ...r, status: "Završen" } : vraceni.has(r.id) ? { ...r, status: vraceni.get(r.id) } : r)));
     }
-    patchProjekti([payload], []);
-    if (prelaziUZavrseno) {
-      const dotaknutiIds = new Set(payload.autoZavrsenoNalozi.map((n) => n.id));
-      update("radniNalozi", db.radniNalozi.map((r) => (dotaknutiIds.has(r.id) ? { ...r, status: "Završen" } : r)));
-    }
-    showToast(`Status projekta ${projekt.sifra}: ${noviStatus}.`);
+    showToast(poruka || `Status projekta ${projekt.sifra}: ${noviStatus}.`);
   };
+  // Vraća projekt iz Završen/Arhiviran natrag u aktivne (pogrešan klik ili posao se ipak nastavlja): status ide na onaj koji
+  // je imao TOČNO prije, a vraćaju se SAMO oni radni nalozi koje je prijelaz sam završio (svaki na svoj raniji status).
+  const vratiUAktivne = (projekt) => promijeniStatusProjekta(projekt, projekt.statusPrijeZavrsetka || "U izradi", "Projekt vraćen u aktivne.");
   const savePon = () => {
     if (!ponForm.naziv.trim()) return;
     if (ponForm.id) update("ponude", db.ponude.map((p) => (p.id === ponForm.id ? ponForm : p)));
@@ -11535,7 +11684,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
           {dozvKartice.some((k) => k.key === "ponude") && <div className={`nav-tab ${tab === "ponude" ? "active" : ""}`} onClick={() => setTab("ponude")}>Ponude</div>}
           {dozvKartice.some((k) => k.key === "laser") && <div className={`nav-tab ${tab === "laser" ? "active" : ""}`} onClick={() => setTab("laser")}>Ponude - Laser</div>}
           {dozvKartice.some((k) => k.key === "potvrde") && <div className={`nav-tab ${tab === "potvrde" ? "active" : ""}`} onClick={() => setTab("potvrde")}>Potvrde narudžbe</div>}
-          {dozvKartice.some((k) => k.key === "zavrseni") && <div className={`nav-tab ${tab === "zavrseni" ? "active" : ""}`} onClick={() => setTab("zavrseni")}>Završeni projekti</div>}
+          {dozvKartice.some((k) => k.key === "zavrseni") && <div className={`nav-tab ${tab === "zavrseni" ? "active" : ""}`} onClick={() => setTab("zavrseni")}>Arhivirani projekti</div>}
         </div>
         {tab === "ponude" && (
           <div style={{ display: "flex", gap: 8 }}>
@@ -11549,7 +11698,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
             <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setZadaciOpen(true)}>Standardni zadaci</Btn>
           </div>
         )}
-        {tab === "zavrseni" && <Btn variant="ghost" size="sm" icon={Printer} onClick={() => ispisiProjekte(projektiZavrseni, "Završeni projekti")}>Ispis / PDF</Btn>}
+        {tab === "zavrseni" && <Btn variant="ghost" size="sm" icon={Printer} onClick={() => ispisiProjekte(projektiZavrseni, "Arhivirani projekti")}>Ispis / PDF</Btn>}
         {tab === "laser" && <Btn variant="ghost" size="sm" icon={Printer} onClick={() => ispisiPonude(db.ponudeLasera, "Popis ponuda — laser", true)}>Ispis / PDF</Btn>}
       </div>
 
@@ -11557,6 +11706,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
 
       {tab === "projekti" && (
         <>
+          <RokoviIStatusiKartica analiza={analizaRokovaProjekata} db={db} mozeMijenjati={mozeProjekti} mojId={mojId} promijeniStatusProjekta={promijeniStatusProjekta} patchProjekt={patchProjekt} showToast={showToast} otvoriDetalj={setDetalj} />
           {imaRucniPoredak && mozeProjekti && (
             <div style={{ marginBottom: 10 }}>
               <Btn variant="ghost" size="sm" onClick={vratiAutomatskoSortiranje}>Vrati automatsko sortiranje (po šifri)</Btn>
@@ -11579,7 +11729,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
             {
               key: "status", label: "Status", render: (r) => mozeProjekti ? (
                 <select className="select" style={{ fontSize: 12, padding: "4px 8px", width: 120 }} value={r.status} onClick={(e) => e.stopPropagation()} onChange={(e) => promijeniStatusProjekta(r, e.target.value)}>
-                  {["Ponuda", "Odobren", "U izradi", "Montaža", "Završen", "Otkazan"].map((s) => <option key={s}>{s}</option>)}
+                  {STATUSI_PROJEKTA.map((s) => <option key={s}>{s}</option>)}
                 </select>
               ) : <Badge status={r.status} />
             },
@@ -11656,7 +11806,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
             { key: "rokZavrsetka", label: "Rok završetka", render: (r) => fmtDate(r.rokZavrsetka) },
             { key: "detalji", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setDetalj(r)}>Detalji</Btn> },
             { key: "mapa", label: "", render: (r) => (r.mapa ? <MapaGumbi putanja={r.mapa} oznaka="Mapa" /> : null) },
-            { key: "vrati", label: "", render: (r) => mozeProjekti && <Btn size="sm" variant="ghost" onClick={() => vratiUAktivne(r)}>Vrati u aktivne</Btn> },
+            { key: "vrati", label: "", render: (r) => mozeProjekti && <span style={{ display: "inline-flex", gap: 6, whiteSpace: "nowrap" }}><Btn size="sm" variant="ghost" title="Vraća projekt u status Završen (čeka obračun)" onClick={() => promijeniStatusProjekta(r, "Završen", `Projekt ${r.sifra} vraćen iz arhive u Završen (čeka obračun).`)}>U Završen</Btn><Btn size="sm" variant="ghost" onClick={() => vratiUAktivne(r)}>Vrati u aktivne</Btn></span> },
             ...(mozeKopiratiProjekt ? [{ key: "kopiraj", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Copy} onClick={() => otvoriKopiju(r)}>Kopiraj</Btn> }] : []),
           ]}
         />
@@ -11684,7 +11834,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
           </div>
           <Field label="Mjesto isporuke"><input className="input" placeholder="npr. ulica i broj, poštanski broj, grad, država" value={projForm.mjestoIsporuke || ""} onChange={(e) => setProjForm({ ...projForm, mjestoIsporuke: e.target.value })} /></Field>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-            <Field label="Status"><select className="select" value={projForm.status} onChange={(e) => setProjForm({ ...projForm, status: e.target.value })}>{["Ponuda", "Odobren", "U izradi", "Montaža", "Završen", "Otkazan"].map((s) => <option key={s}>{s}</option>)}</select></Field>
+            <Field label="Status"><select className="select" value={projForm.status} onChange={(e) => setProjForm({ ...projForm, status: e.target.value })}>{STATUSI_PROJEKTA.map((s) => <option key={s}>{s}</option>)}</select></Field>
             <Field label="Vrijednost (€)"><input className="input f-mono" type="number" value={projForm.vrijednost} onChange={(e) => setProjForm({ ...projForm, vrijednost: e.target.value })} /></Field>
             <Field label="Završna obrada (plan proizvodnje)">
               <select className="select" value={projForm.zavrsnaObrada || zavrsnaObradaProjekta(projForm, db.radniNalozi)} onChange={(e) => setProjForm({ ...projForm, zavrsnaObrada: e.target.value })}>
@@ -11876,7 +12026,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
       {pridruzivanje && (() => {
         const { ponuda, tip, projektId, radim } = pridruzivanje;
         const poSifri = (a, b) => String(a.sifra || "").localeCompare(String(b.sifra || ""), "hr", { numeric: true });
-        const aktivni = db.projekti.filter((p) => !["Završen", "Otkazan"].includes(p.status));
+        const aktivni = db.projekti.filter((p) => projektAktivan(p));
         const istiKupac = aktivni.filter((p) => p.kupacId === ponuda.kupacId).sort(poSifri);
         const ostali = aktivni.filter((p) => p.kupacId !== ponuda.kupacId).sort(poSifri);
         const projekt = aktivni.find((p) => p.id === projektId) || null;
@@ -12757,8 +12907,8 @@ function NovaOtpremnicaModal({ db, update, patchProjekt, showToast, onClose }) {
   if (vrsta === "kupac") {
     // Nudi samo projekte koji stvarno imaju što otpremiti — ista provjera kao "nemaStavki" u
     // OtpremniceListModal (per-projektnom prikazu), da izbor ne vodi u prazan obrazac.
-    // Završeni projekti se ne nude (otpremnice za završen projekt se više ne izdaju).
-    const projektiZaOtpremu = db.projekti.filter((p) => p.status !== "Završen" && (p.koristiNormativ
+    // Arhivirani projekti se ne nude (otpremnice za arhiviran projekt se više ne izdaju); Završen (čeka obračun) još može primiti otpremnicu.
+    const projektiZaOtpremu = db.projekti.filter((p) => p.status !== "Arhiviran" && (p.koristiNormativ
       ? slobodneIsporuke(p, db.otpremnice).length > 0
       : db.narudzbe.some((n) => n.projektId === p.id)));
     const projekt = db.projekti.find((p) => p.id === projektId);
@@ -12811,7 +12961,7 @@ function OtpremnicaKooperantuModal({ db, update, showToast, onClose }) {
   const prazanRedak = () => ({ id: uid("ost"), naziv: "", jm: "kom", kolicina: "" });
   const [stavke, setStavke] = useState([prazanRedak()]);
 
-  const aktivniProjekti = [...db.projekti].filter((p) => p.status !== "Završen").sort((a, b) => usporediPrirodno(a.sifra, b.sifra));
+  const aktivniProjekti = [...db.projekti].filter((p) => p.status !== "Arhiviran").sort((a, b) => usporediPrirodno(a.sifra, b.sifra));
 
   const azurirajStavku = (i, patch) => setStavke(stavke.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
 
@@ -13688,7 +13838,7 @@ const prethodniMjesec = (mjesec) => { const [g, m] = mjesec.split("-").map(Numbe
 const fmtPosto = (n) => `${(Math.round((Number(n) || 0) * 10) / 10).toLocaleString("hr-HR")} %`;
 
 function isporucenoProjekta(p, db, doDatuma) {
-  if (p.status === "Završen" && (!p.zavrsenDatum || p.zavrsenDatum <= doDatuma)) return { posto: 100, izvor: "projekt završen" };
+  if (projektDovrsen(p) && (!p.zavrsenDatum || p.zavrsenDatum <= doDatuma)) return { posto: 100, izvor: "projekt završen" };
   const otpremnice = (db.otpremnice || []).filter((o) => o.projektId === p.id && o.vrsta !== "kooperant" && (o.datum || "") <= doDatuma);
   if (p.koristiNormativ) {
     const sve = [...(p.stavkePod || []), ...(p.stavkeKomplet || [])];
@@ -14095,7 +14245,7 @@ function produktivnostProjekata(db, sMontazom) {
     const satiStvarno = faze.reduce((a, f) => a + f.stvarno, 0);
     const masa = masaProjektaKg(p, db);
     if (!(masa.kg > 0) && !satiPlan && !satiStvarno) return null;
-    const zavrsen = p.status === "Završen";
+    const zavrsen = projektDovrsen(p);
     return {
       projekt: p, sifra: p.sifra || "", naziv: p.naziv || "", kupac: kupacPoId.get(p.kupacId) || "", status: p.status || "", zavrsen,
       masa, autoMasa: masaProjektaKg(p, db, true), faze, satiPlan, satiStvarno,
@@ -14117,7 +14267,7 @@ function produktivnostPoMjesecima(db, mjeseci) {
   const zadnjaOtpremnica = new Map();
   (db.otpremnice || []).forEach((o) => { if (o.vrsta !== "kooperant" && o.datum && o.datum > (zadnjaOtpremnica.get(o.projektId) || "")) zadnjaOtpremnica.set(o.projektId, o.datum); });
   const projekti = (db.projekti || []).filter((p) => p.status !== "Otkazan").map((p) => ({
-    p: p.status === "Završen" && !p.zavrsenDatum && zadnjaOtpremnica.has(p.id) ? { ...p, zavrsenDatum: zadnjaOtpremnica.get(p.id) } : p,
+    p: projektDovrsen(p) && !p.zavrsenDatum && zadnjaOtpremnica.has(p.id) ? { ...p, zavrsenDatum: zadnjaOtpremnica.get(p.id) } : p,
     masa: masaProjektaKg(p, db),
   }));
   return mjeseci.map((mjesec) => {
@@ -14584,7 +14734,7 @@ function izracunProjekcije(db, { od, doMjeseca, danas, trosakSata, materijalPost
   // Projekcija po projektu
   const projekti = [];
   const bezVrijednosti = [];
-  (db.projekti || []).filter((p) => !["Završen", "Otkazan"].includes(p.status)).forEach((p) => {
+  (db.projekti || []).filter((p) => projektAktivan(p)).forEach((p) => {
     const narudzbe = (db.narudzbe || []).filter((n) => n.projektId === p.id);
     let ugovoreno, izvor;
     if (p.koristiNormativ) {
@@ -15804,7 +15954,7 @@ function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, sh
       {tab === "analiza" && (
         <EntityPage
           title="" readOnly searchKeys={["sifra", "naziv"]}
-          data={db.projekti.filter((p) => p.status === "Završen").sort((a, b) => (b.rokZavrsetka || "").localeCompare(a.rokZavrsetka || ""))}
+          data={db.projekti.filter(projektDovrsen).sort((a, b) => (b.rokZavrsetka || "").localeCompare(a.rokZavrsetka || ""))}
           columns={[
             { key: "sifra", label: "Šifra", render: (r) => <span className="f-mono">{r.sifra}</span> },
             { key: "naziv", label: "Naziv" },
@@ -18670,7 +18820,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
                     {stalniPosao(r.radniNalogId)?.projekt && (
                       <select className="select" aria-label="Projekt na koji se odnosi" style={{ marginTop: 6 }} value={r.projektId || ""} onChange={(e) => azurirajRedak(i, { projektId: e.target.value })}>
                         <option value="">— projekt (neobavezno) —</option>
-                        {[...db.projekti].filter((pr) => !["Završen", "Otkazan"].includes(pr.status)).sort((a, b) => String(b.sifra).localeCompare(String(a.sifra), "hr", { numeric: true })).map((pr) => <option key={pr.id} value={pr.id}>{pr.sifra} — {pr.naziv}</option>)}
+                        {[...db.projekti].filter((pr) => projektAktivan(pr)).sort((a, b) => String(b.sifra).localeCompare(String(a.sifra), "hr", { numeric: true })).map((pr) => <option key={pr.id} value={pr.id}>{pr.sifra} — {pr.naziv}</option>)}
                       </select>
                     )}
                   </td>
