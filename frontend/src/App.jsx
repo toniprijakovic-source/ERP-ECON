@@ -19,6 +19,7 @@ import { praznikaZaDodati, praznikaIzvanZakona, imaPraznikeGodine } from "./praz
 import { STATUSI_PROJEKTA, projektDovrsen, projektAktivan, projektPrimaDokumente, prijelazStatusa } from "./statusProjekta";
 import { RAZLOZI_POMAKA_ROKA, analizaRokova, kasneProjekti, zapisPromjeneRoka, dodajPromjenuRoka } from "./rokoviProjekata";
 import { direktorskiPregled, PRAGOVI as PRAGOVI_PREGLEDA, OPIS_SEMAFORA as OPIS_SEMAFORA_PREGLEDA } from "./direktorskiPregled";
+import { stavkeIzRezervacija, pregledZaIzdavanje, ukloniRezervacije } from "./izdavanjeRezervirano";
 import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, ogranicenjeStavke, pocetnaKolicina, visakStavke, zatvoriIsporuke, vratiZatvoreneIsporuke } from "./otpremniceKontrola";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
 
@@ -4568,6 +4569,15 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne }) {
   const [printIzdatnica, setPrintIzdatnica] = useState(null);
   const [povratZa, setPovratZa] = useState(null);
   const [delIzdatnica, setDelIzdatnica] = useState(null);
+  const [izdajProjekt, setIzdajProjekt] = useState(null); // { projektId, predlozak } — izdatnica iz odjeljka "Za izdavanje"
+  const [oslobodiZa, setOslobodiZa] = useState(null); // { projekt, stavke } — potvrda oslobađanja zaostalih rezervacija
+  // Odjeljak "Za izdavanje": modal izdatnice za projekt, popunjen rezerviranim materijalom (saRezerviranim) ili prazan.
+  const otvoriIzdavanje = (projektId, saRezerviranim) => {
+    if (!saRezerviranim) { setIzdajProjekt({ projektId, predlozak: null }); return; }
+    const predlozak = stavkeIzRezervacija({ projektId, rezervacije: db.rezervacije, materijali: db.materijali, redoviZa: (m) => redoviViseDuzina(m, db) });
+    if (!predlozak.stavke.length) { showToast(predlozak.napomene[0] || "Nema rezerviranog materijala koji bi se mogao izdati."); return; }
+    setIzdajProjekt({ projektId, predlozak });
+  };
   const empty = { sifra: "", naziv: "", tip: TIPOVI_MATERIJALA[0], dimenzije: "", jm: "kg", cijena: 0, kolicina: 0, minZaliha: 0, lokacija: "", kgPoM: 0, kgPoM2: 0, projektId: null, kvaliteta: "" };
   const [form, setForm] = useState(empty);
   // Opcionalni pomoćni unos "iz kataloga" — bira se profil/lim, upiše dužina (i za lim širina) +
@@ -4848,7 +4858,8 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne }) {
         </>
       )}
 
-      {tab === "izdatnice" && (
+      {tab === "izdatnice" && (<>
+        <ZaIzdavanjePanel db={db} mozeIzdati={mozeIzdatnice} onIzdaj={otvoriIzdavanje} onOslobodi={setOslobodiZa} />
         <EntityPage
           title="" data={[...db.izdatnice].sort((a, b) => b.datum.localeCompare(a.datum))} onAdd={() => setIzdajZa(true)} onEdit={(row) => setPrintIzdatnica(row)} onDelete={(row) => setDelIzdatnica(row)}
           addLabel="Nova izdatnica" searchKeys={["broj"]} readOnly={!mozeIzdatnice}
@@ -4861,6 +4872,22 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne }) {
             { key: "povrat", label: "", render: (r) => r.status === "Izdano" && mozeIzdatnice ? <Btn size="sm" variant="ghost" onClick={() => setPovratZa(r)}>Zaprimi povrat</Btn> : (r.status === "Zatvoreno" ? <span style={{ fontSize: 11, color: "var(--green)" }}>✓ Povrat zaprimljen</span> : null) },
           ]}
         />
+      </>)}
+
+      {izdajProjekt && <IzdatnicaModal db={db} update={update} showToast={showToast} initialProjektId={izdajProjekt.projektId} predlozak={izdajProjekt.predlozak} onClose={() => setIzdajProjekt(null)} onCreated={(nova) => { setIzdajProjekt(null); setPrintIzdatnica(nova); }} />}
+      {oslobodiZa && (
+        <Modal title="Oslobodi rezervacije" onClose={() => setOslobodiZa(null)} footer={<><Btn variant="ghost" onClick={() => setOslobodiZa(null)}>Odustani</Btn><Btn variant="primary" onClick={() => {
+          const ids = oslobodiZa.stavke.flatMap((s) => s.rezervacijaIds);
+          update("rezervacije", ukloniRezervacije(db.rezervacije, ids));
+          showToast(`Rezervacije za ${oslobodiZa.projekt.sifra} oslobođene (${ids.length}). Stanje skladišta nije promijenjeno.`);
+          setOslobodiZa(null);
+        }}>Oslobodi</Btn></>}>
+          <p style={{ fontSize: 13.5, color: "var(--ink-soft)", marginTop: 0 }}>Projekt <strong style={{ color: "var(--ink)" }}>{oslobodiZa.projekt.sifra}</strong> ({oslobodiZa.projekt.status}) ima rezervirano:</p>
+          <ul style={{ fontSize: 13, margin: "0 0 10px 18px", padding: 0 }}>
+            {oslobodiZa.stavke.map((s) => <li key={s.materijalId}>{s.naziv} — {zaokruziKolicinu(s.kolicina)} {s.jm}</li>)}
+          </ul>
+          <p style={{ fontSize: 13, color: "var(--ink-soft)", marginBottom: 0 }}>Oslobađanjem se rezervacije brišu, a materijal se opet vodi kao slobodan. <strong>Stanje na skladištu se ne mijenja.</strong> Ako je taj materijal stvarno utrošen na projektu, odustani i umjesto toga ga izdaj izdatnicom.</p>
+        </Modal>
       )}
 
       {rezZa && db.materijali.find((m) => m.id === rezZa) && <RezervacijeMaterijalaModal materijal={db.materijali.find((m) => m.id === rezZa)} db={db} update={update} showToast={showToast} mozeMijenjati={mozeZalihe} onClose={() => setRezZa(null)} />}
@@ -5017,33 +5044,162 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne }) {
   );
 }
 
+// Odjeljak "Za izdavanje" na vrhu kartice Izdatnice: što je rezervirano za projekte, a nije izdano (jedan klik pripremi izdatnicu),
+// projekti u izradi koji nikad nisu dobili materijal i rezervacije koje vise na arhiviranim/otkazanim projektima.
+// Logika: izdavanjeRezervirano.js; izdavanje i oslobađanje obavlja SkladistePage (isti modal izdatnice, ista pravila FIFO/stanja).
+// Hrvatski množinski oblik: 1 → jedan, 2–4 → dva, ostalo (i 11–14) → pet.
+const mnoz = (n, jedan, dva, pet) => { const k = n % 100; if (k >= 11 && k <= 14) return pet; const z = n % 10; return z === 1 ? jedan : z >= 2 && z <= 4 ? dva : pet; };
+function ZaIzdavanjePanel({ db, mozeIzdati, onIzdaj, onOslobodi }) {
+  const pregled = useMemo(() => pregledZaIzdavanje({ projekti: db.projekti, rezervacije: db.rezervacije, izdatnice: db.izdatnice, materijali: db.materijali }), [db.projekti, db.rezervacije, db.izdatnice, db.materijali]);
+  const ukupno = pregled.zaIzdati.length + pregled.bezMaterijala.length + pregled.zatvoreni.length;
+  const [otvoreno, setOtvoreno] = useState(true);
+  const voditelj = (p) => { const z = (db.zaposlenici || []).find((x) => x.id === p.voditeljId); return z ? `${z.prezime} ${z.ime}` : ""; };
+  const opisDuzine = (x) => `${x.sirinaMM ? `${x.duzinaMM}×${x.sirinaMM}` : x.duzinaMM} mm × ${x.komada}`;
+  const Stavke = ({ stavke }) => (
+    <div style={{ fontSize: 12.5, lineHeight: "18px" }}>
+      {stavke.map((s) => (
+        <div key={s.materijalId}>
+          <span className="f-mono" style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>{formatSifre(s.sifra)}</span> {s.naziv} — <strong className="f-mono">{zaokruziKolicinu(s.kolicina)} {s.jm}</strong>
+          {s.po.length > 0 && <span className="f-mono" style={{ fontSize: 11, color: "var(--ink-soft)" }}> ({s.po.map(opisDuzine).join("; ")})</span>}
+          {s.manjak && <span style={{ color: "var(--rust)", fontWeight: 600 }}> · na stanju {s.naStanju > 0 ? `samo ${s.naStanju}` : "nema"}</span>}
+        </div>
+      ))}
+    </div>
+  );
+  const Naslov = ({ children, broj, opis }) => (
+    <div style={{ margin: "14px 0 6px" }}>
+      <span className="label" style={{ marginBottom: 0 }}>{children} ({broj})</span>
+      <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>{opis}</div>
+    </div>
+  );
+  const ProjektCelija = ({ p }) => (
+    <td><div style={{ fontWeight: 600 }}>{p.sifra}</div><div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{p.naziv}</div></td>
+  );
+  return (
+    <div className="card" style={{ padding: "10px 14px", marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }} onClick={() => setOtvoreno(!otvoreno)}>
+        <PackageMinus size={16} color={ukupno ? "var(--rust)" : "var(--green)"} />
+        <strong style={{ fontSize: 14 }}>Za izdavanje</strong>
+        <span style={{ fontSize: 12.5, color: "var(--ink-soft)", flex: 1 }}>
+          {ukupno === 0 ? "nema rezerviranog neizdanog materijala" : [
+            pregled.zaIzdati.length ? `${pregled.zaIzdati.length} ${mnoz(pregled.zaIzdati.length, "projekt čeka", "projekta čekaju", "projekata čeka")} izdavanje` : null,
+            pregled.bezMaterijala.length ? `${pregled.bezMaterijala.length} u izradi bez izdanog materijala` : null,
+            pregled.zatvoreni.length ? `${pregled.zatvoreni.length} ${mnoz(pregled.zatvoreni.length, "zaostala rezervacija", "zaostale rezervacije", "zaostalih rezervacija")}` : null,
+          ].filter(Boolean).join(" · ")}
+        </span>
+        <span style={{ fontSize: 12, color: "var(--ink-faint)" }}>{otvoreno ? "Sakrij" : "Prikaži"}</span>
+      </div>
+      {otvoreno && ukupno > 0 && (
+        <>
+          {pregled.zaIzdati.length > 0 && (
+            <>
+              <Naslov broj={pregled.zaIzdati.length} opis="Materijal je rezerviran (najčešće pri zaprimanju narudžbenice „Za projekt“), a još nije izdan. „Izdaj rezervirano“ priprema izdatnicu — provjeriš količine i spremiš.">Rezervirano, čeka izdavanje</Naslov>
+              <table className="erp-table">
+                <thead><tr><th style={{ width: 200 }}>Projekt</th><th style={{ width: 130 }}>Voditelj</th><th>Rezervirano</th><th style={{ width: 150 }} /></tr></thead>
+                <tbody>
+                  {pregled.zaIzdati.map(({ projekt: p, stavke }) => (
+                    <tr key={p.id}>
+                      <ProjektCelija p={p} />
+                      <td style={{ fontSize: 12.5 }}>{voditelj(p) || <span style={{ color: "var(--ink-faint)" }}>—</span>}</td>
+                      <td><Stavke stavke={stavke} /></td>
+                      <td>{mozeIzdati && <Btn size="sm" variant="primary" icon={PackageMinus} onClick={() => onIzdaj(p.id, true)}>Izdaj rezervirano</Btn>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+          {pregled.bezMaterijala.length > 0 && (
+            <>
+              <Naslov broj={pregled.bezMaterijala.length} opis="Projekt je u izradi, a za njega nikad nije izdan materijal i ništa nije rezervirano. Provjeri s voditeljem: troši li se materijal bez izdatnice?">U izradi, a materijal nije izdan</Naslov>
+              <table className="erp-table">
+                <thead><tr><th style={{ width: 200 }}>Projekt</th><th style={{ width: 130 }}>Voditelj</th><th>Status</th><th style={{ width: 150 }} /></tr></thead>
+                <tbody>
+                  {pregled.bezMaterijala.map(({ projekt: p }) => (
+                    <tr key={p.id}>
+                      <ProjektCelija p={p} />
+                      <td style={{ fontSize: 12.5 }}>{voditelj(p) || <span style={{ color: "var(--ink-faint)" }}>—</span>}</td>
+                      <td><span className="badge badge-muted">{p.status}</span></td>
+                      <td>{mozeIzdati && <Btn size="sm" variant="ghost" icon={PackageMinus} onClick={() => onIzdaj(p.id, false)}>Izdaj ručno</Btn>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+          {pregled.zatvoreni.length > 0 && (
+            <>
+              <Naslov broj={pregled.zatvoreni.length} opis="Rezervirano za projekt koji je arhiviran ili otkazan (ili ne postoji), a nikad izdano. Ako je materijal utrošen, izdaj ga (stanje se umanjuje); ako leži na zalihi, oslobodi rezervaciju (stanje se ne mijenja).">Zaostale rezervacije na zatvorenim projektima</Naslov>
+              <table className="erp-table">
+                <thead><tr><th style={{ width: 200 }}>Projekt</th><th style={{ width: 130 }}>Status</th><th>Rezervirano</th><th style={{ width: 190 }} /></tr></thead>
+                <tbody>
+                  {pregled.zatvoreni.map(({ projekt: p, stavke }) => (
+                    <tr key={p.id}>
+                      <ProjektCelija p={p} />
+                      <td><span className="badge badge-muted">{p.status}</span></td>
+                      <td><Stavke stavke={stavke} /></td>
+                      <td>
+                        {mozeIzdati && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "stretch" }}>
+                            {p.status === "Arhiviran" && <Btn size="sm" variant="ghost" icon={PackageMinus} onClick={() => onIzdaj(p.id, true)}>Izdaj (utrošeno)</Btn>}
+                            <Btn size="sm" variant="ghost" onClick={() => onOslobodi({ projekt: p, stavke })}>Oslobodi rezervaciju</Btn>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // Izdaje materijal sa skladišta na projekt — bira se projekt, jedan ili više materijala i
 // količine (ograničene na trenutno stanje), stvara se Izdatnica koja se poslije može ispisati i
 // dati u proizvodnju; povrat ostatka rješava se posebno kroz ZaprimiPovratModal.
-function IzdatnicaModal({ db, update, showToast, initialMaterijalId, onClose, onCreated }) {
+// Materijal koji se vodi po više dužina/formata (npr. "3115 mm × 14; 3050 mm × 1"): retci dužina, inače null.
+const redoviViseDuzina = (mat, db) => {
+  const f = formatiMaterijala(mat, db);
+  if (!f) return null;
+  const redovi = redoviIzDimenzija(mat.dimenzije, mat.kolicina, f.jeLim);
+  return redovi && redovi.length > 1 ? redovi : null;
+};
+
+// predlozak (neobavezno): { stavke, napomene } iz rezervacija projekta (izdavanjeRezervirano.js) — modal se otvara već popunjen;
+// initialProjektId: unaprijed odabran projekt (i kad je Arhiviran — dopušta se samo taj jedan, za izdavanje zaostalih rezervacija).
+function IzdatnicaModal({ db, update, showToast, initialMaterijalId, initialProjektId = "", predlozak = null, onClose, onCreated }) {
   // Projekti za koje je odabrani materijal rezerviran idu prvi; arhivirani/otkazani projekti se ne nude (Završen — čeka obračun — se nudi).
-  const aktualniProjekti = db.projekti.filter(projektPrimaDokumente);
+  const aktualniProjekti = db.projekti.filter((p) => projektPrimaDokumente(p) || p.id === initialProjektId);
   const rezerviraniZa = (materijalIds) => {
     const m = new Map();
     (db.rezervacije || []).filter((r) => materijalIds.includes(r.materijalId)).forEach((r) => m.set(r.projektId, (m.get(r.projektId) || 0) + (Number(r.kolicina) || 0)));
     return m;
   };
   const [projektId, setProjektId] = useState(() => {
+    if (initialProjektId) return initialProjektId;
     const rez = initialMaterijalId ? aktualniProjekti.filter((p) => rezerviraniZa([initialMaterijalId]).has(p.id)) : [];
     return rez.length === 1 ? rez[0].id : "";
   });
   const [izdaoId, setIzdaoId] = useState("");
   const [napomena, setNapomena] = useState("");
-  const [stavke, setStavke] = useState([{ materijalId: initialMaterijalId || "", kolicina: "", po: {} }]);
+  const [stavke, setStavke] = useState(predlozak?.stavke?.length ? predlozak.stavke : [{ materijalId: initialMaterijalId || "", kolicina: "", po: {} }]);
   const [saljem, setSaljem] = useState(false);
+  const [napomenePredloska, setNapomenePredloska] = useState(predlozak?.napomene || []);
 
   // Materijal s više dužina (npr. "3115 mm × 14; 3050 mm × 1"): umjesto jedne količine bira se koliko komada koje dužine se izdaje.
   const jeLimMat = (mat) => !!formatiMaterijala(mat, db)?.jeLim;
-  const redoviZa = (mat) => {
-    const f = formatiMaterijala(mat, db);
-    if (!f) return null;
-    const redovi = redoviIzDimenzija(mat.dimenzije, mat.kolicina, f.jeLim);
-    return redovi && redovi.length > 1 ? redovi : null;
+  const redoviZa = (mat) => redoviViseDuzina(mat, db);
+  // Rezervirano za odabrani projekt, pretvoreno u stavke izdatnice (jedan klik: "Učitaj rezervirano").
+  const rezerviranoZaProjekt = projektId ? stavkeIzRezervacija({ projektId, rezervacije: db.rezervacije, materijali: db.materijali, redoviZa }) : { stavke: [], napomene: [] };
+  const ucitajRezervirano = () => {
+    const prazne = stavke.every((s) => !s.materijalId);
+    const vecOdabrani = new Set(stavke.map((s) => s.materijalId).filter(Boolean));
+    setStavke(prazne ? rezerviranoZaProjekt.stavke : [...stavke, ...rezerviranoZaProjekt.stavke.filter((s) => !vecOdabrani.has(s.materijalId))]);
+    setNapomenePredloska(rezerviranoZaProjekt.napomene);
   };
   const opisDuzine = (r, jeLim) => `${jeLim ? `${r.duzinaMM}×${r.sirinaMM}` : r.duzinaMM} mm`;
   const kolicinaStavke = (st) => (redoviZa(db.materijali.find((m) => m.id === st.materijalId)) ? Object.values(st.po || {}).reduce((a, v) => a + brojIzUnosa(v), 0) : Number(st.kolicina) || 0);
@@ -5148,7 +5304,22 @@ function IzdatnicaModal({ db, update, showToast, initialMaterijalId, onClose, on
           </select>
         </Field>
       </div>
-      <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Stavke za izdavanje</div>
+      {napomenePredloska.length > 0 && (
+        <div className="card" style={{ padding: "8px 12px", marginTop: 8, marginBottom: 4, background: "var(--surface-alt)", borderLeft: "3px solid var(--rust)" }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>Provjeri prije spremanja</div>
+          {napomenePredloska.map((n, i) => <div key={i} style={{ fontSize: 12, color: "var(--ink-soft)" }}>• {n}</div>)}
+        </div>
+      )}
+      {(() => {
+        const odabrani = new Set(stavke.map((s) => s.materijalId).filter(Boolean));
+        const fali = rezerviranoZaProjekt.stavke.filter((s) => !odabrani.has(s.materijalId)).length;
+        return projektId && fali > 0 && (
+          <div style={{ marginTop: 8, marginBottom: 4 }}>
+            <Btn variant="ghost" size="sm" icon={PackageMinus} onClick={ucitajRezervirano}>Učitaj rezervirano za ovaj projekt ({fali} {fali === 1 ? "stavka" : "stavki"})</Btn>
+          </div>
+        );
+      })()}
+      <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Stavke za izdavanje{predlozak ? " — predloženo prema rezerviranom materijalu" : ""}</div>
       <table className="erp-table" style={{ marginBottom: 8 }}>
         <thead><tr><th>Materijal</th><th style={{ width: 140 }}>Količina</th><th style={{ width: 32 }}></th></tr></thead>
         <tbody>
