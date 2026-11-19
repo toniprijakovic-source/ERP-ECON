@@ -17,7 +17,12 @@ const { pakiraj, otpakiraj } = require("./lib/sef");
 const MAPA_ZADANO = "C:\\Users\\Econ\\Desktop\\ERP _ECON\\ERP-Backupovi-Sef";
 const CUVANJE_DANA = { Satne: 30, Dnevne: 365 }; // Mjesecne se ne brišu
 const UPOZORENJE_STARE_KOPIJE_H = 3;
-const TABLICE = ["korekcije_bodova", "aktivnost_dan", "login_log"]; // fiksni popis — nikad se ne uzima iz vanjskog unosa
+const TABLICE = ["korekcije_bodova", "aktivnost_dan", "login_log", "potrosni_dnevnik"]; // fiksni popis — nikad se ne uzima iz vanjskog unosa
+// Tablica koja još ne postoji (npr. nova tablica prije prvog pokretanja nove verzije poslužitelja) daje prazan popis umjesto greške: kopija se ne smije srušiti.
+const procitajTablicu = async (pool, t) => {
+  if (!(await pool.query("SELECT to_regclass($1) AS naziv", [t])).rows[0]?.naziv) return [];
+  return (await pool.query(`SELECT coalesce(json_agg(row_to_json(t)), '[]'::json) AS redovi FROM ${t} t`)).rows[0].redovi;
+};
 
 const p2 = (n) => String(n).padStart(2, "0");
 const nazivDatoteke = (d) => `backup-${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}_${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}.sef`;
@@ -82,7 +87,7 @@ async function napraviKopiju({ pool, mapa = MAPA_ZADANO, sifra, sada = new Date(
   // vremena i brojevi ostaju točno onakvi kakvi jesu (upravljački program bi npr. "date" pretvorio u lokalnu ponoć pa pri
   // vraćanju pomaknuo dan unatrag).
   const tablice = {};
-  for (const t of TABLICE) tablice[t] = (await pool.query(`SELECT coalesce(json_agg(row_to_json(t)), '[]'::json) AS redovi FROM ${t} t`)).rows[0].redovi;
+  for (const t of TABLICE) tablice[t] = await procitajTablicu(pool, t);
 
   const paket = { __erp_backup_sef: true, verzija: 1, datum: sada.toISOString(), podaci, zadnjaIzmjena, tablice };
   const naziv = nazivDatoteke(sada);
@@ -116,7 +121,7 @@ async function napraviKopiju({ pool, mapa = MAPA_ZADANO, sifra, sada = new Date(
   return sazetak;
 }
 
-module.exports = { napraviKopiju, jePrvoOtkad, obrisiStarije, nazivDatoteke, datumIzNaziva, kljucDana, kljucMjeseca, TABLICE };
+module.exports = { napraviKopiju, jePrvoOtkad, obrisiStarije, nazivDatoteke, datumIzNaziva, kljucDana, kljucMjeseca, TABLICE, procitajTablicu };
 
 if (require.main === module) {
   require("dotenv").config({ path: path.join(__dirname, ".env") });

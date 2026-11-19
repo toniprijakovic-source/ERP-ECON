@@ -3,11 +3,24 @@
 // Zaključavanje (FOR UPDATE) ovdje ne postoji, pa testovi ne mogu dokazati istodobnost — ona se oslanja na zaključavanje retka u pravoj bazi.
 const store = process.env.SEED_FILE ? JSON.parse(require("fs").readFileSync(process.env.SEED_FILE, "utf8")) : {};
 const odgovor = (rows) => ({ rows, rowCount: rows.length });
+// Tablica potrosni_dnevnik (potrosni-rute.js): ovdje se oponašaju samo upiti koje ta ruta šalje (unos, provjera zahtjeva, razdoblje, radnik, jedan zapis, storno).
+const dnevnikPM = [];
 const klon = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 async function query(sql, params = []) {
   const s = String(sql);
   if (/^\s*(BEGIN|COMMIT|ROLLBACK)/.test(s)) return odgovor([]);
   if (/SELECT key, value FROM app_data/.test(s)) return odgovor(Object.entries(store).map(([key, value]) => ({ key, value: klon(value) })));
+  if (/^\s*INSERT INTO potrosni_dnevnik/.test(s)) {
+    const [id, zaposlenik_id, zaposlenik, artikl_id, artikl, jm, kolicina, vrsta, zahtjev_id, korisnik_id, korisnik, napomena] = params;
+    if (zahtjev_id && dnevnikPM.some((x) => x.zahtjev_id === zahtjev_id && x.artikl_id === artikl_id)) throw new Error("duplicate key value violates unique constraint");
+    dnevnikPM.push({ id, vrijeme: new Date().toISOString(), zaposlenik_id, zaposlenik, artikl_id, artikl, jm, kolicina: String(kolicina), vrsta, zahtjev_id, korisnik_id, korisnik, napomena, storno: false });
+    return odgovor([]);
+  }
+  if (/FROM potrosni_dnevnik WHERE zahtjev_id/.test(s)) return odgovor(dnevnikPM.filter((x) => x.zahtjev_id === params[0]).slice(0, 1).map(() => ({ "?column?": 1 })));
+  if (/FROM potrosni_dnevnik WHERE vrsta = 'uzimanje'/.test(s)) return odgovor(dnevnikPM.filter((x) => x.vrsta === "uzimanje" && x.vrijeme >= params[0] && x.vrijeme < params[1]).map((x) => ({ ...x })));
+  if (/FROM potrosni_dnevnik WHERE zaposlenik_id/.test(s)) return odgovor(dnevnikPM.filter((x) => x.zaposlenik_id === params[0] && x.vrijeme >= params[1] && x.vrijeme < params[2]).sort((a, b) => b.vrijeme.localeCompare(a.vrijeme)).map((x) => ({ ...x })));
+  if (/FROM potrosni_dnevnik WHERE id = \$1/.test(s)) return odgovor(dnevnikPM.filter((x) => x.id === params[0]).map((x) => ({ ...x })));
+  if (/^\s*UPDATE potrosni_dnevnik SET storno/.test(s)) { const x = dnevnikPM.find((y) => y.id === params[0]); if (x) x.storno = true; return odgovor(x ? [x] : []); }
   let m = s.match(/SELECT value FROM app_data WHERE key = '([^']+)'/);
   if (m) return odgovor(store[m[1]] === undefined ? [] : [{ value: klon(store[m[1]]) }]);
   if (/SELECT value FROM app_data WHERE key = \$1/.test(s)) return odgovor(store[params[0]] === undefined ? [] : [{ value: klon(store[params[0]]) }]);

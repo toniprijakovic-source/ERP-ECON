@@ -23,6 +23,7 @@ const { TABLICE } = require("../backup-sef");
     query: async (sql) => {
       upiti.push(sql);
       if (/FROM app_data/.test(sql)) return { rows: redovi };
+      if (/to_regclass/.test(sql)) return { rows: [{ naziv: "postoji" }] };
       const t = TABLICE.find((x) => new RegExp(`FROM ${x} t`).test(sql));
       if (t) return { rows: [{ redovi: t === "login_log" ? [{ id: 1, zaposlenik: "w1" }, { id: 2, zaposlenik: "w2" }] : [] }] };
       throw new Error("neočekivan upit: " + sql);

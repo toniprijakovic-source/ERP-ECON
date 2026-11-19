@@ -20,6 +20,7 @@ import { STATUSI_PROJEKTA, projektDovrsen, projektAktivan, projektPrimaDokumente
 import { RAZLOZI_POMAKA_ROKA, analizaRokova, kasneProjekti, zapisPromjeneRoka, dodajPromjenuRoka } from "./rokoviProjekata";
 import { direktorskiPregled, PRAGOVI as PRAGOVI_PREGLEDA, OPIS_SEMAFORA as OPIS_SEMAFORA_PREGLEDA } from "./direktorskiPregled";
 import { stavkeIzRezervacija, pregledZaIzdavanje, ukloniRezervacije, rasporediSPrvim } from "./izdavanjeRezervirano";
+import { matricaPotrosnje, zaNarucivanje, parsirajUvoz, MJESECI_KRATKO } from "./potrosniMaterijal";
 import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, ogranicenjeStavke, pocetnaKolicina, visakStavke, zatvoriIsporuke, vratiZatvoreneIsporuke } from "./otpremniceKontrola";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
 
@@ -1918,7 +1919,7 @@ const MODULI_APLIKACIJE = [
 const KARTICE_MODULA = {
   dashboard: { kartice: [{ key: "pregled", naziv: "Pregled" }] },
   direktor: { kartice: [{ key: "pregled", naziv: "Pregled" }] },
-  skladiste: { kartice: [{ key: "zalihe", naziv: "Zalihe" }, { key: "katalog", naziv: "Katalog profila i limova" }, { key: "kvaliteta", naziv: "Kvaliteta materijala" }, { key: "izdatnice", naziv: "Izdatnice" }] },
+  skladiste: { kartice: [{ key: "zalihe", naziv: "Zalihe" }, { key: "katalog", naziv: "Katalog profila i limova" }, { key: "kvaliteta", naziv: "Kvaliteta materijala" }, { key: "izdatnice", naziv: "Izdatnice" }, { key: "potrosnja", naziv: "Potrošnja po radniku" }] },
   transporti: { kartice: [{ key: "upiti", naziv: "Upiti za transport" }, { key: "narudzbe", naziv: "Narudžbe za transport" }] },
   kontrola: { kartice: [{ key: "maticna", naziv: "Matična knjiga" }, { key: "ugradeni", naziv: "Ugrađeni materijal" }] },
   nabava: { kartice: [{ key: "narudzbenice", naziv: "Narudžbenice" }, { key: "upiti", naziv: "Upiti materijala" }, { key: "postavke", naziv: "Postavke tvrtke" }] },
@@ -1969,6 +1970,56 @@ const KIOSK_PRIKAZ_PORUKE_MS = 500;
 // Svakih koliko kiosk provjerava je li izašla nova verzija aplikacije (pa se sam osvježi).
 const KIOSK_PROVJERA_VERZIJE_MS = 33 * 60 * 1000;
 
+// Kiosk → "Potrošni materijal": radnik je prislonio karticu i na velikim pločicama bira što je uzeo (+ / − po artiklu), pa potvrđuje.
+// Pločice su krupne (rade se i u rukavicama); bilo koji dodir produljuje vrijeme neaktivnosti (vidi KioskView), a nakon isteka zaslon se vraća na početni.
+function KioskPotrosniOdabir({ ime, prezime, artikli, onPotvrdi, onOdustani, onAktivnost, saljem, greska }) {
+  const [kolicine, setKolicine] = useState({});
+  const [skupina, setSkupina] = useState("");
+  const skupine = [...new Set(artikli.map((a) => a.skupina || "Ostalo"))];
+  const prikazani = artikli.filter((a) => !skupina || (a.skupina || "Ostalo") === skupina);
+  const odabrano = artikli.filter((a) => (kolicine[a.id] || 0) > 0);
+  const promijeni = (id, korak) => { onAktivnost(); setKolicine((k) => ({ ...k, [id]: Math.max(0, Math.min(99, (k[id] || 0) + korak)) })); };
+  const gumb = { width: 64, height: 64, fontSize: 34, fontWeight: 700, borderRadius: 8, border: "1px solid var(--line)", background: "var(--surface)", cursor: "pointer", lineHeight: 1 };
+  return (
+    <div style={{ width: "min(1100px, 100%)", display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ textAlign: "center", color: "var(--sidebar-ink)" }}>
+        <div style={{ fontSize: 22, opacity: 0.8 }}>Potrošni materijal</div>
+        <div style={{ fontSize: 36, fontWeight: 700 }}>{ime} {prezime}</div>
+        <div style={{ fontSize: 22 }}>Odaberi što je uzeto</div>
+      </div>
+      {skupine.length > 1 && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+          {["", ...skupine].map((s) => (
+            <button key={s || "sve"} type="button" onClick={() => { onAktivnost(); setSkupina(s); }} style={{ ...gumb, width: "auto", height: 52, fontSize: 22, padding: "0 22px", background: skupina === s ? "var(--accent)" : "var(--surface)", color: skupina === s ? "var(--accent-ink)" : "inherit" }}>{s || "Sve"}</button>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
+        {prikazani.map((a) => {
+          const k = kolicine[a.id] || 0;
+          return (
+            <div key={a.id} style={{ background: k > 0 ? "#EAF6EF" : "var(--surface)", border: `2px solid ${k > 0 ? "#1F6B41" : "var(--line)"}`, borderRadius: 10, padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.15, minHeight: 60 }}>{a.naziv}</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <button type="button" aria-label={`Smanji ${a.naziv}`} style={{ ...gumb, opacity: k > 0 ? 1 : 0.35 }} onClick={() => promijeni(a.id, -1)}>−</button>
+                <div style={{ fontSize: 44, fontWeight: 700, minWidth: 90, textAlign: "center" }}>{k}<span style={{ fontSize: 20, fontWeight: 400, marginLeft: 6 }}>{a.jm}</span></div>
+                <button type="button" aria-label={`Dodaj ${a.naziv}`} style={{ ...gumb, background: "var(--accent)", color: "var(--accent-ink)", border: "none" }} onClick={() => promijeni(a.id, 1)}>+</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {greska && <div style={{ background: "#FBEAE6", border: "1px solid #F0C2B5", borderRadius: 8, padding: "14px 18px", fontSize: 24, color: "#9A2E1B", textAlign: "center" }}>{greska}</div>}
+      <div style={{ position: "sticky", bottom: 0, display: "flex", gap: 14, justifyContent: "center", padding: "10px 0", background: "var(--sidebar)" }}>
+        <button type="button" onClick={onOdustani} disabled={saljem} style={{ ...gumb, width: "auto", height: 76, fontSize: 28, padding: "0 40px" }}>Odustani</button>
+        <button type="button" disabled={saljem || odabrano.length === 0} onClick={() => onPotvrdi(odabrano.map((a) => ({ artiklId: a.id, kolicina: kolicine[a.id] })))} style={{ ...gumb, width: "auto", height: 76, fontSize: 30, padding: "0 56px", background: odabrano.length ? "#1F6B41" : "#9AA3A9", color: "#fff", border: "none", opacity: saljem ? 0.6 : 1 }}>
+          {saljem ? "Spremam…" : odabrano.length ? `Potvrdi (${odabrano.length})` : "Odaberi artikl"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function KioskView({ onPrijava }) {
   const [unos, setUnos] = useState("");
   const [poruka, setPoruka] = useState(null);
@@ -1987,6 +2038,23 @@ function KioskView({ onPrijava }) {
   // više ne gubi niti miješa s drugim, bez obzira koliko brzo ljudi dolaze jedno za drugim.
   const redSkeniranjaRef = useRef([]);
   const obradaURaduRef = useRef(false);
+  // Potrošni materijal: tipka na početnom zaslonu → prislanjanje kartice → odabir artikala → potvrda. Zaslon se sam vraća na početni kad nitko
+  // ništa ne dira (nacin: "dolazak" = uobičajena prijava/odjava; "potrosniKartica"; "potrosniOdabir"; "potrosniGotovo").
+  const [nacin, setNacin] = useState("dolazak");
+  const nacinRef = useRef("dolazak");
+  const [potrosni, setPotrosni] = useState(null); // { rfidKod, ime, prezime, artikli }
+  const [potrosniSaljem, setPotrosniSaljem] = useState(false);
+  const [potrosniGreska, setPotrosniGreska] = useState("");
+  const [potrosniGotovo, setPotrosniGotovo] = useState(null); // { ime, prezime, stavke }
+  const istekNacinaRef = useRef(null);
+  const zahtjevPotrosnogRef = useRef(null);
+  const promijeniNacin = (novi, istekMs) => {
+    nacinRef.current = novi;
+    setNacin(novi);
+    if (istekNacinaRef.current) { clearTimeout(istekNacinaRef.current); istekNacinaRef.current = null; }
+    if (novi !== "dolazak") istekNacinaRef.current = setTimeout(() => { nacinRef.current = "dolazak"; setNacin("dolazak"); setPotrosni(null); setPotrosniGreska(""); setPotrosniGotovo(null); zahtjevPotrosnogRef.current = null; }, istekMs);
+  };
+  useEffect(() => () => { if (istekNacinaRef.current) clearTimeout(istekNacinaRef.current); }, []);
 
   useEffect(() => {
     const t = setInterval(() => setSat(new Date()), 1000 * 30);
@@ -2016,7 +2084,7 @@ function KioskView({ onPrijava }) {
         const res = await fetch(`${window.location.origin}/`, { cache: "no-store" });
         const novaSkripta = (await res.text()).match(/\/assets\/index-[^"']+\.js/)?.[0];
         if (!novaSkripta || trenutna.endsWith(novaSkripta)) return;
-        const mirno = !obradaURaduRef.current && redSkeniranjaRef.current.length === 0 && !tisinaTimeoutRef.current;
+        const mirno = !obradaURaduRef.current && redSkeniranjaRef.current.length === 0 && !tisinaTimeoutRef.current && nacinRef.current === "dolazak";
         if (mirno) window.location.reload();
       } catch { /* bez mreže — pokušat će se ponovno kod sljedeće provjere */ }
     };
@@ -2024,7 +2092,7 @@ function KioskView({ onPrijava }) {
     return () => clearInterval(t);
   }, []);
 
-  useEffect(() => { inputRef.current?.focus(); }, [poruka]);
+  useEffect(() => { inputRef.current?.focus(); }, [poruka, nacin]);
 
   useEffect(() => () => {
     if (tisinaTimeoutRef.current) clearTimeout(tisinaTimeoutRef.current);
@@ -2073,8 +2141,49 @@ function KioskView({ onPrijava }) {
     obradaURaduRef.current = false;
   };
 
+  // Potrošni materijal, korak 1: kartica prislonjena nakon tipke "Potrošni materijal" — poslužitelj vraća ime i popis artikala.
+  const prijavaPotrosni = async (kod) => {
+    try {
+      const res = await fetch(`${API_URL}/api/kiosk/potrosni/prijava`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rfidKod: kod }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        kratkaPoruka({ tip: "greska", tekst: data.error || "Kartica nije prepoznata", detalj: res.status === 404 ? `Kod: ${kod} — javi se administratoru.` : "" });
+        promijeniNacin("dolazak");
+        return;
+      }
+      if (!(data.artikli || []).length) { kratkaPoruka({ tip: "greska", tekst: "Nema artikala", detalj: "Potrošni materijal još nije unesen." }); promijeniNacin("dolazak"); return; }
+      setPotrosniGreska("");
+      setPotrosni({ rfidKod: kod, ime: data.ime, prezime: data.prezime, artikli: data.artikli });
+      promijeniNacin("potrosniOdabir", 90 * 1000);
+    } catch {
+      kratkaPoruka({ tip: "greska", tekst: "Nema veze s poslužiteljem", detalj: "Pokušaj ponovno." });
+      promijeniNacin("dolazak");
+    }
+  };
+  // Korak 2: potvrda. zahtjevId ostaje isti dok poslužitelj ne odgovori uspjehom, pa ponovljeno slanje (prekid veze) ne skida dvaput sa zalihe.
+  const potvrdiPotrosni = async (stavke) => {
+    if (!potrosni || potrosniSaljem) return;
+    if (!zahtjevPotrosnogRef.current) zahtjevPotrosnogRef.current = `k-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    setPotrosniSaljem(true);
+    setPotrosniGreska("");
+    try {
+      const res = await fetch(`${API_URL}/api/kiosk/potrosni/uzmi`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rfidKod: potrosni.rfidKod, zahtjevId: zahtjevPotrosnogRef.current, stavke }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setPotrosniGreska(data.error || "Nije zabilježeno — pokušaj ponovno."); return; }
+      zahtjevPotrosnogRef.current = null;
+      setPotrosni(null);
+      setPotrosniGotovo({ ime: data.ime, prezime: data.prezime, stavke: data.stavke || [], vec: !!data.vecZabiljezeno });
+      promijeniNacin("potrosniGotovo", 4000);
+    } catch {
+      setPotrosniGreska("Nema veze s poslužiteljem — pokušaj ponovno.");
+    } finally {
+      setPotrosniSaljem(false);
+    }
+  };
   const obradiKod = async (kod) => {
     setPoruka(null); // bez međuporuke "Obrađujem…" — ekran ostaje miran do stvarnog rezultata
+    if (nacinRef.current === "potrosniKartica") { await prijavaPotrosni(kod); return; }
+    if (nacinRef.current !== "dolazak") return; // dok radnik bira artikle, tuđe kartice se ne obrađuju (ni kao prijava ni kao odjava)
     try {
       const res = await fetch(`${API_URL}/api/kiosk/scan`, {
         method: "POST",
@@ -2125,17 +2234,37 @@ function KioskView({ onPrijava }) {
         <div style={{ fontSize: 56, fontWeight: 700, color: "var(--sidebar-ink)", lineHeight: 1.1 }}>ECON</div>
         <div style={{ fontSize: 26, fontWeight: 600, color: "var(--sidebar-ink)" }}>Evidencija radnog vremena</div>
       </div>
+      {nacin === "potrosniOdabir" && potrosni && (
+        <KioskPotrosniOdabir ime={potrosni.ime} prezime={potrosni.prezime} artikli={potrosni.artikli} saljem={potrosniSaljem} greska={potrosniGreska}
+          onPotvrdi={potvrdiPotrosni} onOdustani={() => { zahtjevPotrosnogRef.current = null; setPotrosni(null); setPotrosniGreska(""); promijeniNacin("dolazak"); }} onAktivnost={() => promijeniNacin("potrosniOdabir", 90 * 1000)} />
+      )}
+      {nacin !== "potrosniOdabir" && (
       <div className="card" style={{ width: 840, maxWidth: "100%", padding: 56, background: "var(--surface)", textAlign: "center" }}>
         <div style={{ fontSize: 26, color: "var(--ink-faint)", marginBottom: 10, textTransform: "capitalize" }}>{sat.toLocaleDateString("hr-HR", { weekday: "long", day: "numeric", month: "long" })}</div>
         <div style={{ fontSize: 72, fontWeight: 700, marginBottom: 30 }}>{sat.toLocaleTimeString("hr-HR", { hour: "2-digit", minute: "2-digit" })}</div>
 
-        {poruka ? (
+        {nacin === "potrosniKartica" ? (
+          <div style={{ padding: "10px 0" }}>
+            <div style={{ fontSize: 40, fontWeight: 700 }}>Potrošni materijal</div>
+            <div style={{ fontSize: 28, color: "var(--ink-soft)", margin: "10px 0 24px" }}>Prisloni karticu čitaču</div>
+            <button type="button" className="btn" style={{ fontSize: 24, padding: "14px 40px" }} onClick={() => promijeniNacin("dolazak")}>Odustani</button>
+          </div>
+        ) : nacin === "potrosniGotovo" && potrosniGotovo ? (
+          <div style={{ padding: "30px 24px", borderRadius: 6, background: "#EAF6EF", border: "1px solid #B9E3C9" }}>
+            <div style={{ fontSize: 44, fontWeight: 700, color: "#1F6B41" }}>{potrosniGotovo.vec ? "VEĆ ZABILJEŽENO" : "ZABILJEŽENO 🙂"}</div>
+            <div style={{ fontSize: 28, margin: "6px 0 10px" }}>{potrosniGotovo.ime} {potrosniGotovo.prezime}</div>
+            {potrosniGotovo.stavke.map((st, i) => <div key={i} style={{ fontSize: 24, color: "var(--ink-soft)" }}>{st.kolicina} {st.jm} — {st.naziv}</div>)}
+          </div>
+        ) : poruka ? (
           <div style={{ padding: "34px 28px", borderRadius: 6, marginBottom: 10, background: bojePoruke[poruka.tip].bg, border: `1px solid ${bojePoruke[poruka.tip].border}` }}>
             <div style={{ fontSize: poruka.tip === "dolazak" || poruka.tip === "odlazak" ? (poruka.tekst.length > 10 ? 32 : 48) : 36, fontWeight: 700, marginBottom: poruka.detalj ? 8 : 0, letterSpacing: poruka.tip === "dolazak" || poruka.tip === "odlazak" ? "0.05em" : 0, color: poruka.tip === "greska" ? bojePoruke.greska.naslov : poruka.tip === "dolazak" || poruka.tip === "odlazak" ? bojePoruke[poruka.tip].naslov : "var(--ink)" }}>{poruka.tekst}</div>
             {poruka.detalj && <div style={{ fontSize: 24, color: "var(--ink-soft)" }}>{poruka.detalj}</div>}
           </div>
         ) : (
           <div style={{ fontSize: 26, color: "var(--ink-soft)" }}>Prisloni karticu čitaču</div>
+        )}
+        {nacin === "dolazak" && (
+          <button type="button" className="btn btn-primary" style={{ marginTop: 30, fontSize: 30, padding: "20px 60px" }} onClick={() => promijeniNacin("potrosniKartica", 30 * 1000)}>Potrošni materijal</button>
         )}
         {/* Skriveni input i dalje hvata upis RFID čitača (koji radi kao tipkovnica) — samo
             više nema vidljivu kućicu za ručno upisivanje koda. */}
@@ -2147,6 +2276,7 @@ function KioskView({ onPrijava }) {
           style={{ position: "absolute", width: 1, height: 1, opacity: 0, border: "none", padding: 0 }}
         />
       </div>
+      )}
       {onPrijava ? (
         <button onClick={onPrijava} className="btn btn-primary" style={{ position: "fixed", bottom: 20, right: 20 }}>Prijava</button>
       ) : (
@@ -2875,10 +3005,10 @@ export default function App() {
           <PracenjeAktivnosti modul={aktivnaStranica} />
           {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} showToast={showToast} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} patchZadatakNapomena={patchZadatakNapomena} potvrdiObavijesti={potvrdiObavijesti} otvoriTransporte={() => { setTransportiTab("narudzbe"); setPage("transporti"); }} otvoriUskladenost={(grupa) => { setEvidencijaSatiPocetak({ tab: "satinalozi", prikaz: "uskladenost", grupa: grupa || "radiona" }); setPage("evidencijasati"); }} />}
           {aktivnaStranica === "direktor" && <DirektorskiPregledPage db={db} mojId={zaposlenik?.id} showToast={showToast} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) { setOtvoriProjektId(id); setPage("projekti"); } else showToast("Nemate pristup modulu Projekti."); }} />}
-          {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} dodajMaticne={dodajMaticne} />}
+          {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} dodajMaticne={dodajMaticne} refetchKljuc={refetchKljuc} />}
           {aktivnaStranica === "kontrola" && <KontrolaKvalitetePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} projektId={kkProjektId} ocistiProjekt={() => setKkProjektId(null)} />}
           {aktivnaStranica === "transporti" && <TransportiPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} pocetniTab={transportiTab} ocistiTab={() => setTransportiTab(null)} />}
-          {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} dodajMaticne={dodajMaticne} />}
+          {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} dodajMaticne={dodajMaticne} refetchKljuc={refetchKljuc} />}
           {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage refetchKljuc={refetchKljuc} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjekt={dopusteniKljucevi.includes("projekti") ? (id) => { setOtvoriProjektId(id); setPage("projekti"); } : undefined} />}
           {(aktivnaStranica === "projekti" || aktivnaStranica === "ponude") && <ProjektiPage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} spremiNormativ={spremiNormativ} patchProjekt={patchProjekt} patchProjekti={patchProjekti} pridruziPonudu={pridruziPonudu} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjektId={otvoriProjektId} ocistiOtvoriProjekt={() => setOtvoriProjektId(null)} otvoriKvalitetu={dopusteniKljucevi.includes("kontrola") ? (id) => { setKkProjektId(id); setPage("kontrola"); } : undefined} />}
           {(aktivnaStranica === "otpremnice" || aktivnaStranica === "fakturiranje") && <FakturiranjePage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} />}
@@ -2906,7 +3036,7 @@ export default function App() {
 
 /* ============================== OBAVIJESTI O ZADACIMA ============================== */
 const kljucObavijesti = (o) => `${o.vrsta}|${o.izvor}|${o.projektId || ""}|${o.zadId}`;
-const imeIzPopisa = (zaposlenici, id) => { const z = (zaposlenici || []).find((x) => x.id === id); return z ? `${z.ime} ${z.prezime}` : "Netko"; };
+const imeIzPopisa = (zaposlenici, id) => { if (id === "sustav") return "ERP"; const z = (zaposlenici || []).find((x) => x.id === id); return z ? `${z.ime} ${z.prezime}` : "Netko"; };
 const opisObavijesti = (o, ime) => (o.vrsta === "dodjela"
   ? `Novi zadatak od ${ime(o.od)}: »${o.naziv}«${o.projektSifra ? ` (${o.projektSifra})` : ""}`
   : `Završen zadatak »${o.naziv}«${o.projektSifra ? ` (${o.projektSifra})` : ""} — ${ime(o.od)}`);
@@ -4562,13 +4692,14 @@ function ZalihaStupac({ materijal, knjiga, katalog, vrsta }) {
   return <RedoviZalihe redovi={redovi} zadnji={vise ? "" : undefined}>{(r, i) => (samoOpca ? (i === 0 ? materijal.lokacija : "") : (r.lokacija || NEMA))}</RedoviZalihe>;
 }
 
-function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne }) {
+function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne, refetchKljuc }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "skladiste");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "zalihe");
   useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "zalihe"); }, [dozvKartice, tab]);
   const mozeZalihe = dozvolaZaKarticu(mojaPozicija, "skladiste", "zalihe").izmjene;
   const mozeKatalog = dozvolaZaKarticu(mojaPozicija, "skladiste", "katalog").izmjene;
   const mozeKvaliteta = dozvolaZaKarticu(mojaPozicija, "skladiste", "kvaliteta").izmjene;
+  const mozeStornoPotrosnje = dozvolaZaKarticu(mojaPozicija, "skladiste", "potrosnja").izmjene;
   const mozeIzdatnice = dozvolaZaKarticu(mojaPozicija, "skladiste", "izdatnice").izmjene;
   const [modal, setModal] = useState(null); // {mode:'add'|'edit', item}
   const [del, setDel] = useState(null);
@@ -4749,6 +4880,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne }) {
         {dozvKartice.some((k) => k.key === "katalog") && <div className={`nav-tab ${tab === "katalog" ? "active" : ""}`} onClick={() => setTab("katalog")}>Katalog profila i limova</div>}
         {dozvKartice.some((k) => k.key === "kvaliteta") && <div className={`nav-tab ${tab === "kvaliteta" ? "active" : ""}`} onClick={() => setTab("kvaliteta")}>Kvaliteta materijala</div>}
         {dozvKartice.some((k) => k.key === "izdatnice") && <div className={`nav-tab ${tab === "izdatnice" ? "active" : ""}`} onClick={() => setTab("izdatnice")}>Izdatnice</div>}
+        {dozvKartice.some((k) => k.key === "potrosnja") && <div className={`nav-tab ${tab === "potrosnja" ? "active" : ""}`} onClick={() => setTab("potrosnja")}>Potrošnja po radniku</div>}
       </div>
 
       {tab === "zalihe" && (<>
@@ -4761,9 +4893,13 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne }) {
               {[["profili", "Skladište profila"], ["ploce", "Skladište ploča"], ["ostalo", "Ostalo"]].map(([g, naziv]) => (
                 <Btn key={g} variant={grupaZaliha === g ? "primary" : "ghost"} onClick={() => odaberi(g)}>{naziv} ({broj(g)})</Btn>
               ))}
+              <Btn key="potrosni" variant={grupaZaliha === "potrosni" ? "primary" : "ghost"} onClick={() => odaberi("potrosni")}>Potrošni materijal ({(db.potrosniMaterijal || []).filter((a) => a.aktivan !== false).length})</Btn>
             </div>
           );
         })()}
+        {grupaZaliha === "potrosni" ? (
+          <PotrosniMaterijalPanel db={db} showToast={showToast} refetchKljuc={refetchKljuc} mozeUrediti={mozeZalihe} />
+        ) : (<>
         {(() => {
           const nultih = db.materijali.filter((m) => !(Number(m.kolicina) > 0)).length;
           return nultih > 0 && (
@@ -4831,6 +4967,7 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne }) {
             ) },
           ]}
         />
+        </>)}
       </>)}
 
       {tab === "katalog" && (
@@ -4871,6 +5008,8 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne }) {
           />
         </>
       )}
+
+      {tab === "potrosnja" && <PotrosnjaPoRadnikuTab db={db} showToast={showToast} refetchKljuc={refetchKljuc} mozeStorno={mozeStornoPotrosnje} />}
 
       {tab === "izdatnice" && (<>
         <ZaIzdavanjePanel db={db} mozeIzdati={mozeIzdatnice} onIzdaj={otvoriIzdavanje} onOslobodi={setOslobodiZa} />
@@ -5061,6 +5200,298 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne }) {
 // Odjeljak "Za izdavanje" na vrhu kartice Izdatnice: što je rezervirano za projekte, a nije izdano (jedan klik pripremi izdatnicu),
 // projekti u izradi koji nikad nisu dobili materijal i rezervacije koje vise na arhiviranim/otkazanim projektima.
 // Logika: izdavanjeRezervirano.js; izdavanje i oslobađanje obavlja SkladistePage (isti modal izdatnice, ista pravila FIFO/stanja).
+/* ============================== POTROŠNI MATERIJAL ============================== */
+// Zalihe potrošnog materijala (rukavice, brusne ploče, žica…), unos na kiosku karticom i pregled potrošnje po radniku. Stanje mijenja SAMO poslužitelj
+// (rute /api/potrosni/* i kiosk) u transakciji — preglednik ovdje samo šalje radnju i ponovno učita popis, nikad ne sprema cijeli popis.
+const potrosniApi = async (metoda, putanja, tijelo) => {
+  const res = await fetch(`${API_URL}${putanja}`, { method: metoda, headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` }, body: tijelo === undefined ? undefined : JSON.stringify(tijelo) });
+  const podaci = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(podaci.error || "Greška na poslužitelju — pokušaj ponovno.");
+  return podaci;
+};
+const JEDINICE_POTROSNOG = ["kom", "par", "kg", "l", "m", "pak", "kutija", "rolna", "boca"];
+const fmtKol = (v) => (Math.round((Number(v) || 0) * 1000) / 1000).toLocaleString("hr-HR");
+
+function PotrosniMaterijalPanel({ db, showToast, refetchKljuc, mozeUrediti }) {
+  const artikli = db.potrosniMaterijal || [];
+  const [potroseno, setPotroseno] = useState({});
+  const [filter, setFilter] = useState("");
+  const [forma, setForma] = useState(null); // { id?, naziv, jm, skupina, minZaliha, stanje, aktivan, napomena }
+  const [primka, setPrimka] = useState(null); // { artikl, kolicina, napomena }
+  const [korekcija, setKorekcija] = useState(null); // { artikl, novoStanje, napomena }
+  const [uvoz, setUvoz] = useState(null); // { tekst }
+  const [saljem, setSaljem] = useState(false);
+  const osvjezi = async () => {
+    await refetchKljuc("potrosniMaterijal");
+    try { setPotroseno((await potrosniApi("GET", "/api/potrosni/zadnjih30")).potroseno || {}); } catch { /* stupac "potrošeno" je dodatak */ }
+  };
+  useEffect(() => { osvjezi().catch(() => {}); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  const izvedi = async (radnja, poruka) => {
+    if (saljem) return false;
+    setSaljem(true);
+    try { const r = await radnja(); await osvjezi(); if (poruka) showToast(typeof poruka === "function" ? poruka(r) : poruka); return true; }
+    catch (e) { showToast(e.message); return false; }
+    finally { setSaljem(false); }
+  };
+  const skupine = [...new Set(artikli.map((a) => a.skupina).filter(Boolean))].sort((a, b) => a.localeCompare(b, "hr"));
+  const vidljivi = artikli.filter((a) => !filter.trim() || `${a.naziv} ${a.skupina || ""}`.toLowerCase().includes(filter.trim().toLowerCase()))
+    .sort((a, b) => (b.naruciti ? 1 : 0) - (a.naruciti ? 1 : 0) || String(a.skupina || "").localeCompare(String(b.skupina || ""), "hr") || a.naziv.localeCompare(b.naziv, "hr"));
+  const zaNaruciti = artikli.filter((a) => a.aktivan !== false && a.naruciti).length;
+  const osoba = db.potrosniPostavke?.nabavaOsobaId || "";
+  const postaviOsobu = (id) => izvedi(async () => { await potrosniApi("PUT", "/api/potrosni/postavke", { nabavaOsobaId: id }); await refetchKljuc("potrosniPostavke"); }, id ? "Odgovorna osoba spremljena." : "Odgovorna osoba uklonjena — zadaci za naručivanje se ne šalju.");
+  const spremiArtikl = async () => {
+    const f = forma;
+    if (!String(f.naziv || "").trim()) { showToast("Naziv je obavezan."); return; }
+    if (await izvedi(() => potrosniApi("PUT", "/api/potrosni/artikl", { id: f.id, naziv: f.naziv, jm: f.jm, skupina: f.skupina, minZaliha: f.minZaliha, stanje: f.id ? undefined : f.stanje, aktivan: f.aktivan !== false, napomena: f.napomena }), "Artikl spremljen.")) setForma(null);
+  };
+  const spremiPrimku = async () => {
+    if (await izvedi(() => potrosniApi("POST", "/api/potrosni/zaprimi", { artiklId: primka.artikl.id, kolicina: Number(String(primka.kolicina).replace(",", ".")), napomena: primka.napomena }), `Zaprimljeno: ${primka.artikl.naziv}.`)) setPrimka(null);
+  };
+  const spremiKorekciju = async () => {
+    if (await izvedi(() => potrosniApi("POST", "/api/potrosni/korekcija", { artiklId: korekcija.artikl.id, novoStanje: Number(String(korekcija.novoStanje).replace(",", ".")), napomena: korekcija.napomena }), `Stanje ispravljeno: ${korekcija.artikl.naziv}.`)) setKorekcija(null);
+  };
+  const razradiUvoz = uvoz ? parsirajUvoz(uvoz.tekst) : null;
+  const provediUvoz = async () => {
+    if (!razradiUvoz?.redovi.length) { showToast("Nema redaka za uvoz."); return; }
+    const r = await izvedi(() => potrosniApi("POST", "/api/potrosni/uvoz", { redovi: razradiUvoz.redovi }), (o) => `Uvezeno ${o.dodano} artikala${o.preskoceno?.length ? `, preskočeno ${o.preskoceno.length} (već postoje ili neispravni)` : ""}.`);
+    if (r) setUvoz(null);
+  };
+  const th = { textAlign: "left" };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ width: 240 }}>
+          <label className="label">Traži</label>
+          <input className="input" aria-label="Traži potrošni materijal" placeholder="naziv ili skupina" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        </div>
+        {mozeUrediti && <Btn variant="primary" icon={Plus} onClick={() => setForma({ naziv: "", jm: "kom", skupina: "", minZaliha: "", stanje: "", aktivan: true, napomena: "" })}>Novi artikl</Btn>}
+        {mozeUrediti && <Btn icon={Upload} onClick={() => setUvoz({ tekst: "" })}>Uvoz iz Excela</Btn>}
+        <div style={{ flex: 1 }} />
+        {mozeUrediti && (
+          <div style={{ width: 280 }}>
+            <label className="label">Odgovorna osoba za naručivanje</label>
+            <select className="select" aria-label="Odgovorna osoba za naručivanje" value={osoba} disabled={saljem} onChange={(e) => postaviOsobu(e.target.value)}>
+              <option value="">— nije određena —</option>
+              {izborZaposlenika(db).sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+            </select>
+          </div>
+        )}
+      </div>
+      {!osoba && <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 10 }}>Dok odgovorna osoba nije određena, zadaci „Naručiti…” se ne šalju; artikli ispod minimuma vide se u popisu „Potrošni materijal za naručiti” u Nabavi.</div>}
+      {zaNaruciti > 0 && <div style={{ fontSize: 13, color: "var(--rust)", fontWeight: 600, marginBottom: 8 }}><AlertTriangle size={14} style={{ verticalAlign: -2, marginRight: 4 }} />Za naručiti: {zaNaruciti} {mnoz(zaNaruciti, "artikl", "artikla", "artikala")}</div>}
+      {artikli.length === 0 ? <EmptyState text="Još nema potrošnog materijala. Dodaj artikle ili uvezi popis iz Excela." /> : (
+        <table className="erp-table">
+          <thead><tr><th style={th}>Naziv</th><th style={th}>Skupina</th><th style={th}>Stanje</th><th style={th}>Minimum</th><th style={th}>Potrošeno 30 d</th><th style={{ width: 230 }} /></tr></thead>
+          <tbody>
+            {vidljivi.map((a) => (
+              <tr key={a.id} className={a.naruciti ? "row-warn" : ""} style={a.aktivan === false ? { opacity: 0.55 } : undefined}>
+                <td><strong>{a.naziv}</strong>{a.aktivan === false && <span className="badge badge-muted" style={{ marginLeft: 6 }}>neaktivan</span>}</td>
+                <td style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>{a.skupina || "—"}</td>
+                <td>
+                  <span className="f-mono" style={{ fontWeight: a.naruciti || a.stanje < 0 ? 700 : 400, color: a.naruciti || a.stanje < 0 ? "var(--rust)" : "inherit" }}>{fmtKol(a.stanje)} {a.jm}</span>
+                  {a.naruciti && <span className="badge" style={{ marginLeft: 6, background: "var(--rust)", color: "#fff" }}>{a.narucenoDatum ? `naručeno ${fmtDate(a.narucenoDatum)}` : "naručiti"}</span>}
+                  {a.stanje < 0 && <div style={{ fontSize: 11, color: "var(--rust)" }}>stanje u minusu — provjeri brojanjem</div>}
+                </td>
+                <td className="f-mono">{Number(a.minZaliha) > 0 ? `${fmtKol(a.minZaliha)} ${a.jm}` : <span style={{ color: "var(--ink-faint)" }}>—</span>}</td>
+                <td className="f-mono">{potroseno[a.id] ? `${fmtKol(potroseno[a.id])} ${a.jm}` : <span style={{ color: "var(--ink-faint)" }}>—</span>}</td>
+                <td>
+                  {mozeUrediti && (
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                      <Btn size="sm" variant="primary" icon={Plus} onClick={() => setPrimka({ artikl: a, kolicina: "", napomena: "" })}>Zaprimi</Btn>
+                      <Btn size="sm" variant="ghost" onClick={() => setKorekcija({ artikl: a, novoStanje: String(a.stanje), napomena: "" })}>Korekcija</Btn>
+                      <Btn size="sm" variant="ghost" icon={Pencil} onClick={() => setForma({ ...a, minZaliha: String(a.minZaliha || ""), napomena: a.napomena || "" })}>Uredi</Btn>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 10 }}>Stanje se skida samo kad radnik na tabletu (kiosk → „Potrošni materijal”) prisloni karticu i odabere što je uzeo; zaprimanje i korekcija (nakon brojanja) rade se ovdje. Kad stanje padne na minimum ili ispod, odgovornoj osobi stiže zadatak „Naručiti…”.</p>
+
+      {forma && (
+        <Modal title={forma.id ? "Uredi artikl" : "Novi artikl"} onClose={() => setForma(null)} footer={<><Btn onClick={() => setForma(null)}>Odustani</Btn><Btn variant="primary" icon={Save} disabled={saljem} onClick={spremiArtikl}>Spremi</Btn></>}>
+          <Field label="Naziv"><input className="input" autoFocus value={forma.naziv} onChange={(e) => setForma({ ...forma, naziv: e.target.value })} /></Field>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Field label="Jedinica mjere"><input className="input" list="jedinice-potrosnog" value={forma.jm} onChange={(e) => setForma({ ...forma, jm: e.target.value })} /><datalist id="jedinice-potrosnog">{JEDINICE_POTROSNOG.map((j) => <option key={j} value={j} />)}</datalist></Field>
+            <Field label="Skupina (npr. Zaštita, Brušenje, Varenje)"><input className="input" list="skupine-potrosnog" value={forma.skupina} onChange={(e) => setForma({ ...forma, skupina: e.target.value })} /><datalist id="skupine-potrosnog">{skupine.map((s) => <option key={s} value={s} />)}</datalist></Field>
+            <Field label="Minimum (na toj razini ide upozorenje; 0 = bez)"><input className="input f-mono" inputMode="decimal" value={forma.minZaliha} onChange={(e) => setForma({ ...forma, minZaliha: e.target.value })} /></Field>
+            {!forma.id && <Field label="Početno stanje"><input className="input f-mono" inputMode="decimal" value={forma.stanje} onChange={(e) => setForma({ ...forma, stanje: e.target.value })} /></Field>}
+          </div>
+          <Field label="Napomena (neobavezno)"><input className="input" value={forma.napomena} onChange={(e) => setForma({ ...forma, napomena: e.target.value })} /></Field>
+          {forma.id && <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}><input type="checkbox" checked={forma.aktivan !== false} onChange={(e) => setForma({ ...forma, aktivan: e.target.checked })} />Aktivan (neaktivan se više ne nudi radnicima na tabletu)</label>}
+          {forma.id && <p style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Stanje se ne mijenja ovdje nego zaprimanjem ili korekcijom, da svaka promjena ostane zapisana.</p>}
+        </Modal>
+      )}
+      {primka && (
+        <Modal title={`Zaprimi — ${primka.artikl.naziv}`} onClose={() => setPrimka(null)} footer={<><Btn onClick={() => setPrimka(null)}>Odustani</Btn><Btn variant="primary" icon={Save} disabled={saljem} onClick={spremiPrimku}>Zaprimi</Btn></>}>
+          <p style={{ fontSize: 13, color: "var(--ink-soft)", marginTop: 0 }}>Sada na stanju: <strong>{fmtKol(primka.artikl.stanje)} {primka.artikl.jm}</strong></p>
+          <Field label={`Zaprimljena količina (${primka.artikl.jm})`}><input className="input f-mono" autoFocus inputMode="decimal" value={primka.kolicina} onChange={(e) => setPrimka({ ...primka, kolicina: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") spremiPrimku(); }} /></Field>
+          <Field label="Napomena (npr. broj otpremnice, neobavezno)"><input className="input" value={primka.napomena} onChange={(e) => setPrimka({ ...primka, napomena: e.target.value })} /></Field>
+        </Modal>
+      )}
+      {korekcija && (
+        <Modal title={`Korekcija stanja — ${korekcija.artikl.naziv}`} onClose={() => setKorekcija(null)} footer={<><Btn onClick={() => setKorekcija(null)}>Odustani</Btn><Btn variant="primary" icon={Save} disabled={saljem} onClick={spremiKorekciju}>Spremi stanje</Btn></>}>
+          <p style={{ fontSize: 13, color: "var(--ink-soft)", marginTop: 0 }}>Upiši koliko stvarno ima nakon brojanja. Razlika se zapisuje u dnevnik, a stanje postaje upisana vrijednost.</p>
+          <Field label={`Prebrojeno stanje (${korekcija.artikl.jm})`}><input className="input f-mono" autoFocus inputMode="decimal" value={korekcija.novoStanje} onChange={(e) => setKorekcija({ ...korekcija, novoStanje: e.target.value })} /></Field>
+          <Field label="Razlog (neobavezno)"><input className="input" value={korekcija.napomena} onChange={(e) => setKorekcija({ ...korekcija, napomena: e.target.value })} /></Field>
+        </Modal>
+      )}
+      {uvoz && (
+        <Modal wide title="Uvoz potrošnog materijala iz Excela" onClose={() => setUvoz(null)} footer={<><Btn onClick={() => setUvoz(null)}>Odustani</Btn><Btn variant="primary" icon={Upload} disabled={saljem || !razradiUvoz?.redovi.length} onClick={provediUvoz}>Uvezi {razradiUvoz?.redovi.length || 0} artikala</Btn></>}>
+          <p style={{ fontSize: 13, color: "var(--ink-soft)", marginTop: 0 }}>U Excelu označi stupce <strong>Naziv, Jedinica, Početno stanje, Minimum, Skupina</strong> (redom; zadnja tri po želji), kopiraj ih i zalijepi ovdje. Prvi redak može biti zaglavlje. Artikli koji već postoje preskaču se.</p>
+          <textarea className="textarea" rows={10} autoFocus placeholder={"Rukavice kožne\tpar\t120\t40\tZaštita\nŽica za varenje 1,0\tkg\t60\t20\tVarenje"} value={uvoz.tekst} onChange={(e) => setUvoz({ tekst: e.target.value })} />
+          {uvoz.tekst.trim() && (
+            <div style={{ fontSize: 12.5, marginTop: 8 }}>
+              <strong>{razradiUvoz.redovi.length}</strong> redaka spremno za uvoz{razradiUvoz.greske.length > 0 && <span style={{ color: "var(--rust)" }}>, {razradiUvoz.greske.length} s greškom: {razradiUvoz.greske.slice(0, 5).map((g) => `red ${g.red} (${g.razlog})`).join("; ")}</span>}
+            </div>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// Potrošnja potrošnog materijala po radniku, mjesecu i godini: tablica radnik × mjeseci; klik na broj otvara pojedinačna uzimanja (uz storno za one s izmjenama).
+function PotrosnjaPoRadnikuTab({ db, showToast, refetchKljuc, mozeStorno }) {
+  const [godina, setGodina] = useState(() => new Date().getFullYear());
+  const [artiklId, setArtiklId] = useState("");
+  const [redovi, setRedovi] = useState([]);
+  const [ucitava, setUcitava] = useState(true);
+  const [detalj, setDetalj] = useState(null); // { zaposlenikId, zaposlenik, mjesec, redovi }
+  const ucitaj = async (g = godina) => {
+    setUcitava(true);
+    try { setRedovi((await potrosniApi("GET", `/api/potrosni/potrosnja?godina=${g}`)).redovi || []); }
+    catch (e) { showToast(e.message); setRedovi([]); }
+    finally { setUcitava(false); }
+  };
+  useEffect(() => { ucitaj(godina); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [godina]);
+  const artikliUPregledu = [...new Map([...(db.potrosniMaterijal || []).map((a) => [a.id, a.naziv]), ...redovi.map((r) => [r.artiklId, r.artikl])]).entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1]), "hr"));
+  const m = matricaPotrosnje(redovi, godina, artiklId);
+  const godine = [0, 1, 2, 3].map((i) => new Date().getFullYear() - i);
+  const ime = (r) => r.zaposlenik;
+  const prikaz = (v) => (v ? (artiklId ? fmtKol(v) : String(v)) : "");
+  const otvoriDetalj = async (radnik, mjesec) => {
+    try { setDetalj({ zaposlenikId: radnik.zaposlenikId, zaposlenik: ime(radnik), mjesec, redovi: (await potrosniApi("GET", `/api/potrosni/dnevnik?zaposlenikId=${encodeURIComponent(radnik.zaposlenikId)}&mjesec=${mjesec}`)).redovi || [] }); }
+    catch (e) { showToast(e.message); }
+  };
+  const storno = async (zapis) => {
+    try {
+      await potrosniApi("POST", "/api/potrosni/storno", { zapisId: zapis.id });
+      showToast(`Storno: ${zapis.artikl} × ${fmtKol(zapis.kolicina)} — stanje vraćeno.`);
+      await Promise.all([ucitaj(godina), refetchKljuc("potrosniMaterijal")]);
+      setDetalj((d) => (d ? { ...d, redovi: d.redovi.map((x) => (x.id === zapis.id ? { ...x, storno: true } : x)) } : d));
+    } catch (e) { showToast(e.message); }
+  };
+  const izvozCsv = () => {
+    const polje = (v) => { const t = String(v ?? ""); return /[;"\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+    const tekst = [["Radnik", "Mjesec", "Artikl", "Količina", "Jedinica", "Broj uzimanja"], ...redovi.filter((r) => !artiklId || r.artiklId === artiklId).map((r) => [r.zaposlenik, r.mjesec, r.artikl, String(r.kolicina).replace(".", ","), r.jm, r.broj])].map((r) => r.map(polje).join(";")).join("\r\n");
+    preuzmiDatoteku(new Blob(["﻿" + tekst], { type: "text/csv;charset=utf-8" }), `Potrosni_materijal_${godina}.csv`);
+  };
+  const celija = { textAlign: "right", fontFamily: "var(--mono, monospace)" };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ width: 120 }}>
+          <label className="label">Godina</label>
+          <select className="select" aria-label="Godina" value={godina} onChange={(e) => setGodina(Number(e.target.value))}>{godine.map((g) => <option key={g} value={g}>{g}</option>)}</select>
+        </div>
+        <div style={{ width: 280 }}>
+          <label className="label">Artikl</label>
+          <select className="select" aria-label="Artikl" value={artiklId} onChange={(e) => setArtiklId(e.target.value)}>
+            <option value="">Svi artikli (broj uzimanja)</option>
+            {artikliUPregledu.map(([id, naziv]) => <option key={id} value={id}>{naziv}</option>)}
+          </select>
+        </div>
+        <div style={{ flex: 1 }} />
+        <Btn icon={Download} onClick={izvozCsv} disabled={!redovi.length}>CSV</Btn>
+      </div>
+      {ucitava ? <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>Učitavanje…</div> : m.radnici.length === 0 ? <EmptyState text={`Nema zabilježene potrošnje za ${godina}.`} /> : (
+        <div style={{ overflowX: "auto" }}>
+          <table className="erp-table">
+            <thead><tr><th style={{ textAlign: "left" }}>Radnik</th>{MJESECI_KRATKO.map((k) => <th key={k} style={{ textAlign: "right" }}>{k}</th>)}<th style={{ textAlign: "right" }}>{godina}.</th></tr></thead>
+            <tbody>
+              {m.radnici.map((r) => (
+                <tr key={r.zaposlenikId}>
+                  <td><strong>{ime(r)}</strong></td>
+                  {m.mjeseci.map((mj) => (
+                    <td key={mj} style={celija}>
+                      {r.poMjesecu[mj] ? <button type="button" className="btn btn-ghost btn-sm" style={{ padding: "2px 8px" }} title="Prikaži pojedinačna uzimanja" onClick={() => otvoriDetalj(r, mj)}>{prikaz(r.poMjesecu[mj])}</button> : ""}
+                    </td>
+                  ))}
+                  <td style={{ ...celija, fontWeight: 700 }}>{prikaz(r.ukupno)}{artiklId && m.jm ? ` ${m.jm}` : ""}</td>
+                </tr>
+              ))}
+              <tr style={{ borderTop: "2px solid var(--line)", fontWeight: 700 }}>
+                <td>Ukupno</td>{m.mjeseci.map((mj) => <td key={mj} style={celija}>{prikaz(m.zbrojPoMjesecu[mj])}</td>)}<td style={celija}>{prikaz(m.ukupno)}{artiklId && m.jm ? ` ${m.jm}` : ""}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 10 }}>{artiklId ? "Prikazana je količina odabranog artikla." : "Prikazan je broj uzimanja (količine različitih jedinica se ne zbrajaju) — odaberi artikl za količine."} Pogrešan klik na tabletu može se stornirati: klik na broj → Storno (stanje se vraća).</p>
+      {detalj && (
+        <Modal wide title={`${detalj.zaposlenik} — ${detalj.mjesec.slice(5)}/${detalj.mjesec.slice(0, 4)}`} onClose={() => setDetalj(null)} footer={<Btn onClick={() => setDetalj(null)}>Zatvori</Btn>}>
+          {detalj.redovi.length === 0 ? <EmptyState text="Nema zapisa." /> : (
+            <table className="erp-table">
+              <thead><tr><th style={{ textAlign: "left" }}>Vrijeme</th><th style={{ textAlign: "left" }}>Artikl</th><th style={{ textAlign: "right" }}>Količina</th><th style={{ textAlign: "left" }}>Vrsta</th><th /></tr></thead>
+              <tbody>
+                {detalj.redovi.map((z) => (
+                  <tr key={z.id} style={z.storno ? { opacity: 0.5, textDecoration: "line-through" } : undefined}>
+                    <td className="f-mono">{new Date(z.vrijeme).toLocaleString("hr-HR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</td>
+                    <td>{z.artikl}</td>
+                    <td className="f-mono" style={{ textAlign: "right" }}>{fmtKol(z.kolicina)} {z.jm}</td>
+                    <td style={{ fontSize: 12.5 }}>{z.vrsta === "uzimanje" ? "uzimanje" : z.vrsta}{z.storno ? " (storno)" : ""}</td>
+                    <td>{mozeStorno && z.vrsta === "uzimanje" && !z.storno && <Btn size="sm" variant="ghost" onClick={() => { if (window.confirm(`Stornirati uzimanje „${z.artikl} × ${fmtKol(z.kolicina)}”? Stanje na skladištu se vraća.`)) storno(z); }}>Storno</Btn>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// Popis u Nabavi: potrošni materijal koji je pao na minimum ili ispod — "Naručeno" bilježi da je narudžba poslana (artikl ostaje na popisu do zaprimanja).
+function PotrosniZaNarucivanjePanel({ db, showToast, refetchKljuc, mozeOznaciti }) {
+  const popis = zaNarucivanje(db.potrosniMaterijal);
+  const [saljem, setSaljem] = useState(false);
+  if (popis.length === 0) return null;
+  const oznaci = async (a, naruceno) => {
+    if (saljem) return;
+    setSaljem(true);
+    try { await potrosniApi("POST", "/api/potrosni/naruceno", { artiklId: a.id, naruceno }); await refetchKljuc("potrosniMaterijal"); showToast(naruceno ? `Označeno kao naručeno: ${a.naziv}.` : `Oznaka naručeno uklonjena: ${a.naziv}.`); }
+    catch (e) { showToast(e.message); }
+    finally { setSaljem(false); }
+  };
+  return (
+    <div className="card" style={{ padding: "10px 14px", marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <AlertTriangle size={16} color="var(--rust)" />
+        <strong style={{ fontSize: 14 }}>Potrošni materijal za naručiti ({popis.length})</strong>
+      </div>
+      <table className="erp-table">
+        <thead><tr><th style={{ textAlign: "left" }}>Artikl</th><th style={{ textAlign: "left" }}>Stanje</th><th style={{ textAlign: "left" }}>Minimum</th><th style={{ textAlign: "left" }}>Od</th><th style={{ width: 150 }} /></tr></thead>
+        <tbody>
+          {popis.map((a) => (
+            <tr key={a.id}>
+              <td><strong>{a.naziv}</strong>{a.skupina && <span style={{ fontSize: 11.5, color: "var(--ink-faint)" }}> · {a.skupina}</span>}</td>
+              <td className="f-mono" style={{ color: "var(--rust)", fontWeight: 700 }}>{fmtKol(a.stanje)} {a.jm}</td>
+              <td className="f-mono">{fmtKol(a.minZaliha)} {a.jm}</td>
+              <td style={{ fontSize: 12.5 }}>{a.upozorenjeDatum ? fmtDate(a.upozorenjeDatum) : "—"}{a.narucenoDatum && <div style={{ color: "var(--steel)" }}>naručeno {fmtDate(a.narucenoDatum)}</div>}</td>
+              <td>{mozeOznaciti && (a.narucenoDatum ? <Btn size="sm" variant="ghost" disabled={saljem} onClick={() => oznaci(a, false)}>Poništi „naručeno”</Btn> : <Btn size="sm" variant="primary" disabled={saljem} onClick={() => oznaci(a, true)}>Naručeno</Btn>)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 6 }}>Artikl nestaje s popisa kad se zaprimi u Skladište → Zalihe → Potrošni materijal.</div>
+    </div>
+  );
+}
+
 // Hrvatski množinski oblik: 1 → jedan, 2–4 → dva, ostalo (i 11–14) → pet.
 const mnoz = (n, jedan, dva, pet) => { const k = n % 100; if (k >= 11 && k <= 14) return pet; const z = n % 10; return z === 1 ? jedan : z >= 2 && z <= 4 ? dva : pet; };
 function ZaIzdavanjePanel({ db, mozeIzdati, onIzdaj, onOslobodi }) {
@@ -6098,7 +6529,7 @@ function NaruceneCijenePanel({ narudzbenica, db }) {
   );
 }
 
-function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, dodajMaticne }) {
+function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, dodajMaticne, refetchKljuc }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "nabava");
   const [tab, setTab] = useState(dozvKartice[0]?.key || "narudzbenice");
   useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "narudzbenice"); }, [dozvKartice, tab]);
@@ -6285,7 +6716,8 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
         {imaPostavke && <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setPostavkeOpen(true)}>Postavke tvrtke</Btn>}
       </div>
 
-      {tab === "narudzbenice" && (
+      {tab === "narudzbenice" && (<>
+        <PotrosniZaNarucivanjePanel db={db} showToast={showToast} refetchKljuc={refetchKljuc} mozeOznaciti={mozeNarudzbenice} />
         <EntityPage
           title="" data={db.narudzbenice} onAdd={openAdd} onEdit={openEdit} onDelete={(r) => setDel(r)}
           addLabel="Nova narudžbenica" searchKeys={["broj"]} readOnly={!mozeNarudzbenice}
@@ -6300,7 +6732,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
             { key: "primi", label: "", render: (r) => r.status !== "Primljeno" && r.stavke.length > 0 ? <Btn size="sm" icon={PackageCheck} onClick={() => setZaprimanjeZa(r)}>Primi robu</Btn> : null },
           ]}
         />
-      )}
+      </>)}
 
       {tab === "upiti" && (
         <EntityPage

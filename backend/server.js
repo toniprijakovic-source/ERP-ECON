@@ -93,7 +93,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
   "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca",
   "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije", "maticnaKnjiga", "upitiTransporta", "narudzbeTransporta", "godisnjiOdmor", "xrechnungPostavke",
-  "kadrovskiPodaci", "radnaMjesta", "uputnice", "pregledi", "zastitaPostavke", "prijedlozi", "statistikaIsporuka",
+  "kadrovskiPodaci", "radnaMjesta", "uputnice", "pregledi", "zastitaPostavke", "prijedlozi", "statistikaIsporuka", "potrosniMaterijal", "potrosniPostavke",
 ];
 
 // Svaki modul (isti "moduli" popis kao u pozicijeZaposlenika) dijeli se na kartice — iste
@@ -112,13 +112,15 @@ const KARTICE_MODULA = {
     pregled: { citanje: ["projekti", "radniNalozi", "narudzbe", "otpremnice", "cmr", "narudzbenice", "izdatnice", "podlogeZaFakturu", "ponude", "kupci", "zaposlenici"], pisanje: [] },
   },
   skladiste: {
-    zalihe: { citanje: ["materijali", "katalogProfila", "kvaliteteMaterijala", "projekti", "izdatnice", "zaposlenici", "rezervacije", "narudzbenice", "dobavljaci", "postavkeTvrtke", "maticnaKnjiga"], pisanje: ["materijali", "izdatnice", "rezervacije"] },
+    zalihe: { citanje: ["materijali", "katalogProfila", "kvaliteteMaterijala", "projekti", "izdatnice", "zaposlenici", "rezervacije", "narudzbenice", "dobavljaci", "postavkeTvrtke", "maticnaKnjiga", "potrosniMaterijal", "potrosniPostavke"], pisanje: ["materijali", "izdatnice", "rezervacije"] },
+    // Potrošnja potrošnog materijala po radniku/mjesecu/godini (dnevnik je u tablici potrosni_dnevnik, čita ga ruta /api/potrosni/potrosnja); storno traži izmjene ove kartice.
+    potrosnja: { citanje: ["zaposlenici", "potrosniMaterijal"], pisanje: [] },
     katalog: { citanje: ["katalogProfila"], pisanje: ["katalogProfila"] },
     kvaliteta: { citanje: ["kvaliteteMaterijala"], pisanje: ["kvaliteteMaterijala"] },
     izdatnice: { citanje: ["izdatnice", "materijali", "projekti", "zaposlenici", "rezervacije", "maticnaKnjiga"], pisanje: ["izdatnice", "materijali", "rezervacije"] },
   },
   nabava: {
-    narudzbenice: { citanje: ["narudzbenice", "dobavljaci", "katalogProfila", "materijali", "projekti", "kvaliteteMaterijala", "rezervacije", "postavkeTvrtke", "maticnaKnjiga"], pisanje: ["narudzbenice", "materijali", "rezervacije", "maticnaKnjiga"] },
+    narudzbenice: { citanje: ["narudzbenice", "dobavljaci", "katalogProfila", "materijali", "projekti", "kvaliteteMaterijala", "rezervacije", "postavkeTvrtke", "maticnaKnjiga", "potrosniMaterijal"], pisanje: ["narudzbenice", "materijali", "rezervacije", "maticnaKnjiga"] },
     upiti: { citanje: ["upitiNabave", "dobavljaci", "materijali", "kvaliteteMaterijala", "katalogProfila"], pisanje: ["upitiNabave", "narudzbenice", "materijali"] },
     postavke: { citanje: ["postavkeTvrtke"], pisanje: ["postavkeTvrtke"] },
   },
@@ -229,10 +231,11 @@ const filtrirajPrijedloge = (prijedlozi, pozicija, zaposlenikId) => (Array.isArr
 const UVIJEK_CITLJIVO = ["zaposlenici", "pozicijeZaposlenika", "postavkeTvrtke", "prijedlozi"];
 
 // Ključevi čija je vrijednost objekt (ne niz) — koristi se za ispravan "prazan" placeholder.
-const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi", "postavkePlaca", "planProizvodnje", "nedovrsenaProizvodnja", "godisnjiOdmor", "xrechnungPostavke", "zastitaPostavke", "statistikaIsporuka"]);
+const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi", "postavkePlaca", "planProizvodnje", "nedovrsenaProizvodnja", "godisnjiOdmor", "xrechnungPostavke", "zastitaPostavke", "statistikaIsporuka", "potrosniPostavke"]);
 // Popisi koji se spremaju SAMO ciljano (PUT /api/<ključ>/patch): zastarjeli preglednik ne smije cijelim popisom prepisati uputnice (brojevi, snimke
 // izdanih uputnica) ni osobne podatke radnika. Ostalo (zastitaPostavke) se sprema kao cijeli objekt.
-const SAMO_CILJANO = new Set(["kadrovskiPodaci", "radnaMjesta", "uputnice", "pregledi", "prijedlozi"]);
+// Potrošni materijal (artikli i odgovorna osoba): stanje mijenjaju samo rute /api/potrosni/* i kiosk, nikad cijeli popis iz preglednika (vidi potrosni-rute.js).
+const SAMO_CILJANO = new Set(["kadrovskiPodaci", "radnaMjesta", "uputnice", "pregledi", "prijedlozi", "potrosniMaterijal", "potrosniPostavke"]);
 
 async function ucitajPozicijuZaposlenika(zaposlenikId) {
   const [zaposlenici, pozicije] = await Promise.all([ucitajKljuc("zaposlenici"), ucitajKljuc("pozicijeZaposlenika")]);
@@ -2560,6 +2563,9 @@ async function migrirajDirektorskiPregled() {
   }
 }
 
+// Potrošni materijal: kiosk (uzimanje karticom), zalihe, naručivanje i pregled potrošnje po radniku (potrosni-rute.js).
+const potrosniRute = require("./potrosni-rute").registrirajPotrosneRute(app, { pool, autentikacija, ucitajPozicijuZaposlenika, dozvolaZaKarticu, klijentIp, neuspjeliKiosk });
+
 // Zajednički error handler: greške iz ruta (vidi omotač async ruta gore) i neispravan JSON u tijelu zahtjeva vraćaju se kao JSON,
 // a poslužitelj ostaje živ.
 app.use((err, req, res, next) => {
@@ -2578,6 +2584,7 @@ app.listen(PORT, () => {
   // Migracije pozicija diraju isti zapis (pozicijeZaposlenika), pa idu jedna za drugom, a ne istodobno (svaka sama hvata svoje greške).
   (async () => { await migrirajEvidencijaSati(); await migrirajZastituNaRadu(); await migrirajDirektorskiPregled(); })();
   pripremiKorekcije();
+  potrosniRute.pripremi();
   pripremiAktivnost();
   setInterval(pripremiAktivnost, 6 * 60 * 60 * 1000);
   provjeriAutoOdjavu();

@@ -13,7 +13,7 @@ require("dotenv").config({ path: require("path").join(__dirname, ".env") });
 const path = require("path");
 const fs = require("fs");
 const { Pool } = require("pg");
-const { TABLICE } = require("./backup-sef"); // jedini popis tablica izvan app_data (fiksan, nikad iz vanjskog unosa)
+const { TABLICE, procitajTablicu } = require("./backup-sef"); // jedini popis tablica izvan app_data (fiksan, nikad iz vanjskog unosa)
 
 const MAPA_BACKUPA = "C:\\Users\\Econ\\Desktop\\ERP _ECON\\ERP-Backupovi";
 const DANA_CUVATI = 30;
@@ -44,7 +44,7 @@ async function napraviKopiju({ pool, mapa = MAPA_BACKUPA, sada = new Date() }) {
 
   // Tablice kao JSON koji sastavlja sama baza (json_agg/row_to_json), isto kao u backup-sef.js: datumi i brojevi ostaju točni.
   const tablice = {};
-  for (const t of TABLICE) tablice[t] = (await pool.query(`SELECT coalesce(json_agg(row_to_json(t)), '[]'::json) AS redovi FROM ${t} t`)).rows[0].redovi;
+  for (const t of TABLICE) tablice[t] = await procitajTablicu(pool, t);
 
   const paket = { __erp_backup: true, verzija: 1, datum: sada.toISOString(), podaci, tablice };
   const odrediste = path.join(mapa, nazivDatoteke(sada));
