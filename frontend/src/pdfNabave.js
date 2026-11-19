@@ -100,7 +100,7 @@ export async function napraviPdfUpitaMaterijala({ broj, datum, izradioIme, stavk
 
 // PDF ponude kupcu (vektorski tekst) — isti sadržaj kao ispis ponude u aplikaciji (hrvatski ili njemački), za privitak e-pošte.
 // L = prijevodi (PRIJEVODI_PONUDE), brojevi su već formatirani u aplikaciji da PDF i ispis uvijek pokazuju isto.
-export async function napraviPdfPonude({ ponuda, kupac, tvrtka, izradio, redci, osnovicaTekst, pdvTekst, ukupnoTekst, pdvStopa, jezik, L, datumTekst, vrijediDoTekst, pozdrav }) {
+export async function napraviPdfPonude({ ponuda, kupac, tvrtka, izradio, redci, osnovicaTekst, pdvTekst, ukupnoTekst, pdvStopa, jezik, L, datumTekst, vrijediDoTekst, pozdrav, popust }) {
   const pdfMake = await ucitajPdfMake();
   const t = tvrtka || {};
   const siva = "#555";
@@ -126,9 +126,15 @@ export async function napraviPdfPonude({ ponuda, kupac, tvrtka, izradio, redci, 
     { text: r.jedCijenaTekst, alignment: "right", fontSize: 9 },
     { text: r.ukupnoTekst, alignment: "right", fontSize: 9 },
   ]);
+  // Popust (ako ga ponuda ima) ide kao zasebna stavka iznad osnovice: zbroj stavki, popust, pa osnovica/ukupno nakon popusta.
+  const popustRedovi = popust ? [
+    [{ text: L.zbrojStavki, color: siva }, { text: popust.zbrojTekst, bold: true, alignment: "right" }],
+    [{ text: `${L.popust} (${popust.postotakTekst}%):`, color: siva }, { text: `−${popust.iznosTekst}`, bold: true, alignment: "right" }],
+  ] : [];
   const zbrojevi = de
-    ? [[{ text: L.ukupno, bold: true, fontSize: 11 }, { text: osnovicaTekst, bold: true, alignment: "right", fontSize: 12 }]]
+    ? [...popustRedovi, [{ text: L.ukupno, bold: true, fontSize: 11 }, { text: osnovicaTekst, bold: true, alignment: "right", fontSize: 12 }]]
     : [
+      ...popustRedovi,
       [{ text: L.osnovica, color: siva }, { text: osnovicaTekst, bold: true, alignment: "right" }],
       [{ text: `${L.pdv} (${pdvStopa}%):`, color: siva }, { text: pdvTekst, bold: true, alignment: "right" }],
       [{ text: L.ukupno, bold: true, fontSize: 11, margin: [0, 4, 0, 0] }, { text: ukupnoTekst, bold: true, alignment: "right", fontSize: 12, margin: [0, 4, 0, 0] }],
