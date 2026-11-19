@@ -2,30 +2,21 @@
 // Isključivo ČITA iz baze (nikad ne piše), sprema jednu JSON datoteku po pokretanju u istom
 // formatu koji aplikacija sama koristi za svoj "Backup" gumb (Zaposlenici → ... → Backup), pa se
 // po potrebi može vratiti natrag kroz tu istu opciju u aplikaciji.
+//
+// SPREMA SVE: ključeve iz app_data uzima SAMA iz baze (nema ručno održavanog popisa, pa novi ključ
+// ulazi u kopiju već pri sljedećem pokretanju), a uz njih i tablice izvan app_data (popis TABLICE iz
+// backup-sef.js: korekcije_bodova, aktivnost_dan, login_log) u polju "tablice". Aplikacijski gumb
+// "Uvoz" čita samo polje "podaci", pa dodatna polja ne smetaju; tablice se vraćaju skriptom
+// vrati-backup.js iz šifrirane (.sef) kopije.
+// Nakon upisa datoteka se odmah pročita i provjeri; neispravna se briše i skripta javlja grešku.
 require("dotenv").config({ path: require("path").join(__dirname, ".env") });
 const path = require("path");
 const fs = require("fs");
 const { Pool } = require("pg");
+const { TABLICE } = require("./backup-sef"); // jedini popis tablica izvan app_data (fiksan, nikad iz vanjskog unosa)
 
 const MAPA_BACKUPA = "C:\\Users\\Econ\\Desktop\\ERP _ECON\\ERP-Backupovi";
 const DANA_CUVATI = 30;
-
-// Isti popis ključeva kao STORAGE_KEYS u frontend/src/App.jsx — ručno održavano jer skripta ne
-// uvozi frontend kod. Ako se u aplikaciji doda novi ključ, treba ga dodati i ovdje.
-const KLJUCEVI = [
-  "kupci", "dobavljaci", "materijali", "projekti", "narudzbenice", "ponude",
-  "radniNalozi", "fakture", "cjenikRada", "katalogProfila", "pozicijeZaposlenika",
-  "zaposlenici", "standardniZadaci", "programiRezanja", "kapacitetiDana",
-  "postavkeTvrtke", "upitiNabave", "radniCentri", "evidencijaRada",
-  "narudzbe", "otpremnice", "podlogeZaFakturu", "normativi",
-  "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca",
-  "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije", "maticnaKnjiga", "upitiTransporta", "narudzbeTransporta", "godisnjiOdmor",
-];
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL?.includes("supabase") ? { rejectUnauthorized: false } : undefined,
-});
 
 const nazivDatoteke = (datum) => {
   const p2 = (n) => String(n).padStart(2, "0");
@@ -43,20 +34,48 @@ const obrisiStareBackupove = () => {
   return obrisano;
 };
 
-(async () => {
-  fs.mkdirSync(MAPA_BACKUPA, { recursive: true });
+// pool: objekt s query() (pg Pool). Vraća sažetak napravljene kopije. Baca grešku ako kopija nije ispravna.
+async function napraviKopiju({ pool, mapa = MAPA_BACKUPA, sada = new Date() }) {
+  fs.mkdirSync(mapa, { recursive: true });
 
-  const r = await pool.query("SELECT key, value FROM app_data");
-  const stvarno = Object.fromEntries(r.rows.map((row) => [row.key, row.value]));
-  const podaci = Object.fromEntries(KLJUCEVI.map((k) => [k, stvarno[k] ?? []]));
-  const paket = { __erp_backup: true, verzija: 1, datum: new Date().toISOString(), podaci };
+  const r = await pool.query("SELECT key, value FROM app_data ORDER BY key");
+  if (!r.rows.length) throw new Error("app_data je prazna — kopija bez podataka se ne sprema (provjeri DATABASE_URL).");
+  const podaci = Object.fromEntries(r.rows.map((row) => [row.key, row.value]));
 
-  const datum = new Date();
-  const odrediste = path.join(MAPA_BACKUPA, nazivDatoteke(datum));
+  // Tablice kao JSON koji sastavlja sama baza (json_agg/row_to_json), isto kao u backup-sef.js: datumi i brojevi ostaju točni.
+  const tablice = {};
+  for (const t of TABLICE) tablice[t] = (await pool.query(`SELECT coalesce(json_agg(row_to_json(t)), '[]'::json) AS redovi FROM ${t} t`)).rows[0].redovi;
+
+  const paket = { __erp_backup: true, verzija: 1, datum: sada.toISOString(), podaci, tablice };
+  const odrediste = path.join(mapa, nazivDatoteke(sada));
   fs.writeFileSync(odrediste, JSON.stringify(paket, null, 2), "utf8");
 
-  const obrisano = obrisiStareBackupove();
-  console.log(`[${datum.toISOString()}] Backup spremljen: ${odrediste} (${(fs.statSync(odrediste).size / 1024).toFixed(1)} KB)${obrisano ? ` — obrisano ${obrisano} starih backupova (>${DANA_CUVATI} dana)` : ""}`);
+  // Provjera odmah nakon upisa: datoteka se mora pročitati i imati iste ključeve i iste brojeve redaka kao što smo upisali.
+  try {
+    const provjera = JSON.parse(fs.readFileSync(odrediste, "utf8"));
+    if (Object.keys(provjera.podaci).length !== Object.keys(podaci).length) throw new Error("broj ključeva u kopiji se ne poklapa");
+    for (const t of TABLICE) if (provjera.tablice[t].length !== tablice[t].length) throw new Error(`broj redaka tablice ${t} se ne poklapa`);
+  } catch (e) {
+    fs.unlinkSync(odrediste);
+    throw new Error(`Kopija je odmah nakon upisa provjerena i NIJE ispravna (obrisana): ${e.message}`);
+  }
 
-  await pool.end();
-})().catch((e) => { console.error("Greška kod izrade backupa:", e); process.exit(1); });
+  return { odrediste, kljuceva: Object.keys(podaci).length, tablice: Object.fromEntries(TABLICE.map((t) => [t, tablice[t].length])), velicinaKB: fs.statSync(odrediste).size / 1024 };
+}
+
+module.exports = { napraviKopiju, nazivDatoteke };
+
+if (require.main === module) {
+  const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DATABASE_URL?.includes("supabase") ? { rejectUnauthorized: false } : undefined,
+  });
+  (async () => {
+    const sada = new Date();
+    const s = await napraviKopiju({ pool, sada });
+    const obrisano = obrisiStareBackupove();
+    console.log(`[${sada.toISOString()}] Backup spremljen: ${s.odrediste} (${s.velicinaKB.toFixed(1)} KB, ${s.kljuceva} ključeva + tablice ${Object.entries(s.tablice).map(([t, n]) => `${t}: ${n}`).join(", ")})${obrisano ? ` — obrisano ${obrisano} starih backupova (>${DANA_CUVATI} dana)` : ""}`);
+  })()
+    .catch((e) => { console.error("Greška kod izrade backupa:", e.message || e); process.exitCode = 1; })
+    .finally(() => pool.end().catch(() => {}));
+}
