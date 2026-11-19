@@ -19,7 +19,7 @@ import { praznikaZaDodati, praznikaIzvanZakona, imaPraznikeGodine } from "./praz
 import { STATUSI_PROJEKTA, projektDovrsen, projektAktivan, projektPrimaDokumente, prijelazStatusa } from "./statusProjekta";
 import { RAZLOZI_POMAKA_ROKA, analizaRokova, kasneProjekti, zapisPromjeneRoka, dodajPromjenuRoka } from "./rokoviProjekata";
 import { direktorskiPregled, PRAGOVI as PRAGOVI_PREGLEDA, OPIS_SEMAFORA as OPIS_SEMAFORA_PREGLEDA } from "./direktorskiPregled";
-import { stavkeIzRezervacija, pregledZaIzdavanje, ukloniRezervacije } from "./izdavanjeRezervirano";
+import { stavkeIzRezervacija, pregledZaIzdavanje, ukloniRezervacije, rasporediSPrvim } from "./izdavanjeRezervirano";
 import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, ogranicenjeStavke, pocetnaKolicina, visakStavke, zatvoriIsporuke, vratiZatvoreneIsporuke } from "./otpremniceKontrola";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
 
@@ -2893,7 +2893,7 @@ export default function App() {
       {cekaBrisanje && <ConfirmDelete label={cekaBrisanje.naziv} onCancel={() => setCekaBrisanje(null)} onConfirm={() => { const akcija = cekaBrisanje.akcija; setCekaBrisanje(null); akcija(); }} />}
       {backupOpen && <BackupModal db={db} update={update} showToast={showToast} onClose={() => setBackupOpen(false)} />}
       {prijedloziOtvoreno && <PrijedloziModal db={db} mojId={zaposlenik?.id} jeUpravitelj={["poz-direktor", "poz-administrator"].includes(mojaPozicija?.id)} moduli={NAV} aktivniModul={aktivnaStranica} spremi={spremiCiljano} showToast={showToast} onClose={() => setPrijedloziOtvoreno(false)} />}
-      {mbKartica && <MaticniBrojKarticaModal broj={mbKartica} db={db} onClose={() => { setMbKartica(""); window.history.replaceState(null, "", window.location.pathname); }} />}
+      {mbKartica && <MaticniBrojKarticaModal broj={mbKartica} db={db} update={update} showToast={showToast} mozeIzdati={dopusteniKljucevi.includes("skladiste") && dozvolaZaKarticu(mojaPozicija, "skladiste", "izdatnice").izmjene} onClose={() => { setMbKartica(""); window.history.replaceState(null, "", window.location.pathname); }} />}
 
       {toast && (
         <div style={{ position: "fixed", bottom: 20, right: 20, maxWidth: "calc(100vw - 40px)", background: "var(--ink)", color: "#fff", padding: "10px 16px", borderRadius: 3, fontSize: 13, display: "flex", alignItems: "center", gap: 8, zIndex: 100 }}>
@@ -3783,8 +3783,10 @@ async function ispisiNaljepniceMaterijala(popis, nazivTvrtke) {
 // Kartica matičnog broja: otvara se skeniranjem QR koda s naljepnice (?mb=3700) — materijal, šarža, atest,
 // stanje i na koje je projekte izdano. Prijavljenom korisniku iz podataka aplikacije (koliko njegova pozicija
 // vidi), a bez prijave s javne rute /api/javno/maticni/:broj (isti podaci, bez cijena) — vidi JavnaKarticaMaticnog.
-function MaticniBrojKarticaModal({ broj, db, onClose }) {
+function MaticniBrojKarticaModal({ broj, db, onClose, mozeIzdati = false, update, showToast }) {
   const z = (db.maticnaKnjiga || []).find((x) => String(x.broj) === String(broj).trim());
+  const [izdaj, setIzdaj] = useState(false); // izdavanje ovog matičnog broja na projekt (skeniran QR → "Izdaj na projekt")
+  const [ispis, setIspis] = useState(null); // upravo napravljena izdatnica
   const potrosnja = useMemo(() => potrosnjaPoMaticnim(db.izdatnice), [db.izdatnice]);
   const izdano = useMemo(() => {
     if (!z) return [];
@@ -3799,12 +3801,24 @@ function MaticniBrojKarticaModal({ broj, db, onClose }) {
     ...z, dobavljac: (db.dobavljaci || []).find((d) => d.id === z.dobavljacId)?.naziv || "", dimenzije: dimenzijeMaticnog(z, db),
     iskoristeno: zaokruziKolicinu(potrosnja.get(z.id) || 0), preostalo: preostaloMaticnog(z, potrosnja), izdano,
   };
+  // Materijal ovog matičnog broja mora postojati na zalihi i imati što izdati — inače gumba nema.
+  const materijal = z ? (db.materijali || []).find((m) => m.id === z.materijalId) : null;
+  const moguceIzdati = !!(mozeIzdati && update && showToast && materijal && Number(materijal.kolicina) > 0 && podaci && Number(podaci.preostalo) > 0);
+  const predlozak = moguceIzdati ? {
+    stavke: [{ materijalId: materijal.id, kolicina: "", po: {}, prvoMaticniId: z.id }],
+    napomene: [`Skenirani matični broj ${z.broj}${z.sarza ? ` (šarža ${z.sarza})` : ""}${podaci.dimenzije ? `, ${podaci.dimenzije}` : ""}: preostalo ${podaci.preostalo} ${z.jm || ""}. Izdaje se prvi — upiši količinu${redoviViseDuzina(materijal, db) ? " (po dužinama)" : ""}.`],
+    opis: "skenirani matični broj",
+  } : null;
   return (
-    <Modal title={`Matični broj ${broj}`} onClose={onClose} footer={<Btn onClick={onClose}>Zatvori</Btn>}>
-      {!z ? (
-        <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>Matični broj {broj} nije pronađen, ili tvoja pozicija nema pristup matičnoj knjizi.</p>
-      ) : <MaticniBrojPodaci z={podaci} sAtestom />}
-    </Modal>
+    <>
+      <Modal title={`Matični broj ${broj}`} onClose={onClose} footer={<>{moguceIzdati && <Btn variant="primary" icon={PackageMinus} onClick={() => setIzdaj(true)}>Izdaj na projekt</Btn>}<Btn onClick={onClose}>Zatvori</Btn></>}>
+        {!z ? (
+          <p style={{ fontSize: 13, color: "var(--ink-soft)" }}>Matični broj {broj} nije pronađen, ili tvoja pozicija nema pristup matičnoj knjizi.</p>
+        ) : <MaticniBrojPodaci z={podaci} sAtestom />}
+      </Modal>
+      {izdaj && predlozak && <IzdatnicaModal db={db} update={update} showToast={showToast} initialMaterijalId={materijal.id} predlozak={predlozak} onClose={() => setIzdaj(false)} onCreated={(nova) => { setIzdaj(false); setIspis(nova); }} />}
+      {ispis && <IzdatnicaPrintModal izdatnica={ispis} projekt={(db.projekti || []).find((p) => p.id === ispis.projektId)} izdao={(db.zaposlenici || []).find((x) => x.id === ispis.izdaoId)} postavkeTvrtke={db.postavkeTvrtke} onClose={() => setIspis(null)} />}
+    </>
   );
 }
 
@@ -5259,7 +5273,14 @@ function IzdatnicaModal({ db, update, showToast, initialMaterijalId, initialProj
         const izdanoRedovi = izd ? izd.map((r) => ({ duzinaMM: Number(r.duzinaMM), sirinaMM: r.sirinaMM ? Number(r.sirinaMM) : null, komada: r.izdano })) : null;
         // cijena: cijena na skladištu u trenutku izdavanja — da vrijednost izdanog materijala (npr.
         // u izvještaju nedovršene proizvodnje) ostane ista i kad se cijena na skladištu kasnije promijeni.
-        return { id: uid("izds"), materijalId: s.materijalId, sifra: mat.sifra, naziv: mat.naziv, jm: mat.jm, dimenzije: izd ? izd.map((r) => `${opisDuzine(r, jeLim)} × ${r.izdano}`).join("; ") : (mat.dimenzije || ""), ...(izdanoRedovi ? { izdanoRedovi } : {}), kolicinaIzdano: Number(s.kolicina), kolicinaVraceno: null, cijena: Number(mat.cijena) || 0, matBrojevi: izd ? rasporediPoFormatima(db, potrosnja, s.materijalId, izd, Number(s.kolicina)) : rasporediFifo(db.maticnaKnjiga || [], potrosnja, s.materijalId, Number(s.kolicina)) };
+        return { id: uid("izds"), materijalId: s.materijalId, sifra: mat.sifra, naziv: mat.naziv, jm: mat.jm, dimenzije: izd ? izd.map((r) => `${opisDuzine(r, jeLim)} × ${r.izdano}`).join("; ") : (mat.dimenzije || ""), ...(izdanoRedovi ? { izdanoRedovi } : {}), kolicinaIzdano: Number(s.kolicina), kolicinaVraceno: null, cijena: Number(mat.cijena) || 0, matBrojevi: rasporediSPrvim({
+          // skenirani matični broj (s.prvoMaticniId) se troši prvi; ostatak po formatima / FIFO-u kao i dosad
+          zapis: s.prvoMaticniId ? (db.maticnaKnjiga || []).find((z) => z.id === s.prvoMaticniId && z.materijalId === s.materijalId) : null,
+          preostalo: (() => { const z = s.prvoMaticniId ? (db.maticnaKnjiga || []).find((x) => x.id === s.prvoMaticniId) : null; return z ? preostaloMaticnog(z, potrosnja) : 0; })(),
+          ukupno: Number(s.kolicina),
+          zauzmi: (id, k) => potrosnja.set(id, (potrosnja.get(id) || 0) + k),
+          ostatak: (k) => (izd ? rasporediPoFormatima(db, potrosnja, s.materijalId, izd, k) : rasporediFifo(db.maticnaKnjiga || [], potrosnja, s.materijalId, k)),
+        }) };
       }),
     };
     update("materijali", noviMaterijali);
@@ -5319,7 +5340,7 @@ function IzdatnicaModal({ db, update, showToast, initialMaterijalId, initialProj
           </div>
         );
       })()}
-      <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Stavke za izdavanje{predlozak ? " — predloženo prema rezerviranom materijalu" : ""}</div>
+      <div className="label" style={{ marginTop: 6, marginBottom: 6 }}>Stavke za izdavanje{predlozak ? ` — ${predlozak.opis || "predloženo prema rezerviranom materijalu"}` : ""}</div>
       <table className="erp-table" style={{ marginBottom: 8 }}>
         <thead><tr><th>Materijal</th><th style={{ width: 140 }}>Količina</th><th style={{ width: 32 }}></th></tr></thead>
         <tbody>
@@ -5328,7 +5349,7 @@ function IzdatnicaModal({ db, update, showToast, initialMaterijalId, initialProj
             return (
               <tr key={i}>
                 <td>
-                  <select className="select" value={s.materijalId} onChange={(e) => azurirajStavku(i, { materijalId: e.target.value, kolicina: "", po: {} })}>
+                  <select className="select" value={s.materijalId} onChange={(e) => azurirajStavku(i, { materijalId: e.target.value, kolicina: "", po: {}, prvoMaticniId: null })}>
                     <option value="">Odaberi materijal…</option>
                     {db.materijali.filter((m) => m.kolicina > 0).map((m) => <option key={m.id} value={m.id}>{m.sifra} — {m.naziv} (na stanju: {m.kolicina} {m.jm})</option>)}
                   </select>

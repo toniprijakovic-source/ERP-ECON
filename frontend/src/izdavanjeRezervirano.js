@@ -102,5 +102,25 @@ export function pregledZaIzdavanje({ projekti, rezervacije, izdatnice, materijal
   return { zaIzdati, bezMaterijala, zatvoreni };
 }
 
+// Izdavanje počinje od ZADANOG matičnog broja (skeniran QR s naljepnice: komad koji skladištar drži u ruci mora u sljedivost
+// pod svojim brojem, a ne pod najstarijim po FIFO-u). Prvo se troši preostalo tog broja (do tražene količine), a ostatak
+// raspoređuje funkcija ostatak(kolicina) → [{ maticniId, broj, kolicina }] (FIFO / po formatima). zauzmi(maticniId, kolicina)
+// evidentira potrošnju u zajedničkoj mapi (više stavki istog materijala u jednoj izdatnici). Isti broj se spaja u jedan redak.
+export function rasporediSPrvim({ zapis, preostalo, ukupno, ostatak, zauzmi }) {
+  const trazeno = Number(ukupno) || 0;
+  const uzmi = zapis ? Math.min(Number(preostalo) || 0, trazeno) : 0;
+  if (!(uzmi > 0.0005)) return ostatak(trazeno);
+  zauzmi(zapis.id, uzmi);
+  const ostalo = zaokruzi(trazeno - uzmi);
+  const rest = ostalo > 0.0005 ? ostatak(ostalo) : [];
+  const spojeno = new Map([[zapis.id, { maticniId: zapis.id, broj: zapis.broj, kolicina: zaokruzi(uzmi) }]]);
+  rest.forEach((a) => {
+    const kljuc = a.maticniId || "bez";
+    const x = spojeno.get(kljuc);
+    spojeno.set(kljuc, x ? { ...x, kolicina: zaokruzi(x.kolicina + a.kolicina) } : a);
+  });
+  return [...spojeno.values()];
+}
+
 // Rezervacije bez zadanih ids (za "Oslobodi") — vraća novi popis rezervacija.
 export const ukloniRezervacije = (rezervacije, ids) => (rezervacije || []).filter((r) => !ids.includes(r.id));

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { rezerviranoPoProjektu, stavkeIzRezervacija, pregledZaIzdavanje, ukloniRezervacije } from "./izdavanjeRezervirano.js";
+import { rezerviranoPoProjektu, stavkeIzRezervacija, pregledZaIzdavanje, ukloniRezervacije, rasporediSPrvim } from "./izdavanjeRezervirano.js";
 
 const rez = (id, projektId, materijalId, kolicina, extra = {}) => ({ id, projektId, materijalId, kolicina, ...extra });
 // materijal s više dužina: redovi dolaze iz aplikacije (redoviZa), ovdje ih zadajemo izravno
@@ -118,4 +118,30 @@ test("pregledZaIzdavanje: stavka nosi stanje i oznaku manjka; materijal koji ne 
 
 test("ukloniRezervacije: miče samo zadane", () => {
   assert.deepEqual(ukloniRezervacije([{ id: "r1" }, { id: "r2" }, { id: "r3" }], ["r1", "r3"]), [{ id: "r2" }]);
+});
+
+test("rasporediSPrvim: zadani matični broj se troši prvi, ostatak ide dalje i spaja se po broju", () => {
+  const potrosnja = new Map();
+  const ostatakPozvan = [];
+  const r = rasporediSPrvim({
+    zapis: { id: "mb-2", broj: 3706 }, preostalo: 3, ukupno: 5,
+    zauzmi: (id, k) => potrosnja.set(id, (potrosnja.get(id) || 0) + k),
+    ostatak: (k) => { ostatakPozvan.push(k); return [{ maticniId: "mb-1", broj: 3700, kolicina: 1 }, { maticniId: "mb-2", broj: 3706, kolicina: 1 }]; },
+  });
+  assert.deepEqual(ostatakPozvan, [2]);
+  assert.deepEqual(r, [{ maticniId: "mb-2", broj: 3706, kolicina: 4 }, { maticniId: "mb-1", broj: 3700, kolicina: 1 }]);
+  assert.equal(potrosnja.get("mb-2"), 3);
+});
+
+test("rasporediSPrvim: dovoljno u zadanom broju — ostatak se ne traži; nema zapisa ili nema preostalog — sve ide dalje", () => {
+  let pozvan = 0;
+  const ostatak = (k) => { pozvan += 1; return [{ maticniId: null, broj: null, kolicina: k }]; };
+  const potrosnja = new Map();
+  const zauzmi = (id, k) => potrosnja.set(id, k);
+  assert.deepEqual(rasporediSPrvim({ zapis: { id: "mb-2", broj: 3706 }, preostalo: 10, ukupno: 4, ostatak, zauzmi }), [{ maticniId: "mb-2", broj: 3706, kolicina: 4 }]);
+  assert.equal(pozvan, 0);
+  assert.deepEqual(rasporediSPrvim({ zapis: { id: "mb-2", broj: 3706 }, preostalo: 0, ukupno: 4, ostatak, zauzmi }), [{ maticniId: null, broj: null, kolicina: 4 }]);
+  assert.deepEqual(rasporediSPrvim({ zapis: null, preostalo: 9, ukupno: 2, ostatak, zauzmi }), [{ maticniId: null, broj: null, kolicina: 2 }]);
+  assert.equal(pozvan, 2);
+  assert.equal(potrosnja.size, 1); // zauzmi samo za prvi slučaj
 });
