@@ -4,7 +4,7 @@ import {
   Plus, Pencil, Trash2, X, Search, AlertTriangle, CheckCircle2, ArrowRight,
   Clock, ChevronRight, Save, PackageCheck, PackageMinus, Settings, Layers,
   ChevronDown, ChevronUp, ChevronLeft, FolderInput, Eye, UserCog, CalendarRange,
-  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors, Printer, Bell, Menu, ShieldCheck, Container, Mail, HistoryIcon, HardHat, Lightbulb
+  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors, Printer, Bell, Menu, ShieldCheck, Container, Mail, HistoryIcon, HardHat, Lightbulb, Gauge
 } from "lucide-react";
 import logoEcon from "./assets/logo-econ.jpg";
 import QRCode from "qrcode";
@@ -18,6 +18,7 @@ import { prefiksGodine, sljedeciBroj, sljedeciBrojUpita } from "./brojeviDokumen
 import { praznikaZaDodati, praznikaIzvanZakona, imaPraznikeGodine } from "./praznici";
 import { STATUSI_PROJEKTA, projektDovrsen, projektAktivan, projektPrimaDokumente, prijelazStatusa } from "./statusProjekta";
 import { RAZLOZI_POMAKA_ROKA, analizaRokova, kasneProjekti, zapisPromjeneRoka, dodajPromjenuRoka } from "./rokoviProjekata";
+import { direktorskiPregled, PRAGOVI as PRAGOVI_PREGLEDA, OPIS_SEMAFORA as OPIS_SEMAFORA_PREGLEDA } from "./direktorskiPregled";
 import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, ogranicenjeStavke, pocetnaKolicina, visakStavke, zatvoriIsporuke, vratiZatvoreneIsporuke } from "./otpremniceKontrola";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
 
@@ -1893,6 +1894,7 @@ const PageHeader = ({ title, subtitle, icon: Icon, action }) => (
 // "fakturiranje" je ključ modula Financije (zadržan zbog postojećih pozicija).
 const MODULI_APLIKACIJE = [
   { key: "dashboard", label: "Nadzorna ploča", icon: LayoutDashboard },
+  { key: "direktor", label: "Direktorski pregled", icon: Gauge },
   { key: "ponude", label: "Ponude", icon: FileText },
   { key: "projekti", label: "Projekti", icon: Building2 },
   { key: "proizvodnja", label: "Proizvodnja", icon: Factory },
@@ -1914,6 +1916,7 @@ const MODULI_APLIKACIJE = [
 // (koji ključevi se smiju čitati/mijenjati) živi na backendu — vidi KARTICE_MODULA u server.js.
 const KARTICE_MODULA = {
   dashboard: { kartice: [{ key: "pregled", naziv: "Pregled" }] },
+  direktor: { kartice: [{ key: "pregled", naziv: "Pregled" }] },
   skladiste: { kartice: [{ key: "zalihe", naziv: "Zalihe" }, { key: "katalog", naziv: "Katalog profila i limova" }, { key: "kvaliteta", naziv: "Kvaliteta materijala" }, { key: "izdatnice", naziv: "Izdatnice" }] },
   transporti: { kartice: [{ key: "upiti", naziv: "Upiti za transport" }, { key: "narudzbe", naziv: "Narudžbe za transport" }] },
   kontrola: { kartice: [{ key: "maticna", naziv: "Matična knjiga" }, { key: "ugradeni", naziv: "Ugrađeni materijal" }] },
@@ -2870,6 +2873,7 @@ export default function App() {
         <div className="erp-sadrzaj" style={{ padding: 24, flex: 1, overflowY: "auto", minWidth: 0 }}>
           <PracenjeAktivnosti modul={aktivnaStranica} />
           {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} showToast={showToast} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} patchZadatakNapomena={patchZadatakNapomena} potvrdiObavijesti={potvrdiObavijesti} otvoriTransporte={() => { setTransportiTab("narudzbe"); setPage("transporti"); }} otvoriUskladenost={(grupa) => { setEvidencijaSatiPocetak({ tab: "satinalozi", prikaz: "uskladenost", grupa: grupa || "radiona" }); setPage("evidencijasati"); }} />}
+          {aktivnaStranica === "direktor" && <DirektorskiPregledPage db={db} mojId={zaposlenik?.id} showToast={showToast} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) { setOtvoriProjektId(id); setPage("projekti"); } else showToast("Nemate pristup modulu Projekti."); }} />}
           {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} dodajMaticne={dodajMaticne} />}
           {aktivnaStranica === "kontrola" && <KontrolaKvalitetePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} projektId={kkProjektId} ocistiProjekt={() => setKkProjektId(null)} />}
           {aktivnaStranica === "transporti" && <TransportiPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} pocetniTab={transportiTab} ocistiTab={() => setTransportiTab(null)} />}
@@ -3060,6 +3064,151 @@ function UpitnikModal({ zadatak, mozeOdgovarati, onSpremi, onClose }) {
 }
 
 /* ============================== DASHBOARD ============================== */
+/* ============================== DIREKTORSKI PREGLED ============================== */
+// Najveći aktivni projekti sa semaforom i popis iznimki koje traže pažnju direktora. Samo čitanje: sve računa direktorskiPregled.js
+// (vrijednost i isporuka iz iste funkcije kao u Financijama), PDF za ponedjeljni pregled radi pdfDirektorskiPregled.js.
+const SEMAFOR_BADGE = { crveno: ["danger", "Crveno"], zuto: ["warning", "Žuto"], zeleno: ["success", "U redu"] };
+const IZNIMKA_BOJA = { crveno: "var(--rust)", zuto: "var(--accent)", info: "var(--steel)" };
+const BROJ_VELIKIH_PROJEKATA = 10;
+
+function DirektorskiPregledPage({ db, otvoriProjekt, mojId, showToast }) {
+  const [prikaziSve, setPrikaziSve] = useState(false);
+  const [filtar, setFiltar] = useState("sve"); // sve | crveno | zuto
+  const [otvorenaIznimka, setOtvorenaIznimka] = useState(null);
+  const [prikaziSveIznimke, setPrikaziSveIznimke] = useState(false);
+  const [izrada, setIzrada] = useState(false);
+  const danas = todayISO();
+  const pregled = useMemo(() => direktorskiPregled({
+    projekti: db.projekti, radniNalozi: db.radniNalozi, otpremnice: db.otpremnice, cmr: db.cmr || [], narudzbenice: db.narudzbenice || [], izdatnice: db.izdatnice || [],
+    podlogeZaFakturu: db.podlogeZaFakturu || [], ponude: db.ponude || [], kupci: db.kupci || [], zaposlenici: db.zaposlenici || [], danas,
+    isporuceno: (p) => isporucenoProjekta(p, db, danas),
+  }), [db.projekti, db.radniNalozi, db.otpremnice, db.cmr, db.narudzbe, db.narudzbenice, db.izdatnice, db.podlogeZaFakturu, db.ponude, db.kupci, db.zaposlenici, danas]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { kpi, redovi, iznimke } = pregled;
+  const prikazani = redovi.filter((r) => filtar === "sve" || r.semafor === filtar);
+  const vidljivi = prikaziSve || filtar !== "sve" ? prikazani : prikazani.slice(0, BROJ_VELIKIH_PROJEKATA);
+  const vidljiveIznimke = prikaziSveIznimke ? iznimke : iznimke.slice(0, 12);
+  const th = { fontSize: 11, color: "var(--ink-faint)", textAlign: "left", padding: "4px 8px", fontWeight: 600, whiteSpace: "nowrap" };
+  const td = { padding: "7px 8px", borderTop: "1px solid var(--line)", verticalAlign: "top", fontSize: 12.5 };
+  const izradiPdf = async () => {
+    setIzrada(true);
+    try {
+      const { napraviPdfDirektorskogPregleda } = await import("./pdfDirektorskiPregled.js");
+      const izradio = db.zaposlenici.find((z) => z.id === mojId);
+      const bajtovi = await napraviPdfDirektorskogPregleda({ pregled, danas, tvrtka: db.postavkeTvrtke || {}, izradio: izradio ? `${izradio.ime} ${izradio.prezime}` : "", izradeno: new Date().toLocaleString("hr-HR") });
+      preuzmiDatoteku(new Blob([bajtovi], { type: "application/pdf" }), `Direktorski pregled ${danas}.pdf`);
+    } catch (e) {
+      console.error(e);
+      showToast("Greška pri izradi PDF-a.");
+    } finally {
+      setIzrada(false);
+    }
+  };
+  const kpiKartica = (naslov, vrijednost, podnaslov, boja) => (
+    <div className="kpi-card beam-tick">
+      <div className="kpi-num" style={boja ? { color: boja } : undefined}>{vrijednost}</div>
+      <div className="kpi-label">{naslov}</div>
+      {podnaslov && <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 2 }}>{podnaslov}</div>}
+    </div>
+  );
+  const jeProjekt = (id) => db.projekti.some((p) => p.id === id);
+  return (
+    <div>
+      <PageHeader title="Direktorski pregled" subtitle={`Najveći aktivni projekti i iznimke koje traže pažnju — stanje na dan ${fmtDate(danas)}`} icon={Gauge}
+        action={<Btn icon={FileText} onClick={izradiPdf} disabled={izrada}>{izrada ? "Izrada…" : "Ispis / PDF"}</Btn>} />
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12, marginBottom: 18 }}>
+        {kpiKartica("Aktivni projekti", kpi.aktivni.broj, fmtCur(kpi.aktivni.vrijednost))}
+        {kpiKartica("Kasne s rokom", kpi.kasne.broj, kpi.semafor.crveno ? `${kpi.semafor.crveno} crvenih · ${kpi.semafor.zuto} žutih` : `${kpi.semafor.zuto} žutih`, kpi.kasne.broj ? "var(--rust)" : undefined)}
+        {kpiKartica("Još za isporučiti", fmtCur(kpi.zaIsporuku.vrijednost), "vrijednost aktivnih minus isporučeno")}
+        {kpiKartica("Čeka konačni obračun", kpi.cekaObracun.broj, fmtCur(kpi.cekaObracun.vrijednost))}
+        {kpiKartica("Poslane ponude", kpi.ponude.poslane, "čekaju odgovor kupca")}
+      </div>
+
+      <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+          <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600 }}>Aktivni projekti po vrijednosti</h3>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            <Btn size="sm" variant={filtar === "sve" ? "primary" : "ghost"} onClick={() => setFiltar("sve")}>Svi ({redovi.length})</Btn>
+            <Btn size="sm" variant={filtar === "crveno" ? "primary" : "ghost"} onClick={() => setFiltar("crveno")}>Crveno ({kpi.semafor.crveno})</Btn>
+            <Btn size="sm" variant={filtar === "zuto" ? "primary" : "ghost"} onClick={() => setFiltar("zuto")}>Žuto ({kpi.semafor.zuto})</Btn>
+          </div>
+        </div>
+        {vidljivi.length === 0 ? <EmptyState text={filtar === "sve" ? "Nema aktivnih projekata." : "Nema projekata s ovim semaforom."} /> : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 940 }}>
+              <thead><tr><th style={th}>Projekt</th><th style={{ ...th, textAlign: "right" }}>Vrijednost</th><th style={th}>Rok</th><th style={th}>Nalozi</th><th style={th}>Sati / plan</th><th style={th}>Materijal</th><th style={th}>Isporučeno</th><th style={th}>Podloge za fakturu</th><th style={th}>Status</th></tr></thead>
+              <tbody>
+                {vidljivi.map((r) => {
+                  const sat = r.sati;
+                  const satBoja = sat.posto != null && sat.plan >= PRAGOVI_PREGLEDA.minPlanSati ? (sat.posto >= PRAGOVI_PREGLEDA.satiCrveno ? "var(--rust)" : sat.posto >= PRAGOVI_PREGLEDA.satiZuto ? "#8A6100" : undefined) : undefined;
+                  const bezIzdatnice = sat.ostvareno >= PRAGOVI_PREGLEDA.satiBezMaterijala && r.materijal.izdatnica === 0;
+                  const [ton, tekstSemafora] = SEMAFOR_BADGE[r.semafor];
+                  return (
+                    <tr key={r.projekt.id} style={{ cursor: "pointer" }} onClick={() => otvoriProjekt(r.projekt.id)} title="Otvori projekt">
+                      <td style={td}>
+                        <span className="f-mono" style={{ fontWeight: 600 }}>{r.projekt.sifra}</span> {r.projekt.naziv}
+                        <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{[r.kupac, r.status, r.voditelj ? `voditelj ${r.voditelj}` : ""].filter(Boolean).join(" · ")}</div>
+                      </td>
+                      <td style={{ ...td, textAlign: "right" }} className="f-mono">{r.vrijednost > 0 ? fmtCur(r.vrijednost) : <span style={{ color: "var(--ink-faint)" }} title="Vrijednost nije upisana">—</span>}</td>
+                      <td style={td} className="f-mono">{r.rok ? fmtDate(r.rok) : <span style={{ color: "var(--ink-faint)" }}>nema</span>}{r.danaDoRoka != null && <div style={{ fontSize: 11, color: r.danaDoRoka < 0 ? "var(--rust)" : "var(--ink-faint)", fontWeight: r.danaDoRoka < 0 ? 600 : 400 }}>{r.danaDoRoka < 0 ? `kasni ${-r.danaDoRoka} d` : `za ${r.danaDoRoka} d`}</div>}</td>
+                      <td style={td} className="f-mono">{r.nalozi.ukupno ? `${r.nalozi.zavrseno}/${r.nalozi.ukupno}` : "—"}{r.nalozi.posto != null && <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{r.nalozi.posto} %</div>}</td>
+                      <td style={{ ...td, color: satBoja, fontWeight: satBoja ? 600 : 400 }} className="f-mono">{sat.plan > 0 ? <>{fmtSati(sat.ostvareno)} / {fmtSati(sat.plan)} h<div style={{ fontSize: 11 }}>{Math.round(sat.posto)} %</div></> : sat.ostvareno > 0 ? <>{fmtSati(sat.ostvareno)} h<div style={{ fontSize: 11, color: "var(--ink-faint)" }}>bez plana</div></> : "—"}</td>
+                      <td style={{ ...td, color: bezIzdatnice ? "#8A6100" : undefined }} className="f-mono" title={bezIzdatnice ? "Ima upisane sate, a materijal nije izdan sa skladišta" : undefined}>{r.materijal.izdatnica} izd.<div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{r.materijal.narudzbenica} narudžbenica</div></td>
+                      <td style={td} className="f-mono">{r.isporuceno.posto} %{r.isporuceno.upozorenje && <span title="Postotak je približan (stavke bez cijene u narudžbi)" style={{ color: "#8A6100" }}> ~</span>}</td>
+                      <td style={td} className="f-mono">{r.podloge.iznos > 0 ? <>{fmtCur(r.podloge.iznos)}{r.podloge.posto != null && <div style={{ fontSize: 11, color: "var(--ink-faint)" }}>{r.podloge.posto} % vrijednosti</div>}</> : <span style={{ color: "var(--ink-faint)" }}>—</span>}</td>
+                      <td style={td}><span className={`badge badge-${ton}`}>{tekstSemafora}</span>{r.razlozi.map((z) => <div key={z} style={{ fontSize: 11, color: "var(--ink-soft)" }}>{z}</div>)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {filtar === "sve" && redovi.length > BROJ_VELIKIH_PROJEKATA && <Btn size="sm" variant="ghost" style={{ marginTop: 6 }} onClick={() => setPrikaziSve(!prikaziSve)}>{prikaziSve ? "Prikaži samo najveće" : `Prikaži sve (${redovi.length})`}</Btn>}
+        <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 8, lineHeight: 1.5 }}>
+          {OPIS_SEMAFORA_PREGLEDA.map(([boja, opis]) => <div key={boja}><strong>{SEMAFOR_BADGE[boja][1]}:</strong> {opis}</div>)}
+        </div>
+      </div>
+
+      <div className="card" style={{ padding: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <AlertTriangle size={15} color={iznimke.some((i) => i.razina === "crveno") ? "var(--rust)" : "var(--steel)"} />
+          <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600 }}>Iznimke koje traže pažnju ({iznimke.length})</h3>
+        </div>
+        {iznimke.length === 0 ? <EmptyState text="Nema iznimki — sve je u redu." /> : vidljiveIznimke.map((i, idx) => {
+          const kljuc = `${i.vrsta}-${i.projektId || idx}`;
+          const otvorena = otvorenaIznimka === kljuc;
+          const mozeOtvoriti = i.stavke.length > 0;
+          return (
+            <div key={kljuc} style={{ borderTop: "1px solid var(--line)", borderLeft: `3px solid ${IZNIMKA_BOJA[i.razina]}`, padding: "8px 10px", marginTop: idx ? 0 : 4 }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "flex-start", cursor: mozeOtvoriti || i.projektId ? "pointer" : "default" }}
+                onClick={() => { if (mozeOtvoriti) setOtvorenaIznimka(otvorena ? null : kljuc); else if (i.projektId && jeProjekt(i.projektId)) otvoriProjekt(i.projektId); }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{i.naslov}</div>
+                  <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{i.tekst}</div>
+                </div>
+                {i.iznos > 0 && <span className="f-mono" style={{ fontSize: 12, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>{fmtCur(i.iznos)}</span>}
+                {mozeOtvoriti && (otvorena ? <ChevronUp size={15} color="var(--ink-faint)" /> : <ChevronDown size={15} color="var(--ink-faint)" />)}
+              </div>
+              {otvorena && (
+                <div style={{ marginTop: 6 }}>
+                  {i.stavke.map((s, k) => (
+                    <div key={k} style={{ fontSize: 12, padding: "3px 0", display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ flex: 1 }}>{s.tekst}</span>
+                      {s.projektId && jeProjekt(s.projektId) && <Btn size="sm" variant="ghost" icon={Eye} onClick={() => otvoriProjekt(s.projektId)}>Projekt</Btn>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {iznimke.length > 12 && <Btn size="sm" variant="ghost" style={{ marginTop: 6 }} onClick={() => setPrikaziSveIznimke(!prikaziSveIznimke)}>{prikaziSveIznimke ? "Prikaži manje" : `Prikaži sve (${iznimke.length})`}</Btn>}
+      </div>
+    </div>
+  );
+}
+
 function Dashboard({ db, update, showToast, setPage, otvoriProjekt, mojId, mojaPozicija, patchZadatakIzvrseno, patchZadatakNapomena, potvrdiObavijesti, otvoriTransporte, otvoriUskladenost }) {
   const [zadaciZa, setZadaciZa] = useState("moji"); // "moji" | "svi" | id zaposlenika
   const [skupinaZadataka, setSkupinaZadataka] = useState("aktualni"); // "aktualni" | "zavrseni"

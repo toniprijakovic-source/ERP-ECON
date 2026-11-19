@@ -105,6 +105,12 @@ const KARTICE_MODULA = {
   dashboard: {
     pregled: { citanje: ["cjenikRada", "fakture", "materijali", "ponude", "projekti", "radniNalozi", "slobodniZadaci"], pisanje: [] },
   },
+  // Direktorski pregled (od 2026-11): samo pregled najvećih aktivnih projekata i iznimki (rokovi, sati naspram plana, materijal, isporuka, podloge za
+  // fakturu, ponude bez odgovora). Ništa ne piše. Vrijednosti projekata, sati i obračun su osjetljivi, pa modul po zadanom dobivaju samo direktor i
+  // glavni administrator (migrirajDirektorskiPregled), a ostalima ga izričito dodjeljuje admin u Zaposlenici → Pozicije.
+  direktor: {
+    pregled: { citanje: ["projekti", "radniNalozi", "narudzbe", "otpremnice", "cmr", "narudzbenice", "izdatnice", "podlogeZaFakturu", "ponude", "kupci", "zaposlenici"], pisanje: [] },
+  },
   skladiste: {
     zalihe: { citanje: ["materijali", "katalogProfila", "kvaliteteMaterijala", "projekti", "izdatnice", "zaposlenici", "rezervacije", "narudzbenice", "dobavljaci", "postavkeTvrtke", "maticnaKnjiga"], pisanje: ["materijali", "izdatnice", "rezervacije"] },
     katalog: { citanje: ["katalogProfila"], pisanje: ["katalogProfila"] },
@@ -2531,6 +2537,29 @@ async function migrirajZastituNaRadu() {
   }
 }
 
+// Jednokratna (idempotentna) migracija: modul Direktorski pregled dobivaju Direktor i Glavni administrator — ostalima ga izričito dodjeljuje admin u
+// Zaposlenici → Pozicije (vrijednosti projekata i obračun). Provodi se samo dok nijedna pozicija nema modul, da ponovno pokretanje ne vrati modul
+// onome kome je namjerno oduzet.
+const POZICIJE_DIREKTORSKI_PREGLED = ["poz-direktor", "poz-administrator"];
+async function migrirajDirektorskiPregled() {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query("SELECT value FROM app_data WHERE key = 'pozicijeZaposlenika' FOR UPDATE");
+    const pozicije = r.rows[0]?.value;
+    if (!Array.isArray(pozicije) || pozicije.some((p) => (p.moduli || []).includes("direktor")) || !pozicije.some((p) => POZICIJE_DIREKTORSKI_PREGLED.includes(p.id))) { await client.query("ROLLBACK"); return; }
+    const nove = pozicije.map((p) => (POZICIJE_DIREKTORSKI_PREGLED.includes(p.id) ? { ...p, moduli: [...(p.moduli || []), "direktor"] } : p));
+    await client.query("UPDATE app_data SET value = $1, updated_at = now() WHERE key = 'pozicijeZaposlenika'", [JSON.stringify(nove)]);
+    await client.query("COMMIT");
+    console.log("Migracija: modul Direktorski pregled dodan pozicijama Direktor i Glavni administrator.");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Greška kod migracije modula Direktorski pregled:", e);
+  } finally {
+    client.release();
+  }
+}
+
 // Zajednički error handler: greške iz ruta (vidi omotač async ruta gore) i neispravan JSON u tijelu zahtjeva vraćaju se kao JSON,
 // a poslužitelj ostaje živ.
 app.use((err, req, res, next) => {
@@ -2546,8 +2575,8 @@ process.on("unhandledRejection", (e) => console.error("Neuhvaćeno odbijeno obe�
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`ERP backend sluša na portu ${PORT}`);
-  migrirajEvidencijaSati();
-  migrirajZastituNaRadu();
+  // Migracije pozicija diraju isti zapis (pozicijeZaposlenika), pa idu jedna za drugom, a ne istodobno (svaka sama hvata svoje greške).
+  (async () => { await migrirajEvidencijaSati(); await migrirajZastituNaRadu(); await migrirajDirektorskiPregled(); })();
   pripremiKorekcije();
   pripremiAktivnost();
   setInterval(pripremiAktivnost, 6 * 60 * 60 * 1000);
