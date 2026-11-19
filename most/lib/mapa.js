@@ -5,20 +5,41 @@ import { Greska, procitajKonplast } from "./pretvori.js";
 
 const izbjegni = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+// Korijeni projektnih mapa iz postavke KORIJEN_PROJEKTI: jedna ili više putanja odvojenih s ";". Oznaka {godina} u putanji
+// zamjenjuje se tekućom godinom i dvjema prethodnima (Z:/ECON_{godina}/ECON_{godina}/Econ_{godina}_Projekti → 2027, 2026, 2025),
+// pa projekt iz 2026. nastavlja raditi i nakon 1.1.2027., a novi 2027. projekti rade čim mapa ECON_2027 postoji (ne mora postojati
+// unaprijed). Prazna postavka = ta zadana putanja. Redoslijed je prednost: prvi korijen u kojem postoji mapa projekta pobjeđuje.
+export const ZADANI_KORIJEN_PROJEKTA = "Z:/ECON_{godina}/ECON_{godina}/Econ_{godina}_Projekti";
+export function korijeniProjekata(postavka, sada = new Date()) {
+  const popis = String(postavka || ZADANI_KORIJEN_PROJEKTA).split(";").map((s) => s.trim()).filter(Boolean);
+  const g = sada.getFullYear();
+  const rezultat = [];
+  for (const p of popis) {
+    if (p.includes("{godina}")) for (const god of [g, g - 1, g - 2]) rezultat.push(p.split("{godina}").join(String(god)));
+    else rezultat.push(p);
+  }
+  return [...new Set(rezultat)];
+}
+
 // Mapa projekta: ručno upisana putanja iz ERP-a ("Mapa projekta") ako postoji, inače mapa u korijenu čije ime počinje šifrom
-// projekta (npr. "RN 170-208_B&O F-O2_Quartier ...").
+// projekta (npr. "RN 170-208_B&O F-O2_Quartier ..."). korijen = jedna putanja ili popis putanja (vidi korijeniProjekata): korijeni
+// koji (još) ne postoje preskaču se, a greška se javlja tek kad nijedan nije dostupan ili u njima nema mape projekta.
 export function nadjiMapuProjekta(korijen, sifra, zadanaMapa) {
   if (zadanaMapa) {
     const p = path.normalize(zadanaMapa);
     if (!fs.existsSync(p)) throw new Greska(`Mapa projekta iz ERP-a ne postoji ili nije dostupna na ovom računalu: ${p}`);
     return p;
   }
-  if (!fs.existsSync(korijen)) throw new Greska(`Korijenska mapa projekata nije dostupna: ${korijen} (je li Z: spojen?)`);
+  const korijeni = Array.isArray(korijen) ? korijen : [korijen];
+  const dostupni = korijeni.filter((k) => fs.existsSync(k));
+  if (!dostupni.length) throw new Greska(`Korijenska mapa projekata nije dostupna: ${korijeni.join(" ; ")} (je li Z: spojen?)`);
   const re = new RegExp(`^${izbjegni(sifra)}(?:[_ ]|$)`, "i");
-  const pogodci = fs.readdirSync(korijen, { withFileTypes: true }).filter((d) => d.isDirectory() && re.test(d.name));
-  if (!pogodci.length) throw new Greska(`U ${korijen} nema mape čije ime počinje s "${sifra}".`);
-  if (pogodci.length > 1) throw new Greska(`Za šifru "${sifra}" postoji više mapa (${pogodci.map((d) => d.name).join("; ")}). U ERP-u upiši "Mapa projekta" na projektu.`);
-  return path.join(korijen, pogodci[0].name);
+  for (const k of dostupni) {
+    const pogodci = fs.readdirSync(k, { withFileTypes: true }).filter((d) => d.isDirectory() && re.test(d.name));
+    if (pogodci.length > 1) throw new Greska(`Za šifru "${sifra}" postoji više mapa (${pogodci.map((d) => d.name).join("; ")}). U ERP-u upiši "Mapa projekta" na projektu.`);
+    if (pogodci.length === 1) return path.join(k, pogodci[0].name);
+  }
+  throw new Greska(`U ${dostupni.join(" ; ")} nema mape čije ime počinje s "${sifra}".`);
 }
 
 // Mape izlaznih računa u mapi projekta: svaka čije ime je jedno od zadanih (postavke.json → mapeRacuna, npr. Fakture, Rechnungen,

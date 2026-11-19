@@ -8,6 +8,7 @@ import { Greska } from "./lib/pretvori.js";
 import { obradi } from "./lib/obradi.js";
 import { citajKumulativ, spremiKumulativ } from "./lib/kumulativ-zadaci.js";
 import { popisXRechnunga, obrisiXRechnung } from "./lib/xrechnung-popis.js";
+import { korijeniProjekata } from "./lib/mapa.js";
 
 const mapaMosta = path.dirname(fileURLToPath(import.meta.url));
 try { process.loadEnvFile(path.join(mapaMosta, ".env")); } catch { /* .env nije obavezan ako su varijable već postavljene */ }
@@ -23,7 +24,7 @@ const nadjiJavu = () => {
   return jdk ? path.join(dir, jdk, "bin", "java.exe") : "java";
 };
 const okolina = {
-  korijen: process.env.KORIJEN_PROJEKTI || "Z:\\ECON_2026\\ECON_2026\\Econ_2026_Projekti",
+  korijen: korijeniProjekata(process.env.KORIJEN_PROJEKTI), // popis korijena: tekuća godina i dvije prethodne (vidi lib/mapa.js)
   probno: process.env.MOST_PROBNO === "1",
   probnoIzlaz: path.join(mapaMosta, "proba-izlaz"),
   primjeri: path.join(mapaMosta, "primjeri"),
@@ -68,7 +69,7 @@ async function obradiZadatak(z) {
 }
 
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(signal, () => { log(`Primljen signal ${signal} — most staje.`); process.exit(0); });
-log(`ECON most pokrenut. ERP: ${API} | Korijen: ${okolina.korijen} | Java: ${okolina.java}${okolina.probno ? " | PROBNI NAČIN" : ""}`);
+log(`ECON most pokrenut. ERP: ${API} | Korijen: ${okolina.korijen.join(" ; ")} | Java: ${okolina.java}${okolina.probno ? " | PROBNI NAČIN" : ""}`);
 let greskaPrijavljena = false;
 for (;;) {
   try {

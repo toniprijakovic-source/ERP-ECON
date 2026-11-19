@@ -39,17 +39,28 @@ try {
 # ECON ERP - pomocnik na racunalu: otvara mape projekata i PDF ateste materijala s mreznog diska Z: i slaze ZIP
 # atesta ugradenog materijala projekta. Pokrece ga preglednik preko poveznica econ-mapa:, econ-atest: i econ-atesti:
 # (registrira ih econ-pomocnik-instalacija.cmd). Sve sto stigne u poveznici se provjerava: otvaraju se samo postojece
-# mape pod Z:\ECON_2026 i PDF-ovi iz mapa atesta, a brojevi atesta smiju imati samo slova, brojke, - i _.
+# mape pod Z:\ECON_<godina> i PDF-ovi iz mapa atesta, a brojevi atesta smiju imati samo slova, brojke, - i _.
 param([string]$Poveznica = '', [switch]$Proba)
 
-# Mape s atestima, redom prednosti: nova (po maticnom broju: 3706.pdf, dodatne stranice 3706.1.pdf), pa stara (1719-1.pdf).
-$KorijenMapa = 'Z:\ECON_2026'
-# Mape projekata: ime pocinje sifrom projekta, npr. "RN 01-33_Regal za limove" (i "..._ZAVRŠEN").
-$MapaProjekata = 'Z:\ECON_2026\ECON_2026\Econ_2026_Projekti'
-$MapeAtesta = @(
-  'Z:\ECON_2026\ECON_2026\Econ_2026_Kontrola kvalitete\Atesti materijala ERP',
-  'Z:\ECON_2026\ECON_2026\Econ_2026_Kontrola kvalitete\Atesti materijala'
-)
+# Godina u mapama na disku: Z:\ECON_<godina>\ECON_<godina>\Econ_<godina>_Projekti. Trazi se u tekucoj godini, pa u dvije prethodne
+# (projekt iz 2026. nastavlja zivjeti u mapi 2026. i nakon 1.1.2027.); mapa tekuce godine ne mora postojati (npr. pocetkom sijecnja).
+# Samo u probnom nacinu (-Proba) mogu se zamijeniti disk i godina varijablama ECON_PROBA_DISK i ECON_PROBA_GODINA (za ispitivanje).
+$Disk = 'Z:'
+$TekucaGodina = (Get-Date).Year
+if ($Proba) {
+  if ($env:ECON_PROBA_DISK) { $Disk = $env:ECON_PROBA_DISK.TrimEnd('\') }
+  if ($env:ECON_PROBA_GODINA -match '^\d{4}$') { $TekucaGodina = [int]$env:ECON_PROBA_GODINA }
+}
+$Godine = @($TekucaGodina, ($TekucaGodina - 1), ($TekucaGodina - 2))
+# Smiju se otvarati samo mape pod Z:\ECON_<4 znamenke> (bilo koja godina).
+$DozvoljenKorijen = '^' + [regex]::Escape($Disk) + '\\ECON_\d{4}(\\|$)'
+# Mape projekata, od tekuce godine unatrag: ime pocinje sifrom projekta, npr. "RN 01-33_Regal za limove" (i "..._ZAVRŠEN").
+$MapeProjekata = @($Godine | ForEach-Object { $Disk + '\ECON_' + $_ + '\ECON_' + $_ + '\Econ_' + $_ + '_Projekti' })
+# Mape s atestima, redom prednosti: nova (po maticnom broju: 3706.pdf, dodatne stranice 3706.1.pdf) za sve godine, pa stara (1719-1.pdf).
+$MapeAtesta = @()
+foreach ($naziv in @('Atesti materijala ERP', 'Atesti materijala')) {
+  foreach ($g in $Godine) { $MapeAtesta += ($Disk + '\ECON_' + $g + '\ECON_' + $g + '\Econ_' + $g + '_Kontrola kvalitete\' + $naziv) }
+}
 $DozvoljenaOznaka = '^[A-Za-z0-9_-]{1,40}$'
 
 function Poruka([string]$tekst) {
@@ -90,7 +101,7 @@ $u = $Poveznica.Trim().TrimEnd('/')
 
 if ($u -match '^econ-mapa:(.+)$') {
   $p = [uri]::UnescapeDataString($Matches[1]).TrimEnd('/')
-  if ($p -like ($KorijenMapa + '*') -and $p -notmatch '\.\.') {
+  if ($p -match $DozvoljenKorijen -and $p -notmatch '\.\.') {
     if (Test-Path -LiteralPath $p -PathType Container) { Otvori $p }
     else { Poruka ("Mapa nije pronađena (je li spojen disk Z:?):`n" + $p) }
   }
@@ -98,13 +109,17 @@ if ($u -match '^econ-mapa:(.+)$') {
 elseif ($u -match '^econ-projekt:(.+)$') {
   $sifra = [uri]::UnescapeDataString($Matches[1]).Trim()
   if ($sifra -notmatch '^[\p{L}\p{Nd} ._-]{1,40}$') { exit }
-  if (-not (Test-Path -LiteralPath $MapaProjekata -PathType Container)) { Poruka ("Mapa projekata nije dostupna (je li spojen disk Z:?):`n" + $MapaProjekata); exit }
-  # Ime mape je sifra ili sifra pa "_" / razmak (RN 170-28 ne smije pogoditi RN 170-282_...); od vise mapa otvara se zadnja mijenjana.
-  $mape = @(Get-ChildItem -LiteralPath $MapaProjekata -Directory -ErrorAction SilentlyContinue | Where-Object {
-    $_.Name -eq $sifra -or $_.Name.StartsWith($sifra + '_', [StringComparison]::OrdinalIgnoreCase) -or $_.Name.StartsWith($sifra + ' ', [StringComparison]::OrdinalIgnoreCase)
-  } | Sort-Object LastWriteTime -Descending)
-  if ($mape.Count -gt 0) { Otvori $mape[0].FullName }
-  else { Poruka ("Mapa projekta " + $sifra + " nije pronađena u`n" + $MapaProjekata + "`n`nIme mape mora počinjati šifrom projekta, npr. " + $sifra + "_Naziv.") }
+  $dostupne = @($MapeProjekata | Where-Object { Test-Path -LiteralPath $_ -PathType Container })
+  if ($dostupne.Count -eq 0) { Poruka ("Mapa projekata nije dostupna (je li spojen disk Z:?):`n" + $MapeProjekata[0]); exit }
+  # Ime mape je sifra ili sifra pa "_" / razmak (RN 170-28 ne smije pogoditi RN 170-282_...); od vise mapa u istoj godini otvara se zadnja mijenjana.
+  # Godine se pretrazuju od tekuce unatrag: prvi pogodak pobjeduje.
+  foreach ($mapaProjekata in $dostupne) {
+    $mape = @(Get-ChildItem -LiteralPath $mapaProjekata -Directory -ErrorAction SilentlyContinue | Where-Object {
+      $_.Name -eq $sifra -or $_.Name.StartsWith($sifra + '_', [StringComparison]::OrdinalIgnoreCase) -or $_.Name.StartsWith($sifra + ' ', [StringComparison]::OrdinalIgnoreCase)
+    } | Sort-Object LastWriteTime -Descending)
+    if ($mape.Count -gt 0) { Otvori $mape[0].FullName; exit }
+  }
+  Poruka ("Mapa projekta " + $sifra + " nije pronađena u`n" + ($dostupne -join "`n") + "`n`nIme mape mora počinjati šifrom projekta, npr. " + $sifra + "_Naziv.")
 }
 elseif ($u -match '^econ-atest:(.+)$') {
   $oznake = Oznake ([uri]::UnescapeDataString($Matches[1])) ','
@@ -138,7 +153,7 @@ elseif ($u -match '^econ-atesti:([^/]*)/(.+)$') {
     foreach ($o in $s) { foreach ($f in (DatotekeAtesta $o $popisi)) { $datoteke[$f.Name] = $f.FullName; $ima = $true } }
     if (-not $ima) { $nedostaju += $s[0] }
   }
-  if ($datoteke.Count -eq 0) { Poruka ("Za ovaj projekt nije pronađen nijedan atest u mapama:`n" + ($MapeAtesta -join "`n")); exit }
+  if ($datoteke.Count -eq 0) { Poruka ("Za ovaj projekt nije pronađen nijedan atest u mapama:`n" + (@($MapeAtesta | Where-Object { Test-Path -LiteralPath $_ -PathType Container }) -join "`n")); exit }
   if ($Proba) { $izlaz = Join-Path $env:TEMP 'econ-proba' }
   else {
     $izlaz = $null

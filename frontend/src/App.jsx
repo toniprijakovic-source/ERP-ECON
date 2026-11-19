@@ -14,6 +14,8 @@ import { satiPoRadnicimaIOperacijama, projektiSaSatima } from "./satiPoProjektu"
 import { trosakKooperanataPoProjektima } from "./kooperantiTrosak";
 import { razlikaProgramaRezanja } from "./programiRezanjaPatch";
 import { cjenikZaPonudu, prilagodjeneSatnice, postotakPopustaPonude, primijeniPopust, tekstPostotka } from "./ponudaCijena";
+import { prefiksGodine, sljedeciBroj, sljedeciBrojUpita } from "./brojeviDokumenata";
+import { praznikaZaDodati, praznikaIzvanZakona, imaPraznikeGodine } from "./praznici";
 import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, ogranicenjeStavke, pocetnaKolicina, visakStavke, zatvoriIsporuke, vratiZatvoreneIsporuke } from "./otpremniceKontrola";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
 
@@ -84,12 +86,8 @@ const usporediPrirodno = (a, b) => {
   return 0;
 };
 
-// Generator sljedećeg broja dokumenta (npr. "NAR-2026-101") koji gleda postojeće brojeve umjesto nasumičnog broja — sprječava duplikate
-const sljedeciBroj = (lista, polje, prefiks, sirina = 3) => {
-  const brojevi = (lista || []).map((x) => x?.[polje]).filter((b) => b && b.startsWith(prefiks)).map((b) => parseInt(b.slice(prefiks.length), 10)).filter((n) => !isNaN(n));
-  const sljedeci = (brojevi.length ? Math.max(...brojevi) : 0) + 1;
-  return `${prefiks}${String(sljedeci).padStart(sirina, "0")}`;
-};
+// Brojevi dokumenata s godinom (PON-, LAS-, NAR-, IZD-, FAK-, upit nabave): generator i prefiks s godinom iz datuma (nova godina = brojevi od 001)
+// su u brojeviDokumenata.js (sljedeciBroj, prefiksGodine, sljedeciBrojUpita), s testovima.
 
 // Revizije ponuda: poslana ponuda se dorađuje kao nova ponuda s nastavkom _rev1, _rev2… (osnovni broj ostaje isti), a poslana verzija ostaje sačuvana.
 // Veza je revizijaOd (id ponude iz koje je nastala); "zamijenjena" se izračunava iz toga (postoji li novija revizija), pa se ništa ne mora ručno održavati.
@@ -2944,8 +2942,9 @@ const STIL_LINK_GUMBA = { background: "none", border: "none", padding: 0, cursor
 const izvuciPutanjuMape = (tekst) => { const m = String(tekst || "").match(/([A-Za-z]:\\[^)\n]+|\\\\[^\s)\\]+\\[^)\n]+)/); return m ? m[1].trim() : ""; };
 const urlOtvoriMapu = (putanja) => `econ-mapa:${encodeURIComponent(putanja).replace(/'/g, "%27")}`;
 const URL_POMOCNIKA = "/econ-pomocnik-instalacija.cmd";
+const GODINA_MAPA = new Date().getFullYear(); // godina u nazivima mapa na Z: (Econ_<godina>_Projekti …), samo za tekstove uputa
 // Mapa projekta: ručno upisana putanja (polje "Mapa projekta") ili automatski econ-projekt:<šifra> — pomoćnik otvara
-// mapu u Z:\ECON_2026\ECON_2026\Econ_2026_Projekti čije ime počinje šifrom (npr. "RN 01-33_Regal za limove").
+// mapu u Z:\ECON_<godina>\ECON_<godina>\Econ_<godina>_Projekti (tekuća godina, pa dvije prethodne) čije ime počinje šifrom (npr. "RN 01-33_Regal za limove").
 const urlMapeProjekta = (p) => (p?.mapa ? urlOtvoriMapu(p.mapa) : p?.sifra ? `econ-projekt:${encodeURIComponent(String(p.sifra).trim()).replace(/'/g, "%27")}` : "");
 function SifraProjektaLink({ p }) {
   const url = urlMapeProjekta(p);
@@ -4195,7 +4194,7 @@ function MaticnaKnjigaTab({ db, update, showToast, mozeMijenjati }) {
             <Field label="Dimenzije (s narudžbenice)"><input className="input f-mono" placeholder="npr. 6000 mm ili 3000 × 1500 mm" value={forma.dimenzije || ""} onChange={(e) => postavi({ dimenzije: e.target.value })} /></Field>
           </div>
           {zahtijevanaVrstaAtesta(forma.kvaliteta) && <p style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 8 }}>Za kvalitetu {forma.kvaliteta} traži se atest {zahtijevanaVrstaAtesta(forma.kvaliteta)}{zahtijevanaVrstaAtesta(forma.kvaliteta) === "2.2" ? " ili viši" : ""}.</p>}
-          <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 8 }}>PDF atesta spremi na Z: u mapu Econ_2026_Kontrola kvalitete\Atesti materijala ERP pod imenom {forma.broj ? `${forma.broj}.pdf` : "matičnog broja (npr. 3706.pdf)"}, dodatne stranice {forma.broj ? `${forma.broj}.1.pdf` : "3706.1.pdf"}. Kad je atest spremljen pod drugim matičnim brojem (ista šarža), u broj atesta upiši taj broj.</p>
+          <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 8 }}>PDF atesta spremi na Z: u mapu Econ_{GODINA_MAPA}_Kontrola kvalitete\Atesti materijala ERP pod imenom {forma.broj ? `${forma.broj}.pdf` : "matičnog broja (npr. 3706.pdf)"}, dodatne stranice {forma.broj ? `${forma.broj}.1.pdf` : "3706.1.pdf"}. Kad je atest spremljen pod drugim matičnim brojem (ista šarža), u broj atesta upiši taj broj.</p>
           <Field label="Napomena"><textarea className="textarea" rows={2} value={forma.napomena} onChange={(e) => postavi({ napomena: e.target.value })} /></Field>
           {!forma.id && <p style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Matični broj dodjeljuje se kod spremanja. Zapis ne mijenja stanje skladišta — služi za zalihu koja je već na skladištu. Roba zaprimljena preko narudžbenice dobiva matični broj sama.</p>}
         </Modal>
@@ -4254,7 +4253,7 @@ function UgradeniMaterijalTab({ db, showToast, pocetniProjektId }) {
         />
       )}
       <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 10 }}>Popis se sastavlja iz izdatnica (uključujući izdavanje s radnih naloga), s odbijenim povratima. Materijal se izdaje s najstarijeg matičnog broja koji ima zalihu. Starije izdatnice, nastale prije matične knjige, nemaju matični broj.</p>
-      <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 4 }}>Atesti (PDF) se traže na disku Z: u mapi Econ_2026_Kontrola kvalitete\Atesti materijala ERP pod matičnim brojem (npr. 3706.pdf, dodatne stranice 3706.1.pdf), a zatim u staroj mapi Atesti materijala. Klik na broj atesta otvara PDF, a „ZIP atesta“ sprema sve ateste projekta u Preuzimanja. Na svakom računalu jednom pokreni <a href={URL_POMOCNIKA} download style={{ color: "var(--steel)", fontWeight: 600 }}>pomoćnika</a>.</p>
+      <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 4 }}>Atesti (PDF) se traže na disku Z: u mapi Econ_{GODINA_MAPA}_Kontrola kvalitete\Atesti materijala ERP pod matičnim brojem (npr. 3706.pdf, dodatne stranice 3706.1.pdf), a zatim u staroj mapi Atesti materijala. Klik na broj atesta otvara PDF, a „ZIP atesta“ sprema sve ateste projekta u Preuzimanja. Na svakom računalu jednom pokreni <a href={URL_POMOCNIKA} download style={{ color: "var(--steel)", fontWeight: 600 }}>pomoćnika</a>.</p>
     </div>
   );
 }
@@ -4933,7 +4932,7 @@ function IzdatnicaModal({ db, update, showToast, initialMaterijalId, onClose, on
       noviMaterijali = noviMaterijali.map((m) => (m.id === mat.id ? { ...m, dimenzije: tekst } : m));
     });
     const novaIzdatnica = {
-      id: uid("izd"), broj: sljedeciBroj(db.izdatnice, "broj", "IZD-2026-"), datum: todayISO(),
+      id: uid("izd"), broj: sljedeciBroj(db.izdatnice, "broj", prefiksGodine("IZD")), datum: todayISO(),
       projektId, izdaoId: izdaoId || null, napomena, status: "Izdano",
       stavke: validne.map((s, k) => {
         const mat = db.materijali.find((m) => m.id === s.materijalId);
@@ -5443,12 +5442,7 @@ const naruceneCijeneNarudzbenice = (n, db) => {
   });
 };
 
-const generirajBrojUpita = (upiti) => {
-  const god = new Date().getFullYear().toString().slice(-2);
-  const brojevi = upiti.filter((u) => u.broj && u.broj.startsWith(`${god}-`)).map((u) => parseInt(u.broj.split("-")[1], 10)).filter((n) => !isNaN(n));
-  const sljedeci = (brojevi.length ? Math.max(...brojevi) : 58) + 1;
-  return `${god}-${String(sljedeci).padStart(3, "0")}`;
-};
+const generirajBrojUpita = (upiti) => sljedeciBrojUpita(upiti);
 
 // Kreira novi Upit (RFQ) u Nabavi na temelju popisa potrebnog materijala definiranog na projektu
 const kreirajUpitIzMaterijala = (projekt, db, patchUpiti, showToast) => {
@@ -5503,7 +5497,7 @@ const generirajNarudzbeIzUpita = (upit, db, update, patchUpiti, showToast) => {
   let noviMaterijali = [...db.materijali];
   let noveNarudzbenice = [...db.narudzbenice];
   const azuriranjeStavkiId = {};
-  const nabPrefiks = "NAR-2026-";
+  const nabPrefiks = prefiksGodine("NAR");
   let nabBrojac = parseInt(sljedeciBroj(noveNarudzbenice, "broj", nabPrefiks).slice(nabPrefiks.length), 10);
 
   Object.entries(poDobavljacu).forEach(([dobavljacId, stavke]) => {
@@ -5775,7 +5769,7 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
     })
     .sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")), [db.zaposlenici, db.pozicijeZaposlenika]);
 
-  const emptyForm = () => ({ id: null, broj: sljedeciBroj(db.narudzbenice, "broj", "NAR-2026-"), dobavljacId: db.dobavljaci[0]?.id || "", datum: todayISO(), rokIsporuke: todayISO(), status: "Nacrt", napomena: "", izradioId: mojId || "", stavke: [] });
+  const emptyForm = () => ({ id: null, broj: sljedeciBroj(db.narudzbenice, "broj", prefiksGodine("NAR")), dobavljacId: db.dobavljaci[0]?.id || "", datum: todayISO(), rokIsporuke: todayISO(), status: "Nacrt", napomena: "", izradioId: mojId || "", stavke: [] });
   const [form, setForm] = useState(emptyForm());
 
   const emptyUpit = () => ({ id: null, broj: generirajBrojUpita(db.upitiNabave), datum: todayISO(), izradioId: zaposleniciNabava[0]?.id || "", status: "Priprema", napomena: "", stavke: [] });
@@ -8907,7 +8901,7 @@ function ProizvodnjaPage({ db, update, patchProjekt, showToast, mojaPozicija, mo
     }
     if (stavkeIzdatnice.length > 0) {
       update("izdatnice", [...(db.izdatnice || []), {
-        id: uid("izd"), broj: sljedeciBroj(db.izdatnice || [], "broj", "IZD-2026-"), datum: todayISO(),
+        id: uid("izd"), broj: sljedeciBroj(db.izdatnice || [], "broj", prefiksGodine("IZD")), datum: todayISO(),
         projektId: row.projektId, radniNalogId: row.id, izdaoId: mojId || null, napomena: `Radni nalog ${row.broj}`, status: "Izdano",
         stavke: stavkeIzdatnice,
       }]);
@@ -10054,7 +10048,7 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
           <div style={{ fontSize: 17, fontWeight: 600 }} className="f-display">{projekt.naziv}</div>
           <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>{kupac?.naziv || "—"} · Rok: {fmtDate(projekt.rokPocetka)} – {fmtDate(projekt.rokZavrsetka)}</div>
           {projekt.mapa ? <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2, wordBreak: "break-all" }}>Mapa projekta: <span className="f-mono" style={{ fontSize: 11.5 }}>{projekt.mapa}</span><MapaGumbi putanja={projekt.mapa} /></div>
-            : <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>Mapa projekta: <a href={urlMapeProjekta(projekt)} style={{ ...STIL_LINK_GUMBA, textDecoration: "none" }}>Otvori mapu</a> <span style={{ fontSize: 11, color: "var(--ink-faint)" }}>(Econ_2026_Projekti\{projekt.sifra}_…)</span></div>}
+            : <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>Mapa projekta: <a href={urlMapeProjekta(projekt)} style={{ ...STIL_LINK_GUMBA, textDecoration: "none" }}>Otvori mapu</a> <span style={{ fontSize: 11, color: "var(--ink-faint)" }}>(Econ_{GODINA_MAPA}_Projekti\{projekt.sifra}_…)</span></div>}
           <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2, display: "flex", alignItems: "center", gap: 8 }}>
             Voditelj projekta: <strong style={{ color: "var(--ink)" }}>{voditelj ? `${voditelj.prezime} ${voditelj.ime}` : "nije dodijeljen"}</strong>
             {voditelj && <Btn variant="ghost" size="sm" onClick={() => { const ok = posaljiObavijestVoditelju(projekt, voditelj); showToast && showToast(ok ? "Otvoren e-mail za slanje obavijesti." : "Voditelj nema unesen e-mail."); }}>Pošalji obavijest</Btn>}
@@ -11151,7 +11145,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
   const emptyProj = () => ({ sifra: "", naziv: "", kupacId: db.kupci[0]?.id || "", status: "Ponuda", vrijednost: 0, rokPocetka: todayISO(), rokZavrsetka: todayISO(), opis: "", voditeljId: "", kontaktOsoba: "", kontaktEmail: "", kontaktTelefon: "", mjestoIsporuke: "", zadaci: noviZadaciIzStandarda(), faze: praznaFazaSati() });
   const [projForm, setProjForm] = useState(emptyProj());
 
-  const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", kontaktOsoba: db.kupci[0]?.kontaktOsoba || "", kontaktOsobaTitula: "herr", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, izradioId: mojId || "", pozicije: [], sirovineStavke: [], satnicaMontaza: 0, satniceRada: {}, otpadLimPoTipu: {}, postotakMarze: 0, postotakPopusta: 0, napomenaNjemacki: NJEMACKI_UVJETI_ZADANO });
+  const emptyPon = () => ({ id: null, broj: sljedeciBroj(db.ponude, "broj", prefiksGodine("PON")), naziv: "", kupacId: db.kupci[0]?.id || "", kontaktOsoba: db.kupci[0]?.kontaktOsoba || "", kontaktOsobaTitula: "herr", datum: todayISO(), status: "U izradi", napomena: "", projektId: null, izradioId: mojId || "", pozicije: [], sirovineStavke: [], satnicaMontaza: 0, satniceRada: {}, otpadLimPoTipu: {}, postotakMarze: 0, postotakPopusta: 0, napomenaNjemacki: NJEMACKI_UVJETI_ZADANO });
   const [ponForm, setPonForm] = useState(emptyPon());
   const [cjenikOpen, setCjenikOpen] = useState(false);
   const [zadaciOpen, setZadaciOpen] = useState(false);
@@ -11167,7 +11161,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
   const [printPonuda, setPrintPonuda] = useState(null);
   const [slanjePonude, setSlanjePonude] = useState(null); // ponuda za koju se priprema e-mail kupcu
 
-  const emptyLaser = () => ({ id: null, broj: sljedeciBroj(db.ponudeLasera, "broj", "LAS-2026-"), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", cjenik: prazniCjenikLasera(), stavke: [], ostaleStavke: [], projektId: null }); // bez "savijanja": nedefinirano = nema redaka, a stara ponuda zadržava svoj zapis savijanje (vidi savijanjaPonude)
+  const emptyLaser = () => ({ id: null, broj: sljedeciBroj(db.ponudeLasera, "broj", prefiksGodine("LAS")), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", cjenik: prazniCjenikLasera(), stavke: [], ostaleStavke: [], projektId: null }); // bez "savijanja": nedefinirano = nema redaka, a stara ponuda zadržava svoj zapis savijanje (vidi savijanjaPonude)
   const [laserForm, setLaserForm] = useState(emptyLaser());
   const [printLaser, setPrintLaser] = useState(null);
   const mozeLaser = dozvolaZaKarticu(mojaPozicija, "ponude", "laser").izmjene;
@@ -11324,12 +11318,12 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
   // Kopija ponude — nova ponuda s istim stavkama/pozicijama, ali svoj broj, "U izradi" status i
   // bez veze na projekt (kopija koja je već pretvorena u projekt ne smije "naslijediti" tu vezu).
   const kopirajPonudu = (ponuda) => {
-    const kopija = { ...JSON.parse(JSON.stringify(ponuda)), id: uid("pon"), broj: sljedeciBroj(db.ponude, "broj", "PON-2026-"), status: "U izradi", projektId: null, datum: todayISO() };
+    const kopija = { ...JSON.parse(JSON.stringify(ponuda)), id: uid("pon"), broj: sljedeciBroj(db.ponude, "broj", prefiksGodine("PON")), status: "U izradi", projektId: null, datum: todayISO() };
     update("ponude", [...db.ponude, kopija]);
     showToast(`Ponuda kopirana kao ${kopija.broj}.`);
   };
   const kopirajLaser = (ponuda) => {
-    const kopija = { ...JSON.parse(JSON.stringify(ponuda)), id: uid("las"), broj: sljedeciBroj(db.ponudeLasera, "broj", "LAS-2026-"), status: "U izradi", projektId: null, datum: todayISO() };
+    const kopija = { ...JSON.parse(JSON.stringify(ponuda)), id: uid("las"), broj: sljedeciBroj(db.ponudeLasera, "broj", prefiksGodine("LAS")), status: "U izradi", projektId: null, datum: todayISO() };
     update("ponudeLasera", [...db.ponudeLasera, kopija]);
     showToast(`Ponuda za laser kopirana kao ${kopija.broj}.`);
   };
@@ -11702,8 +11696,8 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
           </div>
           <Field label="Opis"><textarea className="textarea" rows={3} value={projForm.opis} onChange={(e) => setProjForm({ ...projForm, opis: e.target.value })} /></Field>
           <Field label="Mapa projekta na serveru">
-            <input className="input f-mono" placeholder="prazno = automatski: mapa u Econ_2026_Projekti koja počinje šifrom projekta" value={projForm.mapa || ""} onChange={(e) => setProjForm({ ...projForm, mapa: e.target.value })} />
-            <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 4 }}>Prikazuje se uz zadatke projekta i u popisu projekata s gumbima "Otvori mapu" i "Kopiraj". Da "Otvori mapu" radi jednim klikom, na svakom računalu jednom pokreni <a href={URL_POMOCNIKA} download style={{ color: "var(--steel)", fontWeight: 600 }}>pomoćnika</a> (otvara samo mape pod Z:\ECON_2026 i ateste materijala).</div>
+            <input className="input f-mono" placeholder={`prazno = automatski: mapa u Econ_${GODINA_MAPA}_Projekti koja počinje šifrom projekta`} value={projForm.mapa || ""} onChange={(e) => setProjForm({ ...projForm, mapa: e.target.value })} />
+            <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 4 }}>Prikazuje se uz zadatke projekta i u popisu projekata s gumbima "Otvori mapu" i "Kopiraj". Da "Otvori mapu" radi jednim klikom, na svakom računalu jednom pokreni <a href={URL_POMOCNIKA} download style={{ color: "var(--steel)", fontWeight: 600 }}>pomoćnika</a> (otvara samo mape pod Z:\ECON_{GODINA_MAPA} i prethodnih godina te ateste materijala).</div>
           </Field>
           <div className="label" style={{ marginTop: 6 }}>{(projForm.dodaci || []).length ? "Osnovna narudžba — faze izrade (planirani sati)" : "Faze izrade (planirani sati)"}</div>
           <div style={{ fontSize: 11, color: "var(--ink-faint)", marginBottom: 8 }}>Sati po fazi koriste se kao predložak kad se za ovaj projekt kasnije kreira radni nalog — nisu obavezni za faze koje se ne planiraju.</div>
@@ -15760,7 +15754,7 @@ function FakturiranjePage({ modul = "fakturiranje", db, update, patchProjekt, sh
   const [del, setDel] = useState(null);
   const [printFaktura, setPrintFaktura] = useState(null);
   const [printPodloga, setPrintPodloga] = useState(null);
-  const emptyForm = () => ({ id: null, broj: sljedeciBroj(db.fakture, "broj", "FAK-2026-", 4), projektId: db.projekti[0]?.id || "", kupacId: db.projekti[0]?.kupacId || db.kupci[0]?.id, datumIzdavanja: todayISO(), rokPlacanja: todayISO(), status: "Nacrt", stavke: [], podlogaId: null });
+  const emptyForm = () => ({ id: null, broj: sljedeciBroj(db.fakture, "broj", prefiksGodine("FAK"), 4), projektId: db.projekti[0]?.id || "", kupacId: db.projekti[0]?.kupacId || db.kupci[0]?.id, datumIzdavanja: todayISO(), rokPlacanja: todayISO(), status: "Nacrt", stavke: [], podlogaId: null });
   const [form, setForm] = useState(emptyForm());
 
   const openAdd = () => { setForm(emptyForm()); setModal(true); };
@@ -16362,6 +16356,9 @@ function PostavkePlacaModal({ db, update, showToast, onClose }) {
   const [razlogKorekcije, setRazlogKorekcije] = useState("");
   const [praznici, setPraznici] = useState(db.praznici || []);
   const [noviPraznik, setNoviPraznik] = useState({ datum: "", naziv: "" });
+  // Godina za gumb "Dodaj zakonske praznike": tekuća, a ako su njezini praznici već upisani — iduća.
+  const tekucaGodinaPraznika = new Date().getFullYear();
+  const [godinaPraznika, setGodinaPraznika] = useState(() => (imaPraznikeGodine(db.praznici, tekucaGodinaPraznika) ? tekucaGodinaPraznika + 1 : tekucaGodinaPraznika));
 
   const polja = [
     ["vrijednostBoda", "Vrijednost boda (€)", 0.01],
@@ -16389,6 +16386,16 @@ function PostavkePlacaModal({ db, update, showToast, onClose }) {
     setPraznici([...praznici, { ...noviPraznik, id: uid("prz") }].sort((a, b) => a.datum.localeCompare(b.datum)));
     setNoviPraznik({ datum: "", naziv: "" });
   };
+  // Zakonski praznici cijele godine (Uskrs i Tijelovo računaju se sami), bez onih koji su već na popisu. Upisuje se tek klikom na Spremi.
+  const dodajZakonskePraznike = () => {
+    const novi = praznikaZaDodati(praznici, godinaPraznika);
+    if (!novi.length) { showToast(`Svi zakonski praznici za ${godinaPraznika}. već su na popisu.`); return; }
+    setPraznici([...praznici, ...novi].sort((a, b) => a.datum.localeCompare(b.datum)));
+    showToast(`Dodano ${novi.length} praznika za ${godinaPraznika}. Kliknite Spremi da se upišu.`);
+  };
+  const godineNaPopisu = [...new Set(praznici.map((p) => String(p.datum || "").slice(0, 4)).filter(Boolean))].sort();
+  const izvanZakona = godineNaPopisu.flatMap((g) => praznikaIzvanZakona(praznici, Number(g)));
+  const godineBezPraznika = [tekucaGodinaPraznika, tekucaGodinaPraznika + 1].filter((g) => !imaPraznikeGodine(praznici, g) && (g === tekucaGodinaPraznika || new Date().getMonth() >= 9));
 
   return (
     <Modal wide title="Postavke obračuna plaća" onClose={onClose}
@@ -16443,6 +16450,26 @@ function PostavkePlacaModal({ db, update, showToast, onClose }) {
         <input className="input" placeholder="Naziv praznika" value={noviPraznik.naziv} onChange={(e) => setNoviPraznik({ ...noviPraznik, naziv: e.target.value })} />
         <Btn variant="ghost" icon={Plus} onClick={dodajPraznik}>Dodaj</Btn>
       </div>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Svi zakonski praznici za godinu</span>
+        <select className="select f-mono" style={{ width: 90 }} aria-label="Godina praznika" value={godinaPraznika} onChange={(e) => setGodinaPraznika(Number(e.target.value))}>
+          {[tekucaGodinaPraznika, tekucaGodinaPraznika + 1, tekucaGodinaPraznika + 2].map((g) => <option key={g} value={g}>{g}.</option>)}
+        </select>
+        <Btn variant="ghost" icon={Plus} onClick={dodajZakonskePraznike}>Dodaj zakonske praznike</Btn>
+      </div>
+      <p style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 4 }}>Dodaju se samo praznici kojih još nema na popisu (Uskrs, Uskrsni ponedjeljak i Tijelovo računaju se za odabranu godinu). Promjene se upisuju tek klikom na Spremi.</p>
+      {godineBezPraznika.length > 0 && (
+        <div className="card" style={{ padding: "8px 12px", marginTop: 8, background: "#FDF6E3", borderColor: "#F0C36B", fontSize: 12, color: "#6b5511" }}>
+          <AlertTriangle size={13} color="#8A6100" style={{ verticalAlign: "-2px", marginRight: 6 }} />
+          Za {godineBezPraznika.join(". i ")}. nema upisanih praznika — evidencija, obračun i plan proizvodnje neće znati koji su dani neradni. Odaberite godinu i kliknite „Dodaj zakonske praznike”.
+        </div>
+      )}
+      {izvanZakona.length > 0 && (
+        <div className="card" style={{ padding: "8px 12px", marginTop: 8, background: "#FBEAE6", borderColor: "#E5A99B", fontSize: 12, color: "#7a2e1e" }}>
+          <AlertTriangle size={13} color="#B3402A" style={{ verticalAlign: "-2px", marginRight: 6 }} />
+          Na popisu su datumi koji nisu zakonski neradni dani: {izvanZakona.map((p) => `${fmtDate(p.datum)} (${p.naziv})`).join(", ")}. Dan državnosti je 30. svibnja; 25. lipnja je spomendan. Prije brisanja provjerite: izmjena popisa mijenja obračun tog dana.
+        </div>
+      )}
     </Modal>
   );
 }
@@ -17312,6 +17339,18 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true, mojId })
         </div>
         {mozeMijenjati && <Btn variant="ghost" icon={Settings} onClick={() => setPostavkeOtvorene(true)}>Postavke plaća</Btn>}
       </div>
+
+      {(() => {
+        // Godina bez ijednog upisanog praznika (nova godina još nije postavljena): obračun bi neradne dane računao kao obične.
+        const godinaObracuna = Number(mjesec.slice(0, 4)), tekuca = new Date().getFullYear();
+        if (godinaObracuna < tekuca || godinaObracuna > tekuca + 1 || imaPraznikeGodine(db.praznici, godinaObracuna)) return null;
+        return (
+          <div className="card" style={{ padding: "10px 14px", marginBottom: 14, background: "#FBEAE6", borderColor: "#E5A99B", display: "flex", alignItems: "center", gap: 8 }}>
+            <AlertTriangle size={15} color="#B3402A" />
+            <span style={{ fontSize: 12.5, color: "#7a2e1e" }}>Za {godinaObracuna}. nisu upisani praznici, pa obračun neradne dane (1.1., 6.1., Uskrs…) računa kao obične. {mozeMijenjati ? <>Otvorite <strong>Postavke plaća → Neradni dani → Dodaj zakonske praznike</strong> i spremite.</> : "Javite osobi koja vodi obračun."}</span>
+          </div>
+        );
+      })()}
 
       {imaBolovanje && (
         <div className="card" style={{ padding: "10px 14px", marginBottom: 14, background: "#FDF6E3", borderColor: "#F0C36B", display: "flex", alignItems: "center", gap: 8 }}>

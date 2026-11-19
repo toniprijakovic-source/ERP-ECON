@@ -18,7 +18,9 @@ ništa se ne otvara prema vani). Zadatak nastaje klikom na **Financije → XRech
 
 ## Pokretanje
 1. `most\.env` (vidi `.env.example`): `ERP_API_URL`, `MOST_TOKEN` (ista vrijednost mora biti u Renderu kao `MOST_TOKEN`),
-   `KORIJEN_PROJEKTI` (s kosim crtama!), `MOST_PROBNO`.
+   `KORIJEN_PROJEKTI` (s kosim crtama!), `MOST_PROBNO`. `KORIJEN_PROJEKTI=Z:/ECON_{godina}/ECON_{godina}/Econ_{godina}_Projekti`:
+   `{godina}` je tekuća godina i dvije prethodne (2027, 2026, 2025), pa projekti iz 2026. rade i u 2027., a novi 2027. čim mapa
+   postoji; više putanja odvoji s `;`; ista šifra u više godina = pobjeđuje novija godina. Prazno = ova zadana vrijednost.
 2. Dvoklik na `pokreni-most.bat` (ili `node most.js`).
 3. U ERP-u kartica XRechnung pokazuje "Most je povezan".
 
