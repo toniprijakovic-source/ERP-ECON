@@ -14,7 +14,20 @@ const pretvori = (iso, dana) => new Date(new Date(iso + "T00:00:00Z").getTime() 
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_URL?.includes("supabase") ? { rejectUnauthorized: false } : undefined });
   try {
     const citaj = async (kljuc) => (await pool.query("SELECT value FROM app_data WHERE key = $1", [kljuc])).rows[0]?.value || [];
-    const [projekti, rezervacije, izdatnice, materijali, zaposlenici, knjiga] = await Promise.all(["projekti", "rezervacije", "izdatnice", "materijali", "zaposlenici", "maticnaKnjiga"].map(citaj));
+    const [projekti, rezervacije, izdatnice, materijali, zaposlenici, knjiga, radniNalozi, satiPoNalogu] = await Promise.all(["projekti", "rezervacije", "izdatnice", "materijali", "zaposlenici", "maticnaKnjiga", "radniNalozi", "satiPoNalogu"].map(citaj));
+    // sati upisani na naloge po projektu (ukupno, prvi i zadnji dan upisa) — proizvodnja je "krenula" kad voditelj upiše sate na nalog projekta
+    const projektNaloga = new Map(radniNalozi.map((n) => [n.id, n.projektId]));
+    const satiPoProjektu = new Map();
+    satiPoNalogu.forEach((s) => {
+      const pid = projektNaloga.get(s.radniNalogId);
+      if (!pid || !(Number(s.sati) > 0)) return;
+      const t = satiPoProjektu.get(pid) || { sati: 0, prviUpis: s.datum, zadnjiUpis: s.datum };
+      t.sati += Number(s.sati);
+      if (s.datum && (!t.prviUpis || s.datum < t.prviUpis)) t.prviUpis = s.datum;
+      if (s.datum && (!t.zadnjiUpis || s.datum > t.zadnjiUpis)) t.zadnjiUpis = s.datum;
+      satiPoProjektu.set(pid, t);
+    });
+    const proizvodnja = (pr) => { const t = satiPoProjektu.get(pr.id); return t ? { sati: Math.round(t.sati * 10) / 10, prviUpis: t.prviUpis, zadnjiUpis: t.zadnjiUpis } : { sati: 0, prviUpis: null, zadnjiUpis: null }; };
     const danas = new Date().toISOString().slice(0, 10);
     const prag = pretvori(danas, 7);
     const p = pregledZaIzdavanje({ projekti, rezervacije, izdatnice, materijali });
@@ -32,8 +45,14 @@ const pretvori = (iso, dana) => new Date(new Date(iso + "T00:00:00Z").getTime() 
         zaprimanjaZadnjih7Dana: knjiga.filter((z) => z.izvor === "zaprimanje" && z.datum >= prag).length,
         zadnjeZaprimanje: knjiga.filter((z) => z.izvor === "zaprimanje").map((z) => z.datum).sort().pop() || null,
       },
-      zaIzdati: p.zaIzdati.map((x) => ({ projekt: x.projekt.sifra, naziv: x.projekt.naziv, status: x.projekt.status, voditelj: voditelj(x.projekt), manjak: x.manjak, stavke: x.stavke.map(stavka) })),
-      bezMaterijala: p.bezMaterijala.map((x) => ({ projekt: x.projekt.sifra, naziv: x.projekt.naziv, status: x.projekt.status, voditelj: voditelj(x.projekt) })),
+      // PROIZVODNJA KRENULA, A MATERIJAL NIJE IZDAN: voditelj je upisao sate na naloge projekta (Odobren / U izradi), a za projekt nema nijedne izdatnice.
+      // Najhitnije; rezervirano = true znači da materijal već čeka izdavanje (gumb "Izdaj rezervirano"). Najviše sati prvo.
+      proizvodnjaKrenula: projekti
+        .filter((pr) => ["Odobren", "U izradi"].includes(pr.status) && !izdatnice.some((i) => i.projektId === pr.id) && proizvodnja(pr).sati >= 1)
+        .map((pr) => ({ projekt: pr.sifra, naziv: pr.naziv, status: pr.status, voditelj: voditelj(pr), ...proizvodnja(pr), rezervirano: rezervacije.some((r) => r.projektId === pr.id && Number(r.kolicina) > 0) }))
+        .sort((a, b) => b.sati - a.sati),
+      zaIzdati: p.zaIzdati.map((x) => ({ projekt: x.projekt.sifra, naziv: x.projekt.naziv, status: x.projekt.status, voditelj: voditelj(x.projekt), manjak: x.manjak, ...proizvodnja(x.projekt), stavke: x.stavke.map(stavka) })),
+      bezMaterijala: p.bezMaterijala.map((x) => ({ projekt: x.projekt.sifra, naziv: x.projekt.naziv, status: x.projekt.status, voditelj: voditelj(x.projekt), ...proizvodnja(x.projekt) })),
       zatvoreni: p.zatvoreni.map((x) => ({ projekt: x.projekt.sifra, naziv: x.projekt.naziv, status: x.projekt.status, stavke: x.stavke.map(stavka) })),
     }, null, 2));
   } finally { await pool.end(); }
