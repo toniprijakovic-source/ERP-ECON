@@ -1969,6 +1969,9 @@ const KIOSK_MAX_DULJINA_KODA = 15;
 const KIOSK_PRIKAZ_PORUKE_MS = 500;
 // Svakih koliko kiosk provjerava je li izašla nova verzija aplikacije (pa se sam osvježi).
 const KIOSK_PROVJERA_VERZIJE_MS = 33 * 60 * 1000;
+// Tipka "Potrošni materijal" na zaslonu za evidenciju radnog vremena (?kiosk=1) za sada je skrivena — potrošni materijal se bilježi na posebnom zaslonu
+// (?kiosk=potrosni). Postavi na true da se tipka vrati.
+const KIOSK_TIPKA_POTROSNI = false;
 
 // Kiosk → "Potrošni materijal": radnik je prislonio karticu i na velikim pločicama bira što je uzeo (+ / − po artiklu), pa potvrđuje.
 // Pločice su krupne (rade se i u rukavicama); bilo koji dodir produljuje vrijeme neaktivnosti (vidi KioskView), a nakon isteka zaslon se vraća na početni.
@@ -2264,7 +2267,7 @@ function KioskView({ onPrijava, samoPotrosni = false }) {
         ) : (
           <div style={{ fontSize: 26, color: "var(--ink-soft)" }}>{samoPotrosni ? "Prisloni karticu da uzmeš potrošni materijal" : "Prisloni karticu čitaču"}</div>
         )}
-        {nacin === "dolazak" && !samoPotrosni && (
+        {nacin === "dolazak" && !samoPotrosni && KIOSK_TIPKA_POTROSNI && (
           <button type="button" className="btn btn-primary" style={{ marginTop: 30, fontSize: 30, padding: "20px 60px" }} onClick={() => promijeniNacin("potrosniKartica", 30 * 1000)}>Potrošni materijal</button>
         )}
         {/* Skriveni input i dalje hvata upis RFID čitača (koji radi kao tipkovnica) — samo
