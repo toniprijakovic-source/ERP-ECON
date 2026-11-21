@@ -10749,6 +10749,12 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
     update("radniNalozi", db.radniNalozi.map((r) => (r.id === n.id ? { ...r, planiranoSati: sati } : r)));
     showToast(`Plan naloga ${n.broj}: ${sati} h.`);
   };
+  // Promjena statusa naloga iz detalja projekta mijenja isti zapis kao i u modulu Proizvodnja (tablica).
+  const promijeniStatusNaloga = (n, noviStatus) => {
+    if (noviStatus === n.status) return;
+    update("radniNalozi", db.radniNalozi.map((r) => (r.id === n.id ? { ...r, status: noviStatus } : r)));
+    showToast(`Nalog ${n.broj}: ${noviStatus}.`);
+  };
   const planiranoUkupno = nalozi.reduce((s, n) => s + (Number(n.planiranoSati) || 0), 0);
   const utrosenoUkupno = nalozi.reduce((s, n) => s + (Number(n.utrosenoSati) || 0), 0);
   const postotak = planiranoUkupno > 0 ? Math.min(100, Math.round((utrosenoUkupno / planiranoUkupno) * 100)) : 0;
@@ -11241,7 +11247,11 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
                   <td>{fazaNaloga(n)}</td>
                   <td>{n.zaduzenTim || "—"}</td>
                   <td><PlanSatiUnos nalog={n} onSpremi={promijeniPlanNaloga} /></td>
-                  <td><Badge status={n.status} /></td>
+                  <td>
+                    <select className="select" style={{ fontSize: 12, padding: "4px 8px", width: 120 }} value={n.status} aria-label={`Status naloga ${n.broj}`} onChange={(e) => promijeniStatusNaloga(n, e.target.value)}>
+                      {["Planiran", "U tijeku", "Pauziran", "Završen"].map((s) => <option key={s}>{s}</option>)}
+                    </select>
+                  </td>
                   <td><button className="btn btn-icon btn-ghost" title="Obriši radni nalog" aria-label={`Obriši nalog ${n.broj}`} onClick={() => obrisiNalog(n)}><Trash2 size={14} color="var(--rust)" /></button></td>
                 </tr>
               ))}
