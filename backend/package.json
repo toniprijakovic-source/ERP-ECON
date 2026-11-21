@@ -8,7 +8,7 @@
     "start": "node server.js",
     "migrate": "node migrate.js",
     "seed": "node seed.js",
-    "test": "node test/zastita-api.test.js && node test/radni-nalozi.test.js && node test/otpremnice-isporuke.test.js && node test/normativi-projekti.test.js && node test/kooperanti-po-projektima.test.js && node test/programi-rezanja.test.js && node test/ponuda-u-projekt.test.js && node test/backup-lokalno.test.js && node test/brojevi-nova-godina.test.js && node test/migracija-arhiviran.test.js && node test/direktorski-pregled.test.js && node test/izdaj-zaostale-rezervacije.test.js && node test/potrosni-logika.test.js && node test/potrosni.test.js && node test/kiosk-pracenje.test.js"
+    "test": "node test/zastita-api.test.js && node test/radni-nalozi.test.js && node test/otpremnice-isporuke.test.js && node test/normativi-projekti.test.js && node test/kooperanti-po-projektima.test.js && node test/programi-rezanja.test.js && node test/ponuda-u-projekt.test.js && node test/backup-lokalno.test.js && node test/brojevi-nova-godina.test.js && node test/migracija-arhiviran.test.js && node test/direktorski-pregled.test.js && node test/izdaj-zaostale-rezervacije.test.js && node test/potrosni-logika.test.js && node test/potrosni.test.js && node test/kiosk-pracenje.test.js && node test/termini-isporuke.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -138,6 +138,8 @@ const KARTICE_MODULA = {
   // Otpremnice i CMR naspram Financija (prije jedan "Otpremnice i fakturiranje").
   projekti: {
     projekti: { citanje: ["cjenikRada", "katalogProfila", "kupci", "materijali", "projekti", "radniNalozi", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "zaposlenici", "upitiNabave", "kvaliteteMaterijala", "narudzbenice", "dobavljaci", "narudzbeTransporta", "cmr"], pisanje: ["projekti", "standardniZadaci", "narudzbe", "otpremnice", "normativi", "materijali", "radniNalozi", "upitiNabave"] },
+    // Kalendar isporuka: samo pregled termina isporuke svih projekata (termini su polje projekta; isporučeno se računa iz narudžbi i otpremnica).
+    kalendar: { citanje: ["projekti", "narudzbe", "otpremnice", "kupci", "zaposlenici"], pisanje: [] },
     zavrseni: { citanje: ["projekti", "radniNalozi", "kupci", "narudzbe"], pisanje: [] },
     // Popis potvrda narudžbe (Auftragsbestätigung) — potvrda se sprema na narudžbu kupca.
     potvrde: { citanje: ["narudzbe", "projekti", "kupci", "zaposlenici", "postavkeTvrtke"], pisanje: ["narudzbe"] },
