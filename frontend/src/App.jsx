@@ -2020,7 +2020,7 @@ function KioskPotrosniOdabir({ ime, prezime, artikli, onPotvrdi, onOdustani, onA
   );
 }
 
-function KioskView({ onPrijava }) {
+function KioskView({ onPrijava, samoPotrosni = false }) {
   const [unos, setUnos] = useState("");
   const [poruka, setPoruka] = useState(null);
   const [sat, setSat] = useState(new Date());
@@ -2182,7 +2182,8 @@ function KioskView({ onPrijava }) {
   };
   const obradiKod = async (kod) => {
     setPoruka(null); // bez međuporuke "Obrađujem…" — ekran ostaje miran do stvarnog rezultata
-    if (nacinRef.current === "potrosniKartica") { await prijavaPotrosni(kod); return; }
+    // Zaslon samo za potrošni materijal: kartica na početnom zaslonu odmah otvara odabir (nikad evidencija dolaska/odlaska).
+    if (nacinRef.current === "potrosniKartica" || (samoPotrosni && nacinRef.current === "dolazak")) { await prijavaPotrosni(kod); return; }
     if (nacinRef.current !== "dolazak") return; // dok radnik bira artikle, tuđe kartice se ne obrađuju (ni kao prijava ni kao odjava)
     try {
       const res = await fetch(`${API_URL}/api/kiosk/scan`, {
@@ -2232,7 +2233,7 @@ function KioskView({ onPrijava }) {
       <GlobalStyle />
       <div style={{ marginBottom: 32, textAlign: "center" }}>
         <div style={{ fontSize: 56, fontWeight: 700, color: "var(--sidebar-ink)", lineHeight: 1.1 }}>ECON</div>
-        <div style={{ fontSize: 26, fontWeight: 600, color: "var(--sidebar-ink)" }}>Evidencija radnog vremena</div>
+        <div style={{ fontSize: 26, fontWeight: 600, color: "var(--sidebar-ink)" }}>{samoPotrosni ? "Potrošni materijal" : "Evidencija radnog vremena"}</div>
       </div>
       {nacin === "potrosniOdabir" && potrosni && (
         <KioskPotrosniOdabir ime={potrosni.ime} prezime={potrosni.prezime} artikli={potrosni.artikli} saljem={potrosniSaljem} greska={potrosniGreska}
@@ -2261,9 +2262,9 @@ function KioskView({ onPrijava }) {
             {poruka.detalj && <div style={{ fontSize: 24, color: "var(--ink-soft)" }}>{poruka.detalj}</div>}
           </div>
         ) : (
-          <div style={{ fontSize: 26, color: "var(--ink-soft)" }}>Prisloni karticu čitaču</div>
+          <div style={{ fontSize: 26, color: "var(--ink-soft)" }}>{samoPotrosni ? "Prisloni karticu da uzmeš potrošni materijal" : "Prisloni karticu čitaču"}</div>
         )}
-        {nacin === "dolazak" && (
+        {nacin === "dolazak" && !samoPotrosni && (
           <button type="button" className="btn btn-primary" style={{ marginTop: 30, fontSize: 30, padding: "20px 60px" }} onClick={() => promijeniNacin("potrosniKartica", 30 * 1000)}>Potrošni materijal</button>
         )}
         {/* Skriveni input i dalje hvata upis RFID čitača (koji radi kao tipkovnica) — samo
@@ -2277,7 +2278,7 @@ function KioskView({ onPrijava }) {
         />
       </div>
       )}
-      {onPrijava ? (
+      {samoPotrosni ? null : onPrijava ? (
         <button onClick={onPrijava} className="btn btn-primary" style={{ position: "fixed", bottom: 20, right: 20 }}>Prijava</button>
       ) : (
         <button onClick={zatvoriKiosk} style={{ marginTop: 22, background: "none", border: "none", color: "var(--sidebar-ink)", fontSize: 11, cursor: "pointer", opacity: 0.5 }}>Zatvori kiosk način</button>
@@ -2848,8 +2849,10 @@ export default function App() {
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2600); };
 
   const urlParametri = new URLSearchParams(window.location.search);
-  const jeKioskNacin = urlParametri.get("kiosk") === "1" || !!urlParametri.get("rfid");
-  if (jeKioskNacin) return <KioskView />;
+  // ?kiosk=1 = evidencija dolaska/odlaska (s tipkom Potrošni materijal); ?kiosk=potrosni = zaslon SAMO za potrošni materijal (tablet u skladištu):
+  // kartica odmah otvara odabir artikala i nikad ne bilježi dolazak ni odlazak.
+  const jeKioskNacin = urlParametri.get("kiosk") === "1" || urlParametri.get("kiosk") === "potrosni" || !!urlParametri.get("rfid");
+  if (jeKioskNacin) return <KioskView samoPotrosni={urlParametri.get("kiosk") === "potrosni"} />;
 
   // Početna stranica (bez prijave) je kiosk zaslon za evidenciju radnog vremena — gumb "Prijava"
   // u kutu prebacuje na stvarni login (?prijava=1), da uređaj na ulazu ne mora biti posebno adresiran.
@@ -5308,7 +5311,21 @@ function PotrosniMaterijalPanel({ db, showToast, refetchKljuc, mozeUrediti }) {
           </tbody>
         </table>
       )}
-      <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 10 }}>Stanje se skida samo kad radnik na tabletu (kiosk → „Potrošni materijal”) prisloni karticu i odabere što je uzeo; zaprimanje i korekcija (nakon brojanja) rade se ovdje. Kad stanje padne na minimum ili ispod, odgovornoj osobi stiže zadatak „Naručiti…”.</p>
+      <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 10 }}>Stanje se skida samo kad radnik na tabletu prisloni karticu i odabere što je uzeo; zaprimanje i korekcija (nakon brojanja) rade se ovdje. Kad stanje padne na minimum ili ispod, odgovornoj osobi stiže zadatak „Naručiti…”.</p>
+      {(() => {
+        const adresa = `${window.location.origin}${window.location.pathname}?kiosk=potrosni`;
+        return (
+          <div className="card" style={{ padding: "10px 14px", marginTop: 10, background: "var(--surface-alt)" }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Tablet u skladištu (samo potrošni materijal)</div>
+            <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 8 }}>Na tabletu u skladištu otvori ovu adresu: kartica odmah otvara odabir artikala, a nikad ne bilježi dolazak ni odlazak. Zaslon na ulazu ostaje na adresi za evidenciju radnog vremena (ima i tipku „Potrošni materijal”).</div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <code className="f-mono" style={{ fontSize: 12, padding: "4px 8px", background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 3, wordBreak: "break-all" }}>{adresa}</code>
+              <Btn size="sm" icon={Copy} onClick={() => { navigator.clipboard?.writeText(adresa).then(() => showToast("Adresa kopirana."), () => showToast("Kopiranje nije uspjelo — označi adresu i kopiraj ručno.")); }}>Kopiraj</Btn>
+              <Btn size="sm" icon={Eye} onClick={() => window.open(adresa, "_blank")}>Otvori</Btn>
+            </div>
+          </div>
+        );
+      })()}
 
       {forma && (
         <Modal title={forma.id ? "Uredi artikl" : "Novi artikl"} onClose={() => setForma(null)} footer={<><Btn onClick={() => setForma(null)}>Odustani</Btn><Btn variant="primary" icon={Save} disabled={saljem} onClick={spremiArtikl}>Spremi</Btn></>}>
