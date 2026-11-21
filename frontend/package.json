@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/zastitaNaRadu.test.js src/statistikaIsporuka.test.js src/otpremniceKontrola.test.js src/satiPoProjektu.test.js src/kooperantiTrosak.test.js src/programiRezanjaPatch.test.js src/ponudaCijena.test.js src/brojeviDokumenata.test.js src/praznici.test.js src/rokoviProjekata.test.js src/direktorskiPregled.test.js src/izdavanjeRezervirano.test.js src/potrosniMaterijal.test.js"
+    "test": "node --test src/zastitaNaRadu.test.js src/statistikaIsporuka.test.js src/otpremniceKontrola.test.js src/satiPoProjektu.test.js src/kooperantiTrosak.test.js src/programiRezanjaPatch.test.js src/ponudaCijena.test.js src/brojeviDokumenata.test.js src/praznici.test.js src/rokoviProjekata.test.js src/direktorskiPregled.test.js src/izdavanjeRezervirano.test.js src/potrosniMaterijal.test.js src/kioskPracenje.test.js"
   },
   "dependencies": {
     "lucide-react": "^0.462.0",

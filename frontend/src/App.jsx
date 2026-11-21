@@ -21,6 +21,7 @@ import { RAZLOZI_POMAKA_ROKA, analizaRokova, kasneProjekti, zapisPromjeneRoka, d
 import { direktorskiPregled, PRAGOVI as PRAGOVI_PREGLEDA, OPIS_SEMAFORA as OPIS_SEMAFORA_PREGLEDA } from "./direktorskiPregled";
 import { stavkeIzRezervacija, pregledZaIzdavanje, ukloniRezervacije, rasporediSPrvim } from "./izdavanjeRezervirano";
 import { matricaPotrosnje, zaNarucivanje, parsirajUvoz, MJESECI_KRATKO } from "./potrosniMaterijal";
+import { stanjeKioska, kioskoviBezSignala, NAZIV_VRSTE_KIOSKA } from "./kioskPracenje";
 import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, ogranicenjeStavke, pocetnaKolicina, visakStavke, zatvoriIsporuke, vratiZatvoreneIsporuke } from "./otpremniceKontrola";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
 
@@ -1972,6 +1973,14 @@ const KIOSK_PROVJERA_VERZIJE_MS = 33 * 60 * 1000;
 // Tipka "Potrošni materijal" na zaslonu za evidenciju radnog vremena (?kiosk=1) za sada je skrivena — potrošni materijal se bilježi na posebnom zaslonu
 // (?kiosk=potrosni). Postavi na true da se tipka vrati.
 const KIOSK_TIPKA_POTROSNI = false;
+// Oznaka ovog uređaja (nasumična, trajno u pregledniku) — kiosk je šalje uz svaki ping, pa poslužitelj zna koji je kiosk živ (kartica Evidencija rada → Kiosk zasloni).
+const idUredajaKioska = () => {
+  try {
+    let v = localStorage.getItem("erp_kiosk_uredaj");
+    if (!v || !/^[A-Za-z0-9_-]{6,40}$/.test(v)) { v = `k${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`; localStorage.setItem("erp_kiosk_uredaj", v); }
+    return v;
+  } catch { return `k${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`; }
+};
 
 // Kiosk → "Potrošni materijal": radnik je prislonio karticu i na velikim pločicama bira što je uzeo (+ / − po artiklu), pa potvrđuje.
 // Pločice su krupne (rade se i u rukavicama); bilo koji dodir produljuje vrijeme neaktivnosti (vidi KioskView), a nakon isteka zaslon se vraća na početni.
@@ -2068,7 +2077,7 @@ function KioskView({ onPrijava, samoPotrosni = false }) {
   // preko dana, umjesto da nakon 15 min mirovanja prva prava prijava čeka 30-50 s (što u
   // gužvi na početku smjene izgleda kao da sustav "ne registrira" prijavu).
   useEffect(() => {
-    const ping = () => fetch(`${API_URL}/api/kiosk/ping`).catch(() => {});
+    const ping = () => fetch(`${API_URL}/api/kiosk/ping?id=${encodeURIComponent(idUredajaKioska())}&vrsta=${samoPotrosni ? "potrosni" : "evidencija"}`).catch(() => {});
     ping();
     const t = setInterval(ping, 5 * 60 * 1000);
     return () => clearInterval(t);
@@ -17575,6 +17584,78 @@ function MjesecOdabir({ value, onChange, style }) {
 }
 
 /* ============================== EVIDENCIJA RADA — MJESEČNA MREŽA ============================== */
+// Kiosk zasloni (evidencija radnog vremena i potrošni materijal): zadnji signal svakog kioska i upozorenje kad radnim danom šuti (kioskPracenje.js).
+// Uređaj se pojavi sam kad je kiosk otvoren desetak minuta; naziv ("Ulaz", "Skladište") i uklanjanje starog uređaja rade oni s izmjenama kartice.
+function KioskStatusPanel({ db, showToast, mozeUredi }) {
+  const [stanje, setStanje] = useState(null); // { sada, uredaji }
+  const [nedostupno, setNedostupno] = useState(false);
+  const [uredjuje, setUredjuje] = useState(null); // { id, naziv }
+  const ucitaj = async () => {
+    try { setStanje(await potrosniApi("GET", "/api/kiosk/uredaji")); setNedostupno(false); }
+    catch { setNedostupno(true); }
+  };
+  useEffect(() => { ucitaj(); const t = setInterval(ucitaj, 60 * 1000); return () => clearInterval(t); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  if (!stanje) return null;
+  const praznik = (d) => jePraznik(d, db.praznici);
+  const imeKioska = (u) => u.naziv || `${NAZIV_VRSTE_KIOSKA[u.vrsta] || u.vrsta} (${u.uredaj})`;
+  const tisi = kioskoviBezSignala(stanje.uredaji, stanje.sada, praznik);
+  const spremiNaziv = async () => {
+    try { await potrosniApi("PUT", `/api/kiosk/uredaji/${encodeURIComponent(uredjuje.id)}/naziv`, { naziv: uredjuje.naziv }); setUredjuje(null); await ucitaj(); showToast("Naziv spremljen."); }
+    catch (e) { showToast(e.message); }
+  };
+  const ukloni = async (u) => {
+    if (!window.confirm(`Ukloniti „${imeKioska(u)}” s popisa? Ako je taj kiosk još uključen, sam će se vratiti nakon nekoliko minuta.`)) return;
+    try { await potrosniApi("DELETE", `/api/kiosk/uredaji/${encodeURIComponent(u.id)}`); await ucitaj(); showToast("Uređaj uklonjen s popisa."); }
+    catch (e) { showToast(e.message); }
+  };
+  const boja = { radi: "#1F6B41", nema: "#9A2E1B", izvan: "var(--ink-faint)" };
+  const oznaka = { radi: "radi", nema: "NEMA SIGNALA", izvan: "izvan radnog vremena" };
+  return (
+    <div className="card" style={{ padding: "10px 14px", marginBottom: 12, ...(tisi.length ? { background: "#FBEAE6", borderColor: "#F0C2B5" } : { background: "var(--surface-alt)" }) }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: stanje.uredaji.length ? 8 : 0 }}>
+        {tisi.length ? <AlertTriangle size={16} color="#9A2E1B" /> : <CheckCircle2 size={16} color="#1F6B41" />}
+        <strong style={{ fontSize: 13.5 }}>Kiosk zasloni</strong>
+        <span style={{ fontSize: 12.5, color: tisi.length ? "#9A2E1B" : "var(--ink-soft)", fontWeight: tisi.length ? 600 : 400 }}>
+          {stanje.uredaji.length === 0 ? "još nema uređaja — pojavi se sam kad je kiosk otvoren desetak minuta"
+            : tisi.length ? `ne šalje signal: ${tisi.map((u) => `${imeKioska(u)} (${stanjeKioska(u, stanje.sada, praznik).opis})`).join("; ")} — provjeri struju, Wi-Fi i otvorenu stranicu`
+            : nedostupno ? "podaci nisu osvježeni — provjeri vezu" : "svi šalju signal"}
+        </span>
+      </div>
+      {stanje.uredaji.map((u) => {
+        const s = stanjeKioska(u, stanje.sada, praznik);
+        return (
+          <div key={u.id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "5px 0", borderTop: "1px solid var(--line)" }}>
+            <span style={{ width: 9, height: 9, borderRadius: "50%", background: boja[s.status], flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 200 }}>
+              {uredjuje?.id === u.id ? (
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <input className="input" style={{ width: 220 }} autoFocus aria-label="Naziv kioska" placeholder="npr. Ulaz, Skladište" value={uredjuje.naziv} onChange={(e) => setUredjuje({ ...uredjuje, naziv: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") spremiNaziv(); if (e.key === "Escape") setUredjuje(null); }} />
+                  <Btn size="sm" variant="primary" onClick={spremiNaziv}>Spremi</Btn>
+                  <Btn size="sm" onClick={() => setUredjuje(null)}>Odustani</Btn>
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{u.naziv || NAZIV_VRSTE_KIOSKA[u.vrsta] || u.vrsta}</div>
+                  <div style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>{u.naziv ? `${NAZIV_VRSTE_KIOSKA[u.vrsta] || u.vrsta} · ` : ""}{u.uredaj}</div>
+                </>
+              )}
+            </div>
+            <div style={{ fontSize: 12.5, color: boja[s.status], fontWeight: s.status === "nema" ? 700 : 500, minWidth: 190 }}>
+              {oznaka[s.status]} · zadnji signal {s.opis}
+            </div>
+            {mozeUredi && uredjuje?.id !== u.id && (
+              <div style={{ display: "flex", gap: 4 }}>
+                <Btn size="sm" variant="ghost" icon={Pencil} onClick={() => setUredjuje({ id: u.id, naziv: u.naziv })}>Naziv</Btn>
+                <Btn size="sm" variant="ghost" icon={Trash2} onClick={() => ukloni(u)}>Ukloni</Btn>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true, dozvoljeneGrupe = null }) {
   // Pozicija može biti ograničena na neke grupe (radiona, praktikant, ostalo = tehnički ured, kooperant): ostale se uopće ne prikazuju.
   const smijeGrupu = (g) => !dozvoljeneGrupe || dozvoljeneGrupe.includes(g);
@@ -17750,6 +17831,7 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true, d
         </div>
         <Btn variant="primary" icon={UserCog} onClick={() => window.open(kioskUrl, "_blank")}>Otvori kiosk zaslon</Btn>
       </div>
+      <KioskStatusPanel db={db} showToast={showToast} mozeUredi={mozeMijenjati} />
 
       {neprijavljeni.length > 0 && (
         <div className="card" style={{ padding: "10px 14px", marginBottom: 12, background: "#FDF6E3", borderColor: "#F0C36B" }}>

@@ -5,11 +5,24 @@ const store = process.env.SEED_FILE ? JSON.parse(require("fs").readFileSync(proc
 const odgovor = (rows) => ({ rows, rowCount: rows.length });
 // Tablica potrosni_dnevnik (potrosni-rute.js): ovdje se oponašaju samo upiti koje ta ruta šalje (unos, provjera zahtjeva, razdoblje, radnik, jedan zapis, storno).
 const dnevnikPM = [];
+// Tablica kiosk_signal (kiosk-pracenje.js): signal (upsert), popis ID-eva, popis za pregled, preimenovanje i brisanje.
+const kioskSignali = [];
 const klon = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 async function query(sql, params = []) {
   const s = String(sql);
   if (/^\s*(BEGIN|COMMIT|ROLLBACK)/.test(s)) return odgovor([]);
   if (/SELECT key, value FROM app_data/.test(s)) return odgovor(Object.entries(store).map(([key, value]) => ({ key, value: klon(value) })));
+  if (/^\s*SELECT id FROM kiosk_signal\s*$/.test(s)) return odgovor(kioskSignali.map((x) => ({ id: x.id })));
+  if (/^\s*INSERT INTO kiosk_signal/.test(s)) {
+    const [id, vrsta, uredaj] = params;
+    const x = kioskSignali.find((y) => y.id === id);
+    const sada = new Date().toISOString();
+    if (x) { x.zadnji = sada; x.signala += 1; x.vrsta = vrsta; x.uredaj = uredaj; } else kioskSignali.push({ id, vrsta, uredaj, naziv: "", prvi: sada, zadnji: sada, signala: 1 });
+    return odgovor([]);
+  }
+  if (/FROM kiosk_signal WHERE signala >= \$1/.test(s)) return odgovor(kioskSignali.filter((x) => x.signala >= params[0]).sort((a, b) => b.zadnji.localeCompare(a.zadnji)).map((x) => ({ ...x })));
+  if (/^\s*UPDATE kiosk_signal SET naziv/.test(s)) { const x = kioskSignali.find((y) => y.id === params[0]); if (x) x.naziv = params[1]; return odgovor(x ? [x] : []); }
+  if (/^\s*DELETE FROM kiosk_signal WHERE id = \$1/.test(s)) { const i = kioskSignali.findIndex((y) => y.id === params[0]); if (i >= 0) kioskSignali.splice(i, 1); return odgovor(i >= 0 ? [{}] : []); }
   if (/^\s*INSERT INTO potrosni_dnevnik/.test(s)) {
     const [id, zaposlenik_id, zaposlenik, artikl_id, artikl, jm, kolicina, vrsta, zahtjev_id, korisnik_id, korisnik, napomena] = params;
     if (zahtjev_id && dnevnikPM.some((x) => x.zahtjev_id === zahtjev_id && x.artikl_id === artikl_id)) throw new Error("duplicate key value violates unique constraint");

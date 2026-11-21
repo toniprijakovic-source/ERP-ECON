@@ -732,7 +732,7 @@ app.post("/api/kiosk/scan", async (req, res) => {
 // uspavljivanje besplatnog Render plana (usnivanje nakon 15 min neaktivnosti uzrokuje da prvi
 // pravi zahtjev nakon toga čeka 30-50 s, što u gužvi na početku smjene izgleda kao da se
 // prijava "ne registrira").
-app.get("/api/kiosk/ping", (req, res) => res.json({ ok: true }));
+// (ruta /api/kiosk/ping je u kiosk-pracenje.js: isti brzi odgovor, uz zapis zadnjeg signala kioska)
 // Vrijeme poslužitelja — preglednik iz njega računa koliko sat uređaja odstupa (npr. računalo na
 // laseru s krivom vremenskom zonom), pa se početak/kraj rezanja bilježi prema poslužitelju.
 // verzija = commit koji trenutno radi na Renderu (za provjeru je li nova verzija objavljena).
@@ -2563,6 +2563,9 @@ async function migrirajDirektorskiPregled() {
   }
 }
 
+// Praćenje kioska: ping s oznakom uređaja, popis uređaja i upozorenje kad kiosk šuti (kiosk-pracenje.js).
+const kioskPracenje = require("./kiosk-pracenje").registrirajPracenjeKioska(app, { pool, autentikacija, ucitajPozicijuZaposlenika, dozvolaZaKarticu });
+
 // Potrošni materijal: kiosk (uzimanje karticom), zalihe, naručivanje i pregled potrošnje po radniku (potrosni-rute.js).
 const potrosniRute = require("./potrosni-rute").registrirajPotrosneRute(app, { pool, autentikacija, ucitajPozicijuZaposlenika, dozvolaZaKarticu, klijentIp, neuspjeliKiosk });
 
@@ -2585,6 +2588,7 @@ app.listen(PORT, () => {
   (async () => { await migrirajEvidencijaSati(); await migrirajZastituNaRadu(); await migrirajDirektorskiPregled(); })();
   pripremiKorekcije();
   potrosniRute.pripremi();
+  kioskPracenje.pripremi();
   pripremiAktivnost();
   setInterval(pripremiAktivnost, 6 * 60 * 60 * 1000);
   provjeriAutoOdjavu();
