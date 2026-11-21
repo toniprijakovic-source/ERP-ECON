@@ -2242,8 +2242,9 @@ function KioskView({ onPrijava, samoPotrosni = false }) {
 
   return (
     // translate="no": preglednik na kiosku ne smije sam prevoditi zaslon (prevedeni tekst pokvari prikaz koji se stalno osvježava).
-    <div className="erp-root f-display notranslate" translate="no" style={{ position: "relative", minHeight: 640, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--sidebar)", padding: 20 }}>
+    <div className="erp-root f-display notranslate" translate="no" style={{ position: "relative", minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--sidebar)", padding: 20 }}>
       <GlobalStyle />
+      <style>{"body{margin:0}"}</style>
       <div style={{ marginBottom: 32, textAlign: "center" }}>
         <div style={{ fontSize: 56, fontWeight: 700, color: "var(--sidebar-ink)", lineHeight: 1.1 }}>ECON</div>
         <div style={{ fontSize: 26, fontWeight: 600, color: "var(--sidebar-ink)" }}>{samoPotrosni ? "Potrošni materijal" : "Evidencija radnog vremena"}</div>
@@ -2346,8 +2347,9 @@ function LoginScreen({ onLogin }) {
   };
 
   return (
-    <div className="erp-root" style={{ minHeight: 640, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--sidebar)" }}>
+    <div className="erp-root" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--sidebar)" }}>
       <GlobalStyle />
+      <style>{"body{margin:0}"}</style>
       <div className="card" style={{ width: 380, padding: 28, background: "var(--surface)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
           <div style={{ width: 34, height: 34, background: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 3, flexShrink: 0 }}>
