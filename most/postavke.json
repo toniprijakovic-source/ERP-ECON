@@ -1,5 +1,10 @@
 {
-  "mapeRacuna": ["Fakture", "Rechnungen", "Rechnung"],
+  "mapeRacuna": [
+    "Fakture",
+    "Rechnungen",
+    "Rechnung"
+  ],
+  "mapaUtovara": "Fotografije - Utovar",
   "prodavatelj": {
     "telefon": "+385 40 646050",
     "bic": "RZBHHR2X"

@@ -9,6 +9,7 @@ import { obradi } from "./lib/obradi.js";
 import { citajKumulativ, spremiKumulativ } from "./lib/kumulativ-zadaci.js";
 import { popisXRechnunga, obrisiXRechnung } from "./lib/xrechnung-popis.js";
 import { korijeniProjekata } from "./lib/mapa.js";
+import { obradiUtovar } from "./lib/utovar.js";
 
 const mapaMosta = path.dirname(fileURLToPath(import.meta.url));
 try { process.loadEnvFile(path.join(mapaMosta, ".env")); } catch { /* .env nije obavezan ako su varijable već postavljene */ }
@@ -50,6 +51,13 @@ async function api(metoda, ruta, tijelo) {
   return res.json();
 }
 
+// Preuzimanje datoteke (fotografije utovara) kao bajtovi.
+async function apiBajtovi(ruta) {
+  const res = await fetch(`${API}${ruta}`, { headers: { "X-Most-Token": TOKEN } });
+  if (!res.ok) throw new Error(`GET ${ruta} → ${res.status} ${(await res.text()).slice(0, 200)}`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
 async function obradiZadatak(z) {
   const vrsta = z.vrsta || "xrechnung";
   log(`Zadatak ${z.id.slice(0, 8)}: ${z.sifra} (${vrsta})${okolina.probno ? " [PROBNO — ništa se ne piše na Z:]" : ""}`);
@@ -71,6 +79,7 @@ async function obradiZadatak(z) {
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(signal, () => { log(`Primljen signal ${signal} — most staje.`); process.exit(0); });
 log(`ECON most pokrenut. ERP: ${API} | Korijen: ${okolina.korijen.join(" ; ")} | Java: ${okolina.java}${okolina.probno ? " | PROBNI NAČIN" : ""}`);
 let greskaPrijavljena = false;
+let greskaUtovaraPrijavljena = false;
 for (;;) {
   try {
     const { zadaci } = await api("GET", "/api/most/zadaci");
@@ -79,6 +88,14 @@ for (;;) {
   } catch (e) {
     if (!greskaPrijavljena) log("Veza s ERP-om nije uspjela:", e.message);
     greskaPrijavljena = true;
+  }
+  // Fotografije utovara (mobitel → ERP → mapa projekta na Z:): zasebno od zadataka, da greška jednog ne zaustavi drugo.
+  try {
+    await obradiUtovar(api, apiBajtovi, okolina, log);
+    greskaUtovaraPrijavljena = false;
+  } catch (e) {
+    if (!greskaUtovaraPrijavljena && !greskaPrijavljena) log("Fotografije utovara: veza s ERP-om nije uspjela:", e.message);
+    greskaUtovaraPrijavljena = true;
   }
   await new Promise((r) => setTimeout(r, 5000));
 }

@@ -7,10 +7,28 @@ const odgovor = (rows) => ({ rows, rowCount: rows.length });
 const dnevnikPM = [];
 // Tablica kiosk_signal (kiosk-pracenje.js): signal (upsert), popis ID-eva, popis za pregled, preimenovanje i brisanje.
 const kioskSignali = [];
+// Tablica utovar_slike (utovar.js): unos, redni broj, brojanje, popis projekta, jedna slika, brisanje, red za most i potvrde mosta.
+const utovarSlike = [];
 const klon = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 async function query(sql, params = []) {
   const s = String(sql);
   if (/^\s*(BEGIN|COMMIT|ROLLBACK)/.test(s)) return odgovor([]);
+  if (/^\s*INSERT INTO utovar_slike/.test(s)) {
+    const [id, otpremnica_id, otpremnica_broj, projekt_id, projekt_sifra, datum, redni, naziv, velicina, slika, slicica, zahtjev_id] = params;
+    if (utovarSlike.some((x) => x.otpremnica_id === otpremnica_id && x.datum === datum && x.redni === redni)) throw new Error("duplicate key value violates unique constraint");
+    utovarSlike.push({ id, otpremnica_id, otpremnica_broj, projekt_id, projekt_sifra, datum, redni, naziv, velicina, slika, slicica, zahtjev_id, kreirano: new Date().toISOString(), spremljeno_z: null, z_putanja: "", z_greska: "", z_pokusaj: null });
+    return odgovor([]);
+  }
+  if (/SELECT COALESCE\(MAX\(redni\), 0\) \+ 1 AS sljedeci FROM utovar_slike/.test(s)) return odgovor([{ sljedeci: Math.max(0, ...utovarSlike.filter((x) => x.otpremnica_id === params[0] && x.datum === params[1]).map((x) => x.redni)) + 1 }]);
+  if (/SELECT COUNT\(\*\) AS n FROM utovar_slike/.test(s)) return odgovor([{ n: String(utovarSlike.filter((x) => x.otpremnica_id === params[0]).length) }]);
+  if (/FROM utovar_slike WHERE zahtjev_id = \$1/.test(s)) return odgovor(utovarSlike.filter((x) => x.zahtjev_id === params[0]).map((x) => ({ id: x.id, redni: x.redni, naziv: x.naziv })));
+  if (/FROM utovar_slike WHERE id = \$1/.test(s) && /^\s*SELECT/.test(s)) return odgovor(utovarSlike.filter((x) => x.id === params[0]).map((x) => ({ ...x })));
+  if (/FROM utovar_slike WHERE projekt_id = \$1/.test(s)) return odgovor(utovarSlike.filter((x) => x.projekt_id === params[0]).sort((a, b) => b.datum.localeCompare(a.datum) || a.otpremnica_broj.localeCompare(b.otpremnica_broj) || a.redni - b.redni).map((x) => ({ ...x, slika: undefined, slicica: undefined, ima_original: !!x.slika })));
+  if (/^\s*DELETE FROM utovar_slike WHERE id = \$1/.test(s)) { const i = utovarSlike.findIndex((x) => x.id === params[0]); if (i >= 0) utovarSlike.splice(i, 1); return odgovor(i >= 0 ? [{}] : []); }
+  if (/FROM utovar_slike WHERE spremljeno_z IS NULL AND slika IS NOT NULL/.test(s)) return odgovor(utovarSlike.filter((x) => !x.spremljeno_z && x.slika && !x.z_pokusaj).slice(0, 20).map((x) => ({ ...x, slika: undefined, slicica: undefined })));
+  if (/^\s*UPDATE utovar_slike SET spremljeno_z = now\(\)/.test(s)) { const x = utovarSlike.find((y) => y.id === params[0]); if (x) { x.spremljeno_z = new Date().toISOString(); x.z_putanja = params[1]; x.z_greska = ""; x.z_pokusaj = x.spremljeno_z; } return odgovor(x ? [x] : []); }
+  if (/^\s*UPDATE utovar_slike SET z_greska/.test(s)) { const x = utovarSlike.find((y) => y.id === params[0]); if (x) { x.z_greska = params[1]; x.z_pokusaj = new Date().toISOString(); } return odgovor(x ? [x] : []); }
+  if (/^\s*UPDATE utovar_slike SET slika = NULL/.test(s)) return odgovor([]);
   if (/SELECT key, value FROM app_data/.test(s)) return odgovor(Object.entries(store).map(([key, value]) => ({ key, value: klon(value) })));
   if (/^\s*SELECT id FROM kiosk_signal\s*$/.test(s)) return odgovor(kioskSignali.map((x) => ({ id: x.id })));
   if (/^\s*INSERT INTO kiosk_signal/.test(s)) {

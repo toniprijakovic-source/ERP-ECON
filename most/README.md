@@ -43,6 +43,15 @@ Most nakon svakog valjanog XRechnunga sam upiše taj račun u niz. Primjer: `pri
 Bez te datoteke račun se pretvara kao običan (bez kumulativa). **Zaštita:** račun čija stavka sadrži "nach Abrechnungsblatt"
 (Abschlagsrechnung) bez `kumulativ.json` se u pravom načinu ODBIJA (iznos za platiti ne bi odgovarao PDF-u kupcu); u probnom je to samo upozorenje.
 
+## Fotografije utovara (mobitel → ERP → Z:)
+Radnik skenira QR kod na otpremnici, slika utovar mobitelom, a slike dolaze u ERP. Most ih svakih nekoliko sekundi preuzme i
+spremi u `<mapa projekta>\Fotografije - Utovar\<datum utovara, npr. 2026-11-24>\utovar_<datum>_<otpremnica>_<nn>.jpg`
+(naziv mape je u `postavke.json` → `mapaUtovara`). Mapa projekta se traži kao i za račune (polje "Mapa projekta" u ERP-u ili mapa
+čije ime počinje šifrom `RN …`); **mapa projekta se nikad ne stvara sama** — ako je nema (ili ih ima više), ERP u kartici
+"Fotografije utovara" pokazuje grešku i most pokuša ponovno nakon 10 minuta. Postojeća datoteka se nikad ne prepisuje (ista slika =
+već spremljeno, drukčija = `_v2`), prihvaćaju se samo JPEG slike i samo dogovoreni oblik naziva. U probnom načinu (`MOST_PROBNO=1`)
+slike idu u `proba-izlaz\utovar`, a ERP ih ne označava kao spremljene. Nakon objave nove verzije mosta treba ga ponovno pokrenuti.
+
 ## Ograničenja prve verzije
 Samo isporuke u EU bez PDV-a (kategorija K), valuta EUR, bez popusta na stavkama; domaće račune šalje Konplast.
 

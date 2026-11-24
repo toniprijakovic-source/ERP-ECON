@@ -2571,6 +2571,10 @@ const kioskPracenje = require("./kiosk-pracenje").registrirajPracenjeKioska(app,
 // Potrošni materijal: kiosk (uzimanje karticom), zalihe, naručivanje i pregled potrošnje po radniku (potrosni-rute.js).
 const potrosniRute = require("./potrosni-rute").registrirajPotrosneRute(app, { pool, autentikacija, ucitajPozicijuZaposlenika, dozvolaZaKarticu, klijentIp, neuspjeliKiosk });
 
+// Fotografije utovara: QR kod na otpremnici → mobilna stranica bez prijave → slike uz projekt i datum utovara; most ih sprema na Z: (utovar.js).
+const utovarZahtjevi = brojacNeuspjelih(240, 10 * 60 * 1000); // svi zahtjevi javnih ruta po adresi (pregled, slanje slika, uklanjanje)
+const utovar = require("./utovar").registrirajUtovar(app, { pool, autentikacija, ucitajPozicijuZaposlenika, izracunajDozvoljeneKljuceve, ucitajKljuc, mostAutentikacija, klijentIp, brojac: utovarZahtjevi, tajna: JWT_SECRET });
+
 // Zajednički error handler: greške iz ruta (vidi omotač async ruta gore) i neispravan JSON u tijelu zahtjeva vraćaju se kao JSON,
 // a poslužitelj ostaje živ.
 app.use((err, req, res, next) => {
@@ -2591,6 +2595,7 @@ app.listen(PORT, () => {
   pripremiKorekcije();
   potrosniRute.pripremi();
   kioskPracenje.pripremi();
+  utovar.pripremi();
   pripremiAktivnost();
   setInterval(pripremiAktivnost, 6 * 60 * 60 * 1000);
   provjeriAutoOdjavu();

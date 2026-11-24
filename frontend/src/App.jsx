@@ -4,7 +4,7 @@ import {
   Plus, Pencil, Trash2, X, Search, AlertTriangle, CheckCircle2, ArrowRight,
   Clock, ChevronRight, Save, PackageCheck, PackageMinus, Settings, Layers,
   ChevronDown, ChevronUp, ChevronLeft, FolderInput, Eye, UserCog, CalendarRange,
-  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors, Printer, Bell, Menu, ShieldCheck, Container, Mail, HistoryIcon, HardHat, Lightbulb, Gauge
+  Database, Download, Upload, AlertCircle, Copy, GripVertical, FileText, Scissors, Printer, Bell, Menu, ShieldCheck, Container, Mail, HistoryIcon, HardHat, Lightbulb, Gauge, Camera
 } from "lucide-react";
 import logoEcon from "./assets/logo-econ.jpg";
 import QRCode from "qrcode";
@@ -22,6 +22,7 @@ import { direktorskiPregled, PRAGOVI as PRAGOVI_PREGLEDA, OPIS_SEMAFORA as OPIS_
 import { stavkeIzRezervacija, pregledZaIzdavanje, ukloniRezervacije, rasporediSPrvim } from "./izdavanjeRezervirano";
 import { matricaPotrosnje, zaNarucivanje, parsirajUvoz, MJESECI_KRATKO } from "./potrosniMaterijal";
 import { stanjeKioska, kioskoviBezSignala, NAZIV_VRSTE_KIOSKA } from "./kioskPracenje";
+import { sazmiSliku, adresaUtovara, tokenIzUpita, grupirajPoDatumu, stanjeSlike, NAZIV_STANJA as NAZIV_STANJA_SLIKE } from "./utovarFotografije";
 import { imaTermine, sortiraniTermini, rokIzTermina, stanjaTermina, projektSEfektivnimRokom, rokoviDijelova, posloviPoTerminima, redoviKalendara, grupirajPoTjednima, pocetakTjedna, dodajDane as dodajDaneISO } from "./terminiIsporuke";
 import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, ogranicenjeStavke, pocetnaKolicina, visakStavke, zatvoriIsporuke, vratiZatvoreneIsporuke } from "./otpremniceKontrola";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
@@ -2866,6 +2867,9 @@ export default function App() {
   const urlParametri = new URLSearchParams(window.location.search);
   // ?kiosk=1 = evidencija dolaska/odlaska (s tipkom Potrošni materijal); ?kiosk=potrosni = zaslon SAMO za potrošni materijal (tablet u skladištu):
   // kartica odmah otvara odabir artikala i nikad ne bilježi dolazak ni odlazak.
+  // ?utovar=<veza> = stranica na mobitelu s QR koda otpremnice: bez prijave, samo slikanje utovara (vidi UtovarStranica).
+  const utovarVeza = tokenIzUpita(window.location.search);
+  if (utovarVeza) return <UtovarStranica token={utovarVeza} />;
   const jeKioskNacin = urlParametri.get("kiosk") === "1" || urlParametri.get("kiosk") === "potrosni" || !!urlParametri.get("rfid");
   if (jeKioskNacin) return <KioskView samoPotrosni={urlParametri.get("kiosk") === "potrosni"} />;
 
@@ -4041,6 +4045,232 @@ function JavnaKarticaMaticnog({ broj }) {
           : stanje.greska ? <div style={{ fontSize: 13, color: "var(--rust)" }}>{stanje.greska}</div>
           : <MaticniBrojPodaci z={stanje.podaci} />}
       </div>
+    </div>
+  );
+}
+
+// Fotografije utovara — stranica na mobitelu (QR kod s otpremnice, bez prijave). Slike se sažimaju na mobitelu (≈ 1600 px) i šalju jedna po jedna;
+// poslužitelj ih veže uz projekt i datum utovara, a most ih sprema na Z: u <mapa projekta>\Fotografije - Utovar\<datum>\. Ponovno slanje iste slike
+// (isti zahtjevId) ne stvara duplikat, pa slaba veza nije problem. Pogrešnu sliku može se ukloniti još pola sata.
+const NOVI_ID_SLIKE = () => (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`);
+function UtovarStranica({ token }) {
+  const API_VEZA = `${API_URL}/api/utovar/veza/${encodeURIComponent(token)}`;
+  const [info, setInfo] = useState({ ucitava: true });
+  const [stavke, setStavke] = useState([]); // slike snimljene u ovoj sesiji: { kljuc, url, status: obrada|salje|gotovo|greska, id, vrijeme, greska }
+  const red = useRef(Promise.resolve()); // slanje jedna po jedna
+  const podaci = useRef({}); // kljuc → { slika, slicica, zahtjevId } (za ponovni pokušaj)
+  const brojac = useRef(0);
+  useEffect(() => {
+    fetch(API_VEZA)
+      .then(async (r) => { const d = await r.json().catch(() => ({})); setInfo(r.ok ? { podaci: d } : { greska: d.error || "Veza nije ispravna." }); })
+      .catch(() => setInfo({ greska: "Nema veze s poslužiteljem — provjeri internetsku vezu pa ponovno skeniraj QR kod." }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+  useEffect(() => () => stavke.forEach((s) => s.url && URL.revokeObjectURL(s.url)), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const postavi = (kljuc, patch) => setStavke((l) => l.map((x) => (x.kljuc === kljuc ? { ...x, ...patch } : x)));
+  const posalji = async (kljuc) => {
+    const p = podaci.current[kljuc];
+    if (!p) return;
+    postavi(kljuc, { status: "salje", greska: "" });
+    try {
+      const res = await fetch(`${API_VEZA}/slika`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || "Slanje nije uspjelo.");
+      postavi(kljuc, { status: "gotovo", id: d.id, vrijeme: Date.now() });
+    } catch (e) {
+      postavi(kljuc, { status: "greska", greska: e instanceof TypeError ? "Nema veze — slika je sačuvana, pokušaj ponovno." : e.message || "Slanje nije uspjelo." });
+    }
+  };
+  const dodaj = (popis) => {
+    const datoteke = [...(popis || [])].filter((f) => /^image\//.test(f.type) || /\.(jpe?g|png|heic|heif|webp)$/i.test(f.name));
+    for (const f of datoteke) {
+      const kljuc = `s${++brojac.current}`;
+      setStavke((l) => [...l, { kljuc, url: URL.createObjectURL(f), status: "obrada", greska: "" }]);
+      red.current = red.current.then(async () => {
+        try {
+          const z = await sazmiSliku(f);
+          podaci.current[kljuc] = { slika: z.slika, slicica: z.slicica, zahtjevId: NOVI_ID_SLIKE() };
+          await posalji(kljuc);
+        } catch (e) { postavi(kljuc, { status: "greska", greska: e.message || "Slika se nije mogla obraditi." }); }
+      });
+    }
+  };
+  const ponovi = (kljuc) => { red.current = red.current.then(() => posalji(kljuc)); };
+  const ukloni = async (s) => {
+    postavi(s.kljuc, { greska: "" });
+    try {
+      const res = await fetch(`${API_VEZA}/slika/${encodeURIComponent(s.id)}`, { method: "DELETE" });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || "Uklanjanje nije uspjelo.");
+      URL.revokeObjectURL(s.url);
+      setStavke((l) => l.filter((x) => x.kljuc !== s.kljuc));
+    } catch (e) { postavi(s.kljuc, { greska: e.message || "Uklanjanje nije uspjelo." }); }
+  };
+  const p = info.podaci;
+  const poslano = stavke.filter((s) => s.status === "gotovo").length;
+  const ukupno = (p?.vecDodano || 0) + poslano;
+  const zauzet = stavke.some((s) => s.status === "obrada" || s.status === "salje");
+  const puno = p && ukupno >= p.najvise;
+  const stilGumba = { display: "flex", alignItems: "center", justifyContent: "center", gap: 10, minHeight: 64, fontSize: 19, fontWeight: 600, cursor: puno ? "not-allowed" : "pointer", opacity: puno ? 0.5 : 1, textAlign: "center" };
+  return (
+    <div className="erp-root" style={{ minHeight: "100vh", background: "var(--sidebar)", padding: "16px 12px", boxSizing: "border-box" }}>
+      <GlobalStyle />
+      <style>{"body{margin:0}"}</style>
+      <div className="card" style={{ maxWidth: 560, margin: "0 auto", padding: 18, background: "var(--surface)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+          <div style={{ width: 38, height: 38, background: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 3, flexShrink: 0 }}><Camera size={20} color="var(--accent-ink)" /></div>
+          <div style={{ minWidth: 0 }}>
+            <div className="f-mono" style={{ fontSize: 10, letterSpacing: "0.08em", color: "var(--ink-faint)", textTransform: "uppercase" }}>ECON D.O.O. · fotografije utovara</div>
+            <div className="f-display" style={{ fontSize: 18, fontWeight: 600 }}>{p ? `Otpremnica ${p.otpremnica.broj}` : "Fotografije utovara"}</div>
+          </div>
+        </div>
+        {info.ucitava && <div style={{ fontSize: 14, color: "var(--ink-soft)" }}>Učitavanje…</div>}
+        {info.greska && <div style={{ fontSize: 14, color: "var(--rust)", lineHeight: 1.5 }}>{info.greska}</div>}
+        {p && (
+          <>
+            <div style={{ fontSize: 14, lineHeight: 1.6, marginBottom: 14 }}>
+              <div><strong className="f-mono">{p.projekt.sifra}</strong>{p.projekt.naziv ? ` — ${p.projekt.naziv}` : ""}</div>
+              {p.primatelj && <div style={{ color: "var(--ink-soft)" }}>{p.otpremnica.vrsta === "kooperant" ? "Kooperant" : "Kupac"}: {p.primatelj}</div>}
+              <div style={{ color: "var(--ink-soft)" }}>Datum utovara: <strong style={{ color: "var(--ink)" }}>{fmtDate(p.danas)}</strong></div>
+            </div>
+            <div style={{ display: "grid", gap: 10, marginBottom: 12 }}>
+              <label className="btn btn-primary" style={stilGumba}>
+                <Camera size={26} /> Fotografiraj
+                <input type="file" accept="image/*" capture="environment" disabled={!!puno} style={{ display: "none" }} onChange={(e) => { dodaj(e.target.files); e.target.value = ""; }} />
+              </label>
+              <label className="btn btn-ghost" style={{ ...stilGumba, minHeight: 48, fontSize: 16 }}>
+                Dodaj iz galerije
+                <input type="file" accept="image/*" multiple disabled={!!puno} style={{ display: "none" }} onChange={(e) => { dodaj(e.target.files); e.target.value = ""; }} />
+              </label>
+            </div>
+            <div style={{ fontSize: 13, color: "var(--ink-soft)", marginBottom: 12 }}>
+              Poslano slika: <strong style={{ color: "var(--ink)" }}>{ukupno}</strong> / {p.najvise}
+              {zauzet && <span> · šaljem…</span>}
+              {puno && <span style={{ color: "var(--rust)" }}> · dosegnut najveći broj slika za ovu otpremnicu</span>}
+            </div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {[...stavke].reverse().map((s) => (
+                <div key={s.kljuc} style={{ display: "flex", gap: 10, alignItems: "center", border: "1px solid var(--line)", padding: 6, borderRadius: 3 }}>
+                  <img src={s.url} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 2, flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
+                    {s.status === "obrada" && <span style={{ color: "var(--ink-soft)" }}>Obrađujem…</span>}
+                    {s.status === "salje" && <span style={{ color: "var(--ink-soft)" }}>Šaljem…</span>}
+                    {s.status === "gotovo" && <span style={{ color: "var(--green)", fontWeight: 600 }}>✔ Poslano</span>}
+                    {s.status === "greska" && <span style={{ color: "var(--rust)" }}>✘ {s.greska}</span>}
+                    {s.status === "gotovo" && s.greska && <div style={{ color: "var(--rust)" }}>{s.greska}</div>}
+                  </div>
+                  {s.status === "greska" && podaci.current[s.kljuc] && <button type="button" className="btn btn-primary btn-sm" onClick={() => ponovi(s.kljuc)}>Pokušaj ponovno</button>}
+                  {s.status === "gotovo" && Date.now() - s.vrijeme < 29 * 60 * 1000 && <button type="button" className="btn btn-ghost btn-sm" onClick={() => ukloni(s)}>Ukloni</button>}
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: "var(--ink-faint)", marginTop: 14, lineHeight: 1.5 }}>
+              Slike se spremaju uz projekt i datum utovara (u mapu projekta: Fotografije - Utovar). Kad završiš, samo zatvori stranicu.
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Fotografije utovara u detalju projekta: skupine po datumu utovara (najnovije prvo), sličice se dohvaćaju tek kad se skupina otvori.
+// Kartice nema dok projekt nema slika ili pozicija ne smije čitati otpremnice.
+function UtovarSlicica({ id, onKlik }) {
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    let ugasen = false, objekt = "";
+    fetch(`${API_URL}/api/utovar/slika/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${localStorage.getItem("erp_token")}` } })
+      .then((r) => (r.ok ? r.blob() : Promise.reject(new Error("nema slike"))))
+      .then((b) => { if (ugasen) return; objekt = URL.createObjectURL(b); setUrl(objekt); })
+      .catch(() => {});
+    return () => { ugasen = true; if (objekt) URL.revokeObjectURL(objekt); };
+  }, [id]);
+  return (
+    <button type="button" onClick={onKlik} aria-label="Otvori fotografiju utovara" style={{ width: 104, height: 78, padding: 0, border: "1px solid var(--line)", background: "var(--surface-alt)", cursor: "pointer", borderRadius: 3, overflow: "hidden" }}>
+      {url && <img src={url} alt="Fotografija utovara" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
+    </button>
+  );
+}
+
+function UtovarSlikaModal({ slika, onClose, onObrisano, showToast }) {
+  const [prikaz, setPrikaz] = useState({ url: "", original: false });
+  const { url, original: jeOriginal } = prikaz;
+  const [potvrda, setPotvrda] = useState(false);
+  useEffect(() => {
+    let ugasen = false, objekt = "";
+    const zaglavlje = { headers: { Authorization: `Bearer ${localStorage.getItem("erp_token")}` } };
+    const dohvati = async (original) => { const r = await fetch(`${API_URL}/api/utovar/slika/${encodeURIComponent(slika.id)}${original ? "?original=1" : ""}`, zaglavlje); if (!r.ok) throw new Error("nema"); return r.blob(); };
+    (async () => {
+      let original = true, blob;
+      try { blob = await dohvati(true); } catch { original = false; try { blob = await dohvati(false); } catch { /* ništa za prikazati */ } }
+      if (ugasen) return;
+      if (blob) { objekt = URL.createObjectURL(blob); setPrikaz({ url: objekt, original }); }
+    })();
+    return () => { ugasen = true; if (objekt) URL.revokeObjectURL(objekt); };
+  }, [slika.id]);
+  const stanje = stanjeSlike(slika);
+  const obrisi = async () => {
+    try { await potrosniApi("DELETE", `/api/utovar/slika/${encodeURIComponent(slika.id)}`); showToast("Fotografija je uklonjena iz ERP-a."); onObrisano(); } catch (e) { showToast(e.message || "Uklanjanje nije uspjelo."); }
+  };
+  return (
+    <Modal wide title={`Fotografija utovara — ${slika.otpremnica}`} onClose={onClose} footer={<>
+      <Btn onClick={onClose}>Zatvori</Btn>
+      {potvrda ? <Btn variant="danger" icon={Trash2} onClick={obrisi}>Potvrdi uklanjanje</Btn> : <Btn variant="ghost" icon={Trash2} onClick={() => setPotvrda(true)}>Ukloni iz ERP-a</Btn>}
+    </>}>
+      <div style={{ textAlign: "center", background: "var(--surface-alt)", padding: 8, minHeight: 120 }}>
+        {url ? <img src={url} alt="Fotografija utovara" style={{ maxWidth: "100%", maxHeight: "68vh", objectFit: "contain" }} /> : <div style={{ padding: 30, color: "var(--ink-soft)" }}>Učitavanje…</div>}
+      </div>
+      {!jeOriginal && url && <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 6 }}>Prikazana je mala sličica: original je uklonjen iz ERP-a nakon što je spremljen u mapu projekta na Z:.</div>}
+      <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 8, lineHeight: 1.6 }}>
+        <div>Datoteka: <span className="f-mono">{slika.naziv}</span></div>
+        <div>Snimljeno: {fmtDate(slika.kreirano)} {new Date(slika.kreirano).toLocaleTimeString("hr-HR", { hour: "2-digit", minute: "2-digit" })}</div>
+        <div>Spremanje na serveru (Z:): {stanje === "spremljeno" ? <span className="f-mono" style={{ wordBreak: "break-all" }}>{slika.putanjaZ || "spremljeno"}</span> : stanje === "greska" ? <span style={{ color: "var(--rust)" }}>nije spremljeno — {slika.greskaZ}</span> : "čeka da ju most spremi"}</div>
+        {potvrda && <div style={{ color: "var(--rust)" }}>Uklanja se samo kopija u ERP-u; datoteka u mapi projekta na Z: ostaje.</div>}
+      </div>
+    </Modal>
+  );
+}
+
+const rijecSlika = (n) => (n % 10 === 1 && n % 100 !== 11 ? "slika" : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? "slike" : "slika");
+function FotografijeUtovaraKartica({ projekt, showToast }) {
+  const [slike, setSlike] = useState(null);
+  const [otvoreno, setOtvoreno] = useState({}); // datum → otvorena skupina
+  const [velika, setVelika] = useState(null);
+  const ucitaj = async () => { try { setSlike((await potrosniApi("GET", `/api/utovar/projekt/${encodeURIComponent(projekt.id)}`)).slike || []); } catch { setSlike([]); } };
+  useEffect(() => { ucitaj(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [projekt.id]);
+  const skupine = useMemo(() => grupirajPoDatumu(slike), [slike]);
+  if (!slike || slike.length === 0) return null;
+  const boja = { spremljeno: "var(--green)", greska: "var(--rust)", ceka: "var(--ink-faint)" };
+  return (
+    <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+        <Camera size={16} color="var(--steel)" />
+        <strong style={{ fontSize: 14 }}>Fotografije utovara</strong>
+        <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{slike.length} {rijecSlika(slike.length)} · {skupine.length} {skupine.length === 1 ? "utovar" : "utovara"}</span>
+      </div>
+      {skupine.map((g) => (
+        <div key={g.datum} style={{ borderTop: "1px solid var(--line)", padding: "8px 0" }}>
+          <div onClick={() => setOtvoreno((o) => ({ ...o, [g.datum]: !o[g.datum] }))} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", flexWrap: "wrap" }}>
+            {otvoreno[g.datum] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            <strong className="f-mono" style={{ fontSize: 13 }}>{fmtDate(g.datum)}</strong>
+            <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>{g.ukupno} slika · {g.otpremnice.map((o) => o.broj).join(", ")}</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: boja[g.stanje] }} title={g.stanje === "greska" ? g.prvaGreska : ""}>
+              {g.stanje === "spremljeno" ? "✔ spremljeno na Z:" : g.stanje === "greska" ? `✘ ${NAZIV_STANJA_SLIKE.greska}` : g.spremljeno > 0 ? `${g.spremljeno}/${g.ukupno} spremljeno na Z:` : "čeka most"}
+            </span>
+          </div>
+          {g.stanje === "greska" && <div style={{ fontSize: 12, color: "var(--rust)", marginTop: 4, paddingLeft: 24 }}>{g.prvaGreska}</div>}
+          {otvoreno[g.datum] && g.otpremnice.map((o) => (
+            <div key={o.broj} style={{ marginTop: 8, paddingLeft: 24 }}>
+              {g.otpremnice.length > 1 && <div className="f-mono" style={{ fontSize: 11.5, color: "var(--ink-soft)", marginBottom: 4 }}>{o.broj}</div>}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {o.slike.map((s) => <UtovarSlicica key={s.id} id={s.id} onKlik={() => setVelika(s)} />)}
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+      {velika && <UtovarSlikaModal slika={velika} showToast={showToast} onClose={() => setVelika(null)} onObrisano={() => { setVelika(null); ucitaj(); }} />}
     </div>
   );
 }
@@ -9315,6 +9545,16 @@ function OtpremnicaPrintModal({ otpremnica, db, onClose }) {
   const narudzba = db.narudzbe.find((n) => n.id === otpremnica.narudzbaId);
   const dobavljac = db.dobavljaci.find((d) => d.id === otpremnica.dobavljacId);
   const PRAZNI_REDOVI = Math.max(0, 20 - otpremnica.stavke.length);
+  // QR kod za fotografije utovara: veza vrijedi samo za ovu otpremnicu (potpisuje je poslužitelj); bez veze (nema mreže/ovlasti) ispis ide bez QR koda.
+  const [qrUtovara, setQrUtovara] = useState("");
+  useEffect(() => {
+    let ugasen = false;
+    potrosniApi("GET", `/api/utovar/veza-za/${encodeURIComponent(otpremnica.id)}`)
+      .then((r) => QRCode.toDataURL(adresaUtovara(window.location.origin, window.location.pathname, r.token), { margin: 0, scale: 6, errorCorrectionLevel: "M" }))
+      .then((url) => { if (!ugasen) setQrUtovara(url); })
+      .catch(() => {});
+    return () => { ugasen = true; };
+  }, [otpremnica.id]);
   return (
     <Modal wide title={`Pregled za ispis — Otpremnica ${otpremnica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(otpremnica.broj)}>Ispis / Spremi kao PDF</Btn></>}>
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
@@ -9331,6 +9571,12 @@ function OtpremnicaPrintModal({ otpremnica, db, onClose }) {
                 <tr><td style={{ paddingRight: 10, color: "#555", textAlign: "right" }}>Mjesto / Ort :</td><td style={{ fontWeight: 600, textAlign: "left" }}>{otpremnica.mjesto}</td></tr>
               </tbody>
             </table>
+            {qrUtovara && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+                <div style={{ fontSize: 8.5, color: "#555", lineHeight: 1.35, textAlign: "right" }}>Fotografije utovara<br />Ladefotos<br /><span style={{ fontSize: 7.5 }}>skeniraj mobitelom</span></div>
+                <img src={qrUtovara} alt="QR kod: fotografije utovara" style={{ width: 84, height: 84, display: "block" }} />
+              </div>
+            )}
           </div>
         </div>
 
@@ -10942,6 +11188,8 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
       </div>
 
       <TerminiIsporukeKartica projekt={projekt} db={db} patchProjekt={patchProjekt} showToast={showToast || (() => {})} mozeMijenjati mojId={mojId} />
+
+      <FotografijeUtovaraKartica projekt={projekt} showToast={showToast || (() => {})} />
 
       {/* ===== Tipski projekt po normativu (kupaonice i sl.) ===== */}
       <div className="card" style={{ padding: 14, marginBottom: 16 }}>
