@@ -14396,7 +14396,7 @@ function CmrFormModal({ db, pocetni, onSpremi, onClose }) {
           )}
           <select className="select" value="" onChange={(e) => dodajProjekt(e.target.value)}>
             <option value="">{projektiCmr.length ? "+ dodaj još jedan projekt…" : "— odaberi projekt —"}</option>
-            {[...db.projekti].filter((pr) => !f.projektIds.includes(pr.id)).sort((a, b) => String(b.sifra).localeCompare(String(a.sifra), "hr", { numeric: true })).map((pr) => <option key={pr.id} value={pr.id}>{pr.sifra} — {pr.naziv}</option>)}
+            {[...db.projekti].filter((pr) => pr.status !== "Arhiviran" && !f.projektIds.includes(pr.id)).sort((a, b) => String(b.sifra).localeCompare(String(a.sifra), "hr", { numeric: true })).map((pr) => <option key={pr.id} value={pr.id}>{pr.sifra} — {pr.naziv}</option>)}
           </select>
           {kupciRazliciti && <div style={{ fontSize: 11, color: "var(--rust)", marginTop: 3 }}>Projekti imaju različite kupce — provjeri primatelja (polje 2) i mjesto isporuke (polje 3).</div>}
         </Field>
