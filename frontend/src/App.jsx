@@ -1270,6 +1270,18 @@ const ispisPdf = (naziv) => {
     setTimeout(() => { if (iframe.isConnected) iframe.remove(); }, 60000);
   });
 };
+// Ctrl+P dok je otvoren dijalog s dokumentom za ispis (.print-doc u prozoru) = isti ispis kao gumb "Ispis / Spremi kao PDF". Inače preglednik ispisuje cijelu stranicu iza dijaloga,
+// a dokument je "position: fixed" pa se na SVAKOJ stranici ponavlja njegov prvi list (npr. "stranica 1/6" na svih 6 stranica). Izbornik preglednika → Ispis se ne može presresti: tamo koristiti gumb.
+if (typeof window !== "undefined" && !window.__ispisPresretacCtrlP) {
+  window.__ispisPresretacCtrlP = true;
+  window.addEventListener("keydown", (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || String(e.key).toLowerCase() !== "p") return;
+    const dokumenti = document.querySelectorAll(".modal-overlay .print-doc");
+    if (!dokumenti.length) return;
+    e.preventDefault();
+    ispisPdf(dokumenti[dokumenti.length - 1].dataset.ispisNaziv || document.title);
+  });
+}
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const daysUntil = (d) => Math.ceil((new Date(d) - new Date(todayISO())) / 86400000);
 const addDays = (d, n) => { const dt = new Date(d); dt.setDate(dt.getDate() + n); return dt.toISOString().slice(0, 10); };
@@ -4465,9 +4477,11 @@ function MontazaNaljepniceModal({ projekt, veze, onClose }) {
       <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginBottom: 10, cursor: "pointer" }}>
         <input type="checkbox" checked={razmak} onChange={(e) => setRazmak(e.target.checked)} /> Razmak između naljepnica (svaki drugi red prazan) — lakše skeniranje, jer kamera ne hvata susjedni QR kod
       </label>
-      <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
+      <style>{"@media screen{.nalj-podloga{background:#d9dde1;padding:12px}.nalj-stranica{background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.3);padding:6mm 8mm;margin-bottom:16mm;min-height:262mm}.nalj-stranica:last-child{margin-bottom:0}}"}</style>
+      <div className="nalj-podloga">
+      <div className="print-doc" data-ispis-naziv={`QR naljepnice ${projekt.sifra}`} style={{ background: "transparent", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
         {stranice.map((st, i) => (
-          <div key={i} style={{ breakAfter: i < stranice.length - 1 ? "page" : "auto", pageBreakAfter: i < stranice.length - 1 ? "always" : "auto", marginBottom: i < stranice.length - 1 ? 18 : 0 }}>
+          <div key={i} className="nalj-stranica" style={{ breakAfter: i < stranice.length - 1 ? "page" : "auto", pageBreakAfter: i < stranice.length - 1 ? "always" : "auto" }}>
             <div style={{ fontSize: 10.5, color: "#555", marginBottom: 6, display: "flex", justifyContent: "space-between" }}>
               <span><strong>{projekt.sifra}</strong>{projekt.naziv ? ` — ${projekt.naziv}` : ""} · QR naljepnice za montažu</span><span>stranica {i + 1}/{stranice.length}</span>
             </div>
@@ -4485,6 +4499,7 @@ function MontazaNaljepniceModal({ projekt, veze, onClose }) {
             </div>
           </div>
         ))}
+      </div>
       </div>
     </Modal>
   );
