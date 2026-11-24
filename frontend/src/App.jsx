@@ -9,6 +9,7 @@ import {
 import logoEcon from "./assets/logo-econ.jpg";
 import QRCode from "qrcode";
 import { napraviPdfUpitaMaterijala, napraviPdfPonude, napraviEml, preuzmiDatoteku, potpisEmail } from "./pdfNabave";
+import { napraviPdfPonudeLasera, PRIJEVODI_PONUDE_LASERA } from "./pdfPonudeLasera";
 import { statistikaIsporuka, statistikaGodine, tezinaOtpremnice as tezinaOtpremniceLogika, tezinaStavkeOtpremnice, isporucenoPoStavkama } from "./statistikaIsporuka";
 import { satiPoRadnicimaIOperacijama, projektiSaSatima } from "./satiPoProjektu";
 import { trosakKooperanataPoProjektima } from "./kooperantiTrosak";
@@ -12373,18 +12374,21 @@ function PonudaPrintModal({ ponuda, kupac, db, onClose }) {
 }
 
 // E-mail kupcu s PDF-om ponude u privitku: priprema se neposlana poruka (.eml) koju Outlook otvara za provjeru i slanje.
-function SlanjePonudeModal({ ponuda, kupac, db, update, showToast, posiljatelj, onClose }) {
-  const [jezik, setJezik] = useState("de");
+// laser = ponuda za lasersko rezanje (PDF iz pdfPonudeLasera.js, zadani jezik hrvatski jer su kupci lasera uglavnom domaći).
+// mozeSpremiti = smije li korisnik uz ponudu zapamtiti adresu i datum pripreme (bez ovlasti poruka se i dalje priprema).
+function SlanjePonudeModal({ ponuda, kupac, db, update, showToast, posiljatelj, onClose, laser = false, mozeSpremiti = true }) {
+  const zadaniJezik = laser ? "hr" : "de";
+  const [jezik, setJezik] = useState(zadaniJezik);
   const [adresa, setAdresa] = useState(ponuda.emailKupca || kupac?.email || "");
   const pozdravDe = ponuda.kontaktOsoba ? `${ponuda.kontaktOsobaTitula === "frau" ? "Sehr geehrte Frau" : "Sehr geehrter Herr"} ${ponuda.kontaktOsoba},` : "Sehr geehrte Damen und Herren,";
   const naslovZa = (j) => `${j === "de" ? "Angebot" : "Ponuda"} - ${ponuda.broj}`;
   const tekstZa = (j) => {
     const potpis = potpisEmail(posiljatelj, db.postavkeTvrtke);
-    if (j === "de") return `${pozdravDe}\n\nvielen Dank für Ihr Interesse an einer Zusammenarbeit.\n\nIm Anhang sende ich Ihnen unser Angebot für die Arbeiten gemäß Ihrer Anfrage.\n\nBitte bestätigen Sie mir kurz den Erhalt des Angebots und teilen Sie mir mit, wann wir mit Ihrer Rückmeldung rechnen dürfen.\n\n${potpis}`;
-    return `Poštovani,\n\nzahvaljujemo na interesu za suradnju.\n\nU privitku Vam šaljem našu ponudu za radove prema Vašem upitu.\n\nMolim Vas da mi kratko potvrdite primitak ponude i javite kada možemo očekivati Vaš odgovor.\n\n${potpis}`;
+    if (j === "de") return `${pozdravDe}\n\nvielen Dank für Ihr Interesse an einer Zusammenarbeit.\n\nIm Anhang sende ich Ihnen ${laser ? "unser Angebot für das Laserschneiden" : "unser Angebot für die Arbeiten"} gemäß Ihrer Anfrage.\n\nBitte bestätigen Sie mir kurz den Erhalt des Angebots und teilen Sie mir mit, wann wir mit Ihrer Rückmeldung rechnen dürfen.\n\n${potpis}`;
+    return `Poštovani,\n\nzahvaljujemo na interesu za suradnju.\n\nU privitku Vam šaljem ${laser ? "našu ponudu za uslugu laserskog rezanja" : "našu ponudu za radove"} prema Vašem upitu.\n\nMolim Vas da mi kratko potvrdite primitak ponude i javite kada možemo očekivati Vaš odgovor.\n\n${potpis}`;
   };
-  const [naslov, setNaslov] = useState(naslovZa("de"));
-  const [tekst, setTekst] = useState(tekstZa("de"));
+  const [naslov, setNaslov] = useState(naslovZa(zadaniJezik));
+  const [tekst, setTekst] = useState(tekstZa(zadaniJezik));
   const [radim, setRadim] = useState(false);
   const promijeniJezik = (j) => { setJezik(j); setNaslov(naslovZa(j)); setTekst(tekstZa(j)); };
   const adrese = adresa.split(/[;,\s]+/).filter((x) => x.includes("@"));
@@ -12392,20 +12396,27 @@ function SlanjePonudeModal({ ponuda, kupac, db, update, showToast, posiljatelj, 
     if (!adrese.length) { showToast("Upiši e-mail adresu kupca."); return; }
     setRadim(true);
     try {
-      const L = PRIJEVODI_PONUDE[jezik];
-      const { pdvStopa, cijenePozicija, zbrojStavki, postotakPopusta, iznosPopusta, osnovica, pdvIznos, ukupno } = racunajPrikazPonude(ponuda, db);
-      const redci = cijenePozicija.map(({ p, cijena }) => ({ oznaka: p.oznaka, naziv: p.naziv, opis: p.opis, kolicina: p.kolicina, jedCijenaTekst: fmtCurDec(cijena / (Number(p.kolicina) || 1)), ukupnoTekst: fmtCurDec(cijena) }));
-      const pdf = await napraviPdfPonude({
-        ponuda, kupac, tvrtka: db.postavkeTvrtke, izradio: db.zaposlenici.find((z) => z.id === ponuda.izradioId), redci,
-        osnovicaTekst: fmtCurDec(osnovica), pdvTekst: fmtCurDec(pdvIznos), ukupnoTekst: fmtCurDec(ukupno), pdvStopa, jezik, L,
-        popust: postotakPopusta > 0 ? { zbrojTekst: fmtCurDec(zbrojStavki), iznosTekst: fmtCurDec(iznosPopusta), postotakTekst: tekstPostotka(postotakPopusta) } : null,
-        datumTekst: fmtDate(ponuda.datum), vrijediDoTekst: fmtDate(addDays(ponuda.datum, 30)),
-        pozdrav: `${ponuda.kontaktOsobaTitula === "frau" ? "Sehr geehrte Frau" : "Sehr geehrter Herr"} ${ponuda.kontaktOsoba || "___"},`,
-      });
+      let pdf;
+      if (laser) {
+        const L = PRIJEVODI_PONUDE_LASERA[jezik];
+        pdf = await napraviPdfPonudeLasera({ ponuda, kupac, tvrtka: db.postavkeTvrtke, L, datumTekst: fmtDate(ponuda.datum), vrijediDoTekst: fmtDate(addDays(ponuda.datum, 30)), ...podaciPdfPonudeLasera(ponuda, db, L) });
+      } else {
+        const L = PRIJEVODI_PONUDE[jezik];
+        const { pdvStopa, cijenePozicija, zbrojStavki, postotakPopusta, iznosPopusta, osnovica, pdvIznos, ukupno } = racunajPrikazPonude(ponuda, db);
+        const redci = cijenePozicija.map(({ p, cijena }) => ({ oznaka: p.oznaka, naziv: p.naziv, opis: p.opis, kolicina: p.kolicina, jedCijenaTekst: fmtCurDec(cijena / (Number(p.kolicina) || 1)), ukupnoTekst: fmtCurDec(cijena) }));
+        pdf = await napraviPdfPonude({
+          ponuda, kupac, tvrtka: db.postavkeTvrtke, izradio: db.zaposlenici.find((z) => z.id === ponuda.izradioId), redci,
+          osnovicaTekst: fmtCurDec(osnovica), pdvTekst: fmtCurDec(pdvIznos), ukupnoTekst: fmtCurDec(ukupno), pdvStopa, jezik, L,
+          popust: postotakPopusta > 0 ? { zbrojTekst: fmtCurDec(zbrojStavki), iznosTekst: fmtCurDec(iznosPopusta), postotakTekst: tekstPostotka(postotakPopusta) } : null,
+          datumTekst: fmtDate(ponuda.datum), vrijediDoTekst: fmtDate(addDays(ponuda.datum, 30)),
+          pozdrav: `${ponuda.kontaktOsobaTitula === "frau" ? "Sehr geehrte Frau" : "Sehr geehrter Herr"} ${ponuda.kontaktOsoba || "___"},`,
+        });
+      }
       const imePdfa = `${ponuda.broj}.pdf`;
       preuzmiDatoteku(napraviEml({ primatelji: adrese, naslov, tekst, pdf, imePdfa }), imePdfa.replace(/\.pdf$/, ".eml").replace(/[^A-Za-z0-9._-]+/g, "_"));
       // adresa se pamti uz ponudu, da je sljedeći put ne treba ponovno upisivati
-      update("ponude", db.ponude.map((x) => (x.id === ponuda.id ? { ...x, emailKupca: adrese.join(", "), emailPripremljen: todayISO() } : x)));
+      const kljuc = laser ? "ponudeLasera" : "ponude";
+      if (mozeSpremiti) update(kljuc, (db[kljuc] || []).map((x) => (x.id === ponuda.id ? { ...x, emailKupca: adrese.join(", "), emailPripremljen: todayISO() } : x)));
       showToast("Poruka je pripremljena. Otvori preuzetu datoteku (dvoklik), provjeri i klikni Pošalji u Outlooku.");
       onClose();
     } catch (e) {
@@ -12570,6 +12581,9 @@ function PonudaLaseraModal({ form, setForm, db, onSave, onClose, onRevizija }) {
           Na ispisu obračunaj PDV
         </label>
       </div>
+      <Field label="E-mail kupca za slanje ponude">
+        <input className="input" type="text" placeholder={db.kupci.find((k) => k.id === form.kupacId)?.email || "ime@tvrtka.hr — na tu adresu se šalje ponuda (gumb „E-mail kupcu“ u popisu ponuda za laser)"} value={form.emailKupca || ""} onChange={(e) => setForm({ ...form, emailKupca: e.target.value })} />
+      </Field>
 
       <div className="label" style={{ marginTop: 6 }}>Satnice, dodatak i popust (vrijede za ovu ponudu)</div>
       <div className="card" style={{ padding: 14, background: "var(--surface-alt)", marginBottom: 14 }}>
@@ -12725,15 +12739,38 @@ function PonudaLaseraModal({ form, setForm, db, onSave, onClose, onRevizija }) {
   );
 }
 
-function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
-  const t = db.postavkeTvrtke || {};
+// Iznosi ponude za laser kako se pokazuju kupcu — isti u pregledu za ispis i u PDF-u za e-mail.
+const racunajPrikazPonudeLasera = (ponuda, db) => {
   const calc = izracunPonudeLasera(ponuda, db.kvaliteteMaterijala);
   // PDV se na ispisu obračunava samo kad je na ponudi označena kvačica (zadano: bez PDV-a).
-  const pdvStopa = Number(t.pdvStopa ?? 25);
+  const pdvStopa = Number((db.postavkeTvrtke || {}).pdvStopa ?? 25);
   const pdvIznos = ponuda.sPdv ? calc.cijenaKonacna * (pdvStopa / 100) : 0;
   // Dodatak se ne navodi kao posebna stavka na ispisu — uračunat je izravno u cijenu svake
   // stavke rezanja (isto kao uvećanje kod standardnih ponuda).
   const faktorDodatka = 1 + (calc.dodatakPct || 0) / 100;
+  return { calc, pdvStopa, pdvIznos, faktorDodatka };
+};
+
+// Redci za PDF ponude za laser (pdfPonudeLasera.js), s oznakama na odabranom jeziku (L).
+const podaciPdfPonudeLasera = (ponuda, db, L) => {
+  const { calc, pdvStopa, pdvIznos, faktorDodatka } = racunajPrikazPonudeLasera(ponuda, db);
+  return {
+    stavke: calc.stavke.map((s) => ({ opis: s.opis, laser: s.tipLasera === "cijevni" ? "cijevni" : "plocasti", komada: s.formati.reduce((sum, f) => sum + (Number(f.komada) || 0), 0), iznosTekst: fmtCurDec(s.ukupno * faktorDodatka) })),
+    savijanja: calc.savijanja.some((r) => String(r.opis || "").trim()) ? calc.savijanja.map((r) => ({ opis: String(r.opis || "").trim() || "—", iznosTekst: fmtCurDec(r.trosak) })) : [],
+    ostale: (ponuda.ostaleStavke || []).map((r) => ({ opis: r.opis, iznosTekst: fmtCurDec((Number(r.kolicina) || 0) * (Number(r.cijenaJed) || 0)) })),
+    zbrojevi: [
+      ...(calc.trosakSavijanja > 0 ? [{ tekst: L.savijanjeZbroj, iznosTekst: fmtCurDec(calc.trosakSavijanja) }] : []),
+      ...(calc.trosakOstalo > 0 ? [{ tekst: L.ostalo, iznosTekst: fmtCurDec(calc.trosakOstalo) }] : []),
+      ...(calc.postotakPopusta > 0 ? [{ tekst: L.prijePopusta, iznosTekst: fmtCurDec(calc.cijenaPrijePopusta) }, { tekst: `${L.popust} (${tekstPostotka(calc.postotakPopusta)}%):`, iznosTekst: `−${fmtCurDec(calc.iznosPopusta)}` }] : []),
+      ...(ponuda.sPdv ? [{ tekst: L.osnovica, iznosTekst: fmtCurDec(calc.cijenaKonacna) }, { tekst: `${L.pdv} (${pdvStopa}%):`, iznosTekst: fmtCurDec(pdvIznos) }] : []),
+      { tekst: ponuda.sPdv ? L.ukupno : L.ukupnoBezPdv, iznosTekst: fmtCurDec(calc.cijenaKonacna + pdvIznos), glavni: true },
+    ],
+  };
+};
+
+function PonudaLaseraPrintModal({ ponuda, kupac, db, onClose }) {
+  const t = db.postavkeTvrtke || {};
+  const { calc, pdvStopa, pdvIznos, faktorDodatka } = racunajPrikazPonudeLasera(ponuda, db);
 
   return (
     <Modal wide title={`Pregled za ispis — Ponuda za laser ${ponuda.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} onClick={() => ispisPdf(ponuda.broj)}>Ispis / Spremi kao PDF</Btn></>}>
@@ -13338,6 +13375,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
   const emptyLaser = () => ({ id: null, broj: sljedeciBroj(db.ponudeLasera, "broj", prefiksGodine("LAS")), naziv: "", kupacId: db.kupci[0]?.id || "", datum: todayISO(), status: "U izradi", napomena: "", cjenik: prazniCjenikLasera(), stavke: [], ostaleStavke: [], projektId: null }); // bez "savijanja": nedefinirano = nema redaka, a stara ponuda zadržava svoj zapis savijanje (vidi savijanjaPonude)
   const [laserForm, setLaserForm] = useState(emptyLaser());
   const [printLaser, setPrintLaser] = useState(null);
+  const [slanjeLasera, setSlanjeLasera] = useState(null); // ponuda za laser za koju se priprema e-mail kupcu
   const mozeLaser = dozvolaZaKarticu(mojaPozicija, "ponude", "laser").izmjene;
   const [pretvorba, setPretvorba] = useState(null); // { ponuda, tip: "standard"|"laser", broj, naziv } — prije kreiranja projekta iz ponude pita se za broj naloga (šifru) jer taj broj slijedi vlastitu, ručno vođenu numeraciju tvrtke (serije po vrsti posla), a ne može se pouzdano pogoditi automatski
   // Kopiranje projekta smije samo glavni administrator.
@@ -13796,6 +13834,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
             { key: "ukupno", label: "Vrijednost", render: (r) => <span className="f-mono">{fmtCurDec(izracunPonudeLasera(r, db.kvaliteteMaterijala).cijenaKonacna)}</span> },
             { key: "status", label: "Status", render: (r) => <StatusPonudeIzbor ponuda={r} disabled={!mozeLaser} onPromijeni={(p, s) => promijeniStatusPonude(p, s, true)} /> },
             { key: "pdf", label: "", render: (r) => <Btn size="sm" icon={Eye} onClick={() => setPrintLaser(r)}>PDF ponude</Btn> },
+            { key: "email", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Mail} onClick={() => setSlanjeLasera(r)}>E-mail kupcu</Btn> },
             { key: "kopiraj", label: "", render: (r) => <Btn size="sm" variant="ghost" icon={Copy} onClick={() => kopirajLaser(r)}>Kopiraj</Btn> },
             { key: "revizija", label: "", render: (r) => (!ponudaNijePoslana(r) && !imaNovijuReviziju(db.ponudeLasera, r) ? <Btn size="sm" variant="ghost" icon={HistoryIcon} disabled={!mozeLaser} onClick={() => napraviReviziju(r, true)}>Revizija</Btn> : null) },
             {
@@ -14113,6 +14152,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
       {printPonuda && <PonudaPrintModal ponuda={printPonuda} kupac={db.kupci.find((k) => k.id === printPonuda.kupacId)} db={db} onClose={() => setPrintPonuda(null)} />}
       {modal === "laser" && <PonudaLaseraModal form={laserForm} setForm={setLaserForm} db={db} onSave={saveLaser} onClose={() => setModal(null)} onRevizija={() => napraviReviziju(laserForm, true)} />}
       {printLaser && <PonudaLaseraPrintModal ponuda={printLaser} kupac={db.kupci.find((k) => k.id === printLaser.kupacId)} db={db} onClose={() => setPrintLaser(null)} />}
+      {slanjeLasera && <SlanjePonudeModal laser mozeSpremiti={mozeLaser} ponuda={(db.ponudeLasera || []).find((x) => x.id === slanjeLasera.id) || slanjeLasera} kupac={db.kupci.find((k) => k.id === slanjeLasera.kupacId)} db={db} update={update} showToast={showToast} posiljatelj={db.zaposlenici.find((z) => z.id === mojId)} onClose={() => setSlanjeLasera(null)} />}
 
       {del && (
         <ConfirmDelete
