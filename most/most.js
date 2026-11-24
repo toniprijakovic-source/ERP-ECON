@@ -10,6 +10,7 @@ import { citajKumulativ, spremiKumulativ } from "./lib/kumulativ-zadaci.js";
 import { popisXRechnunga, obrisiXRechnung } from "./lib/xrechnung-popis.js";
 import { korijeniProjekata } from "./lib/mapa.js";
 import { obradiUtovar, obradiMontazu } from "./lib/utovar.js";
+import { obradiNesukladnosti } from "./lib/nesukladnosti.js";
 
 const mapaMosta = path.dirname(fileURLToPath(import.meta.url));
 try { process.loadEnvFile(path.join(mapaMosta, ".env")); } catch { /* .env nije obavezan ako su varijable već postavljene */ }
@@ -34,6 +35,8 @@ const okolina = {
   konfig: path.join(mapaMosta, "alati", "konfig"),
   postavke: JSON.parse(fs.readFileSync(path.join(mapaMosta, "postavke.json"), "utf8")),
 };
+// Mapa nesukladnosti (ISO zapisi): KORIJEN_NESUKLADNOSTI iz .env ili postavke.json → mapaNesukladnosti (mora postojati; most stvara samo podmape godine i nesukladnosti).
+okolina.korijenNesukladnosti = process.env.KORIJEN_NESUKLADNOSTI || okolina.postavke.mapaNesukladnosti || "";
 
 // Ispis ide na konzolu i u most-zapisnik.log (UTF-8; pri 1 MB se stari zapisnik premjesti u .old).
 const datotekaZapisnika = path.join(mapaMosta, "most-zapisnik.log");
@@ -93,6 +96,7 @@ for (;;) {
   try {
     await obradiUtovar(api, apiBajtovi, okolina, log);
     await obradiMontazu(api, apiBajtovi, okolina, log);
+    await obradiNesukladnosti(api, apiBajtovi, okolina, log);
     greskaUtovaraPrijavljena = false;
   } catch (e) {
     if (!greskaUtovaraPrijavljena && !greskaPrijavljena) log("Fotografije (utovar/montaža): veza s ERP-om nije uspjela:", e.message);

@@ -52,6 +52,12 @@ spremi u `<mapa projekta>\Fotografije - Utovar\<datum utovara, npr. 2026-11-24>\
 već spremljeno, drukčija = `_v2`), prihvaćaju se samo JPEG slike i samo dogovoreni oblik naziva. U probnom načinu (`MOST_PROBNO=1`)
 slike idu u `proba-izlaz\foto`, a ERP ih ne označava kao spremljene. Nakon objave nove verzije mosta treba ga ponovno pokrenuti.
 
+## Nesukladnosti (ISO 9001)
+ERP (Kontrola kvalitete → Nesukladnosti) izrađuje PDF obrasca "Nesukladnosti i popravne radnje", a most ga sa slikama sprema u
+`<mapa nesukladnosti>\<godina>\<NN-GG RN …>\` (postavke.json → `mapaNesukladnosti`, ili `KORIJEN_NESUKLADNOSTI` u .env). Ta mapa mora postojati;
+most stvara samo podmape godine i nesukladnosti. PDF se zamjenjuje novijom verzijom istog zapisa (ako je otvoren u pregledniku PDF-a, most pokuša ponovno za
+10 minuta), slike se nikad ne prepisuju (`_v2`). Nesukladnosti uvezene iz starog Worda ne idu na Z: dok se u ERP-u ne klikne "Spremi na Z:".
+
 ## Ograničenja prve verzije
 Samo isporuke u EU bez PDV-a (kategorija K), valuta EUR, bez popusta na stavkama; domaće račune šalje Konplast.
 

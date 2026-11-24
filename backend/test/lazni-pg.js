@@ -12,10 +12,53 @@ const utovarSlike = [];
 // Tablice montaza_pozicije i montaza_slike (montaza.js).
 const montazaPoz = [];
 const montazaSlike = [];
+// Tablice nesukladnosti (nesukladnosti.js).
+const nsZapisi = [];
+const nsSlike = [];
+const nsPdf = new Map();
+const nsPostavke = new Map();
+const nsJavni = (x) => ({ ...x, podaci: klon(x.podaci) });
 const klon = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 async function query(sql, params = []) {
   const s = String(sql);
   if (/^\s*(BEGIN|COMMIT|ROLLBACK)/.test(s)) return odgovor([]);
+  if (/^\s*INSERT INTO nesukladnosti_postavke/.test(s)) { nsPostavke.set(params[0], params[1]); return odgovor([{}]); }
+  if (/FROM nesukladnosti_postavke WHERE kljuc = \$1/.test(s)) return odgovor(nsPostavke.has(params[0]) ? [{ vrijednost: nsPostavke.get(params[0]) }] : []);
+  if (/^\s*INSERT INTO nesukladnosti_pdf/.test(s)) { nsPdf.set(params[0], params[1]); return odgovor([{}]); }
+  if (/FROM nesukladnosti_pdf WHERE ns_id = \$1/.test(s)) return odgovor(nsPdf.has(params[0]) ? [{ pdf: nsPdf.get(params[0]) }] : []);
+  if (/^\s*INSERT INTO nesukladnosti_slike/.test(s)) {
+    const [id, ns_id, redni, naziv, vrsta, slika, slicica, kreirao_id, zahtjev_id] = params;
+    if (nsSlike.some((x) => x.ns_id === ns_id && x.redni === redni)) throw new Error("duplicate key value violates unique constraint");
+    nsSlike.push({ id, ns_id, redni, naziv, vrsta, slika, slicica, kreirao_id, zahtjev_id, kreirano: new Date().toISOString(), spremljeno_z: null, z_putanja: "", z_greska: "", z_pokusaj: null });
+    return odgovor([]);
+  }
+  if (/COALESCE\(MAX\(redni\), 0\) \+ 1 AS sljedeci FROM nesukladnosti_slike/.test(s)) return odgovor([{ sljedeci: Math.max(0, ...nsSlike.filter((x) => x.ns_id === params[0]).map((x) => x.redni)) + 1 }]);
+  if (/SELECT COUNT\(\*\) AS n FROM nesukladnosti_slike/.test(s)) return odgovor([{ n: String(nsSlike.filter((x) => x.ns_id === params[0]).length) }]);
+  if (/FROM nesukladnosti_slike WHERE zahtjev_id = \$1/.test(s)) return odgovor(nsSlike.filter((x) => x.zahtjev_id === params[0]).map((x) => ({ id: x.id, naziv: x.naziv })));
+  if (/FROM nesukladnosti_slike WHERE ns_id = \$1 ORDER BY/.test(s)) return odgovor(nsSlike.filter((x) => x.ns_id === params[0]).sort((a, b) => a.redni - b.redni).map((x) => ({ ...x, slika: undefined, slicica: undefined, ima_slicicu: !!x.slicica })));
+  if (/FROM nesukladnosti_slike WHERE id = \$1/.test(s) && /^\s*SELECT/.test(s)) return odgovor(nsSlike.filter((x) => x.id === params[0]).map((x) => ({ ...x })));
+  if (/^\s*DELETE FROM nesukladnosti_slike WHERE id = \$1/.test(s)) { const i = nsSlike.findIndex((x) => x.id === params[0]); if (i >= 0) nsSlike.splice(i, 1); return odgovor(i >= 0 ? [{}] : []); }
+  if (/FROM nesukladnosti_slike s JOIN nesukladnosti n/.test(s)) return odgovor(nsSlike.filter((x) => !x.spremljeno_z && !x.z_pokusaj).map((x) => ({ x, n: nsZapisi.find((z) => z.id === x.ns_id) })).filter((o) => o.n && o.n.z_ukljuceno).slice(0, 20).map(({ x, n }) => ({ id: x.id, naziv: x.naziv, vrsta: x.vrsta, godina: n.godina, z_mapa: n.z_mapa })));
+  if (/^\s*UPDATE nesukladnosti_slike SET spremljeno_z = now\(\)/.test(s)) { const x = nsSlike.find((y) => y.id === params[0]); if (x) { x.spremljeno_z = new Date().toISOString(); x.z_putanja = params[1]; x.z_greska = ""; x.z_pokusaj = x.spremljeno_z; } return odgovor(x ? [x] : []); }
+  if (/^\s*UPDATE nesukladnosti_slike SET z_greska/.test(s)) { const x = nsSlike.find((y) => y.id === params[0]); if (x) { x.z_greska = params[1]; x.z_pokusaj = new Date().toISOString(); } return odgovor(x ? [x] : []); }
+  if (/^\s*INSERT INTO nesukladnosti \(/.test(s)) {
+    const [id, godina, broj, podaci, status, kreirao_id, z_mapa] = params;
+    if (nsZapisi.some((x) => x.godina === godina && x.broj === broj)) throw new Error("duplicate key value violates unique constraint");
+    const sada = new Date().toISOString();
+    nsZapisi.push({ id, godina, broj, podaci: JSON.parse(podaci), status, verzija: 1, kreirano: sada, izmijenjeno: sada, kreirao_id, izmijenio_id: kreirao_id, uvoz: false, z_ukljuceno: true, z_mapa, pdf_verzija: 0, pdf_z_verzija: 0, z_putanja: "", z_greska: "", z_pokusaj: null });
+    return odgovor([]);
+  }
+  if (/COALESCE\(MAX\(broj\), 0\) \+ 1 AS sljedeci FROM nesukladnosti/.test(s)) return odgovor([{ sljedeci: Math.max(0, ...nsZapisi.filter((x) => x.godina === params[0]).map((x) => x.broj)) + 1 }]);
+  if (/SELECT DISTINCT godina FROM nesukladnosti/.test(s)) return odgovor([...new Set(nsZapisi.map((x) => x.godina))].sort((a, b) => b - a).map((godina) => ({ godina })));
+  if (/FROM nesukladnosti WHERE godina = \$1 ORDER BY broj DESC/.test(s)) return odgovor(nsZapisi.filter((x) => x.godina === params[0]).sort((a, b) => b.broj - a.broj).map((x) => ({ ...nsJavni(x), slika: String(nsSlike.filter((y) => y.ns_id === x.id).length) })));
+  if (/FROM nesukladnosti WHERE id = \$1/.test(s) && /^\s*SELECT/.test(s)) return odgovor(nsZapisi.filter((x) => x.id === params[0]).map(nsJavni));
+  if (/FROM nesukladnosti WHERE status NOT IN/.test(s)) return odgovor(nsZapisi.filter((x) => !["Zatvorena", "Poništena"].includes(x.status)).map(nsJavni));
+  if (/FROM nesukladnosti WHERE z_ukljuceno AND pdf_verzija > pdf_z_verzija/.test(s)) return odgovor(nsZapisi.filter((x) => x.z_ukljuceno && x.pdf_verzija > x.pdf_z_verzija && !x.z_pokusaj).slice(0, 10).map(nsJavni));
+  if (/^\s*UPDATE nesukladnosti SET podaci = \$2/.test(s)) { const x = nsZapisi.find((y) => y.id === params[0] && y.verzija === params[4]); if (x) { x.podaci = JSON.parse(params[1]); x.status = params[2]; x.verzija += 1; x.izmijenjeno = new Date().toISOString(); x.izmijenio_id = params[3]; } return odgovor(x ? [x] : []); }
+  if (/^\s*UPDATE nesukladnosti SET pdf_verzija = pdf_verzija \+ 1/.test(s)) { const x = nsZapisi.find((y) => y.id === params[0]); if (x) { x.pdf_verzija += 1; x.z_pokusaj = null; } return odgovor(x ? [x] : []); }
+  if (/^\s*UPDATE nesukladnosti SET z_ukljuceno = true/.test(s)) { const x = nsZapisi.find((y) => y.id === params[0]); if (x) x.z_ukljuceno = true; return odgovor(x ? [x] : []); }
+  if (/^\s*UPDATE nesukladnosti SET pdf_z_verzija = GREATEST/.test(s)) { const x = nsZapisi.find((y) => y.id === params[0]); if (x) { x.pdf_z_verzija = Math.max(x.pdf_z_verzija, params[1]); x.z_putanja = params[2]; x.z_greska = ""; x.z_pokusaj = new Date().toISOString(); } return odgovor(x ? [x] : []); }
+  if (/^\s*UPDATE nesukladnosti SET z_greska/.test(s)) { const x = nsZapisi.find((y) => y.id === params[0]); if (x) { x.z_greska = params[1]; x.z_pokusaj = new Date().toISOString(); } return odgovor(x ? [x] : []); }
   if (/^\s*INSERT INTO montaza_pozicije/.test(s)) {
     const [projekt_id, mapa, oznaka, poredak] = params;
     if (montazaPoz.some((x) => x.projekt_id === projekt_id && x.mapa === mapa)) return odgovor([]);

@@ -17,7 +17,7 @@ const { pakiraj, otpakiraj } = require("./lib/sef");
 const MAPA_ZADANO = "C:\\Users\\Econ\\Desktop\\ERP _ECON\\ERP-Backupovi-Sef";
 const CUVANJE_DANA = { Satne: 30, Dnevne: 365 }; // Mjesecne se ne brišu
 const UPOZORENJE_STARE_KOPIJE_H = 3;
-const TABLICE = ["korekcije_bodova", "aktivnost_dan", "login_log", "potrosni_dnevnik", "montaza_pozicije"]; // fiksni popis — nikad se ne uzima iz vanjskog unosa
+const TABLICE = ["korekcije_bodova", "aktivnost_dan", "login_log", "potrosni_dnevnik", "montaza_pozicije", "nesukladnosti", "nesukladnosti_postavke"]; // fiksni popis — nikad se ne uzima iz vanjskog unosa
 // Tablica koja još ne postoji (npr. nova tablica prije prvog pokretanja nove verzije poslužitelja) daje prazan popis umjesto greške: kopija se ne smije srušiti.
 const procitajTablicu = async (pool, t) => {
   if (!(await pool.query("SELECT to_regclass($1) AS naziv", [t])).rows[0]?.naziv) return [];

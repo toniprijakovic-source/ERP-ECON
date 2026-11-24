@@ -24,6 +24,8 @@ import { matricaPotrosnje, zaNarucivanje, parsirajUvoz, MJESECI_KRATKO } from ".
 import { stanjeKioska, kioskoviBezSignala, NAZIV_VRSTE_KIOSKA } from "./kioskPracenje";
 import { sazmiSliku, adresaUtovara, tokenIzUpita, grupirajPoDatumu, stanjeSlike, NAZIV_STANJA as NAZIV_STANJA_SLIKE } from "./utovarFotografije";
 import { parsirajOznake, sazetakPozicija, rasporediNaljepnice, adresaMontaze, tokenMontazeIzUpita } from "./montazaOznake";
+import { ZAVRSNI_NS, IZVORI_NS, MJERE_NS, BOJA_STATUSA_NS, prazniPodaciNs, novaAktivnost, kasneAktivnosti, sljedeciRok, nedostajeZaOcjenu, filtrirajNs, sazetakNs, zadaniNositelj, vrijemeHr } from "./nesukladnosti";
+import { napraviPdfNesukladnosti } from "./pdfNesukladnosti";
 import { imaTermine, sortiraniTermini, rokIzTermina, stanjaTermina, projektSEfektivnimRokom, rokoviDijelova, posloviPoTerminima, redoviKalendara, grupirajPoTjednima, pocetakTjedna, dodajDane as dodajDaneISO } from "./terminiIsporuke";
 import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, ogranicenjeStavke, pocetnaKolicina, visakStavke, zatvoriIsporuke, vratiZatvoreneIsporuke } from "./otpremniceKontrola";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
@@ -1937,7 +1939,7 @@ const KARTICE_MODULA = {
   direktor: { kartice: [{ key: "pregled", naziv: "Pregled" }] },
   skladiste: { kartice: [{ key: "zalihe", naziv: "Zalihe" }, { key: "katalog", naziv: "Katalog profila i limova" }, { key: "kvaliteta", naziv: "Kvaliteta materijala" }, { key: "izdatnice", naziv: "Izdatnice" }, { key: "potrosnja", naziv: "Potrošnja po radniku" }] },
   transporti: { kartice: [{ key: "upiti", naziv: "Upiti za transport" }, { key: "narudzbe", naziv: "Narudžbe za transport" }] },
-  kontrola: { kartice: [{ key: "maticna", naziv: "Matična knjiga" }, { key: "ugradeni", naziv: "Ugrađeni materijal" }] },
+  kontrola: { kartice: [{ key: "maticna", naziv: "Matična knjiga" }, { key: "ugradeni", naziv: "Ugrađeni materijal" }, { key: "nesukladnosti", naziv: "Nesukladnosti" }] },
   nabava: { kartice: [{ key: "narudzbenice", naziv: "Narudžbenice" }, { key: "upiti", naziv: "Upiti materijala" }, { key: "postavke", naziv: "Postavke tvrtke" }] },
   proizvodnja: { kartice: [{ key: "tablica", naziv: "Tablica" }, { key: "gantogram", naziv: "Plan proizvodnje" }, { key: "rezanje", naziv: "Plan rezanja" }, { key: "isporuke", naziv: "Isporuke kupaonica" }] },
   projekti: { kartice: [{ key: "projekti", naziv: "Projekti" }, { key: "kalendar", naziv: "Kalendar isporuka" }, { key: "potvrde", naziv: "Potvrde narudžbe" }, { key: "zavrseni", naziv: "Arhivirani projekti" }] },
@@ -2896,7 +2898,7 @@ export default function App() {
   if (urlParametri.get("mb") && urlParametri.get("prijava") !== "1" && (potrebnaPrijava || !prijavljenId)) {
     return <JavnaKarticaMaticnog broj={urlParametri.get("mb")} />;
   }
-  const zeliPrijavu = urlParametri.get("prijava") === "1" || !!urlParametri.get("mb");
+  const zeliPrijavu = urlParametri.get("prijava") === "1" || !!urlParametri.get("mb") || !!urlParametri.get("nesukladnost");
   if ((potrebnaPrijava || !prijavljenId) && !zeliPrijavu) {
     return <KioskView onPrijava={() => { window.location.href = `${window.location.pathname}?prijava=1`; }} />;
   }
@@ -2926,6 +2928,8 @@ export default function App() {
   const zaposlenik = db.zaposlenici.find((z) => z.id === prijavljenId);
   const mojaPozicija = db.pozicijeZaposlenika.find((p) => p.id === zaposlenik?.pozicijaId);
   const dopusteniKljucevi = mojaPozicija?.moduli?.length ? mojaPozicija.moduli : ["dashboard"];
+  // Kratica s mobitela za prijavu nesukladnosti (Kontrola kvalitete → Nesukladnosti → "Prijava s mobitela").
+  if (urlParametri.get("nesukladnost") === "nova") return <NesukladnostMobilno db={db} zaposlenik={zaposlenik} mojaPozicija={mojaPozicija} />;
   const NAV = MODULI_APLIKACIJE.filter((m) => dopusteniKljucevi.includes(m.key));
   const aktivnaStranica = dopusteniKljucevi.includes(page) ? page : (dopusteniKljucevi[0] || "dashboard");
   const odjava = () => {
@@ -3044,7 +3048,7 @@ export default function App() {
           {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} showToast={showToast} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} patchZadatakNapomena={patchZadatakNapomena} potvrdiObavijesti={potvrdiObavijesti} otvoriTransporte={() => { setTransportiTab("narudzbe"); setPage("transporti"); }} otvoriUskladenost={(grupa) => { setEvidencijaSatiPocetak({ tab: "satinalozi", prikaz: "uskladenost", grupa: grupa || "radiona" }); setPage("evidencijasati"); }} />}
           {aktivnaStranica === "direktor" && <DirektorskiPregledPage db={db} mojId={zaposlenik?.id} showToast={showToast} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) { setOtvoriProjektId(id); setPage("projekti"); } else showToast("Nemate pristup modulu Projekti."); }} />}
           {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} dodajMaticne={dodajMaticne} refetchKljuc={refetchKljuc} />}
-          {aktivnaStranica === "kontrola" && <KontrolaKvalitetePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} projektId={kkProjektId} ocistiProjekt={() => setKkProjektId(null)} />}
+          {aktivnaStranica === "kontrola" && <KontrolaKvalitetePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} projektId={kkProjektId} ocistiProjekt={() => setKkProjektId(null)} />}
           {aktivnaStranica === "transporti" && <TransportiPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} pocetniTab={transportiTab} ocistiTab={() => setTransportiTab(null)} />}
           {aktivnaStranica === "nabava" && <NabavaPage db={db} update={update} patchUpiti={patchUpiti} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} dodajMaticne={dodajMaticne} refetchKljuc={refetchKljuc} />}
           {aktivnaStranica === "proizvodnja" && <ProizvodnjaPage refetchKljuc={refetchKljuc} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} otvoriProjekt={dopusteniKljucevi.includes("projekti") ? (id) => { setOtvoriProjektId(id); setPage("projekti"); } : undefined} />}
@@ -4280,7 +4284,7 @@ function UtovarSlicica({ id, onKlik, osnova = "utovar" }) {
   );
 }
 
-function UtovarSlikaModal({ slika, onClose, onObrisano, showToast, osnova = "utovar", naslov }) {
+function UtovarSlikaModal({ slika, onClose, onObrisano, showToast, osnova = "utovar", naslov, obrisi: obrisiVanjsko }) {
   const [prikaz, setPrikaz] = useState({ url: "", original: false });
   const { url, original: jeOriginal } = prikaz;
   const [potvrda, setPotvrda] = useState(false);
@@ -4298,12 +4302,12 @@ function UtovarSlikaModal({ slika, onClose, onObrisano, showToast, osnova = "uto
   }, [slika.id]);
   const stanje = stanjeSlike(slika);
   const obrisi = async () => {
-    try { await potrosniApi("DELETE", `/api/${osnova}/slika/${encodeURIComponent(slika.id)}`); showToast("Fotografija je uklonjena iz ERP-a."); onObrisano(); } catch (e) { showToast(e.message || "Uklanjanje nije uspjelo."); }
+    try { if (obrisiVanjsko) await obrisiVanjsko(); else await potrosniApi("DELETE", `/api/${osnova}/slika/${encodeURIComponent(slika.id)}`); showToast("Fotografija je uklonjena iz ERP-a."); onObrisano(); } catch (e) { showToast(e.message || "Uklanjanje nije uspjelo."); }
   };
   return (
     <Modal wide title={naslov || `Fotografija utovara — ${slika.otpremnica}`} onClose={onClose} footer={<>
       <Btn onClick={onClose}>Zatvori</Btn>
-      {potvrda ? <Btn variant="danger" icon={Trash2} onClick={obrisi}>Potvrdi uklanjanje</Btn> : <Btn variant="ghost" icon={Trash2} onClick={() => setPotvrda(true)}>Ukloni iz ERP-a</Btn>}
+      {obrisiVanjsko !== null && (potvrda ? <Btn variant="danger" icon={Trash2} onClick={obrisi}>Potvrdi uklanjanje</Btn> : <Btn variant="ghost" icon={Trash2} onClick={() => setPotvrda(true)}>Ukloni iz ERP-a</Btn>)}
     </>}>
       <div style={{ textAlign: "center", background: "var(--surface-alt)", padding: 8, minHeight: 120 }}>
         {url ? <img src={url} alt="Fotografija utovara" style={{ maxWidth: "100%", maxHeight: "68vh", objectFit: "contain" }} /> : <div style={{ padding: 30, color: "var(--ink-soft)" }}>Učitavanje…</div>}
@@ -4568,6 +4572,334 @@ function MontazaKartica({ projekt, showToast }) {
       {uvoz && <MontazaUvozModal projekt={projekt} pozicije={s.redovi} showToast={showToast} onClose={() => setUvoz(false)} onGotovo={() => { setUvoz(false); ucitaj(); }} />}
       {naljepnice && <MontazaNaljepniceModal projekt={projekt} veze={naljepnice} onClose={() => setNaljepnice(null)} />}
       {poz && <MontazaPozicijaModal projekt={projekt} poz={poz} slike={(podaci.slike || []).filter((x) => x.mapa === poz.mapa)} showToast={showToast} onClose={() => setOdabrana(null)} onPromjena={poslije} />}
+    </div>
+  );
+}
+
+// ===== Nesukladnosti i popravne radnje (ISO 9001): Kontrola kvalitete → Nesukladnosti + prijava s mobitela (?nesukladnost=nova) =====
+// Zapisi su u SQL tablicama na poslužitelju (backend/nesukladnosti.js); ovdje su obrazac, popis, PDF (pdfNesukladnosti.js) i slike.
+const adresaPrijaveNs = () => `${window.location.origin}${window.location.pathname}?nesukladnost=nova`;
+const slikaNsKaoDataUrl = async (id) => {
+  const r = await fetch(`${API_URL}/api/nesukladnosti/slika/${encodeURIComponent(id)}?original=1`, { headers: { Authorization: `Bearer ${localStorage.getItem("erp_token")}` } });
+  if (!r.ok) throw new Error("slika");
+  const b = await r.blob();
+  return new Promise((ok, ne) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = ne; fr.readAsDataURL(b); });
+};
+// Izradi PDF obrasca (sa slikama) i pošalji ga poslužitelju; naZ = uključi i spremanje na Z: (za nesukladnosti uvezene iz Worda).
+async function posaljiPdfNesukladnosti(id, tvrtka, izradio, naZ) {
+  const det = await potrosniApi("GET", `/api/nesukladnosti/${encodeURIComponent(id)}`);
+  const slike = [];
+  for (const s of det.slike.slice(0, 24)) { try { slike.push({ dataUrl: await slikaNsKaoDataUrl(s.id), naziv: s.naziv }); } catch { /* slika bez sadržaja se preskače */ } }
+  const pdf = await napraviPdfNesukladnosti({ zapis: det.zapis, tvrtka, slike, izradio });
+  const res = await fetch(`${API_URL}/api/nesukladnosti/${encodeURIComponent(id)}/pdf${naZ ? "?naZ=1" : ""}`, { method: "PUT", headers: { "Content-Type": "application/pdf", Authorization: `Bearer ${localStorage.getItem("erp_token")}` }, body: pdf });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "PDF nije spremljen.");
+  return det;
+}
+async function posaljiSlikuNs(id, datoteka) {
+  const z = await sazmiSliku(datoteka);
+  return potrosniApi("POST", `/api/nesukladnosti/${encodeURIComponent(id)}/slika`, { slika: z.slika, slicica: z.slicica, zahtjevId: NOVI_ID_SLIKE() });
+}
+const imeZaposlenikaNs = (db, id) => { const z = (db.zaposlenici || []).find((x) => x.id === id); return z ? `${z.ime} ${z.prezime}` : ""; };
+const aktivniZaposleniciNs = (db) => [...(db.zaposlenici || [])].filter((z) => z.status !== "Neaktivan").sort((a, b) => `${a.prezime} ${a.ime}`.localeCompare(`${b.prezime} ${b.ime}`, "hr"));
+const projektiZaNs = (db) => [...(db.projekti || [])].sort((a, b) => String(b.sifra).localeCompare(String(a.sifra), "hr", { numeric: true }));
+
+function NesukladnostModal({ db, zapisId, ovlasti, mojId, onClose, onPromjena, showToast }) {
+  const danas = todayISO();
+  const [stanje, setStanje] = useState(zapisId ? null : { zapis: null, slike: [] });
+  const [f, setF] = useState(() => prazniPodaciNs({ mojId, danas }));
+  const [nove, setNove] = useState([]); // slike odabrane prije prvog spremanja: { kljuc, datoteka, url }
+  const [ocjena, setOcjena] = useState("");
+  const [saljem, setSaljem] = useState(false);
+  const [velika, setVelika] = useState(null);
+  const ucitaj = async (id = stanje?.zapis?.id || zapisId) => {
+    const d = await potrosniApi("GET", `/api/nesukladnosti/${encodeURIComponent(id)}`);
+    setStanje(d); setF({ ...prazniPodaciNs({ mojId, danas }), ...d.zapis.podaci }); setOcjena(d.zapis.podaci.ocjena || "");
+    return d;
+  };
+  useEffect(() => { if (zapisId) ucitaj(zapisId).catch((e) => showToast(e.message)); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [zapisId]);
+  useEffect(() => () => nove.forEach((n) => URL.revokeObjectURL(n.url)), []); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!stanje) return <Modal wide title="Nesukladnost" onClose={onClose}><div style={{ padding: 20, color: "var(--ink-soft)" }}>Učitavanje…</div></Modal>;
+  const zapis = stanje.zapis;
+  const status = zapis?.status || "Otvorena";
+  const zavrsna = ZAVRSNI_NS.includes(status);
+  const smijeUredjivati = ovlasti.izmjene && !zavrsna;
+  const postavi = (patch) => setF((p) => ({ ...p, ...patch }));
+  const postaviAktivnost = (id, patch) => setF((p) => ({ ...p, aktivnosti: p.aktivnosti.map((a) => (a.id === id ? { ...a, ...patch } : a)) }));
+  const zaposleni = aktivniZaposleniciNs(db);
+  const odgovorniPopis = [...zaposleni.map((z) => `${z.ime} ${z.prezime}`), ...(db.dobavljaci || []).map((d) => d.naziv)];
+  const izvrsi = async (akcija, poruka) => {
+    if (saljem) return;
+    setSaljem(true);
+    try {
+      let id = zapis?.id;
+      if (!zapis) {
+        const r = await potrosniApi("POST", "/api/nesukladnosti", { podaci: f });
+        id = r.zapis.id;
+        for (const n of nove) { try { await posaljiSlikuNs(id, n.datoteka); } catch (e) { showToast(`Slika nije spremljena: ${e.message}`); } }
+        setNove([]);
+      } else {
+        await potrosniApi("PUT", `/api/nesukladnosti/${encodeURIComponent(id)}`, { podaci: f, verzija: zapis.verzija, akcija, ocjena });
+      }
+      let d = await ucitaj(id);
+      try { if (d.zapis.z.ukljuceno) d = await posaljiPdfNesukladnosti(id, db.postavkeTvrtke, imeZaposlenikaNs(db, mojId), false); } catch (e) { showToast(`Spremljeno, ali PDF nije izrađen: ${e.message}`); setSaljem(false); onPromjena(); return; }
+      showToast(poruka || `Nesukladnost ${d.zapis.oznaka} je spremljena.`);
+      onPromjena();
+    } catch (e) { showToast(e.message || "Spremanje nije uspjelo."); }
+    setSaljem(false);
+  };
+  const dodajSlike = async (popis) => {
+    const datoteke = Array.from(popis || []).filter((x) => /^image\//.test(x.type) || /\.(jpe?g|png|heic|heif|webp)$/i.test(x.name));
+    if (!zapis) { setNove((l) => [...l, ...datoteke.map((d) => ({ kljuc: NOVI_ID_SLIKE(), datoteka: d, url: URL.createObjectURL(d) }))]); return; }
+    setSaljem(true);
+    for (const d of datoteke) { try { await posaljiSlikuNs(zapis.id, d); } catch (e) { showToast(`Slika nije spremljena: ${e.message}`); } }
+    await ucitaj(zapis.id).catch(() => {});
+    setSaljem(false);
+    showToast("Slike su dodane — spremi nesukladnost da se osvježi PDF.");
+  };
+  const otvoriPdf = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/nesukladnosti/${encodeURIComponent(zapis.id)}/pdf`, { headers: { Authorization: `Bearer ${localStorage.getItem("erp_token")}` } });
+      let blob;
+      if (r.ok) blob = await r.blob();
+      else { const det = await potrosniApi("GET", `/api/nesukladnosti/${encodeURIComponent(zapis.id)}`); const slike = []; for (const s of det.slike.slice(0, 24)) { try { slike.push({ dataUrl: await slikaNsKaoDataUrl(s.id), naziv: s.naziv }); } catch { /* preskoči */ } } blob = new Blob([await napraviPdfNesukladnosti({ zapis: det.zapis, tvrtka: db.postavkeTvrtke, slike, izradio: imeZaposlenikaNs(db, mojId) })], { type: "application/pdf" }); }
+      window.open(URL.createObjectURL(blob), "_blank");
+    } catch (e) { showToast(e.message || "PDF se ne može otvoriti."); }
+  };
+  const spremiNaZ = async () => { setSaljem(true); try { await posaljiPdfNesukladnosti(zapis.id, db.postavkeTvrtke, imeZaposlenikaNs(db, mojId), true); await ucitaj(zapis.id); showToast("PDF i slike će most spremiti na Z:."); onPromjena(); } catch (e) { showToast(e.message); } setSaljem(false); };
+  const nedostaje = nedostajeZaOcjenu(f);
+  const I = (label, el, sirina) => <Field label={label}>{el}</Field>;
+  const ro = !smijeUredjivati;
+  return (
+    <>
+    <Modal xwide title={zapis ? `Nesukladnost ${zapis.oznaka}${zapis.uvoz ? " (uvezeno iz Worda)" : ""}` : "Nova nesukladnost"} onClose={onClose} footer={<>
+      {zapis && <Btn icon={FileText} onClick={otvoriPdf} disabled={saljem}>PDF</Btn>}
+      {zapis && !zapis.z.ukljuceno && ovlasti.izmjene && <Btn onClick={spremiNaZ} disabled={saljem}>Spremi na Z:</Btn>}
+      <span style={{ flex: 1 }} />
+      <Btn onClick={onClose}>Zatvori</Btn>
+      {smijeUredjivati && <Btn variant="primary" icon={Save} disabled={saljem} onClick={() => izvrsi("spremi")}>{zapis ? "Spremi" : "Spremi nesukladnost"}</Btn>}
+      {zapis && smijeUredjivati && ["Otvorena", "Mjere u tijeku"].includes(status) && <Btn variant="primary" icon={ArrowRight} disabled={saljem || nedostaje.length > 0} title={nedostaje.length ? `Nedostaje: ${nedostaje.join(", ")}` : ""} onClick={() => izvrsi("na_ocjenu", "Poslano SUKO-u na ocjenu.")}>Pošalji na ocjenu</Btn>}
+    </>}>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+        <span className={`badge ${BOJA_STATUSA_NS[status] || "badge-muted"}`}>{status}</span>
+        {zapis && <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>Mapa na Z: <span className="f-mono">…\{zapis.godina}\{zapis.z.mapa}\</span>{zapis.z.pdfNaZ > 0 ? " · PDF spremljen ✔" : zapis.z.ukljuceno ? " · čeka most" : " · ne sprema se na Z: (uvoz)"}{zapis.z.greska ? <span style={{ color: "var(--rust)" }}> · {zapis.z.greska}</span> : null}</span>}
+      </div>
+
+      <div className="label" style={{ marginBottom: 6 }}>1. Opis nesukladnosti</div>
+      <div style={{ display: "grid", gridTemplateColumns: "140px 1.4fr 1fr 1fr", gap: 10 }}>
+        {I("Datum", <input className="input" type="date" value={f.datum} disabled={ro} onChange={(e) => postavi({ datum: e.target.value })} />)}
+        {I("Projekt", <select className="select" value={f.projektId} disabled={ro} onChange={(e) => postavi({ projektId: e.target.value })}><option value="">— bez projekta —</option>{projektiZaNs(db).map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}</select>)}
+        {I("Izvor", <select className="select" value={f.izvor} disabled={ro} onChange={(e) => postavi({ izvor: e.target.value })}>{IZVORI_NS.map((x) => <option key={x} value={x}>{x}</option>)}</select>)}
+        {I("Dobavljač / kooperant (ako se odnosi)", <select className="select" value={f.dobavljacId} disabled={ro} onChange={(e) => postavi({ dobavljacId: e.target.value })}><option value="">—</option>{[...(db.dobavljaci || [])].sort((a, b) => a.naziv.localeCompare(b.naziv, "hr")).map((d) => <option key={d.id} value={d.id}>{d.naziv}</option>)}</select>)}
+      </div>
+      <div style={{ display: "flex", gap: 16, margin: "2px 0 6px", fontSize: 13 }}>
+        <label style={{ display: "flex", gap: 6, alignItems: "center" }}><input type="radio" checked={!f.potencijalna} disabled={ro} onChange={() => postavi({ potencijalna: false })} /> Nesukladnost</label>
+        <label style={{ display: "flex", gap: 6, alignItems: "center" }}><input type="radio" checked={!!f.potencijalna} disabled={ro} onChange={() => postavi({ potencijalna: true })} /> Potencijalna nesukladnost</label>
+      </div>
+      <Field label="Opis"><textarea className="textarea" rows={4} value={f.opis} disabled={ro} onChange={(e) => postavi({ opis: e.target.value })} placeholder="Što je uočeno, gdje i na kojim pozicijama…" /></Field>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        {I("Evidentirao (zaposlenik)", <select className="select" value={f.evidentiraoId} disabled={ro} onChange={(e) => postavi({ evidentiraoId: e.target.value, evidentirao: e.target.value ? "" : f.evidentirao })}><option value="">— vanjski (upiši desno) —</option>{zaposleni.map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}</select>)}
+        {I("…ili vanjski (kupac, dobavljač, inspekcija)", <input className="input" value={f.evidentiraoId ? "" : f.evidentirao} disabled={ro || !!f.evidentiraoId} placeholder="npr. B&O Bau Werke GmbH" onChange={(e) => postavi({ evidentirao: e.target.value })} />)}
+      </div>
+      <div className="label" style={{ margin: "6px 0" }}>Slike</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-start" }}>
+        {(stanje.slike || []).map((s) => <div key={s.id} style={{ width: 104 }}><UtovarSlicica id={s.id} osnova="nesukladnosti" onKlik={() => setVelika(s)} /><div style={{ fontSize: 10.5, color: "var(--ink-soft)" }}>{s.naziv}{s.naZ ? " ✔ Z:" : ""}</div></div>)}
+        {nove.map((n) => <div key={n.kljuc} style={{ width: 104 }}><img src={n.url} alt="" style={{ width: 104, height: 78, objectFit: "cover", borderRadius: 3 }} /><div style={{ fontSize: 10.5, color: "var(--ink-soft)" }}>nova — šalje se kod spremanja</div></div>)}
+        {smijeUredjivati && <label className="btn btn-ghost" style={{ height: 78, cursor: "pointer" }}><Camera size={16} /> Dodaj slike<input type="file" accept="image/*" multiple style={{ display: "none" }} onChange={(e) => { dodajSlike(e.target.files); e.target.value = ""; }} /></label>}
+      </div>
+
+      <div className="label" style={{ margin: "14px 0 6px" }}>2. Popunjava odgovorna osoba — nositelj nesukladnosti</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10 }}>
+        {I("Nositelj nesukladnosti", <select className="select" value={f.nositeljId} disabled={ro} onChange={(e) => postavi({ nositeljId: e.target.value })}><option value="">— odaberi —</option>{zaposleni.map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}</select>)}
+        {I("Poduzeti mjeru", <div style={{ display: "flex", gap: 14, paddingTop: 6 }}>{MJERE_NS.map((m) => <label key={m} style={{ display: "flex", gap: 5, alignItems: "center", fontSize: 13 }}><input type="checkbox" disabled={ro} checked={f.mjere.includes(m)} onChange={(e) => postavi({ mjere: e.target.checked ? [...f.mjere, m] : f.mjere.filter((x) => x !== m) })} /> {m}</label>)}</div>)}
+      </div>
+      <Field label="Uzrok"><textarea className="textarea" rows={2} value={f.uzrok} disabled={ro} onChange={(e) => postavi({ uzrok: e.target.value })} /></Field>
+      <datalist id="ns-odgovorni">{odgovorniPopis.map((x) => <option key={x} value={x} />)}</datalist>
+      <table className="erp-table" style={{ marginBottom: 6 }}>
+        <thead><tr><th>Mjera će se provesti kroz sljedeće aktivnosti</th><th style={{ width: 200 }}>Odgovoran</th><th style={{ width: 140 }}>Planirani rok</th><th style={{ width: 140 }}>Stvarna provedba</th><th style={{ width: 36 }} /></tr></thead>
+        <tbody>
+          {f.aktivnosti.length === 0 && <tr><td colSpan={5} style={{ color: "var(--ink-soft)", fontSize: 12.5 }}>Još nema aktivnosti.</td></tr>}
+          {f.aktivnosti.map((a) => {
+            const kasni = a.rok && !a.provedeno && a.rok < danas;
+            return (
+              <tr key={a.id}>
+                <td><input className="input" value={a.opis} disabled={ro} onChange={(e) => postaviAktivnost(a.id, { opis: e.target.value })} /></td>
+                <td><input className="input" list="ns-odgovorni" value={a.odgovoran} disabled={ro} onChange={(e) => postaviAktivnost(a.id, { odgovoran: e.target.value })} /></td>
+                <td><input className="input" type="date" value={a.rok} disabled={ro} onChange={(e) => postaviAktivnost(a.id, { rok: e.target.value })} style={kasni ? { borderColor: "var(--rust)", color: "var(--rust)" } : undefined} title={kasni ? "Rok je prošao" : ""} /></td>
+                <td><input className="input" type="date" value={a.provedeno} disabled={ro} onChange={(e) => postaviAktivnost(a.id, { provedeno: e.target.value })} /></td>
+                <td>{!ro && <button type="button" className="btn btn-icon btn-ghost" aria-label="Ukloni aktivnost" onClick={() => setF((p) => ({ ...p, aktivnosti: p.aktivnosti.filter((x) => x.id !== a.id) }))}><Trash2 size={14} /></button>}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {!ro && <Btn size="sm" icon={Plus} onClick={() => setF((p) => ({ ...p, aktivnosti: [...p.aktivnosti, novaAktivnost()] }))}>Dodaj aktivnost</Btn>}
+      {f.nositeljPotvrda?.ime && <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 6 }}>Potvrdio nositelj: <strong>{f.nositeljPotvrda.ime}</strong> · {vrijemeHr(f.nositeljPotvrda.vrijeme)}</div>}
+
+      <div className="label" style={{ margin: "14px 0 6px" }}>3. Popunjava predstavnik uprave za kvalitetu i okoliš (SUKO)</div>
+      {ovlasti.jeSuko && zapis && !zavrsna ? (
+        <>
+          <Field label="Preispitivanje i ocjena učinkovitosti poduzete mjere"><textarea className="textarea" rows={3} value={ocjena} onChange={(e) => setOcjena(e.target.value)} placeholder="npr. U dogovoru s voditeljem proizvodnje utvrđen uzrok i način kako da se idući put spriječi…" /></Field>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Btn variant="primary" icon={CheckCircle2} disabled={saljem || !ocjena.trim()} onClick={() => izvrsi("zatvori", "Nesukladnost je zatvorena.")}>Mjera je učinkovita — zatvori</Btn>
+            <Btn disabled={saljem || !ocjena.trim()} onClick={() => izvrsi("neucinkovito", "Vraćeno nositelju: mjera nije učinkovita.")}>Mjera nije učinkovita — vrati nositelju</Btn>
+            <Btn variant="ghost" disabled={saljem} onClick={() => izvrsi("ponisti", "Nesukladnost je poništena.")}>Poništi (krivi unos)</Btn>
+          </div>
+        </>
+      ) : (
+        <div style={{ fontSize: 13, background: "var(--surface-alt)", padding: 10, borderRadius: 3 }}>
+          {f.ocjena ? <><div style={{ whiteSpace: "pre-wrap" }}>{f.ocjena}</div><div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 4 }}>{f.ucinkovito === true ? "Mjera je učinkovita" : f.ucinkovito === false ? "Mjera nije učinkovita" : ""}{f.ocijenio?.ime ? ` · ${f.ocijenio.ime}, ${vrijemeHr(f.ocijenio.vrijeme)}` : ""}</div></> : <span style={{ color: "var(--ink-soft)" }}>{status === "Čeka ocjenu" ? "Čeka ocjenu SUKO-a." : "Ocjenu upisuje SUKO kad nositelj pošalje nesukladnost na ocjenu."}</span>}
+          {ovlasti.jeSuko && zavrsna && <div style={{ marginTop: 8 }}><Btn size="sm" disabled={saljem} onClick={() => izvrsi("ponovno_otvori", "Nesukladnost je ponovno otvorena.")}>Ponovno otvori</Btn></div>}
+        </div>
+      )}
+      <Field label="Napomena"><textarea className="textarea" rows={2} value={f.napomena} disabled={ro} onChange={(e) => postavi({ napomena: e.target.value })} /></Field>
+      {!ovlasti.izmjene && <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>Samo pregled — vaša pozicija nema ovlaštenje za unos nesukladnosti.</div>}
+    </Modal>
+    {velika && <UtovarSlikaModal slika={{ ...velika, otpremnica: zapis?.oznaka, spremljenoZ: velika.naZ ? velika.kreirano : null, greskaZ: velika.greskaZ }} osnova="nesukladnosti" naslov={`Slika — nesukladnost ${zapis?.oznaka} (${velika.naziv})`} showToast={showToast}
+      obrisi={smijeUredjivati ? async () => { await potrosniApi("DELETE", `/api/nesukladnosti/${encodeURIComponent(zapis.id)}/slika/${encodeURIComponent(velika.id)}`); } : null}
+      onClose={() => setVelika(null)} onObrisano={() => { setVelika(null); ucitaj(zapis.id).catch(() => {}); }} />}
+    </>
+  );
+}
+
+function NesukladnostiTab({ db, showToast, mojId }) {
+  const danas = todayISO();
+  const [godina, setGodina] = useState(() => Number(danas.slice(0, 4)));
+  const [podaci, setPodaci] = useState(null);
+  const [filter, setFilter] = useState("sve");
+  const [tekst, setTekst] = useState("");
+  const [otvoren, setOtvoren] = useState(null); // "nova" | id zapisa
+  const [mobitel, setMobitel] = useState(false);
+  const [qr, setQr] = useState("");
+  const ucitaj = async () => { try { setPodaci(await potrosniApi("GET", `/api/nesukladnosti?godina=${godina}`)); } catch (e) { setPodaci({ greska: e.message }); } };
+  useEffect(() => { ucitaj(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [godina]);
+  useEffect(() => { if (mobitel && !qr) QRCode.toDataURL(adresaPrijaveNs(), { margin: 1, scale: 6 }).then(setQr).catch(() => {}); }, [mobitel, qr]);
+  if (!podaci) return <div style={{ color: "var(--ink-soft)", fontSize: 13 }}>Učitavanje…</div>;
+  if (podaci.greska) return <EmptyState text={podaci.greska} />;
+  const zapisi = filtrirajNs(podaci.zapisi, { status: filter, tekst });
+  const s = sazetakNs(podaci.zapisi, danas);
+  const godine = [...new Set([Number(danas.slice(0, 4)), ...(podaci.godine || []), godina])].sort((a, b) => b - a);
+  const promijeniSuko = async (id) => { try { await potrosniApi("PUT", "/api/nesukladnosti/postavke", { sukoId: id }); showToast("Predstavnik uprave (SUKO) je spremljen."); ucitaj(); } catch (e) { showToast(e.message); } };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <select className="select" style={{ width: 100 }} value={godina} onChange={(e) => setGodina(Number(e.target.value))}>{godine.map((g) => <option key={g} value={g}>{g}.</option>)}</select>
+        {[["sve", `Sve (${s.ukupno})`], ["otvorene", `Otvorene (${s.otvorene})`], ["Čeka ocjenu", `Čeka ocjenu (${s.cekaOcjenu})`], ["zatvorene", `Zatvorene (${s.zatvorene})`]].map(([k, n]) => <button key={k} type="button" className={`btn btn-sm ${filter === k ? "btn-primary" : "btn-ghost"}`} onClick={() => setFilter(k)}>{n}</button>)}
+        {s.kasne > 0 && <span className="badge badge-danger">kasni rok: {s.kasne}</span>}
+        <input className="input" style={{ width: 220 }} placeholder="Traži (broj, projekt, opis, uzrok…)" value={tekst} onChange={(e) => setTekst(e.target.value)} />
+        <span style={{ flex: 1 }} />
+        <Btn icon={Camera} onClick={() => setMobitel((x) => !x)}>Prijava s mobitela</Btn>
+        {podaci.ovlasti?.izmjene && <Btn variant="primary" icon={Plus} onClick={() => setOtvoren("nova")}>Nova nesukladnost</Btn>}
+      </div>
+      {mobitel && (
+        <div className="card" style={{ padding: 14, marginBottom: 12, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+          {qr && <img src={qr} alt="QR kod za prijavu nesukladnosti" style={{ width: 120, height: 120 }} />}
+          <div style={{ fontSize: 13, lineHeight: 1.6, flex: 1, minWidth: 260 }}>
+            <strong>Kratica za mobitel:</strong> skeniraj QR kod (ili otvori adresu), prijavi se, pa dodaj stranicu na početni zaslon:
+            <div>• iPhone (Safari): gumb Dijeli → <em>Dodaj na početni zaslon</em></div>
+            <div>• Android (Chrome): izbornik ⋮ → <em>Dodaj na početni zaslon</em></div>
+            <div className="f-mono" style={{ fontSize: 12, marginTop: 4, wordBreak: "break-all" }}>{adresaPrijaveNs()} <button type="button" className="btn btn-ghost btn-sm" onClick={() => { navigator.clipboard?.writeText(adresaPrijaveNs()); showToast("Adresa je kopirana."); }}><Copy size={12} /> Kopiraj</button></div>
+            <div style={{ color: "var(--ink-soft)", fontSize: 12 }}>Prijava traži korisnika ERP-a s pravom na karticu Nesukladnosti; prijava traje do 12 sati, zatim se treba ponovno prijaviti.</div>
+          </div>
+        </div>
+      )}
+      <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 8 }}>
+        Predstavnik uprave za kvalitetu i okoliš (SUKO): <strong style={{ color: "var(--ink)" }}>{imeZaposlenikaNs(db, podaci.sukoId) || "nije određen"}</strong>
+        {podaci.ovlasti?.jeSuko && <select className="select" style={{ width: 220, marginLeft: 8, display: "inline-block" }} value={podaci.sukoId || ""} onChange={(e) => promijeniSuko(e.target.value)}><option value="">— nije određen —</option>{aktivniZaposleniciNs(db).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}</select>}
+        <span> · PDF i slike: Z:\Econ_ISO\…\P4,5,6 Upravljanje nesukladnostima, popravne\{godina}\</span>
+      </div>
+      {zapisi.length === 0 ? <EmptyState text={podaci.zapisi.length ? "Nema nesukladnosti za ovaj filtar." : `Za ${godina}. još nema nesukladnosti.`} /> : (
+        <table className="erp-table">
+          <thead><tr><th style={{ width: 64 }}>Br.</th><th style={{ width: 92 }}>Datum</th><th style={{ width: 110 }}>Projekt</th><th>Opis</th><th style={{ width: 130 }}>Izvor</th><th style={{ width: 130 }}>Nositelj</th><th style={{ width: 96 }}>Rok</th><th style={{ width: 112 }}>Status</th><th style={{ width: 54 }}>Z:</th></tr></thead>
+          <tbody>
+            {zapisi.map((z) => {
+              const p = z.podaci || {};
+              const rok = sljedeciRok(p);
+              const kasni = !ZAVRSNI_NS.includes(z.status) && kasneAktivnosti(p, danas).length > 0;
+              return (
+                <tr key={z.id} onClick={() => setOtvoren(z.id)} style={{ cursor: "pointer" }}>
+                  <td className="f-mono" style={{ fontWeight: 600 }}>{z.oznaka}</td>
+                  <td>{fmtDate(p.datum)}</td>
+                  <td className="f-mono" style={{ fontSize: 12 }}>{p.projektSifra || "—"}</td>
+                  <td style={{ fontSize: 12.5 }}>{String(p.opis || "").slice(0, 110)}{String(p.opis || "").length > 110 ? "…" : ""}{z.brojSlika ? <span style={{ color: "var(--ink-soft)" }}> · {z.brojSlika} sl.</span> : null}</td>
+                  <td style={{ fontSize: 12 }}>{p.izvor}</td>
+                  <td style={{ fontSize: 12 }}>{p.nositelj || "—"}</td>
+                  <td style={{ fontSize: 12, color: kasni ? "var(--rust)" : undefined, fontWeight: kasni ? 700 : 400 }}>{ZAVRSNI_NS.includes(z.status) ? "" : rok ? fmtDate(rok) : "—"}</td>
+                  <td><span className={`badge ${BOJA_STATUSA_NS[z.status] || "badge-muted"}`}>{z.status}</span></td>
+                  <td style={{ fontSize: 12 }} title={z.z.greska || (z.z.ukljuceno ? "" : "Uvezeno iz Worda — ne sprema se na Z:")}>{z.z.greska ? <span style={{ color: "var(--rust)" }}>✘</span> : !z.z.ukljuceno ? "—" : z.z.pdfNaZ > 0 && z.z.pdfNaZ >= z.z.pdfVerzija ? <span style={{ color: "var(--green)" }}>✔</span> : "…"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {otvoren && <NesukladnostModal db={db} zapisId={otvoren === "nova" ? null : otvoren} ovlasti={podaci.ovlasti || {}} mojId={mojId} showToast={showToast} onClose={() => { setOtvoren(null); ucitaj(); }} onPromjena={ucitaj} />}
+    </div>
+  );
+}
+
+// Prijava nesukladnosti s mobitela (kratica ?nesukladnost=nova): projekt, izvor, opis, nositelj i slike; nakon slanja broj NN/GG.
+function NesukladnostMobilno({ db, zaposlenik, mojaPozicija }) {
+  const mojId = zaposlenik?.id || "";
+  const smije = (mojaPozicija?.moduli || []).includes("kontrola") && dozvolaZaKarticu(mojaPozicija, "kontrola", "nesukladnosti").izmjene;
+  const [f, setF] = useState(() => prazniPodaciNs({ mojId, nositeljId: mojId, danas: todayISO() }));
+  const [nositeljRucno, setNositeljRucno] = useState(false);
+  const [slike, setSlike] = useState([]); // { kljuc, datoteka, url }
+  const [faza, setFaza] = useState(""); // "" | "salje" | poruka greške
+  const [gotovo, setGotovo] = useState(null);
+  const projekti = projektiZaNs(db).filter((p) => p.status !== "Arhiviran");
+  const odaberiProjekt = (id) => { const p = projekti.find((x) => x.id === id); setF((s) => ({ ...s, projektId: id, nositeljId: nositeljRucno ? s.nositeljId : zadaniNositelj(p, mojId) })); };
+  const dodaj = (popis) => setSlike((l) => [...l, ...Array.from(popis || []).filter((x) => /^image\//.test(x.type) || /\.(jpe?g|png|heic|heif|webp)$/i.test(x.name)).map((d) => ({ kljuc: NOVI_ID_SLIKE(), datoteka: d, url: URL.createObjectURL(d) }))]);
+  const prijavi = async () => {
+    if (!f.opis.trim()) { setFaza("Upiši opis nesukladnosti."); return; }
+    setFaza("salje");
+    try {
+      const r = await potrosniApi("POST", "/api/nesukladnosti", { podaci: f });
+      let neposlane = 0;
+      for (const s of slike) { try { await posaljiSlikuNs(r.zapis.id, s.datoteka); } catch { neposlane += 1; } }
+      try { await posaljiPdfNesukladnosti(r.zapis.id, db.postavkeTvrtke, zaposlenik ? `${zaposlenik.ime} ${zaposlenik.prezime}` : "", false); } catch { /* PDF se izradi kod sljedećeg spremanja u ERP-u */ }
+      setGotovo({ oznaka: r.zapis.oznaka, neposlane });
+      setFaza("");
+    } catch (e) { setFaza(e instanceof TypeError ? "Nema veze — pokušaj ponovno." : e.message || "Slanje nije uspjelo."); }
+  };
+  const nova = () => { slike.forEach((s) => URL.revokeObjectURL(s.url)); setSlike([]); setGotovo(null); setNositeljRucno(false); setF(prazniPodaciNs({ mojId, nositeljId: mojId, danas: todayISO() })); };
+  const stil = { width: "100%", fontSize: 16 };
+  return (
+    <div className="erp-root" style={{ minHeight: "100vh", background: "var(--sidebar)", padding: "16px 12px", boxSizing: "border-box" }}>
+      <GlobalStyle />
+      <style>{"body{margin:0}"}</style>
+      <div className="card" style={{ maxWidth: 560, margin: "0 auto", padding: 18, background: "var(--surface)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+          <div style={{ width: 38, height: 38, background: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 3, flexShrink: 0 }}><ShieldCheck size={20} color="var(--accent-ink)" /></div>
+          <div style={{ minWidth: 0 }}>
+            <div className="f-mono" style={{ fontSize: 10, letterSpacing: "0.08em", color: "var(--ink-faint)", textTransform: "uppercase" }}>ECON D.O.O. · kontrola kvalitete</div>
+            <div className="f-display" style={{ fontSize: 18, fontWeight: 600 }}>Prijava nesukladnosti</div>
+          </div>
+        </div>
+        {!smije ? <div style={{ fontSize: 14, color: "var(--rust)" }}>Vaša pozicija nema ovlaštenje za unos nesukladnosti (Kontrola kvalitete → Nesukladnosti). Obratite se administratoru.</div>
+          : gotovo ? (
+            <div style={{ textAlign: "center", padding: "10px 0" }}>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "var(--green)" }}>✔ Prijavljeno: {gotovo.oznaka}</div>
+              {gotovo.neposlane > 0 && <div style={{ color: "var(--rust)", marginTop: 6 }}>{gotovo.neposlane} slika nije poslano — dodaj ih u ERP-u.</div>}
+              <div style={{ fontSize: 13, color: "var(--ink-soft)", margin: "8px 0 16px" }}>Nositelj dobiva zadatak u ERP-u; uzrok i mjere upisuju se u Kontroli kvalitete → Nesukladnosti.</div>
+              <button type="button" className="btn btn-primary" style={{ width: "100%", minHeight: 52, fontSize: 17, justifyContent: "center" }} onClick={nova}>Nova prijava</button>
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: 10 }}>
+              <Field label="Projekt"><select className="select" style={stil} value={f.projektId} onChange={(e) => odaberiProjekt(e.target.value)}><option value="">— bez projekta —</option>{projekti.map((p) => <option key={p.id} value={p.id}>{p.sifra} — {p.naziv}</option>)}</select></Field>
+              <Field label="Izvor"><select className="select" style={stil} value={f.izvor} onChange={(e) => setF((s) => ({ ...s, izvor: e.target.value }))}>{IZVORI_NS.map((x) => <option key={x} value={x}>{x}</option>)}</select></Field>
+              <Field label="Opis nesukladnosti"><textarea className="textarea" rows={5} style={stil} value={f.opis} onChange={(e) => setF((s) => ({ ...s, opis: e.target.value }))} placeholder="Što je uočeno i gdje…" /></Field>
+              <Field label="Nositelj (rješava uzrok i mjere)"><select className="select" style={stil} value={f.nositeljId} onChange={(e) => { setNositeljRucno(true); setF((s) => ({ ...s, nositeljId: e.target.value })); }}><option value="">— nije određen —</option>{aktivniZaposleniciNs(db).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}</select></Field>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <UtovarUlaz className="btn btn-primary" stil={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, minHeight: 52, fontSize: 16, fontWeight: 600 }} capture onOdabir={dodaj}><Camera size={20} /> Fotografiraj</UtovarUlaz>
+                <UtovarUlaz className="btn btn-ghost" stil={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 52, fontSize: 15 }} multiple onOdabir={dodaj}>Iz galerije</UtovarUlaz>
+              </div>
+              {slike.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{slike.map((s) => <div key={s.kljuc} style={{ position: "relative" }}><img src={s.url} alt="" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 3 }} /><button type="button" aria-label="Ukloni sliku" onClick={() => { URL.revokeObjectURL(s.url); setSlike((l) => l.filter((x) => x.kljuc !== s.kljuc)); }} style={{ position: "absolute", top: 2, right: 2, background: "rgba(0,0,0,.6)", color: "#fff", border: 0, borderRadius: 10, width: 20, height: 20, cursor: "pointer" }}>×</button></div>)}</div>}
+              {faza && faza !== "salje" && <div style={{ color: "var(--rust)", fontSize: 14 }}>{faza}</div>}
+              <button type="button" className="btn btn-primary" style={{ width: "100%", minHeight: 56, fontSize: 18, justifyContent: "center", opacity: faza === "salje" ? 0.6 : 1 }} disabled={faza === "salje"} onClick={prijavi}>{faza === "salje" ? "Šaljem…" : "Prijavi nesukladnost"}</button>
+              <div style={{ fontSize: 12, color: "var(--ink-faint)" }}>Prijavljuje: {zaposlenik ? `${zaposlenik.ime} ${zaposlenik.prezime}` : "—"} · {fmtDate(todayISO())}</div>
+            </div>
+          )}
+      </div>
     </div>
   );
 }
@@ -4931,20 +5263,22 @@ function ZaprimanjeModal({ narudzbenica, db, onPotvrdi, onClose }) {
 
 /* ============================== KONTROLA KVALITETE ============================== */
 // Matična knjiga materijala (jedan zapis po isporuci/šarži) i lista ugrađenog materijala po projektu.
-function KontrolaKvalitetePage({ db, update, showToast, mojaPozicija, projektId, ocistiProjekt }) {
+function KontrolaKvalitetePage({ db, update, showToast, mojaPozicija, mojId, projektId, ocistiProjekt }) {
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "kontrola");
   const [tab, setTab] = useState(() => (projektId && dozvKartice.some((k) => k.key === "ugradeni") ? "ugradeni" : (dozvKartice[0]?.key || "maticna")));
   useEffect(() => { if (!dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0]?.key || "maticna"); }, [dozvKartice, tab]);
   useEffect(() => { if (projektId && ocistiProjekt) ocistiProjekt(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div>
-      <PageHeader title="Kontrola kvalitete" icon={ShieldCheck} subtitle="Matična knjiga materijala i popis ugrađenog materijala po projektu" />
+      <PageHeader title="Kontrola kvalitete" icon={ShieldCheck} subtitle="Matična knjiga materijala, popis ugrađenog materijala po projektu i nesukladnosti (ISO 9001)" />
       <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
         {dozvKartice.some((k) => k.key === "maticna") && <div className={`nav-tab ${tab === "maticna" ? "active" : ""}`} onClick={() => setTab("maticna")}>Matična knjiga</div>}
         {dozvKartice.some((k) => k.key === "ugradeni") && <div className={`nav-tab ${tab === "ugradeni" ? "active" : ""}`} onClick={() => setTab("ugradeni")}>Ugrađeni materijal</div>}
+        {dozvKartice.some((k) => k.key === "nesukladnosti") && <div className={`nav-tab ${tab === "nesukladnosti" ? "active" : ""}`} onClick={() => setTab("nesukladnosti")}>Nesukladnosti</div>}
       </div>
       {tab === "maticna" && <MaticnaKnjigaTab db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "kontrola", "maticna").izmjene} />}
       {tab === "ugradeni" && <UgradeniMaterijalTab db={db} showToast={showToast} pocetniProjektId={projektId} />}
+      {tab === "nesukladnosti" && <NesukladnostiTab db={db} showToast={showToast} mojId={mojId} />}
     </div>
   );
 }
