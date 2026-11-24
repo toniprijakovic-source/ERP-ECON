@@ -4052,6 +4052,20 @@ function JavnaKarticaMaticnog({ broj }) {
 // Fotografije utovara — stranica na mobitelu (QR kod s otpremnice, bez prijave). Slike se sažimaju na mobitelu (≈ 1600 px) i šalju jedna po jedna;
 // poslužitelj ih veže uz projekt i datum utovara, a most ih sprema na Z: u <mapa projekta>\Fotografije - Utovar\<datum>\. Ponovno slanje iste slike
 // (isti zahtjevId) ne stvara duplikat, pa slaba veza nije problem. Pogrešnu sliku može se ukloniti još pola sata.
+// Tipka za odabir slike. Pravo polje za datoteku leži PROZIRNO preko tipke, pa dodir izravno otvara kameru/galeriju — i na iPhoneu, gdje
+// polje skriveno s display:none iza oznake (label) ne reagira pouzdano. Ako dodir ipak pogodi samo tipku ispod, ona sama pozove polje.
+function UtovarUlaz({ className, stil, capture, multiple, disabled, onOdabir, children }) {
+  const ulaz = useRef(null);
+  return (
+    <div style={{ position: "relative" }}>
+      <button type="button" className={className} disabled={disabled} style={{ ...stil, width: "100%" }} onClick={() => ulaz.current?.click()}>{children}</button>
+      <input ref={ulaz} type="file" accept="image/*" {...(capture ? { capture: "environment" } : {})} multiple={!!multiple} disabled={disabled}
+        aria-label={capture ? "Fotografiraj" : "Dodaj iz galerije"} tabIndex={-1}
+        style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer", fontSize: 0 }}
+        onChange={(e) => { const odabrano = Array.from(e.target.files || []); e.target.value = ""; if (odabrano.length) onOdabir(odabrano); }} />
+    </div>
+  );
+}
 const NOVI_ID_SLIKE = () => (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`);
 function UtovarStranica({ token }) {
   const API_VEZA = `${API_URL}/api/utovar/veza/${encodeURIComponent(token)}`;
@@ -4060,6 +4074,7 @@ function UtovarStranica({ token }) {
   const red = useRef(Promise.resolve()); // slanje jedna po jedna
   const podaci = useRef({}); // kljuc → { slika, slicica, zahtjevId } (za ponovni pokušaj)
   const brojac = useRef(0);
+  const [poruka, setPoruka] = useState("");
   useEffect(() => {
     fetch(API_VEZA)
       .then(async (r) => { const d = await r.json().catch(() => ({})); setInfo(r.ok ? { podaci: d } : { greska: d.error || "Veza nije ispravna." }); })
@@ -4082,7 +4097,9 @@ function UtovarStranica({ token }) {
     }
   };
   const dodaj = (popis) => {
-    const datoteke = [...(popis || [])].filter((f) => /^image\//.test(f.type) || /\.(jpe?g|png|heic|heif|webp)$/i.test(f.name));
+    const sve = Array.from(popis || []);
+    const datoteke = sve.filter((f) => /^image\//.test(f.type) || /\.(jpe?g|png|heic|heif|webp)$/i.test(f.name));
+    setPoruka(datoteke.length ? `Odabrano: ${datoteke.length} ${rijecSlika(datoteke.length)}.` : `Odabrana datoteka nije slika${sve[0]?.type ? ` (${sve[0].type})` : ""}.`);
     for (const f of datoteke) {
       const kljuc = `s${++brojac.current}`;
       setStavke((l) => [...l, { kljuc, url: URL.createObjectURL(f), status: "obrada", greska: "" }]);
@@ -4134,19 +4151,14 @@ function UtovarStranica({ token }) {
               <div style={{ color: "var(--ink-soft)" }}>Datum utovara: <strong style={{ color: "var(--ink)" }}>{fmtDate(p.danas)}</strong></div>
             </div>
             <div style={{ display: "grid", gap: 10, marginBottom: 12 }}>
-              <label className="btn btn-primary" style={stilGumba}>
-                <Camera size={26} /> Fotografiraj
-                <input type="file" accept="image/*" capture="environment" disabled={!!puno} style={{ display: "none" }} onChange={(e) => { dodaj(e.target.files); e.target.value = ""; }} />
-              </label>
-              <label className="btn btn-ghost" style={{ ...stilGumba, minHeight: 48, fontSize: 16 }}>
-                Dodaj iz galerije
-                <input type="file" accept="image/*" multiple disabled={!!puno} style={{ display: "none" }} onChange={(e) => { dodaj(e.target.files); e.target.value = ""; }} />
-              </label>
+              <UtovarUlaz className="btn btn-primary" stil={stilGumba} capture disabled={!!puno} onOdabir={dodaj}><Camera size={26} /> Fotografiraj</UtovarUlaz>
+              <UtovarUlaz className="btn btn-ghost" stil={{ ...stilGumba, minHeight: 48, fontSize: 16 }} multiple disabled={!!puno} onOdabir={dodaj}>Dodaj iz galerije</UtovarUlaz>
             </div>
             <div style={{ fontSize: 13, color: "var(--ink-soft)", marginBottom: 12 }}>
               Poslano slika: <strong style={{ color: "var(--ink)" }}>{ukupno}</strong> / {p.najvise}
               {zauzet && <span> · šaljem…</span>}
               {puno && <span style={{ color: "var(--rust)" }}> · dosegnut najveći broj slika za ovu otpremnicu</span>}
+              {poruka && <div style={{ marginTop: 4 }}>{poruka}</div>}
             </div>
             <div style={{ display: "grid", gap: 8 }}>
               {[...stavke].reverse().map((s) => (
