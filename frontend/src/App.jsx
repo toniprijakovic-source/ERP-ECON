@@ -10313,6 +10313,8 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
       {aktivnaKartica === "rekap" && calc && (() => {
         const postotakMarze = Number(calc.postotakMarze) || 0;
         let ukupnoSveStavkeSaMarzom = 0;
+        // Zbroj po stupcima (rad, materijal, AKZ, montaža, ostalo, marža) — redak "Zbroj stavki" ispod tablice.
+        const zbroj = { rada: 0, materijal: 0, akz: 0, montaza: 0, ostalo: 0, marza: 0 };
         return (
           <table className="erp-table">
             <thead>
@@ -10334,6 +10336,7 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
                 const marza = bezMarze * (postotakMarze / 100);
                 const saMarzom = bezMarze + marza;
                 ukupnoSveStavkeSaMarzom += saMarzom;
+                zbroj.rada += rada; zbroj.materijal += materijal; zbroj.akz += akz; zbroj.montaza += montaza; zbroj.ostalo += ostalo; zbroj.marza += marza;
                 const kolicina = Number(p.kolicina) || 1;
                 const otvoren = !!opisOtvoren[p.id];
                 return (
@@ -10380,11 +10383,21 @@ function PozicijeEditor({ pozicije = [], setPozicije, cjenikRada, katalog = [], 
               const popust = primijeniPopust(ukupnoSveStavkeSaMarzom, { postotakPopusta: calc.postotakPopusta });
               return (
                 <tfoot>
+                  {pozicije.length > 0 && (
+                    <tr style={{ borderTop: "2px solid var(--line-strong)", background: "var(--surface-alt)" }}>
+                      <td style={{ fontWeight: 700 }}>ZBROJ STAVKI (sa maržom {postotakMarze}%)</td>
+                      <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(zbroj.rada)}</td>
+                      <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(zbroj.materijal)}</td>
+                      <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(zbroj.akz)}</td>
+                      <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(zbroj.montaza)}</td>
+                      <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(zbroj.ostalo)}</td>
+                      <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(zbroj.marza)}</td>
+                      <td></td>
+                      <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(ukupnoSveStavkeSaMarzom)}</td>
+                    </tr>
+                  )}
                   {popust.postotak > 0 && (
-                    <>
-                      <tr style={{ borderTop: "2px solid var(--line-strong)" }}><td colSpan={8} style={{ textAlign: "right" }}>Ukupno stavke (sa maržom {postotakMarze}%)</td><td className="f-mono" style={{ fontWeight: 600 }}>{fmtCurDec(ukupnoSveStavkeSaMarzom)}</td></tr>
-                      <tr><td colSpan={8} style={{ textAlign: "right" }}>Popust ({tekstPostotka(popust.postotak)}%)</td><td className="f-mono" style={{ fontWeight: 600, color: "var(--rust)" }}>−{fmtCurDec(popust.iznos)}</td></tr>
-                    </>
+                    <tr><td colSpan={8} style={{ textAlign: "right" }}>Popust ({tekstPostotka(popust.postotak)}%)</td><td className="f-mono" style={{ fontWeight: 600, color: "var(--rust)" }}>−{fmtCurDec(popust.iznos)}</td></tr>
                   )}
                   <tr style={{ borderTop: "2px solid var(--line-strong)" }}><td colSpan={8} style={{ textAlign: "right", fontWeight: 700 }}>UKUPNA CIJENA PONUDE (sa maržom {postotakMarze}%{popust.postotak > 0 ? `, nakon popusta ${tekstPostotka(popust.postotak)}%` : ""})</td><td className="f-mono" style={{ fontWeight: 700, fontSize: 15, color: "var(--steel)" }}>{fmtCurDec(popust.nakon)}</td></tr>
                 </tfoot>
@@ -11812,7 +11825,14 @@ function PonudaLaseraModal({ form, setForm, db, onSave, onClose, onRevizija }) {
             ))}
           </tbody>
           <tfoot>
-            <tr style={{ borderTop: "1px solid var(--line-strong)" }}><td colSpan={5} style={{ textAlign: "right" }}>Zbroj stavki rezanja</td><td className="f-mono" style={{ fontWeight: 600 }}>{fmtCurDec(calc.zbrojStavki)}</td></tr>
+            <tr style={{ borderTop: "1px solid var(--line-strong)", background: "var(--surface-alt)" }}>
+              <td style={{ fontWeight: 700 }}>ZBROJ STAVKI REZANJA</td>
+              <td className="f-mono" style={{ fontWeight: 700 }}>{calc.stavke.reduce((z, s) => z + s.masaKg, 0).toFixed(1)}</td>
+              <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(calc.stavke.reduce((z, s) => z + s.trosakRezanja, 0))}</td>
+              <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(calc.stavke.reduce((z, s) => z + s.trosakPripreme, 0))}</td>
+              <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(calc.stavke.reduce((z, s) => z + s.trosakMaterijala, 0))}</td>
+              <td className="f-mono" style={{ fontWeight: 700 }}>{fmtCurDec(calc.zbrojStavki)}</td>
+            </tr>
             <tr><td colSpan={5} style={{ textAlign: "right" }}>Dodatak ({calc.dodatakPct}%)</td><td className="f-mono">{fmtCurDec(calc.iznosDodatka)}</td></tr>
             <tr><td colSpan={5} style={{ textAlign: "right" }}>Savijanje + ostalo</td><td className="f-mono">{fmtCurDec(calc.trosakSavijanja + calc.trosakOstalo)}</td></tr>
             {calc.postotakPopusta > 0 && <tr><td colSpan={5} style={{ textAlign: "right" }}>Popust ({tekstPostotka(calc.postotakPopusta)}% od {fmtCurDec(calc.cijenaPrijePopusta)})</td><td className="f-mono" style={{ color: "var(--rust)" }}>−{fmtCurDec(calc.iznosPopusta)}</td></tr>}
