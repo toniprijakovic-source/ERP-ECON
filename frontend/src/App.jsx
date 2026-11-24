@@ -4447,6 +4447,7 @@ function MontazaPozicijaModal({ projekt, poz, slike, onClose, onPromjena, showTo
 // Ispis QR naljepnica: dva stupca na A4 (18 po stranici); QR otvara stranicu za slikanje te pozicije.
 function MontazaNaljepniceModal({ projekt, veze, onClose }) {
   const [qr, setQr] = useState({});
+  const [razmak, setRazmak] = useState(true); // svaki drugi red prazan: kamera mobitela uz naljepnicu ne smije "vidjeti" susjedni QR kod
   useEffect(() => {
     let ugasen = false;
     (async () => {
@@ -4456,18 +4457,21 @@ function MontazaNaljepniceModal({ projekt, veze, onClose }) {
     })().catch(() => {});
     return () => { ugasen = true; };
   }, [veze]);
-  const stranice = rasporediNaljepnice(veze);
+  const stranice = rasporediNaljepnice(veze, razmak ? 10 : 18);
   const spremno = Object.keys(qr).length === veze.length;
   return (
     <Modal wide title={`QR naljepnice za montažu — ${projekt.sifra}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} disabled={!spremno} onClick={() => ispisPdf(`QR naljepnice ${projekt.sifra}`)}>Ispis / Spremi kao PDF</Btn></>}>
-      <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 10 }}>{veze.length} {rijecPozicija(veze.length)} na {stranice.length} {stranice.length === 1 ? "stranici" : "stranice"} (A4, dva stupca). Isprintaj, izreži i zalijepi na poziciju — monter skenira mobitelom.</div>
+      <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 10 }}>{veze.length} {rijecPozicija(veze.length)} na {stranice.length} {stranice.length === 1 ? "stranici" : stranice.length < 5 ? "stranice" : "stranica"} (A4, dva stupca{razmak ? ", svaki drugi red prazan" : ""}). Isprintaj, izreži i zalijepi na poziciju — monter skenira mobitelom.</div>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginBottom: 10, cursor: "pointer" }}>
+        <input type="checkbox" checked={razmak} onChange={(e) => setRazmak(e.target.checked)} /> Razmak između naljepnica (svaki drugi red prazan) — lakše skeniranje, jer kamera ne hvata susjedni QR kod
+      </label>
       <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
         {stranice.map((st, i) => (
           <div key={i} style={{ breakAfter: i < stranice.length - 1 ? "page" : "auto", pageBreakAfter: i < stranice.length - 1 ? "always" : "auto", marginBottom: i < stranice.length - 1 ? 18 : 0 }}>
             <div style={{ fontSize: 10.5, color: "#555", marginBottom: 6, display: "flex", justifyContent: "space-between" }}>
               <span><strong>{projekt.sifra}</strong>{projekt.naziv ? ` — ${projekt.naziv}` : ""} · QR naljepnice za montažu</span><span>stranica {i + 1}/{stranice.length}</span>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3mm" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", columnGap: razmak ? "14mm" : "3mm", rowGap: razmak ? "25mm" : "3mm" }}>
               {st.map((v) => (
                 <div key={v.token} style={{ display: "flex", alignItems: "center", gap: "4mm", border: "1px dashed #888", padding: "2mm 3mm", height: "25mm", boxSizing: "border-box", breakInside: "avoid" }}>
                   {qr[v.token] ? <img src={qr[v.token]} alt={`QR ${v.oznaka}`} style={{ width: "21mm", height: "21mm", flexShrink: 0 }} /> : <div style={{ width: "21mm", height: "21mm", flexShrink: 0 }} />}
