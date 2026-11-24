@@ -9,7 +9,7 @@ import { obradi } from "./lib/obradi.js";
 import { citajKumulativ, spremiKumulativ } from "./lib/kumulativ-zadaci.js";
 import { popisXRechnunga, obrisiXRechnung } from "./lib/xrechnung-popis.js";
 import { korijeniProjekata } from "./lib/mapa.js";
-import { obradiUtovar } from "./lib/utovar.js";
+import { obradiUtovar, obradiMontazu } from "./lib/utovar.js";
 
 const mapaMosta = path.dirname(fileURLToPath(import.meta.url));
 try { process.loadEnvFile(path.join(mapaMosta, ".env")); } catch { /* .env nije obavezan ako su varijable već postavljene */ }
@@ -89,12 +89,13 @@ for (;;) {
     if (!greskaPrijavljena) log("Veza s ERP-om nije uspjela:", e.message);
     greskaPrijavljena = true;
   }
-  // Fotografije utovara (mobitel → ERP → mapa projekta na Z:): zasebno od zadataka, da greška jednog ne zaustavi drugo.
+  // Fotografije utovara i montaže (mobitel → ERP → mapa projekta na Z:): zasebno od zadataka, da greška jednog ne zaustavi drugo.
   try {
     await obradiUtovar(api, apiBajtovi, okolina, log);
+    await obradiMontazu(api, apiBajtovi, okolina, log);
     greskaUtovaraPrijavljena = false;
   } catch (e) {
-    if (!greskaUtovaraPrijavljena && !greskaPrijavljena) log("Fotografije utovara: veza s ERP-om nije uspjela:", e.message);
+    if (!greskaUtovaraPrijavljena && !greskaPrijavljena) log("Fotografije (utovar/montaža): veza s ERP-om nije uspjela:", e.message);
     greskaUtovaraPrijavljena = true;
   }
   await new Promise((r) => setTimeout(r, 5000));

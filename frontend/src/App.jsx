@@ -23,6 +23,7 @@ import { stavkeIzRezervacija, pregledZaIzdavanje, ukloniRezervacije, rasporediSP
 import { matricaPotrosnje, zaNarucivanje, parsirajUvoz, MJESECI_KRATKO } from "./potrosniMaterijal";
 import { stanjeKioska, kioskoviBezSignala, NAZIV_VRSTE_KIOSKA } from "./kioskPracenje";
 import { sazmiSliku, adresaUtovara, tokenIzUpita, grupirajPoDatumu, stanjeSlike, NAZIV_STANJA as NAZIV_STANJA_SLIKE } from "./utovarFotografije";
+import { parsirajOznake, sazetakPozicija, rasporediNaljepnice, adresaMontaze, tokenMontazeIzUpita } from "./montazaOznake";
 import { imaTermine, sortiraniTermini, rokIzTermina, stanjaTermina, projektSEfektivnimRokom, rokoviDijelova, posloviPoTerminima, redoviKalendara, grupirajPoTjednima, pocetakTjedna, dodajDane as dodajDaneISO } from "./terminiIsporuke";
 import { slobodneIsporuke, dvostrukeIsporuke, pripremiStavkeNormativa, prekoNarucenogPoNarudzbi, ogranicenjeStavke, pocetnaKolicina, visakStavke, zatvoriIsporuke, vratiZatvoreneIsporuke } from "./otpremniceKontrola";
 import { VRSTE_PREGLEDA, SKOLSKE_SPREME, KUCICE, TERETI, OCJENA_ZADANO, prazniTereti, prazanPredlozak, predlosciIzProcjene, nazivVrste, ocistiOib, provjeriOib, parsirajTocke, formatirajTocke, godineUGodineMjesece, zadnjiPregled, sljedeciPregled, statusRoka, sljedeciRedniBroj, trebaPocetniBroj, nazivDatotekeUputnice, nedostajuciPodaci, izradiPoljaUputnice, provjeriUputnicu, imePrezime } from "./zastitaNaRadu";
@@ -2870,6 +2871,9 @@ export default function App() {
   // ?utovar=<veza> = stranica na mobitelu s QR koda otpremnice: bez prijave, samo slikanje utovara (vidi UtovarStranica).
   const utovarVeza = tokenIzUpita(window.location.search);
   if (utovarVeza) return <UtovarStranica token={utovarVeza} />;
+  // ?montaza=<veza> = stranica s QR naljepnice pozicije (npr. balkona): slikanje završene pozicije i status "montirano" (vidi MontazaStranica).
+  const montazaVeza = tokenMontazeIzUpita(window.location.search);
+  if (montazaVeza) return <MontazaStranica token={montazaVeza} />;
   const jeKioskNacin = urlParametri.get("kiosk") === "1" || urlParametri.get("kiosk") === "potrosni" || !!urlParametri.get("rfid");
   if (jeKioskNacin) return <KioskView samoPotrosni={urlParametri.get("kiosk") === "potrosni"} />;
 
@@ -4067,20 +4071,21 @@ function UtovarUlaz({ className, stil, capture, multiple, disabled, onOdabir, ch
   );
 }
 const NOVI_ID_SLIKE = () => (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`);
-function UtovarStranica({ token }) {
-  const API_VEZA = `${API_URL}/api/utovar/veza/${encodeURIComponent(token)}`;
+// Zajednička stranica na mobitelu za slikanje (utovar i montaža): apiVeza = adresa veze na poslužitelju; naslovMali/naslov(p)/opis(p)/uputa = tekstovi;
+// dodatak({ p, ukupno, zauzet, osvjezi }) = dodatni dio stranice (npr. tipka "Označi montirano").
+function FotoStranica({ apiVeza, naslovMali, naslov, opis, dodatak, uputa }) {
+  const API_VEZA = apiVeza;
   const [info, setInfo] = useState({ ucitava: true });
   const [stavke, setStavke] = useState([]); // slike snimljene u ovoj sesiji: { kljuc, url, status: obrada|salje|gotovo|greska, id, vrijeme, greska }
   const red = useRef(Promise.resolve()); // slanje jedna po jedna
   const podaci = useRef({}); // kljuc → { slika, slicica, zahtjevId } (za ponovni pokušaj)
   const brojac = useRef(0);
+  const gotovoRef = useRef(0); // koliko je slika iz ove sesije već poslano (da osvježen broj s poslužitelja ne računa iste slike dvaput)
   const [poruka, setPoruka] = useState("");
-  useEffect(() => {
-    fetch(API_VEZA)
-      .then(async (r) => { const d = await r.json().catch(() => ({})); setInfo(r.ok ? { podaci: d } : { greska: d.error || "Veza nije ispravna." }); })
-      .catch(() => setInfo({ greska: "Nema veze s poslužiteljem — provjeri internetsku vezu pa ponovno skeniraj QR kod." }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  const ucitajInfo = () => fetch(API_VEZA)
+    .then(async (r) => { const d = await r.json().catch(() => ({})); setInfo(r.ok ? { podaci: d, osnovica: Math.max(0, (Number(d.vecDodano) || 0) - gotovoRef.current) } : { greska: d.error || "Veza nije ispravna." }); })
+    .catch(() => setInfo({ greska: "Nema veze s poslužiteljem — provjeri internetsku vezu pa ponovno skeniraj QR kod." }));
+  useEffect(() => { ucitajInfo(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [apiVeza]);
   useEffect(() => () => stavke.forEach((s) => s.url && URL.revokeObjectURL(s.url)), []); // eslint-disable-line react-hooks/exhaustive-deps
   const postavi = (kljuc, patch) => setStavke((l) => l.map((x) => (x.kljuc === kljuc ? { ...x, ...patch } : x)));
   const posalji = async (kljuc) => {
@@ -4125,7 +4130,8 @@ function UtovarStranica({ token }) {
   };
   const p = info.podaci;
   const poslano = stavke.filter((s) => s.status === "gotovo").length;
-  const ukupno = (p?.vecDodano || 0) + poslano;
+  gotovoRef.current = poslano;
+  const ukupno = (info.osnovica ?? p?.vecDodano ?? 0) + poslano;
   const zauzet = stavke.some((s) => s.status === "obrada" || s.status === "salje");
   const puno = p && ukupno >= p.najvise;
   const stilGumba = { display: "flex", alignItems: "center", justifyContent: "center", gap: 10, minHeight: 64, fontSize: 19, fontWeight: 600, cursor: puno ? "not-allowed" : "pointer", opacity: puno ? 0.5 : 1, textAlign: "center" };
@@ -4137,19 +4143,15 @@ function UtovarStranica({ token }) {
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
           <div style={{ width: 38, height: 38, background: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 3, flexShrink: 0 }}><Camera size={20} color="var(--accent-ink)" /></div>
           <div style={{ minWidth: 0 }}>
-            <div className="f-mono" style={{ fontSize: 10, letterSpacing: "0.08em", color: "var(--ink-faint)", textTransform: "uppercase" }}>ECON D.O.O. · fotografije utovara</div>
-            <div className="f-display" style={{ fontSize: 18, fontWeight: 600 }}>{p ? `Otpremnica ${p.otpremnica.broj}` : "Fotografije utovara"}</div>
+            <div className="f-mono" style={{ fontSize: 10, letterSpacing: "0.08em", color: "var(--ink-faint)", textTransform: "uppercase" }}>ECON D.O.O. · {naslovMali}</div>
+            <div className="f-display" style={{ fontSize: 18, fontWeight: 600 }}>{naslov(p)}</div>
           </div>
         </div>
         {info.ucitava && <div style={{ fontSize: 14, color: "var(--ink-soft)" }}>Učitavanje…</div>}
         {info.greska && <div style={{ fontSize: 14, color: "var(--rust)", lineHeight: 1.5 }}>{info.greska}</div>}
         {p && (
           <>
-            <div style={{ fontSize: 14, lineHeight: 1.6, marginBottom: 14 }}>
-              <div><strong className="f-mono">{p.projekt.sifra}</strong>{p.projekt.naziv ? ` — ${p.projekt.naziv}` : ""}</div>
-              {p.primatelj && <div style={{ color: "var(--ink-soft)" }}>{p.otpremnica.vrsta === "kooperant" ? "Kooperant" : "Kupac"}: {p.primatelj}</div>}
-              <div style={{ color: "var(--ink-soft)" }}>Datum utovara: <strong style={{ color: "var(--ink)" }}>{fmtDate(p.danas)}</strong></div>
-            </div>
+            <div style={{ fontSize: 14, lineHeight: 1.6, marginBottom: 14 }}>{opis(p)}</div>
             <div style={{ display: "grid", gap: 10, marginBottom: 12 }}>
               <UtovarUlaz className="btn btn-primary" stil={stilGumba} capture disabled={!!puno} onOdabir={dodaj}><Camera size={26} /> Fotografiraj</UtovarUlaz>
               <UtovarUlaz className="btn btn-ghost" stil={{ ...stilGumba, minHeight: 48, fontSize: 16 }} multiple disabled={!!puno} onOdabir={dodaj}>Dodaj iz galerije</UtovarUlaz>
@@ -4157,9 +4159,10 @@ function UtovarStranica({ token }) {
             <div style={{ fontSize: 13, color: "var(--ink-soft)", marginBottom: 12 }}>
               Poslano slika: <strong style={{ color: "var(--ink)" }}>{ukupno}</strong> / {p.najvise}
               {zauzet && <span> · šaljem…</span>}
-              {puno && <span style={{ color: "var(--rust)" }}> · dosegnut najveći broj slika za ovu otpremnicu</span>}
+              {puno && <span style={{ color: "var(--rust)" }}> · dosegnut najveći dopušteni broj slika</span>}
               {poruka && <div style={{ marginTop: 4 }}>{poruka}</div>}
             </div>
+            {dodatak && dodatak({ p, ukupno, zauzet, osvjezi: ucitajInfo })}
             <div style={{ display: "grid", gap: 8 }}>
               {[...stavke].reverse().map((s) => (
                 <div key={s.kljuc} style={{ display: "flex", gap: 10, alignItems: "center", border: "1px solid var(--line)", padding: 6, borderRadius: 3 }}>
@@ -4176,9 +4179,7 @@ function UtovarStranica({ token }) {
                 </div>
               ))}
             </div>
-            <div style={{ fontSize: 12, color: "var(--ink-faint)", marginTop: 14, lineHeight: 1.5 }}>
-              Slike se spremaju uz projekt i datum utovara (u mapu projekta: Fotografije - Utovar). Kad završiš, samo zatvori stranicu.
-            </div>
+            <div style={{ fontSize: 12, color: "var(--ink-faint)", marginTop: 14, lineHeight: 1.5 }}>{uputa}</div>
           </>
         )}
       </div>
@@ -4186,13 +4187,75 @@ function UtovarStranica({ token }) {
   );
 }
 
+function UtovarStranica({ token }) {
+  return (
+    <FotoStranica apiVeza={`${API_URL}/api/utovar/veza/${encodeURIComponent(token)}`} naslovMali="fotografije utovara"
+      naslov={(p) => (p ? `Otpremnica ${p.otpremnica.broj}` : "Fotografije utovara")}
+      opis={(p) => (
+        <>
+          <div><strong className="f-mono">{p.projekt.sifra}</strong>{p.projekt.naziv ? ` — ${p.projekt.naziv}` : ""}</div>
+          {p.primatelj && <div style={{ color: "var(--ink-soft)" }}>{p.otpremnica.vrsta === "kooperant" ? "Kooperant" : "Kupac"}: {p.primatelj}</div>}
+          <div style={{ color: "var(--ink-soft)" }}>Datum utovara: <strong style={{ color: "var(--ink)" }}>{fmtDate(p.danas)}</strong></div>
+        </>
+      )}
+      uputa="Slike se spremaju uz projekt i datum utovara (u mapu projekta: Fotografije - Utovar). Kad završiš, samo zatvori stranicu." />
+  );
+}
+
+// Stranica s QR naljepnice na balkonu/poziciji (?montaza=<veza>): slikanje ZAVRŠENE pozicije i tipka "Označi montirano" (traži barem jednu sliku).
+function MontazaStranica({ token }) {
+  const API = `${API_URL}/api/montaza/veza/${encodeURIComponent(token)}`;
+  const [zauzetStatus, setZauzetStatus] = useState(false);
+  const [greskaStatusa, setGreskaStatusa] = useState("");
+  const postaviStatus = async (montirano, osvjezi) => {
+    setZauzetStatus(true); setGreskaStatusa("");
+    try {
+      const res = await fetch(`${API}/montirano`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ montirano }) });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || "Spremanje nije uspjelo.");
+      await osvjezi();
+    } catch (e) { setGreskaStatusa(e instanceof TypeError ? "Nema veze — pokušaj ponovno." : e.message || "Spremanje nije uspjelo."); }
+    setZauzetStatus(false);
+  };
+  const vrijemeMontaze = (iso) => `${fmtDate(iso)} ${new Date(iso).toLocaleTimeString("hr-HR", { hour: "2-digit", minute: "2-digit" })}`;
+  return (
+    <FotoStranica apiVeza={API} naslovMali="montaža — fotografije"
+      naslov={(p) => (p ? `Pozicija ${p.oznaka}` : "Montaža")}
+      opis={(p) => (
+        <>
+          <div><strong className="f-mono">{p.projekt.sifra}</strong>{p.projekt.naziv ? ` — ${p.projekt.naziv}` : ""}</div>
+          <div style={{ color: "var(--ink-soft)" }}>Slikaj završenu poziciju <strong style={{ color: "var(--ink)" }}>{p.oznaka}</strong>, zatim je označi kao montiranu.</div>
+        </>
+      )}
+      dodatak={({ p, ukupno, zauzet, osvjezi }) => (
+        <div style={{ border: `1px solid ${p.montirano ? "var(--green)" : "var(--line)"}`, background: p.montirano ? "#EAF6EF" : "var(--surface-alt)", borderRadius: 3, padding: 12, marginBottom: 12 }}>
+          {p.montirano ? (
+            <>
+              <div style={{ fontWeight: 700, color: "var(--green)", fontSize: 16 }}>✔ Montirano — {vrijemeMontaze(p.montirano)}</div>
+              <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} disabled={zauzetStatus} onClick={() => postaviStatus(false, osvjezi)}>Poništi (krivo označeno)</button>
+            </>
+          ) : (
+            <>
+              <button type="button" className="btn btn-primary" style={{ width: "100%", minHeight: 52, fontSize: 17, justifyContent: "center", opacity: zauzetStatus || zauzet || ukupno < 1 ? 0.45 : 1, cursor: zauzetStatus || zauzet || ukupno < 1 ? "not-allowed" : "pointer" }} disabled={zauzetStatus || zauzet || ukupno < 1} onClick={() => postaviStatus(true, osvjezi)}>
+                <CheckCircle2 size={22} /> Označi montirano
+              </button>
+              <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 6 }}>{ukupno < 1 ? "Prvo slikaj završenu poziciju." : zauzet ? "Pričekaj da se slike pošalju." : "Slike su poslane — možeš označiti montirano."}</div>
+            </>
+          )}
+          {greskaStatusa && <div style={{ fontSize: 13, color: "var(--rust)", marginTop: 6 }}>{greskaStatusa}</div>}
+        </div>
+      )}
+      uputa="Slike se spremaju uz projekt i poziciju (u mapu projekta: Fotografije - Montaža). Kad završiš, samo zatvori stranicu." />
+  );
+}
+
 // Fotografije utovara u detalju projekta: skupine po datumu utovara (najnovije prvo), sličice se dohvaćaju tek kad se skupina otvori.
 // Kartice nema dok projekt nema slika ili pozicija ne smije čitati otpremnice.
-function UtovarSlicica({ id, onKlik }) {
+function UtovarSlicica({ id, onKlik, osnova = "utovar" }) {
   const [url, setUrl] = useState("");
   useEffect(() => {
     let ugasen = false, objekt = "";
-    fetch(`${API_URL}/api/utovar/slika/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${localStorage.getItem("erp_token")}` } })
+    fetch(`${API_URL}/api/${osnova}/slika/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${localStorage.getItem("erp_token")}` } })
       .then((r) => (r.ok ? r.blob() : Promise.reject(new Error("nema slike"))))
       .then((b) => { if (ugasen) return; objekt = URL.createObjectURL(b); setUrl(objekt); })
       .catch(() => {});
@@ -4205,14 +4268,14 @@ function UtovarSlicica({ id, onKlik }) {
   );
 }
 
-function UtovarSlikaModal({ slika, onClose, onObrisano, showToast }) {
+function UtovarSlikaModal({ slika, onClose, onObrisano, showToast, osnova = "utovar", naslov }) {
   const [prikaz, setPrikaz] = useState({ url: "", original: false });
   const { url, original: jeOriginal } = prikaz;
   const [potvrda, setPotvrda] = useState(false);
   useEffect(() => {
     let ugasen = false, objekt = "";
     const zaglavlje = { headers: { Authorization: `Bearer ${localStorage.getItem("erp_token")}` } };
-    const dohvati = async (original) => { const r = await fetch(`${API_URL}/api/utovar/slika/${encodeURIComponent(slika.id)}${original ? "?original=1" : ""}`, zaglavlje); if (!r.ok) throw new Error("nema"); return r.blob(); };
+    const dohvati = async (original) => { const r = await fetch(`${API_URL}/api/${osnova}/slika/${encodeURIComponent(slika.id)}${original ? "?original=1" : ""}`, zaglavlje); if (!r.ok) throw new Error("nema"); return r.blob(); };
     (async () => {
       let original = true, blob;
       try { blob = await dohvati(true); } catch { original = false; try { blob = await dohvati(false); } catch { /* ništa za prikazati */ } }
@@ -4223,10 +4286,10 @@ function UtovarSlikaModal({ slika, onClose, onObrisano, showToast }) {
   }, [slika.id]);
   const stanje = stanjeSlike(slika);
   const obrisi = async () => {
-    try { await potrosniApi("DELETE", `/api/utovar/slika/${encodeURIComponent(slika.id)}`); showToast("Fotografija je uklonjena iz ERP-a."); onObrisano(); } catch (e) { showToast(e.message || "Uklanjanje nije uspjelo."); }
+    try { await potrosniApi("DELETE", `/api/${osnova}/slika/${encodeURIComponent(slika.id)}`); showToast("Fotografija je uklonjena iz ERP-a."); onObrisano(); } catch (e) { showToast(e.message || "Uklanjanje nije uspjelo."); }
   };
   return (
-    <Modal wide title={`Fotografija utovara — ${slika.otpremnica}`} onClose={onClose} footer={<>
+    <Modal wide title={naslov || `Fotografija utovara — ${slika.otpremnica}`} onClose={onClose} footer={<>
       <Btn onClick={onClose}>Zatvori</Btn>
       {potvrda ? <Btn variant="danger" icon={Trash2} onClick={obrisi}>Potvrdi uklanjanje</Btn> : <Btn variant="ghost" icon={Trash2} onClick={() => setPotvrda(true)}>Ukloni iz ERP-a</Btn>}
     </>}>
@@ -4283,6 +4346,209 @@ function FotografijeUtovaraKartica({ projekt, showToast }) {
         </div>
       ))}
       {velika && <UtovarSlikaModal slika={velika} showToast={showToast} onClose={() => setVelika(null)} onObrisano={() => { setVelika(null); ucitaj(); }} />}
+    </div>
+  );
+}
+
+// ===== Montaža po oznaci pozicije (npr. 52 balkona): kartica u detalju projekta =====
+// Popis oznaka se učita (lijepljenjem iz Excela/Worda), ERP izradi QR naljepnice, monter skenira naljepnicu na poziciji i slika je + označi "montirano"
+// (MontazaStranica); slike su u ERP-u i u mapi projekta na Z: (Fotografije - Montaža\<oznaka>). Podaci su u SQL tablicama (montaza.js), ne u projektu.
+const rijecPozicija = (n) => (n % 10 === 1 && n % 100 !== 11 ? "pozicija" : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? "pozicije" : "pozicija");
+const BOJE_POZICIJE = {
+  montirano: { pozadina: "#EAF6EF", rub: "var(--green)", tekst: "var(--green)" },
+  slike: { pozadina: "#FFF6DE", rub: "#F5D98A", tekst: "#8A6100" },
+  prazno: { pozadina: "var(--surface-alt)", rub: "var(--line-strong)", tekst: "var(--ink-soft)" },
+};
+
+function MontazaUvozModal({ projekt, pozicije, onClose, onGotovo, showToast }) {
+  const [tekst, setTekst] = useState("");
+  const [saljem, setSaljem] = useState(false);
+  const r = useMemo(() => parsirajOznake(tekst, pozicije), [tekst, pozicije]);
+  const spremi = async () => {
+    setSaljem(true);
+    try {
+      const o = await potrosniApi("PUT", `/api/montaza/projekt/${encodeURIComponent(projekt.id)}/pozicije`, { oznake: r.nove.map((x) => x.oznaka) });
+      showToast(`Učitano: ${o.dodano} ${rijecPozicija(o.dodano)}${o.preskoceno?.length ? `, preskočeno ${o.preskoceno.length}` : ""}.`);
+      onGotovo();
+    } catch (e) { showToast(e.message || "Učitavanje nije uspjelo."); setSaljem(false); }
+  };
+  return (
+    <Modal wide title={`Učitaj pozicije za montažu — ${projekt.sifra}`} onClose={onClose}
+      footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={Plus} disabled={saljem || r.nove.length === 0} onClick={spremi}>Učitaj {r.nove.length} {rijecPozicija(r.nove.length)}</Btn></>}>
+      <div style={{ fontSize: 13, color: "var(--ink-soft)", marginBottom: 8, lineHeight: 1.5 }}>
+        Zalijepi oznake pozicija (npr. balkona), jednu po retku — može stupac iz Excela ili Worda. Oznake koje već postoje i duplikati se preskaču.
+        Oznaka ide u naziv mape na Z: (Fotografije - Montaža\<strong>oznaka</strong>) i na QR naljepnicu.
+      </div>
+      <textarea className="textarea" rows={10} autoFocus value={tekst} onChange={(e) => setTekst(e.target.value)} placeholder={"A-1.OG\nA-2.OG\nB-3.OG\n…"} style={{ fontFamily: "var(--font-mono)" }} />
+      <div style={{ fontSize: 13, marginTop: 10 }}>
+        <strong>Nove oznake: {r.nove.length}</strong>
+        {r.preskoceno.length > 0 && <span style={{ color: "var(--ink-soft)" }}> · preskočeno: {r.preskoceno.length}</span>}
+      </div>
+      {r.nove.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6, maxHeight: 140, overflow: "auto" }}>
+          {r.nove.map((x) => <span key={x.mapa} className="badge badge-info f-mono" title={x.mapa !== x.oznaka ? `Naziv mape: ${x.mapa}` : ""}>{x.oznaka}</span>)}
+        </div>
+      )}
+      {r.preskoceno.length > 0 && (
+        <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 8 }}>
+          Preskočeno: {r.preskoceno.slice(0, 12).map((x) => `${x.oznaka} (${x.razlog})`).join(", ")}{r.preskoceno.length > 12 ? ` … i još ${r.preskoceno.length - 12}` : ""}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function MontazaPozicijaModal({ projekt, poz, slike, onClose, onPromjena, showToast }) {
+  const [velika, setVelika] = useState(null);
+  const [potvrdaBrisanja, setPotvrdaBrisanja] = useState(false);
+  const putanja = `${projekt.sifra} … \\Fotografije - Montaža\\${poz.mapa}\\`;
+  const promijeniStatus = async () => {
+    try { await potrosniApi("POST", `/api/montaza/projekt/${encodeURIComponent(projekt.id)}/pozicija/${encodeURIComponent(poz.mapa)}/montirano`, { montirano: !poz.montirano }); showToast(poz.montirano ? "Montaža poništena." : "Označeno kao montirano."); onPromjena(); }
+    catch (e) { showToast(e.message || "Promjena nije uspjela."); }
+  };
+  const obrisi = async () => {
+    try { await potrosniApi("DELETE", `/api/montaza/projekt/${encodeURIComponent(projekt.id)}/pozicija/${encodeURIComponent(poz.mapa)}`); showToast("Pozicija je uklonjena."); onPromjena(true); }
+    catch (e) { showToast(e.message || "Uklanjanje nije uspjelo."); setPotvrdaBrisanja(false); }
+  };
+  const moze = !poz.montirano && slike.length === 0;
+  return (
+    <>
+      <Modal wide title={`Pozicija ${poz.oznaka} — ${projekt.sifra}`} onClose={onClose} footer={<>
+        {moze && (potvrdaBrisanja ? <Btn variant="danger" icon={Trash2} onClick={obrisi}>Potvrdi uklanjanje pozicije</Btn> : <Btn variant="ghost" icon={Trash2} onClick={() => setPotvrdaBrisanja(true)}>Ukloni poziciju</Btn>)}
+        <Btn onClick={onClose}>Zatvori</Btn>
+      </>}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+          {poz.montirano
+            ? <span style={{ fontWeight: 700, color: "var(--green)" }}>✔ Montirano — {fmtDate(poz.montirano)} {new Date(poz.montirano).toLocaleTimeString("hr-HR", { hour: "2-digit", minute: "2-digit" })}</span>
+            : <span style={{ fontWeight: 600, color: "var(--ink-soft)" }}>Nije označeno kao montirano</span>}
+          <Btn variant={poz.montirano ? "ghost" : "primary"} icon={CheckCircle2} onClick={promijeniStatus}>{poz.montirano ? "Poništi montažu" : "Označi montirano"}</Btn>
+        </div>
+        {slike.length === 0 ? <EmptyState text="Za ovu poziciju još nema fotografija. Monter ih šalje skeniranjem QR naljepnice." /> : (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {slike.map((s) => (
+              <div key={s.id} style={{ width: 104 }}>
+                <UtovarSlicica id={s.id} osnova="montaza" onKlik={() => setVelika(s)} />
+                <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>
+                  {fmtDate(s.datum)} <span style={{ color: stanjeSlike(s) === "spremljeno" ? "var(--green)" : stanjeSlike(s) === "greska" ? "var(--rust)" : "var(--ink-faint)" }} title={stanjeSlike(s) === "greska" ? s.greskaZ : NAZIV_STANJA_SLIKE[stanjeSlike(s)]}>{stanjeSlike(s) === "spremljeno" ? "✔ Z:" : stanjeSlike(s) === "greska" ? "✘" : "…"}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {slike.some((s) => stanjeSlike(s) === "greska") && <div style={{ fontSize: 12, color: "var(--rust)", marginTop: 8 }}>{slike.find((s) => stanjeSlike(s) === "greska").greskaZ}</div>}
+        <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 10 }}>Mapa na serveru: <span className="f-mono">{putanja}</span></div>
+        {potvrdaBrisanja && <div style={{ fontSize: 12, color: "var(--rust)", marginTop: 6 }}>Uklanja se pozicija s popisa; QR naljepnica te pozicije prestaje raditi.</div>}
+      </Modal>
+      {velika && <UtovarSlikaModal slika={velika} osnova="montaza" naslov={`Fotografija — pozicija ${poz.oznaka}`} showToast={showToast} onClose={() => setVelika(null)} onObrisano={() => { setVelika(null); onPromjena(); }} />}
+    </>
+  );
+}
+
+// Ispis QR naljepnica: dva stupca na A4 (18 po stranici); QR otvara stranicu za slikanje te pozicije.
+function MontazaNaljepniceModal({ projekt, veze, onClose }) {
+  const [qr, setQr] = useState({});
+  useEffect(() => {
+    let ugasen = false;
+    (async () => {
+      const o = {};
+      for (const v of veze) o[v.token] = await QRCode.toDataURL(adresaMontaze(window.location.origin, window.location.pathname, v.token), { margin: 0, scale: 6, errorCorrectionLevel: "M" });
+      if (!ugasen) setQr(o);
+    })().catch(() => {});
+    return () => { ugasen = true; };
+  }, [veze]);
+  const stranice = rasporediNaljepnice(veze);
+  const spremno = Object.keys(qr).length === veze.length;
+  return (
+    <Modal wide title={`QR naljepnice za montažu — ${projekt.sifra}`} onClose={onClose} footer={<><Btn onClick={onClose}>Zatvori</Btn><Btn variant="primary" icon={Save} disabled={!spremno} onClick={() => ispisPdf(`QR naljepnice ${projekt.sifra}`)}>Ispis / Spremi kao PDF</Btn></>}>
+      <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 10 }}>{veze.length} {rijecPozicija(veze.length)} na {stranice.length} {stranice.length === 1 ? "stranici" : "stranice"} (A4, dva stupca). Isprintaj, izreži i zalijepi na poziciju — monter skenira mobitelom.</div>
+      <div className="print-doc" style={{ background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
+        {stranice.map((st, i) => (
+          <div key={i} style={{ breakAfter: i < stranice.length - 1 ? "page" : "auto", pageBreakAfter: i < stranice.length - 1 ? "always" : "auto", marginBottom: i < stranice.length - 1 ? 18 : 0 }}>
+            <div style={{ fontSize: 10.5, color: "#555", marginBottom: 6, display: "flex", justifyContent: "space-between" }}>
+              <span><strong>{projekt.sifra}</strong>{projekt.naziv ? ` — ${projekt.naziv}` : ""} · QR naljepnice za montažu</span><span>stranica {i + 1}/{stranice.length}</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3mm" }}>
+              {st.map((v) => (
+                <div key={v.token} style={{ display: "flex", alignItems: "center", gap: "4mm", border: "1px dashed #888", padding: "2mm 3mm", height: "25mm", boxSizing: "border-box", breakInside: "avoid" }}>
+                  {qr[v.token] ? <img src={qr[v.token]} alt={`QR ${v.oznaka}`} style={{ width: "21mm", height: "21mm", flexShrink: 0 }} /> : <div style={{ width: "21mm", height: "21mm", flexShrink: 0 }} />}
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 21, fontWeight: 700, lineHeight: 1.1 }}>{v.oznaka}</div>
+                    <div style={{ fontSize: 9, color: "#333", marginTop: 3, lineHeight: 1.25 }}>{projekt.sifra}{projekt.naziv ? ` · ${projekt.naziv}` : ""}</div>
+                    <div style={{ fontSize: 8, color: "#666", marginTop: 2 }}>Skeniraj i slikaj završenu poziciju</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+function MontazaKartica({ projekt, showToast }) {
+  const [podaci, setPodaci] = useState(null);
+  const [uvoz, setUvoz] = useState(false);
+  const [odabrana, setOdabrana] = useState(null); // mapa odabrane pozicije
+  const [naljepnice, setNaljepnice] = useState(null);
+  const [filter, setFilter] = useState("sve"); // sve | nemontirano | bezslika
+  const ucitaj = async () => { try { setPodaci(await potrosniApi("GET", `/api/montaza/projekt/${encodeURIComponent(projekt.id)}`)); } catch { setPodaci({ pozicije: [], slike: [], nedostupno: true }); } };
+  useEffect(() => { ucitaj(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [projekt.id]);
+  const s = useMemo(() => sazetakPozicija(podaci?.pozicije, podaci?.slike), [podaci]);
+  if (!podaci || podaci.nedostupno) return null;
+  const otvoriNaljepnice = async () => {
+    try { const r = await potrosniApi("GET", `/api/montaza/projekt/${encodeURIComponent(projekt.id)}/veze`); setNaljepnice(r.veze || []); }
+    catch (e) { showToast(e.message || "Naljepnice se nisu mogle pripremiti."); }
+  };
+  const poslije = (zatvori) => { if (zatvori) setOdabrana(null); ucitaj(); };
+  const prikazane = s.redovi.filter((r) => (filter === "nemontirano" ? !r.montirano : filter === "bezslika" ? r.brojSlika === 0 : true));
+  const poz = odabrana ? s.redovi.find((r) => r.mapa === odabrana) : null;
+  if (s.ukupno === 0) {
+    return (
+      <div className="card" style={{ padding: "10px 14px", marginBottom: 16, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <Camera size={16} color="var(--steel)" />
+        <strong style={{ fontSize: 14 }}>Montaža po pozicijama</strong>
+        <span style={{ fontSize: 12, color: "var(--ink-soft)", flex: 1, minWidth: 200 }}>Učitaj oznake pozicija (npr. balkona): ERP izradi QR naljepnice za montere, fotografije završenih pozicija i status montirano.</span>
+        <Btn size="sm" icon={Plus} onClick={() => setUvoz(true)}>Učitaj pozicije</Btn>
+        {uvoz && <MontazaUvozModal projekt={projekt} pozicije={s.redovi} showToast={showToast} onClose={() => setUvoz(false)} onGotovo={() => { setUvoz(false); ucitaj(); }} />}
+      </div>
+    );
+  }
+  const postotak = Math.round((s.montirano / s.ukupno) * 100);
+  return (
+    <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+        <Camera size={16} color="var(--steel)" />
+        <strong style={{ fontSize: 14 }}>Montaža po pozicijama</strong>
+        <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>montirano <strong style={{ color: "var(--ink)" }}>{s.montirano}/{s.ukupno}</strong> · fotografije za {s.sSlikama}/{s.ukupno}</span>
+        <span style={{ flex: 1 }} />
+        <Btn size="sm" icon={Printer} onClick={otvoriNaljepnice}>Ispis QR naljepnica</Btn>
+        <Btn size="sm" icon={Plus} onClick={() => setUvoz(true)}>Dodaj pozicije</Btn>
+      </div>
+      <div style={{ height: 8, background: "var(--line)", borderRadius: 4, overflow: "hidden", marginBottom: 10 }}>
+        <div style={{ height: "100%", width: `${postotak}%`, background: postotak >= 100 ? "var(--green)" : "var(--steel)" }} />
+      </div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}>
+        {[["sve", `Sve (${s.ukupno})`], ["nemontirano", `Nemontirane (${s.ukupno - s.montirano})`], ["bezslika", `Bez fotografija (${s.bezSlika.length})`]].map(([k, naziv]) => (
+          <button key={k} type="button" className={`btn btn-sm ${filter === k ? "btn-primary" : "btn-ghost"}`} onClick={() => setFilter(k)}>{naziv}</button>
+        ))}
+        <span style={{ fontSize: 11.5, color: "var(--ink-faint)", marginLeft: 6 }}>zeleno = montirano · žuto = ima fotografije · sivo = još ništa</span>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {prikazane.length === 0 && <span style={{ fontSize: 13, color: "var(--ink-soft)" }}>Nema pozicija za ovaj filter.</span>}
+        {prikazane.map((r) => {
+          const b = BOJE_POZICIJE[r.stanje];
+          return (
+            <button key={r.mapa} type="button" onClick={() => setOdabrana(r.mapa)} title={`${r.oznaka}: ${r.stanje === "montirano" ? "montirano" : r.stanje === "slike" ? "ima fotografije, nije označeno montirano" : "još ništa"}${r.brojSlika ? ` · ${r.brojSlika} ${rijecSlika(r.brojSlika)}` : ""}`}
+              style={{ background: b.pozadina, border: `1px solid ${b.rub}`, color: b.tekst, borderRadius: 3, padding: "6px 10px", cursor: "pointer", fontFamily: "var(--font-mono)", fontSize: 12.5, fontWeight: 600, minWidth: 82, textAlign: "center" }}>
+              {r.oznaka}{r.montirano ? " ✔" : ""}{r.brojSlika ? <span style={{ fontWeight: 500, opacity: 0.85 }}> · {r.brojSlika}</span> : null}
+            </button>
+          );
+        })}
+      </div>
+      {uvoz && <MontazaUvozModal projekt={projekt} pozicije={s.redovi} showToast={showToast} onClose={() => setUvoz(false)} onGotovo={() => { setUvoz(false); ucitaj(); }} />}
+      {naljepnice && <MontazaNaljepniceModal projekt={projekt} veze={naljepnice} onClose={() => setNaljepnice(null)} />}
+      {poz && <MontazaPozicijaModal projekt={projekt} poz={poz} slike={(podaci.slike || []).filter((x) => x.mapa === poz.mapa)} showToast={showToast} onClose={() => setOdabrana(null)} onPromjena={poslije} />}
     </div>
   );
 }
@@ -11202,6 +11468,8 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
       <TerminiIsporukeKartica projekt={projekt} db={db} patchProjekt={patchProjekt} showToast={showToast || (() => {})} mozeMijenjati mojId={mojId} />
 
       <FotografijeUtovaraKartica projekt={projekt} showToast={showToast || (() => {})} />
+
+      <MontazaKartica projekt={projekt} showToast={showToast || (() => {})} />
 
       {/* ===== Tipski projekt po normativu (kupaonice i sl.) ===== */}
       <div className="card" style={{ padding: 14, marginBottom: 16 }}>

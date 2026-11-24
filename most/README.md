@@ -50,7 +50,7 @@ spremi u `<mapa projekta>\Fotografije - Utovar\<datum utovara, npr. 2026-11-24>\
 čije ime počinje šifrom `RN …`); **mapa projekta se nikad ne stvara sama** — ako je nema (ili ih ima više), ERP u kartici
 "Fotografije utovara" pokazuje grešku i most pokuša ponovno nakon 10 minuta. Postojeća datoteka se nikad ne prepisuje (ista slika =
 već spremljeno, drukčija = `_v2`), prihvaćaju se samo JPEG slike i samo dogovoreni oblik naziva. U probnom načinu (`MOST_PROBNO=1`)
-slike idu u `proba-izlaz\utovar`, a ERP ih ne označava kao spremljene. Nakon objave nove verzije mosta treba ga ponovno pokrenuti.
+slike idu u `proba-izlaz\foto`, a ERP ih ne označava kao spremljene. Nakon objave nove verzije mosta treba ga ponovno pokrenuti.
 
 ## Ograničenja prve verzije
 Samo isporuke u EU bez PDV-a (kategorija K), valuta EUR, bez popusta na stavkama; domaće račune šalje Konplast.

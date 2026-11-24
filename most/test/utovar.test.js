@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spremiUtovarSliku, obradiUtovar, MAPA_UTOVARA } from "../lib/utovar.js";
+import { spremiUtovarSliku, spremiMontaznuSliku, obradiUtovar, obradiMontazu, MAPA_UTOVARA, MAPA_MONTAZE } from "../lib/utovar.js";
 import { Greska } from "../lib/pretvori.js";
 
 let neuspjeh = 0;
@@ -80,6 +80,57 @@ try {
   javljeno.length = 0;
   await obradiUtovar(api, bajtovi, { ...okolina, probno: true });
   provjeri(javljeno.every((x) => x.tijelo.status === "greska") && /Probni/.test(javljeno[0].tijelo.poruka), "probni način nikad ne javlja 'spremljeno' (ERP ne smije misliti da je slika na Z:)");
+
+  // ===== Montaža: mapa po oznaci pozicije =====
+  provjeri(MAPA_MONTAZE === "Fotografije - Montaža", "naziv mape montaže je 'Fotografije - Montaža'");
+  const mont = (o = {}) => ({ sifra: "RN 99-01", mapa: "", pozicija: "J-3.OG", datum: "2026-11-24", naziv: "2026-11-24_J-3.OG_01.jpg", ...o });
+  r = spremiMontaznuSliku(mont(), JPEG("m1"), okolina);
+  const mOcekivana = path.join(korijen, "RN 99-01_Test konstrukcija", MAPA_MONTAZE, "J-3.OG", "2026-11-24_J-3.OG_01.jpg");
+  provjeri(r.putanja === mOcekivana && fs.existsSync(mOcekivana) && !r.vecPostojala, "montaža: slika ide u <mapa projekta>/Fotografije - Montaža/<oznaka>/<datum>_<oznaka>_<nn>.jpg");
+  r = spremiMontaznuSliku(mont(), JPEG("m1"), okolina);
+  provjeri(r.vecPostojala === true && fs.readdirSync(path.dirname(mOcekivana)).length === 1, "montaža: ista slika ponovno = već postoji, bez duplikata");
+  r = spremiMontaznuSliku(mont(), JPEG("druga"), okolina);
+  provjeri(r.putanja.endsWith("_01_v2.jpg") && fs.readFileSync(mOcekivana).equals(JPEG("m1")), "montaža: drukčija slika istog naziva ne prepisuje original (_v2)");
+  r = spremiMontaznuSliku(mont({ pozicija: "A-1.OG", naziv: "2026-11-25_A-1.OG_02.jpg", datum: "2026-11-25" }), JPEG("m2"), okolina);
+  provjeri(r.putanja.includes(path.join(MAPA_MONTAZE, "A-1.OG")) && r.putanja.endsWith("2026-11-25_A-1.OG_02.jpg"), "montaža: druga pozicija = vlastita mapa (stvara se ako ne postoji)");
+  e = baci(() => spremiMontaznuSliku(mont({ sifra: "RN 99-77", naziv: "2026-11-24_J-3.OG_01.jpg" }), JPEG("m"), okolina));
+  provjeri(e instanceof Greska && /nema mape/.test(e.message) && !fs.existsSync(path.join(korijen, "RN 99-77")), "montaža: nema mape projekta → greška, ništa se ne stvara");
+  for (const [opis, o] of [
+    ["oznaka s putanjom", { pozicija: "../x", naziv: "2026-11-24_../x_01.jpg" }],
+    ["oznaka s kosom crtom", { pozicija: "a/b", naziv: "2026-11-24_a/b_01.jpg" }],
+    ["rezervirano ime Windowsa", { pozicija: "CON", naziv: "2026-11-24_CON_01.jpg" }],
+    ["oznaka završava točkom", { pozicija: "J-3.", naziv: "2026-11-24_J-3._01.jpg" }],
+    ["prazna oznaka", { pozicija: "", naziv: "2026-11-24__01.jpg" }],
+    ["naziv ne odgovara oznaci", { naziv: "2026-11-24_A-1.OG_01.jpg" }],
+    ["naziv ne odgovara datumu", { naziv: "2026-11-23_J-3.OG_01.jpg" }],
+    ["naziv s putanjom", { naziv: "..\\2026-11-24_J-3.OG_01.jpg" }],
+    ["naziv bez rednog broja", { naziv: "2026-11-24_J-3.OG_x.jpg" }],
+    ["naziv koji nije .jpg", { naziv: "2026-11-24_J-3.OG_01.exe" }],
+    ["nemoguć datum", { datum: "2026-13-40", naziv: "2026-13-40_J-3.OG_01.jpg" }],
+  ]) provjeri(baci(() => spremiMontaznuSliku(mont(o), JPEG("m"), okolina)) instanceof Greska, "montaža: odbija se — " + opis);
+  provjeri(baci(() => spremiMontaznuSliku(mont(), Buffer.from("<html>nije slika</html>"), okolina)) instanceof Greska, "montaža: sadržaj koji nije JPEG se odbija");
+  r = spremiMontaznuSliku(mont({ sifra: "RN 99-55", naziv: "2026-11-24_J-3.OG_09.jpg" }), JPEG("p"), { ...okolina, probno: true });
+  provjeri(r.putanja.startsWith(proba) && !fs.existsSync(path.join(korijen, "RN 99-55")), "montaža: probni način piše u proba-izlaz");
+  r = spremiMontaznuSliku(mont({ sifra: "RN 99-03", mapa: eksplicitna, naziv: "2026-11-24_J-3.OG_05.jpg" }), JPEG("c"), okolina);
+  provjeri(r.putanja.startsWith(path.join(eksplicitna, MAPA_MONTAZE, "J-3.OG")), "montaža: mapa upisana u ERP-u ima prednost");
+
+  const javljenoM = [];
+  const redM = [
+    { id: "m1", sifra: "RN 99-01", mapa: "", pozicija: "B-3.OG", datum: "2026-11-26", naziv: "2026-11-26_B-3.OG_01.jpg" },
+    { id: "m2", sifra: "RN 99-77", mapa: "", pozicija: "B-3.OG", datum: "2026-11-26", naziv: "2026-11-26_B-3.OG_02.jpg" },
+    { id: "m3", sifra: "RN 99-01", mapa: "", pozicija: "B-3.OG", datum: "2026-11-26", naziv: "2026-11-26_B-3.OG_03.jpg" },
+  ];
+  const apiM = async (metoda, ruta, tijelo) => { if (metoda === "GET") return { slike: ruta.includes("/montaza/") ? redM : [] }; javljenoM.push({ ruta, tijelo }); return { ok: true }; };
+  const bajtoviM = async (ruta) => (ruta.endsWith("/m3") ? Buffer.from("nije jpeg") : JPEG(ruta));
+  const nM = await obradiMontazu(apiM, bajtoviM, okolina);
+  const rezM = (id) => javljenoM.find((x) => x.ruta.includes("/" + id + "/rezultat"))?.tijelo;
+  provjeri(nM === 3 && javljenoM.length === 3 && javljenoM.every((x) => x.ruta.startsWith("/api/most/montaza/slika/")), "montaža: svaka slika iz reda dobiva rezultat na ispravnoj ruti");
+  provjeri(rezM("m1")?.status === "spremljeno" && fs.existsSync(rezM("m1").putanja) && rezM("m1").putanja.includes(path.join(MAPA_MONTAZE, "B-3.OG")), "montaža: uspjeh javlja 'spremljeno' s putanjom");
+  provjeri(rezM("m2")?.status === "greska" && /nema mape/.test(rezM("m2").poruka), "montaža: nema mape projekta → greška s razlogom");
+  provjeri(rezM("m3")?.status === "greska" && /JPEG/.test(rezM("m3").poruka), "montaža: oštećena slika → greška, ostale nisu zaustavljene");
+  javljenoM.length = 0;
+  await obradiMontazu(apiM, bajtoviM, { ...okolina, probno: true });
+  provjeri(javljenoM.every((x) => x.tijelo.status === "greska") && /Probni/.test(javljenoM[0].tijelo.poruka), "montaža: probni način nikad ne javlja 'spremljeno'");
 } catch (e) {
   console.error(e);
   neuspjeh++;

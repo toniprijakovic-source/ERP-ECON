@@ -222,4 +222,4 @@ function registrirajUtovar(app, d) {
   return { pripremi };
 }
 
-module.exports = { registrirajUtovar, napraviToken, provjeriToken, vezaVrijedi, nazivDatoteke, sigurnoUNaziv, dekodiraj, jeJpeg, zagrebDatum, VEZA_DANA, MAX_PO_OTPREMNICI, ZADRZI_ORIGINAL_DANA };
+module.exports = { registrirajUtovar, napraviToken, provjeriToken, vezaVrijedi, nazivDatoteke, sigurnoUNaziv, dekodiraj, jeJpeg, zagrebDatum, VEZA_DANA, MAX_PO_OTPREMNICI, ZADRZI_ORIGINAL_DANA, MAX_SLIKA, MAX_SLICICA, BRISANJE_VLASTITE_MIN };
