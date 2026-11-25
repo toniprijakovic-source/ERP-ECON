@@ -11,6 +11,7 @@ import { popisXRechnunga, obrisiXRechnung } from "./lib/xrechnung-popis.js";
 import { korijeniProjekata } from "./lib/mapa.js";
 import { obradiUtovar, obradiMontazu } from "./lib/utovar.js";
 import { obradiNesukladnosti } from "./lib/nesukladnosti.js";
+import { procitajMapiranja, osigurajPogone, opisPogona } from "./lib/pogoni.js";
 
 const mapaMosta = path.dirname(fileURLToPath(import.meta.url));
 try { process.loadEnvFile(path.join(mapaMosta, ".env")); } catch { /* .env nije obavezan ako su varijable već postavljene */ }
@@ -79,11 +80,28 @@ async function obradiZadatak(z) {
   await api("POST", `/api/most/zadaci/${z.id}/rezultat`, rezultat);
 }
 
+// Na serveru (servisni račun bez spojenih pogona) most sam spaja Z: za svoju sesiju — vidi lib/pogoni.js i MAPIRAJ_POGONE u .env.
+// Provjera najviše jednom u minuti; u zapisnik ide samo promjena stanja.
+let mapiranja = [];
+try { mapiranja = procitajMapiranja(process.env.MAPIRAJ_POGONE); } catch (e) { log(e.message); process.exit(1); }
+const stanjePogona = new Map();
+let zadnjaProvjeraPogona = 0;
+const provjeriPogone = () => {
+  if (!mapiranja.length || Date.now() - zadnjaProvjeraPogona < 60_000) return;
+  zadnjaProvjeraPogona = Date.now();
+  for (const r of osigurajPogone(mapiranja)) {
+    const opis = opisPogona(r);
+    if (stanjePogona.get(r.slovo) !== opis) log(opis);
+    stanjePogona.set(r.slovo, opis);
+  }
+};
+
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(signal, () => { log(`Primljen signal ${signal} — most staje.`); process.exit(0); });
-log(`ECON most pokrenut. ERP: ${API} | Korijen: ${okolina.korijen.join(" ; ")} | Java: ${okolina.java}${okolina.probno ? " | PROBNI NAČIN" : ""}`);
+log(`ECON most pokrenut. ERP: ${API} | Korijen: ${okolina.korijen.join(" ; ")} | Java: ${okolina.java}${okolina.probno ? " | PROBNI NAČIN" : ""}${mapiranja.length ? ` | Pogoni: ${mapiranja.map((m) => `${m.slovo}=${m.cilj}`).join(" ; ")}` : ""}`);
 let greskaPrijavljena = false;
 let greskaUtovaraPrijavljena = false;
 for (;;) {
+  provjeriPogone();
   try {
     const { zadaci } = await api("GET", "/api/most/zadaci");
     greskaPrijavljena = false;

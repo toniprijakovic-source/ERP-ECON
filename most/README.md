@@ -58,6 +58,14 @@ ERP (Kontrola kvalitete → Nesukladnosti) izrađuje PDF obrasca "Nesukladnosti 
 most stvara samo podmape godine i nesukladnosti. PDF se zamjenjuje novijom verzijom istog zapisa (ako je otvoren u pregledniku PDF-a, most pokuša ponovno za
 10 minuta), slike se nikad ne prepisuju (`_v2`). Nesukladnosti uvezene iz starog Worda ne idu na Z: dok se u ERP-u ne klikne "Spremi na Z:".
 
+## Na serveru (servisni račun)
+ERP i postavke čuvaju putanje s pogonom `Z:` (polje "Mapa projekta", `mapaNesukladnosti`). Servisni račun na serveru nema spojen Z:,
+zato u `.env` ide `MAPIRAJ_POGONE=Z:=//ECON-R550/econ` (dijeljena mapa → `net use … /persistent:no`) ili `Z:=D:/econ` (lokalna mapa → `subst`).
+Most spoji pogon samo za svoju sesiju, provjerava ga svake minute i u zapisnik upiše samo promjenu stanja; postojeći pogon ne dira.
+Prije preseljenja pokrenuti `node provjera-prava.js` POD RAČUNOM MOSTA (instaliraj-zadatke-na-serveru.ps1 `-Sto provjera`): spoji pogone,
+čita korijene, u jednoj projektnoj mapi i u mapi nesukladnosti stvori pa obriše privremenu mapu, postojeću tuđu datoteku samo otvori za
+pisanje (ništa ne upisuje), pokrene Javu i provjeri vezu s ERP-om (`/api/vrijeme`, bez preuzimanja zadataka). Izvještaj: `provjera-prava.txt`.
+
 ## Ograničenja prve verzije
 Samo isporuke u EU bez PDV-a (kategorija K), valuta EUR, bez popusta na stavkama; domaće račune šalje Konplast.
 
