@@ -171,7 +171,7 @@ function izdajZaostale(stanje, { sifre, danas }) {
   }
   return { materijali, rezervacije: rezervacije.filter((r) => Number(r.kolicina) > EPS), izdatnice, izvjestaj };
 }
-module.exports = { izdajZaostale };
+module.exports = { izdajZaostale, redoviIzDimenzija, kljucFormata, kljucFormataIzTeksta, potrosnjaPoMaticnim, preostaloMaticnog, sljedeciBroj, opisDuzine };
 
 if (require.main === module) {
   require("dotenv").config({ path: path.join(__dirname, ".env") });
