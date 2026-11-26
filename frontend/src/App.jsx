@@ -3528,14 +3528,15 @@ function StanjeServeraTab({ db, showToast, mozeMijenjati }) {
     } catch { setGreska("Nema veze s poslužiteljem."); }
   };
   useEffect(() => { ucitaj(); const t = setInterval(ucitaj, 30000); return () => clearInterval(t); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  // polje: "primateljId" (upozorenja servera) ili "laserPrimateljId" (promjene u mapama Laser za limove/profile); šalje se samo to polje.
+  // polje: "primateljId" (upozorenja servera, jedna osoba) ili "laserPrimatelji" (promjene u mapama Laser za limove/profile, popis do dvije osobe);
+  // šalje se samo to polje.
   const spremiPrimatelja = async (id, polje = "primateljId") => {
     setSprema(true);
     try {
-      const res = await fetch(`${API_URL}/api/server/postavke`, { method: "PUT", headers: zaglavlje(), body: JSON.stringify({ [polje]: id || null }) });
+      const res = await fetch(`${API_URL}/api/server/postavke`, { method: "PUT", headers: zaglavlje(), body: JSON.stringify({ [polje]: polje === "laserPrimatelji" ? id : id || null }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { showToast(data.error || "Spremanje nije uspjelo."); return; }
-      if (polje === "laserPrimateljId") showToast(id ? "Spremljeno — promjene u mapama za laser dolaze kao zadatak u zvonce." : "Spremljeno — promjene za laser vide se samo u projektu.");
+      if (polje === "laserPrimatelji") showToast(id.length ? "Spremljeno — promjene u mapama za laser dolaze kao zadatak u zvonce." : "Spremljeno — promjene za laser vide se samo u projektu.");
       else showToast(id ? "Spremljeno — upozorenja dolaze kao zadatak u zvonce." : "Spremljeno — upozorenja se samo prikazuju ovdje.");
       await ucitaj();
     } catch { showToast("Nema veze s poslužiteljem."); } finally { setSprema(false); }
@@ -3546,7 +3547,14 @@ function StanjeServeraTab({ db, showToast, mozeMijenjati }) {
   const iz = st.izvjestaj;
   const kop = iz?.kopije;
   const obnova = kop?.obnova;
-  const zaposlenici = [...(db.zaposlenici || [])].filter((z) => z.status !== "Neaktivan" || z.id === st.postavke?.primateljId || z.id === st.postavke?.laserPrimateljId).sort((a, b) => `${a.prezime} ${a.ime}`.localeCompare(`${b.prezime} ${b.ime}`, "hr"));
+  const laserPrimatelji = Array.isArray(st.postavke?.laserPrimatelji) ? st.postavke.laserPrimatelji : [];
+  const zaposlenici = [...(db.zaposlenici || [])].filter((z) => z.status !== "Neaktivan" || z.id === st.postavke?.primateljId || laserPrimatelji.includes(z.id)).sort((a, b) => `${a.prezime} ${a.ime}`.localeCompare(`${b.prezime} ${b.ime}`, "hr"));
+  // Izbor osobe za laser na mjestu i (0 ili 1): prazno uklanja osobu, ista osoba se ne ponavlja.
+  const promijeniLaser = (i, id) => {
+    const novi = [laserPrimatelji[0] || "", laserPrimatelji[1] || ""];
+    novi[i] = id;
+    spremiPrimatelja([...new Set(novi.filter(Boolean))], "laserPrimatelji");
+  };
   const struktura = st.struktura || {};
   const bezMape = st.mape?.nepronadjene || [];
   const naslov = (t) => <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600, marginBottom: 8 }}>{t}</h3>;
@@ -3700,14 +3708,16 @@ function StanjeServeraTab({ db, showToast, mozeMijenjati }) {
           {!mozeMijenjati && <span style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Nemate ovlaštenje za izmjenu.</span>}
         </div>
         <div style={sitno}>Odabrana osoba dobiva zadatak u zvoncu (od "ERP") kad {OPIS_UPOZORENJA_SERVERA}. Zadatak se sam zatvori kad se problem riješi. Ako ga osoba zatvori ranije, a problem ostane, novi zadatak dolazi nakon 24 sata.</div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 14 }}>
-          <span style={{ fontSize: 12.5, fontWeight: 600 }}>Promjene u mapama za laser:</span>
-          <select className="select" style={{ maxWidth: 320 }} value={st.postavke?.laserPrimateljId || ""} disabled={!mozeMijenjati || sprema} onChange={(e) => spremiPrimatelja(e.target.value, "laserPrimateljId")}>
-            <option value="">— nitko (promjene samo u projektu) —</option>
-            {zaposlenici.map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
-          </select>
+        <div style={{ fontSize: 12.5, fontWeight: 600, marginTop: 14, marginBottom: 6 }}>Promjene u mapama za laser (najviše dvije osobe)</div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          {[0, 1].map((i) => (
+            <select key={i} className="select" style={{ maxWidth: 280 }} value={laserPrimatelji[i] || ""} disabled={!mozeMijenjati || sprema || (i === 1 && !laserPrimatelji[0])} onChange={(e) => promijeniLaser(i, e.target.value)}>
+              <option value="">{i === 0 ? "— nitko (promjene samo u projektu) —" : "— bez druge osobe —"}</option>
+              {zaposlenici.filter((z) => z.id !== laserPrimatelji[1 - i]).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+            </select>
+          ))}
         </div>
-        <div style={sitno}>Kad se u mapi projekta na serveru u "Laser za limove" ili "Laser za profile" doda, promijeni ili obriše datoteka, odabrana osoba dobije jedan zadatak u zvoncu po projektu s popisom promjena. Izmjene nacrta (Od kupca, Za proizvodnju) idu voditelju projekta i voditelju proizvodnje.</div>
+        <div style={sitno}>Kad se u mapi projekta na serveru u "Laser za limove" ili "Laser za profile" doda, promijeni ili obriše datoteka, svaka odabrana osoba dobije jedan zadatak u zvoncu po projektu s popisom promjena. Izmjene nacrta (Od kupca, Za proizvodnju) idu voditelju projekta i voditelju proizvodnje.</div>
       </div>
     </div>
   );

@@ -6,7 +6,7 @@
 // polje prazno). Greška (npr. Z: nije spojen) se pamti i most pokušava ponovno.
 //
 // PRAĆENJE MAPA: most svakih nekoliko minuta šalje sažetak mapa aktivnih projekata (kartica Dokumenti u projektu) i promjene:
-//   laser    — mape "Laser za limove" / "Laser za profile": zadatak u zvoncu osobi odabranoj u Direktorski pregled → Stanje servera,
+//   laser    — mape "Laser za limove" / "Laser za profile": zadatak u zvoncu osobama (najviše dvije) odabranima u Direktorski pregled → Stanje servera,
 //   nacrti   — "Od kupca" i "Za proizvodnju" (nove revizije): zadatak voditelju projekta i voditeljima proizvodnje; potvrđuje se u kartici
 //              Dokumenti uz napomenu što se promijenilo i koje naloge pogađa,
 //   odobrenje — nove mape "Poslano/Odgovor/Freigabe DATUM": samo zapis u kartici (bez zvonca).
@@ -62,7 +62,7 @@ function opisDogadaja(d, sifra = "") {
 // osoba koja prima upozorenja servera); odobrenje → nitko (samo zapis).
 function primateljiDogadaja(d, projekt, zaposlenici, pozicije, postavke = {}) {
   const aktivni = new Map((zaposlenici || []).filter((z) => z && z.status !== "Neaktivan").map((z) => [z.id, z]));
-  if (d.vrsta === "laser") return postavke.laserPrimateljId && aktivni.has(postavke.laserPrimateljId) ? [postavke.laserPrimateljId] : [];
+  if (d.vrsta === "laser") return [...new Set(Array.isArray(postavke.laserPrimatelji) ? postavke.laserPrimatelji : [])].filter((id) => aktivni.has(id));
   if (d.vrsta !== "nacrti") return [];
   const vodPro = new Set((pozicije || []).filter((p) => String(p?.naziv || "").trim().toLowerCase() === "voditelj proizvodnje").map((p) => p.id));
   const ids = [projekt?.voditeljId, ...[...aktivni.values()].filter((z) => vodPro.has(z.pozicijaId)).map((z) => z.id)].filter((id) => id && aktivni.has(id));

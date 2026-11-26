@@ -327,7 +327,7 @@ function registrirajMost(app, d) {
       most: { ...stanjeMosta(), zadnjiKontakt: kontakt },
       izvjestaj: st.izvjestaj?.vrijednost || null, izvjestajPrimljen: st.izvjestaj?.azurirano || null, izvjestajSvjez: !!svjezi,
       upozorenja: izracunajUpozorenja({ kontakt, izvjestaj: svjezi, sada }),
-      postavke: { primateljId: st.postavke?.vrijednost?.primateljId || null, laserPrimateljId: st.postavke?.vrijednost?.laserPrimateljId || null },
+      postavke: { primateljId: st.postavke?.vrijednost?.primateljId || null, laserPrimatelji: Array.isArray(st.postavke?.vrijednost?.laserPrimatelji) ? st.postavke.vrijednost.laserPrimatelji : [] },
       mape: st.mape?.vrijednost || null, mapeUpisane: Array.isArray(st.mapeUpisane?.vrijednost) ? st.mapeUpisane.vrijednost : [],
       zadaci24h: Object.fromEntries(zadaci.map((z) => [z.status, Number(z.n)])),
       // Struktura mapa novih projekata (dokumenti-projekta.js): od kada vrijedi, koliko je napravljeno i greške koje čekaju ponovni pokušaj.
@@ -339,19 +339,24 @@ function registrirajMost(app, d) {
       },
     });
   }));
-  // Postavke: tko prima upozorenja servera (primateljId) i obavijesti o promjenama u mapama "Laser za limove/profile" (laserPrimateljId).
-  // Šalje se samo polje koje se mijenja; drugo ostaje kakvo je bilo.
+  // Postavke: tko prima upozorenja servera (primateljId) i obavijesti o promjenama u mapama "Laser za limove/profile" (laserPrimatelji,
+  // najviše dvije osobe). Šalje se samo polje koje se mijenja; drugo ostaje kakvo je bilo.
   app.put("/api/server/postavke", autentikacija, obradi(async (req, res) => {
     if (!(await ovlast(req, res, true))) return;
     const b = req.body || {};
     const zaposlenici = (await ucitajKljuc("zaposlenici")) || [];
     const prije = (await ucitajStanje()).postavke?.vrijednost || {};
-    const postavke = { primateljId: prije.primateljId || null, laserPrimateljId: prije.laserPrimateljId || null };
-    for (const polje of ["primateljId", "laserPrimateljId"]) {
-      if (!(polje in b)) continue;
-      const id = b[polje] ? tekst(b[polje], 80) : null;
+    const postavke = { primateljId: prije.primateljId || null, laserPrimatelji: Array.isArray(prije.laserPrimatelji) ? prije.laserPrimatelji : [] };
+    if ("primateljId" in b) {
+      const id = b.primateljId ? tekst(b.primateljId, 80) : null;
       if (id && !zaposlenici.some((z) => z.id === id)) return res.status(400).json({ error: "Zaposlenik nije pronađen." });
-      postavke[polje] = id;
+      postavke.primateljId = id;
+    }
+    if ("laserPrimatelji" in b) {
+      const ids = [...new Set((Array.isArray(b.laserPrimatelji) ? b.laserPrimatelji : []).filter(Boolean).map((x) => tekst(x, 80)))];
+      if (ids.length > 2) return res.status(400).json({ error: "Za laser se mogu odabrati najviše dvije osobe." });
+      if (ids.some((id) => !zaposlenici.some((z) => z.id === id))) return res.status(400).json({ error: "Zaposlenik nije pronađen." });
+      postavke.laserPrimatelji = ids;
     }
     await spremiStanje("postavke", postavke);
     res.json({ ok: true, postavke });
