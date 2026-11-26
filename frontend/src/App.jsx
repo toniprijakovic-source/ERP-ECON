@@ -2591,6 +2591,15 @@ export default function App() {
     const payload = token ? decodeJwtPayload(token) : null;
     return payload?.zaposlenikId || null;
   });
+  // ?projekt=<id> (prečac "Otvori u ERP-u.url" u mapi projekta na serveru, most/lib/dokumenti.js): nakon prijave otvara detalj tog projekta.
+  const [projektIzUrla, setProjektIzUrla] = useState(() => new URLSearchParams(window.location.search).get("projekt") || "");
+  useEffect(() => {
+    if (!projektIzUrla || !db || !prijavljenId || potrebnaPrijava) return;
+    if ((db.projekti || []).some((p) => p.id === projektIzUrla)) { setOtvoriProjektId(projektIzUrla); setPage("projekti"); }
+    else showToast("Projekt iz poveznice nije pronađen ili nemate pristup projektima.");
+    setProjektIzUrla("");
+    window.history.replaceState(null, "", window.location.pathname);
+  }, [projektIzUrla, db, prijavljenId, potrebnaPrijava]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const ucitajPodatke = async () => {
     const token = localStorage.getItem("erp_token");
@@ -2989,7 +2998,7 @@ export default function App() {
   if (urlParametri.get("mb") && urlParametri.get("prijava") !== "1" && (potrebnaPrijava || !prijavljenId)) {
     return <JavnaKarticaMaticnog broj={urlParametri.get("mb")} />;
   }
-  const zeliPrijavu = urlParametri.get("prijava") === "1" || !!urlParametri.get("mb") || !!urlParametri.get("nesukladnost");
+  const zeliPrijavu = urlParametri.get("prijava") === "1" || !!urlParametri.get("mb") || !!urlParametri.get("nesukladnost") || !!urlParametri.get("projekt");
   if ((potrebnaPrijava || !prijavljenId) && !zeliPrijavu) {
     return <KioskView onPrijava={() => { window.location.href = `${window.location.pathname}?prijava=1`; }} />;
   }
@@ -3519,13 +3528,15 @@ function StanjeServeraTab({ db, showToast, mozeMijenjati }) {
     } catch { setGreska("Nema veze s poslužiteljem."); }
   };
   useEffect(() => { ucitaj(); const t = setInterval(ucitaj, 30000); return () => clearInterval(t); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const spremiPrimatelja = async (primateljId) => {
+  // polje: "primateljId" (upozorenja servera) ili "laserPrimateljId" (promjene u mapama Laser za limove/profile); šalje se samo to polje.
+  const spremiPrimatelja = async (id, polje = "primateljId") => {
     setSprema(true);
     try {
-      const res = await fetch(`${API_URL}/api/server/postavke`, { method: "PUT", headers: zaglavlje(), body: JSON.stringify({ primateljId: primateljId || null }) });
+      const res = await fetch(`${API_URL}/api/server/postavke`, { method: "PUT", headers: zaglavlje(), body: JSON.stringify({ [polje]: id || null }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { showToast(data.error || "Spremanje nije uspjelo."); return; }
-      showToast(primateljId ? "Spremljeno — upozorenja dolaze kao zadatak u zvonce." : "Spremljeno — upozorenja se samo prikazuju ovdje.");
+      if (polje === "laserPrimateljId") showToast(id ? "Spremljeno — promjene u mapama za laser dolaze kao zadatak u zvonce." : "Spremljeno — promjene za laser vide se samo u projektu.");
+      else showToast(id ? "Spremljeno — upozorenja dolaze kao zadatak u zvonce." : "Spremljeno — upozorenja se samo prikazuju ovdje.");
       await ucitaj();
     } catch { showToast("Nema veze s poslužiteljem."); } finally { setSprema(false); }
   };
@@ -3535,7 +3546,8 @@ function StanjeServeraTab({ db, showToast, mozeMijenjati }) {
   const iz = st.izvjestaj;
   const kop = iz?.kopije;
   const obnova = kop?.obnova;
-  const zaposlenici = [...(db.zaposlenici || [])].filter((z) => z.status !== "Neaktivan" || z.id === st.postavke?.primateljId).sort((a, b) => `${a.prezime} ${a.ime}`.localeCompare(`${b.prezime} ${b.ime}`, "hr"));
+  const zaposlenici = [...(db.zaposlenici || [])].filter((z) => z.status !== "Neaktivan" || z.id === st.postavke?.primateljId || z.id === st.postavke?.laserPrimateljId).sort((a, b) => `${a.prezime} ${a.ime}`.localeCompare(`${b.prezime} ${b.ime}`, "hr"));
+  const struktura = st.struktura || {};
   const bezMape = st.mape?.nepronadjene || [];
   const naslov = (t) => <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600, marginBottom: 8 }}>{t}</h3>;
   const red = (oznaka, vrijednost) => (
@@ -3661,6 +3673,21 @@ function StanjeServeraTab({ db, showToast, mozeMijenjati }) {
             <div style={sitno}>Ako mapa postoji pod drugim imenom, upišite je ručno na projektu ("Mapa projekta na serveru"). Ako postoje dvije mape iste šifre, jednu preimenujte ili upišite pravu ručno.</div>
           </div>
         ) : st.mape ? <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Svi aktivni projekti imaju upisanu mapu.</div> : <div style={sitno}>Most još nije javio rezultat traženja mapa.</div>}
+        <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Mape novih projekata (01 Narudžba … 09 Slike)</div>
+          <div style={{ fontSize: 12.5 }}>
+            {struktura.od ? <>Za projekte otvorene u ERP-u od {vrijemeStanja(struktura.od)} most sam napravi mapu i podmape. Napravljeno: <strong>{struktura.brojGotovih || 0}</strong>.</> : "Most još nije počeo raditi mape novih projekata."}
+          </div>
+          {(struktura.gotovo || []).slice(0, 5).map((g, i) => (
+            <div key={`${g.sifra}-${i}`} style={{ fontSize: 12.5, padding: "3px 0", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "baseline" }}>
+              <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{g.sifra}</span>
+              <span className="f-mono" style={{ fontSize: 11.5, wordBreak: "break-all", flex: 1, minWidth: 200 }}>{g.mapa}</span>
+              <MapaGumbi putanja={g.mapa} />
+              <span style={{ color: "var(--ink-faint)", fontSize: 11.5, whiteSpace: "nowrap" }}>{vrijemeStanja(g.vrijeme)}</span>
+            </div>
+          ))}
+          {(struktura.greske || []).map((g, i) => <div key={`g-${g.sifra}-${i}`} style={{ fontSize: 12.5, color: "var(--rust)", padding: "2px 0" }}>{g.sifra}: {g.greska} <span style={{ color: "var(--ink-faint)" }}>({vrijemeStanja(g.vrijeme)}; most pokušava ponovno)</span></div>)}
+        </div>
       </div>
 
       <div className="card" style={{ padding: 14 }}>
@@ -3673,6 +3700,14 @@ function StanjeServeraTab({ db, showToast, mozeMijenjati }) {
           {!mozeMijenjati && <span style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Nemate ovlaštenje za izmjenu.</span>}
         </div>
         <div style={sitno}>Odabrana osoba dobiva zadatak u zvoncu (od "ERP") kad {OPIS_UPOZORENJA_SERVERA}. Zadatak se sam zatvori kad se problem riješi. Ako ga osoba zatvori ranije, a problem ostane, novi zadatak dolazi nakon 24 sata.</div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 14 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 600 }}>Promjene u mapama za laser:</span>
+          <select className="select" style={{ maxWidth: 320 }} value={st.postavke?.laserPrimateljId || ""} disabled={!mozeMijenjati || sprema} onChange={(e) => spremiPrimatelja(e.target.value, "laserPrimateljId")}>
+            <option value="">— nitko (promjene samo u projektu) —</option>
+            {zaposlenici.map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+          </select>
+        </div>
+        <div style={sitno}>Kad se u mapi projekta na serveru u "Laser za limove" ili "Laser za profile" doda, promijeni ili obriše datoteka, odabrana osoba dobije jedan zadatak u zvoncu po projektu s popisom promjena. Izmjene nacrta (Od kupca, Za proizvodnju) idu voditelju projekta i voditelju proizvodnje.</div>
       </div>
     </div>
   );
@@ -4837,6 +4872,126 @@ function MontazaNaljepniceModal({ projekt, veze, onClose }) {
       </div>
       </div>
     </Modal>
+  );
+}
+
+/* ---------- Dokumenti projekta na serveru (most: most/lib/dokumenti.js, poslužitelj: backend/dokumenti-projekta.js) ----------
+   Sažetak mapa projekta na Z: (broj datoteka po podmapi, zadnja izmjena), upozorenja "što fali" za projekte s novom strukturom mapa i popis
+   promjena koje je most uočio: revizije nacrta (Od kupca / Za proizvodnju) — potvrđuje ih voditelj projekta uz napomenu što se promijenilo
+   i koje naloge pogađa —, promjene u mapama Laser za limove/profile i nove mape odobravanja nacrta (Poslano/Odgovor/Freigabe DATUM). */
+const NASLOV_DOGADAJA = { laser: "Laser", nacrti: "Nacrti", odobrenje: "Odobravanje" };
+// Hrvatska množina: 1 datoteka, 2–4 datoteke, 5+ datoteka (11–14 kao 5+).
+const mnozinaHr = (n, jedan, dva, pet) => (n % 10 === 1 && n % 100 !== 11 ? jedan : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? dva : pet);
+const opisPromjeneMape = (d) => {
+  const p = d.podaci || {};
+  if (d.vrsta === "odobrenje") return `Nova mapa: ${(p.mape || []).map((m) => String(m).split("/").pop()).join(", ")}`;
+  const dio = [];
+  const revNazivi = new Set((p.revizije || []).map((r) => r.naziv));
+  (p.revizije || []).forEach((r) => dio.push(`nova revizija ${r.naziv} (prije ${r.prije})`));
+  const dodano = (p.dodano || []).filter((n) => !revNazivi.has(n));
+  if (dodano.length) dio.push(`novo: ${dodano.slice(0, 6).join(", ")}${(p.dodanoUkupno || p.dodano.length) > 6 + (p.revizije || []).length ? ` … (ukupno ${(p.dodanoUkupno || p.dodano.length) - (p.revizije || []).length})` : ""}`);
+  if ((p.izmijenjeno || []).length) dio.push(`izmijenjeno: ${p.izmijenjeno.slice(0, 6).join(", ")}${(p.izmijenjenoUkupno || p.izmijenjeno.length) > 6 ? ` … (ukupno ${p.izmijenjenoUkupno || p.izmijenjeno.length})` : ""}`);
+  if ((p.obrisano || []).length) dio.push(`obrisano: ${p.obrisano.slice(0, 6).join(", ")}${(p.obrisanoUkupno || p.obrisano.length) > 6 ? ` … (ukupno ${p.obrisanoUkupno || p.obrisano.length})` : ""}`);
+  return dio.join(" · ") || "promjena";
+};
+const podrucjeDogadaja = (d) => (d.vrsta === "laser" ? String(d.podaci?.podrucje || "Laser").split("/").pop() : d.vrsta === "nacrti" ? (d.podaci?.gdje === "kupac" ? "Od kupca" : "Za proizvodnju") : "Za odobrenje");
+// Upozorenja za projekte s novom strukturom (podmape s rednim brojem): narudžba kupca, nacrti za proizvodnju, kontrola kvalitete na kraju.
+const staFaliUMapama = (projekt, podmape) => {
+  const broj = (naziv) => (podmape || []).find((m) => m.naziv === naziv)?.datoteka;
+  const fali = [];
+  if (broj("01 Narudžba") === 0) fali.push("Narudžba kupca još nije u mapi 01 Narudžba.");
+  if (broj("02 Nacrti/Za proizvodnju") === 0 && ["U izradi", "Montaža"].includes(projekt.status)) fali.push("Nema nacrta za proizvodnju (02 Nacrti\\Za proizvodnju).");
+  if (broj("04 Kontrola kvalitete") === 0 && ["Montaža", "Završen"].includes(projekt.status)) fali.push("Nema dokumentacije kontrole kvalitete (04 Kontrola kvalitete).");
+  return fali;
+};
+function DokumentiKartica({ projekt, db, showToast }) {
+  const [podaci, setPodaci] = useState(null);
+  const [otvoreno, setOtvoreno] = useState(false);
+  const [sviDogadaji, setSviDogadaji] = useState(false);
+  const [potvrda, setPotvrda] = useState(null); // { id, napomena }
+  const [sprema, setSprema] = useState(false);
+  const ucitaj = async () => { try { setPodaci(await potrosniApi("GET", `/api/dokumenti/projekt/${encodeURIComponent(projekt.id)}`)); } catch { setPodaci({ nedostupno: true }); } };
+  useEffect(() => { ucitaj(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [projekt.id]);
+  if (!podaci || podaci.nedostupno) return null;
+  const { sazetak, struktura, dogadaji = [] } = podaci;
+  const nepotvrdjene = dogadaji.filter((d) => d.vrsta === "nacrti" && !d.potvrdeno);
+  const fali = sazetak?.podmape ? staFaliUMapama(projekt, sazetak.podmape) : [];
+  const spremiPotvrdu = async () => {
+    setSprema(true);
+    try {
+      await potrosniApi("POST", `/api/dokumenti/dogadaj/${encodeURIComponent(potvrda.id)}/potvrdi`, { napomena: potvrda.napomena });
+      setPotvrda(null);
+      showToast("Promjena potvrđena.");
+      await ucitaj();
+    } catch (e) { showToast(e.message); } finally { setSprema(false); }
+  };
+  const mapa = sazetak?.mapa || projekt.mapa;
+  const prikazani = sviDogadaji ? dogadaji : dogadaji.slice(0, 8);
+  return (
+    <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", cursor: "pointer" }} onClick={() => setOtvoreno(!otvoreno)}>
+        <FolderInput size={16} color="var(--steel)" />
+        <strong style={{ fontSize: 14 }}>Dokumenti na serveru</strong>
+        {sazetak?.mapa && <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>{sazetak.ukupno} {mnozinaHr(sazetak.ukupno, "datoteka", "datoteke", "datoteka")}{sazetak.zadnja ? ` · zadnja izmjena ${fmtDate(sazetak.zadnja)}` : ""}</span>}
+        {nepotvrdjene.length > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: "var(--rust)" }}>{nepotvrdjene.length} {mnozinaHr(nepotvrdjene.length, "izmjena nacrta čeka potvrdu", "izmjene nacrta čekaju potvrdu", "izmjena nacrta čeka potvrdu")}</span>}
+        {fali.length > 0 && <span style={{ fontSize: 12, color: "#8A6100" }}>⚠ {fali.length} {mnozinaHr(fali.length, "stvar fali", "stvari fale", "stvari fali")}</span>}
+        <span style={{ flex: 1 }} />
+        {mapa && <MapaGumbi putanja={mapa} />}
+        {otvoreno ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+      </div>
+      {otvoreno && (
+        <div style={{ marginTop: 10 }}>
+          {struktura?.greska && <div style={{ fontSize: 12.5, color: "var(--rust)", marginBottom: 8 }}>Mapa projekta još nije napravljena: {struktura.greska.greska} (most pokušava ponovno svake minute).</div>}
+          {struktura?.novi && !struktura?.gotovo && !struktura?.greska && <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 8 }}>Most će za najviše minutu napraviti mapu projekta sa standardnim podmapama.</div>}
+          {struktura?.gotovo && <div style={{ fontSize: 12, color: "var(--ink-faint)", marginBottom: 8 }}>{struktura.gotovo.novaMapa ? "Mapu projekta" : "Podmape u postojećoj mapi"} napravio je most {vrijemeStanja(struktura.gotovo.vrijeme)}.</div>}
+          {!sazetak && <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Most još nije pregledao mapu ovog projekta (pregled svakih 5 minuta).</div>}
+          {sazetak?.greska && <div style={{ fontSize: 12.5, color: "var(--rust)" }}>{sazetak.greska}</div>}
+          {fali.length > 0 && (
+            <div className="card" style={{ padding: "8px 12px", marginBottom: 10, background: "#FDF6E3", borderColor: "#F0C36B" }}>
+              {fali.map((f) => <div key={f} style={{ fontSize: 12.5, color: "#6b5511" }}>⚠ {f}</div>)}
+            </div>
+          )}
+          {sazetak?.podmape?.length > 0 && (
+            <div style={{ columnWidth: 250, columnGap: 24, marginBottom: 12 }}>
+              {sazetak.podmape.map((m) => {
+                const dubina = m.naziv.split("/").length - 1;
+                return (
+                  <div key={m.naziv} style={{ display: "flex", gap: 8, fontSize: 12.5, padding: "2px 0", paddingLeft: dubina * 14, color: m.datoteka ? "var(--ink)" : "var(--ink-faint)", breakInside: "avoid" }}>
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.naziv}>{m.naziv.split("/").pop()}</span>
+                    <span className="f-mono" style={{ fontSize: 11.5 }}>{m.datoteka}</span>
+                    <span style={{ fontSize: 11, color: "var(--ink-faint)", minWidth: 70, textAlign: "right" }}>{m.zadnja ? fmtDate(m.zadnja) : ""}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>Promjene u mapama</div>
+          {dogadaji.length === 0 ? <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Još nema zabilježenih promjena (prate se Laser za limove/profile, Od kupca, Za proizvodnju i mape odobravanja s datumom).</div> : (
+            <div>
+              {prikazani.map((d) => (
+                <div key={d.id} style={{ padding: "6px 0", borderTop: "1px solid var(--line)", fontSize: 12.5 }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "baseline" }}>
+                    <span style={{ color: "var(--ink-faint)", fontSize: 11.5, whiteSpace: "nowrap" }}>{vrijemeStanja(d.vrijeme)}</span>
+                    <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{NASLOV_DOGADAJA[d.vrsta]} · {podrucjeDogadaja(d)}</span>
+                    <span style={{ flex: 1, minWidth: 200, wordBreak: "break-word" }}>{opisPromjeneMape(d)}</span>
+                  </div>
+                  {d.potvrdeno && <div style={{ fontSize: 12, color: "var(--green)", marginTop: 2 }}>✓ Potvrdio {imeZaposlenikaNs(db, d.potvrdio) || "—"}, {vrijemeStanja(d.potvrdeno)}{d.napomena ? `: ${d.napomena}` : ""}</div>}
+                  {!d.potvrdeno && d.vrsta === "nacrti" && !d.mozePotvrditi && <div style={{ fontSize: 12, color: "var(--rust)", marginTop: 2 }}>Čeka potvrdu voditelja projekta.</div>}
+                  {d.mozePotvrditi && (potvrda?.id === d.id ? (
+                    <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}>
+                      <textarea className="textarea" rows={2} style={{ flex: "1 1 320px" }} maxLength={1000} placeholder={d.vrsta === "laser" ? "npr. programi za laser ažurirani" : "Što se promijenilo i koje radne naloge / pozicije pogađa (npr. promijenjena duljina poz. 12, nalog RN …/3; već izrezani dijelovi → nesukladnost)"} value={potvrda.napomena} onChange={(e) => setPotvrda({ ...potvrda, napomena: e.target.value })} />
+                      <Btn size="sm" variant="primary" icon={Save} disabled={sprema} onClick={spremiPotvrdu}>{sprema ? "Spremam…" : "Potvrdi"}</Btn>
+                      <Btn size="sm" variant="ghost" onClick={() => setPotvrda(null)}>Odustani</Btn>
+                    </div>
+                  ) : <Btn size="sm" variant={d.vrsta === "nacrti" ? "primary" : "ghost"} style={{ marginTop: 4 }} onClick={() => setPotvrda({ id: d.id, napomena: "" })}>Potvrdi{d.vrsta === "nacrti" ? " izmjenu" : ""}</Btn>)}
+                </div>
+              ))}
+              {dogadaji.length > 8 && <Btn size="sm" variant="ghost" onClick={() => setSviDogadaji(!sviDogadaji)}>{sviDogadaji ? "Prikaži manje" : `Prikaži sve (${dogadaji.length})`}</Btn>}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -12295,6 +12450,8 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
       </div>
 
       <TerminiIsporukeKartica projekt={projekt} db={db} patchProjekt={patchProjekt} showToast={showToast || (() => {})} mozeMijenjati mojId={mojId} />
+
+      <DokumentiKartica projekt={projekt} db={db} showToast={showToast || (() => {})} />
 
       <FotografijeUtovaraKartica projekt={projekt} showToast={showToast || (() => {})} />
 
