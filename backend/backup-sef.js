@@ -8,7 +8,8 @@
 //     Mjesecne (prvo pokretanje u mjesecu, trajno — nikad se ne brišu same);
 //   • nakon upisa kopiju odmah dešifrira i provjeri (neispravna kopija se briše i skripta javlja grešku);
 //   • piše zapisnik.log i zadnja-kopija.json (samo vrijeme i brojke, bez podataka) za nadzor.
-// Isključivo ČITA iz baze. Pokretanje: node backup-sef.js  (Planer zadataka svaki sat).
+// Kopija isključivo ČITA iz baze. Jednom mjesečno nakon kopije slijedi probna obnova (probna-obnova.js): kopija se vraća u
+// PRIVREMENE tablice koje nestaju nakon provjere — prave tablice se ne diraju. Pokretanje: node backup-sef.js  (Planer zadataka svaki sat).
 // Postavke u .env: DATABASE_URL, BACKUP_SIFRA (najmanje 16 znakova), BACKUP_MAPA (kamo se sprema).
 const path = require("path");
 const fs = require("fs");
@@ -121,7 +122,7 @@ async function napraviKopiju({ pool, mapa = MAPA_ZADANO, sifra, sada = new Date(
   return sazetak;
 }
 
-module.exports = { napraviKopiju, jePrvoOtkad, obrisiStarije, nazivDatoteke, datumIzNaziva, kljucDana, kljucMjeseca, TABLICE, procitajTablicu };
+module.exports = { napraviKopiju, jePrvoOtkad, obrisiStarije, nazivDatoteke, datumIzNaziva, kljucDana, kljucMjeseca, TABLICE, procitajTablicu, MAPA_ZADANO, dodajUZapisnik };
 
 if (require.main === module) {
   require("dotenv").config({ path: path.join(__dirname, ".env") });
@@ -137,9 +138,18 @@ if (require.main === module) {
     ssl: process.env.DATABASE_URL?.includes("supabase") ? { rejectUnauthorized: false } : undefined,
   });
   napraviKopiju({ pool, mapa, sifra })
-    .then((s) => {
+    .then(async (s) => {
       console.log(`[${s.vrijeme}] Kopija spremljena: ${s.naziv} (${s.velicinaKB} KB šifrirano, ${s.kljuceva} ključeva + ${TABLICE.length} tablice)${s.dnevna ? " +Dnevne" : ""}${s.mjesecna ? " +Mjesecne" : ""}`);
       s.poruke.forEach((p) => console.warn(p));
+      // Jednom mjesečno probna obnova najnovije mjesečne kopije u privremene tablice (probna-obnova.js). Ne ruši kopiju: ako datoteke
+      // probna-obnova.js nema (stariji paket) ili obnova ne uspije, kopija je i dalje spremljena, a rezultat ide u probna-obnova.json.
+      let probna = null;
+      try { probna = require("./probna-obnova"); } catch { /* stariji paket bez probne obnove */ }
+      if (probna && probna.trebaProbnaObnova(probna.procitajStanje(mapa))) {
+        const r = await probna.napraviProbnuObnovu({ pool, mapa, sifra, tablice: TABLICE, dodajUZapisnik });
+        if (r.ok) console.log(`Probna obnova uspjela: ${r.kopija} (${r.kljuceva} ključeva, ${r.trajanjeMs} ms).`);
+        else console.warn(`Probna obnova NIJE uspjela (${r.kopija}): ${r.greska}`);
+      }
     })
     .catch((e) => {
       console.error("Greška kod izrade kopije:", e.message);

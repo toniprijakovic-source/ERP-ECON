@@ -12,6 +12,11 @@ const utovarSlike = [];
 // Tablice montaza_pozicije i montaza_slike (montaza.js).
 const montazaPoz = [];
 const montazaSlike = [];
+// Tablice most_zadaci i most_stanje (most-veza.js): red zadataka mosta i stanje servera. Početno stanje servera može doći iz
+// SEED_FILE pod ključem __mostStanje ({ kljuc: { vrijednost, azurirano } }) — npr. stari kontakt mosta za provjeru upozorenja.
+const mostZadaci = [];
+const mostStanje = new Map(Object.entries(store.__mostStanje || {}));
+delete store.__mostStanje;
 // Tablice nesukladnosti (nesukladnosti.js).
 const nsZapisi = [];
 const nsSlike = [];
@@ -22,6 +27,23 @@ const klon = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v))
 async function query(sql, params = []) {
   const s = String(sql);
   if (/^\s*(BEGIN|COMMIT|ROLLBACK)/.test(s)) return odgovor([]);
+  if (/^\s*INSERT INTO most_zadaci/.test(s)) {
+    const [id, vrsta, projekt_id, podaci, kreirao, kreirao_ime, samoCita] = params;
+    if (!samoCita && mostZadaci.some((z) => z.projekt_id === projekt_id && z.vrsta !== "xrechnung-popis" && ["Čeka", "Obrada"].includes(z.status))) return odgovor([]);
+    const kreirano = new Date().toISOString();
+    mostZadaci.push({ id, vrsta, projekt_id, status: "Čeka", podaci: JSON.parse(podaci), kreirao, kreirao_ime, kreirano, preuzeto: null, zavrseno: null, rezultat: null });
+    return odgovor([{ kreirano }]);
+  }
+  if (/FROM most_zadaci ORDER BY kreirano DESC LIMIT 30/.test(s)) return odgovor([...mostZadaci].reverse().slice(0, 30).map((z) => klon(z)));
+  if (/^\s*UPDATE most_zadaci SET status = 'Greška'[^]*status = 'Obrada' AND preuzeto/.test(s)) { const n = mostZadaci.filter((z) => z.status === "Obrada" && Date.parse(z.preuzeto) < Date.now() - 10 * 60000); n.forEach((z) => { z.status = "Greška"; z.zavrseno = new Date().toISOString(); z.rezultat = JSON.parse(params[0]); }); return odgovor(n.map(() => ({}))); }
+  if (/^\s*UPDATE most_zadaci SET status = 'Greška'[^]*status = 'Čeka' AND kreirano/.test(s)) { const n = mostZadaci.filter((z) => z.status === "Čeka" && Date.parse(z.kreirano) < Date.now() - 24 * 3600000); n.forEach((z) => { z.status = "Greška"; z.zavrseno = new Date().toISOString(); z.rezultat = JSON.parse(params[0]); }); return odgovor(n.map(() => ({}))); }
+  if (/^\s*UPDATE most_zadaci SET status = 'Obrada', preuzeto = now\(\) WHERE status = 'Čeka' RETURNING/.test(s)) { const n = mostZadaci.filter((z) => z.status === "Čeka"); n.forEach((z) => { z.status = "Obrada"; z.preuzeto = new Date().toISOString(); }); return odgovor(n.map((z) => ({ id: z.id, vrsta: z.vrsta, podaci: klon(z.podaci), kreirano: z.kreirano }))); }
+  if (/^\s*UPDATE most_zadaci SET status = \$2, zavrseno = now\(\), rezultat = \$3::jsonb WHERE id = \$1/.test(s)) { const z = mostZadaci.find((y) => y.id === params[0]); if (z) { z.status = params[1]; z.zavrseno = new Date().toISOString(); z.rezultat = JSON.parse(params[2]); } return odgovor(z ? [{}] : []); }
+  if (/^\s*UPDATE most_zadaci SET status = 'Otkazano'/.test(s)) { const z = mostZadaci.find((y) => y.id === params[0] && y.status === "Čeka"); if (z) { z.status = "Otkazano"; z.zavrseno = new Date().toISOString(); } return odgovor(z ? [{}] : []); }
+  if (/^\s*SELECT status FROM most_zadaci WHERE id = \$1/.test(s)) return odgovor(mostZadaci.filter((z) => z.id === params[0]).map((z) => ({ status: z.status })));
+  if (/^\s*SELECT status, count\(\*\)::int AS n FROM most_zadaci/.test(s)) { const m = {}; mostZadaci.forEach((z) => { m[z.status] = (m[z.status] || 0) + 1; }); return odgovor(Object.entries(m).map(([status, n]) => ({ status, n }))); }
+  if (/^\s*INSERT INTO most_stanje/.test(s)) { mostStanje.set(params[0], { vrijednost: JSON.parse(params[1]), azurirano: new Date().toISOString() }); return odgovor([{}]); }
+  if (/^\s*SELECT kljuc, vrijednost, azurirano FROM most_stanje/.test(s)) return odgovor([...mostStanje.entries()].map(([kljuc, x]) => ({ kljuc, vrijednost: klon(x.vrijednost), azurirano: x.azurirano })));
   if (/^\s*INSERT INTO nesukladnosti_postavke/.test(s)) { nsPostavke.set(params[0], params[1]); return odgovor([{}]); }
   if (/FROM nesukladnosti_postavke WHERE kljuc = \$1/.test(s)) return odgovor(nsPostavke.has(params[0]) ? [{ vrijednost: nsPostavke.get(params[0]) }] : []);
   if (/^\s*INSERT INTO nesukladnosti_pdf/.test(s)) { nsPdf.set(params[0], params[1]); return odgovor([{}]); }

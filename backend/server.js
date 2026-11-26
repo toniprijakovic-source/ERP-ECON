@@ -110,6 +110,9 @@ const KARTICE_MODULA = {
   // glavni administrator (migrirajDirektorskiPregled), a ostalima ga izričito dodjeljuje admin u Zaposlenici → Pozicije.
   direktor: {
     pregled: { citanje: ["projekti", "radniNalozi", "narudzbe", "otpremnice", "cmr", "narudzbenice", "izdatnice", "podlogeZaFakturu", "ponude", "kupci", "zaposlenici"], pisanje: [] },
+    // Stanje servera ECON-R550 (most, sigurnosne kopije, probna obnova, disk, mape projekata) i tko prima upozorenja: podaci idu rutama
+    // /api/server/* (most-veza.js, ovlast = ova kartica), ovdje samo popis zaposlenika za izbor primatelja.
+    server: { citanje: ["zaposlenici"], pisanje: [] },
   },
   skladiste: {
     zalihe: { citanje: ["materijali", "katalogProfila", "kvaliteteMaterijala", "projekti", "izdatnice", "zaposlenici", "rezervacije", "narudzbenice", "dobavljaci", "postavkeTvrtke", "maticnaKnjiga", "potrosniMaterijal", "potrosniPostavke"], pisanje: ["materijali", "izdatnice", "rezervacije"] },
@@ -1161,22 +1164,12 @@ app.get("/api/plan/podaci", autentikacija, async (req, res) => {
   });
 });
 
-// ---------- XRechnung: zadaci za lokalni "most" ----------
-// ERP je na internetu pa ne vidi mrežni disk Z:. Zato "Kreiraj XRechnung" u ERP-u samo upiše zadatak u red čekanja;
-// MOST (program na uredskom računalu s pristupom Z:) svakih par sekundi pita ima li zadataka, obradi ih lokalno (mapa Fakture
-// projekta, Konplastov XML, izrada i službena provjera XRechnunga) i vrati rezultat. Most se prijavljuje tajnom MOST_TOKEN
-// (zaglavlje X-Most-Token) i samo se javlja ovamo — ništa se ne otvara prema vani.
-// Red čekanja je u memoriji poslužitelja: zadaci su kratkotrajni, a rezultat (datoteke) ostaje na Z:. Restart poslužitelja
-// briše popis, a zadatak koji čeka/obrađuje se samo ponovno zada.
+// ---------- Most na serveru ECON-R550 (XRechnung, fotografije i nesukladnosti na Z:, stanje servera) ----------
+// ERP je na internetu pa ne vidi mrežni disk Z:. MOST (most/most.js, na serveru pod servisnim računom) se sam javlja ovamo i obrađuje
+// zadatke na serveru. Prijavljuje se tajnom MOST_TOKEN (zaglavlje X-Most-Token) — ništa se ne otvara prema vani.
+// Red zadataka (XRechnung), izvještaj o serveru i automatska "Mapa projekta" su u most-veza.js; fotografije u utovar.js/montaza.js,
+// nesukladnosti u nesukladnosti.js (iste provjere tokena).
 const MOST_TOKEN = process.env.MOST_TOKEN || "";
-const xrZadaci = [];
-let mostZadnjiPut = null;
-const XR_STATUSI_ZAVRSNI = ["Valjano", "Nevaljano", "Greška", "Gotovo"];
-// Vrste zadataka: izrada XRechnunga te čitanje/spremanje postavki kumulativa (kumulativ.json u mapi računa projekta).
-const XR_VRSTE = ["xrechnung", "kumulativ-citaj", "kumulativ-spremi", "xrechnung-popis", "xrechnung-obrisi"];
-// Popis izrađenih XRechnunga samo čita pa ne blokira (i ne blokira ga) druge zadatke istog projekta.
-const xrBlokira = (z) => z.vrsta !== "xrechnung-popis" && (z.status === "Čeka" || z.status === "Obrada");
-
 const mostAutentikacija = (req, res, next) => {
   if (MOST_TOKEN.length < 24) return res.status(503).json({ error: "Most nije podešen (MOST_TOKEN nije postavljen na poslužitelju)." });
   const dan = Buffer.from(String(req.headers["x-most-token"] || ""));
@@ -1184,100 +1177,6 @@ const mostAutentikacija = (req, res, next) => {
   if (dan.length !== tajna.length || !crypto.timingSafeEqual(dan, tajna)) return res.status(401).json({ error: "Neispravan token mosta." });
   next();
 };
-const xrDozvola = async (req) => izracunajDozvoljeneKljuceve(await ucitajPozicijuZaposlenika(req.zaposlenikId));
-const xrJavni = (z) => ({ id: z.id, vrsta: z.vrsta, racunBroj: z.racunBroj, projektId: z.projektId, sifra: z.sifra, naziv: z.naziv, eAdresa: z.eAdresa, referenca: z.referenca, status: z.status, kreiraoIme: z.kreiraoIme, kreirano: z.kreirano, zavrseno: z.zavrseno || null, rezultat: z.rezultat || null });
-const xrTekst = (v, max) => String(v ?? "").slice(0, max);
-// Postavke kumulativa (ugovor, avans, prijašnji računi) — poslužitelj samo ograničava oblik i duljine; brojeve i smislenost provjerava most.
-const xrIznos = (v) => (typeof v === "number" && Number.isFinite(v) ? v : xrTekst(v, 30));
-const xrKumulativ = (v) => {
-  if (!v || typeof v !== "object") return null;
-  const isp = v.isporuka && typeof v.isporuka === "object" ? { ulica: xrTekst(v.isporuka.ulica, 100), posta: xrTekst(v.isporuka.posta, 12), grad: xrTekst(v.isporuka.grad, 60), drzava: xrTekst(v.isporuka.drzava, 2) } : undefined;
-  return {
-    ...(v._napomena ? { _napomena: xrTekst(v._napomena, 500) } : {}), ...(v.projekt ? { projekt: xrTekst(v.projekt, 60) } : {}), ...(v.pozicija ? { pozicija: xrTekst(v.pozicija, 60) } : {}),
-    gesamtauftrag: xrIznos(v.gesamtauftrag), vorauszahlung: xrIznos(v.vorauszahlung),
-    racuni: (Array.isArray(v.racuni) ? v.racuni.slice(0, 40) : []).map((r) => ({ oznaka: xrTekst(r?.oznaka, 10), vrsta: r?.vrsta === "aconto" ? "aconto" : "racun", broj: xrTekst(r?.broj, 40), datum: xrTekst(r?.datum, 10), iznos: xrIznos(r?.iznos), ...(r?.kumulativ != null ? { kumulativ: xrIznos(r.kumulativ) } : {}) })),
-    ...(isp ? { isporuka: isp } : {}),
-  };
-};
-
-app.get("/api/xrechnung/zadaci", autentikacija, async (req, res) => {
-  const { citljivo } = await xrDozvola(req);
-  if (!citljivo.has("xrechnungPostavke")) return res.status(403).json({ error: "Vaša pozicija nema pristup kartici XRechnung." });
-  res.json({ zadaci: xrZadaci.slice(0, 30).map(xrJavni), most: { povezan: !!mostZadnjiPut && Date.now() - mostZadnjiPut < 30000, zadnjiPut: mostZadnjiPut ? new Date(mostZadnjiPut).toISOString() : null } });
-});
-
-app.post("/api/xrechnung/zadaci", autentikacija, async (req, res) => {
-  const { pisivo } = await xrDozvola(req);
-  if (!pisivo.has("xrechnungPostavke")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za izradu XRechnunga." });
-  const { projektId, eAdresa, referenca, racunBroj } = req.body || {};
-  const vrsta = XR_VRSTE.includes(req.body?.vrsta) ? req.body.vrsta : "xrechnung";
-  const [projekti, zaposlenici] = await Promise.all([ucitajKljuc("projekti"), ucitajKljuc("zaposlenici")]);
-  const projekt = (projekti || []).find((p) => p.id === projektId);
-  if (!projekt) return res.status(404).json({ error: "Projekt nije pronađen." });
-  const email = String(eAdresa || "").trim();
-  if (vrsta === "xrechnung" && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) return res.status(400).json({ error: "E-adresa kupca nije ispravna." });
-  const kumulativ = vrsta === "kumulativ-spremi" ? xrKumulativ(req.body?.kumulativ) : null;
-  if (vrsta === "kumulativ-spremi" && !kumulativ) return res.status(400).json({ error: "Nedostaju podaci o kumulativu." });
-  if (vrsta === "xrechnung-obrisi" && !String(racunBroj || "").trim()) return res.status(400).json({ error: "Nije zadan broj računa." });
-  if (vrsta !== "xrechnung-popis" && xrZadaci.some((z) => z.projektId === projektId && xrBlokira(z))) return res.status(409).json({ error: "Za ovaj projekt već postoji zadatak koji čeka ili se obrađuje." });
-  const ja = (zaposlenici || []).find((z) => z.id === req.zaposlenikId);
-  const zadatak = {
-    id: crypto.randomUUID(), vrsta, projektId, sifra: xrTekst(projekt.sifra, 60), naziv: xrTekst(projekt.naziv, 160), mapa: xrTekst(projekt.mapa, 400),
-    eAdresa: vrsta === "xrechnung" ? email : "", referenca: xrTekst(referenca, 100).trim(), racunBroj: xrTekst(racunBroj, 40).trim(), kumulativ,
-    status: "Čeka", kreirao: req.zaposlenikId, kreiraoIme: ja ? `${ja.ime} ${ja.prezime}` : "", kreirano: new Date().toISOString(),
-  };
-  xrZadaci.unshift(zadatak);
-  if (xrZadaci.length > 100) xrZadaci.length = 100;
-  res.json({ ok: true, zadatak: xrJavni(zadatak) });
-});
-
-app.delete("/api/xrechnung/zadaci/:id", autentikacija, async (req, res) => {
-  const { pisivo } = await xrDozvola(req);
-  if (!pisivo.has("xrechnungPostavke")) return res.status(403).json({ error: "Vaša pozicija nema ovlaštenje za izradu XRechnunga." });
-  const z = xrZadaci.find((q) => q.id === req.params.id);
-  if (!z) return res.status(404).json({ error: "Zadatak nije pronađen." });
-  if (z.status !== "Čeka") return res.status(409).json({ error: "Zadatak se već obrađuje ili je završen." });
-  z.status = "Otkazano";
-  z.zavrseno = new Date().toISOString();
-  res.json({ ok: true });
-});
-
-// Most: dohvaća i preuzima zadatke koji čekaju (svaki poziv je i "otkucaj" da je most živ).
-app.get("/api/most/zadaci", mostAutentikacija, (req, res) => {
-  mostZadnjiPut = Date.now();
-  xrZadaci.forEach((z) => { // zadatak koji most nije završio u 10 minuta (npr. prekinut rad) ne ostaje vječno "u obradi"
-    if (z.status === "Obrada" && Date.now() - z.preuzeto > 10 * 60 * 1000) { z.status = "Greška"; z.zavrseno = new Date().toISOString(); z.rezultat = { poruke: ["Most nije javio rezultat u 10 minuta. Pokušaj ponovno."] }; }
-  });
-  const cekaju = xrZadaci.filter((z) => z.status === "Čeka");
-  cekaju.forEach((z) => { z.status = "Obrada"; z.preuzeto = Date.now(); });
-  res.json({ zadaci: cekaju.map((z) => ({ id: z.id, vrsta: z.vrsta, sifra: z.sifra, naziv: z.naziv, mapa: z.mapa, eAdresa: z.eAdresa, referenca: z.referenca, racunBroj: z.racunBroj, kumulativ: z.kumulativ })) });
-});
-
-app.post("/api/most/zadaci/:id/rezultat", mostAutentikacija, (req, res) => {
-  const z = xrZadaci.find((q) => q.id === req.params.id);
-  if (!z) return res.status(404).json({ error: "Zadatak nije pronađen." });
-  const b = req.body || {};
-  const popis = (v, max, duljina) => (Array.isArray(v) ? v.slice(0, max).map((s) => xrTekst(s, duljina)) : []);
-  const pravila = (v) => (Array.isArray(v) ? v.slice(0, 30).map((g) => ({ id: xrTekst(g?.id, 60), tekst: xrTekst(g?.tekst, 400) })) : []);
-  z.status = XR_STATUSI_ZAVRSNI.includes(b.status) ? b.status : "Greška";
-  z.zavrseno = new Date().toISOString();
-  z.rezultat = {
-    poruke: popis(b.poruke, 20, 500),
-    sazetak: b.sazetak && typeof b.sazetak === "object" ? Object.fromEntries(Object.entries(b.sazetak).slice(0, 20).map(([k, v]) => [xrTekst(k, 40), typeof v === "number" ? v : xrTekst(v, 200)])) : null,
-    kontrole: Array.isArray(b.kontrole) ? b.kontrole.slice(0, 20).map((k) => ({ ok: !!k?.ok, opis: xrTekst(k?.opis, 300) })) : [],
-    validacija: b.validacija ? { ocjena: xrTekst(b.validacija.ocjena, 30), greske: pravila(b.validacija.greske), upozorenja: pravila(b.validacija.upozorenja) } : null,
-    datoteke: Array.isArray(b.datoteke) ? b.datoteke.slice(0, 10).map((d) => ({ naziv: xrTekst(d?.naziv, 200), putanja: xrTekst(d?.putanja, 500) })) : [],
-    izlaznaMapa: xrTekst(b.izlaznaMapa, 500), probno: !!b.probno,
-    kumulativ: xrKumulativ(b.kumulativ), mapaKumulativa: xrTekst(b.mapaKumulativa, 500),
-    xrechnungi: Array.isArray(b.xrechnungi) ? b.xrechnungi.slice(0, 50).map((x) => ({
-      broj: xrTekst(x?.broj, 40), datum: xrTekst(x?.datum, 10), kupac: xrTekst(x?.kupac, 160), eAdresa: xrTekst(x?.eAdresa, 254),
-      zaPlatiti: Number(x?.zaPlatiti) || 0, valjan: !!x?.valjan, mapa: xrTekst(x?.mapa, 500), promijenjeno: xrTekst(x?.promijenjeno, 30),
-      datoteke: Array.isArray(x?.datoteke) ? x.datoteke.slice(0, 12).map((d) => xrTekst(d, 200)) : [],
-    })) : null,
-    zadnjiRacun: b.zadnjiRacun && typeof b.zadnjiRacun === "object" ? { broj: xrTekst(b.zadnjiRacun.broj, 40), datum: xrTekst(b.zadnjiRacun.datum, 10) } : null,
-  };
-  res.json({ ok: true });
-});
 
 // ---------- Obavijesti o zadacima (zvonce u aplikaciji) ----------
 // Dvije vrste: "dodjela" — netko mi je zadao zadatak (dok ga ne potvrdim ili izvršim) i
@@ -2628,6 +2527,9 @@ const utovar = require("./utovar").registrirajUtovar(app, { pool, autentikacija,
 const montazaZahtjevi = brojacNeuspjelih(240, 10 * 60 * 1000);
 const montaza = require("./montaza").registrirajMontazu(app, { pool, autentikacija, ucitajPozicijuZaposlenika, izracunajDozvoljeneKljuceve, ucitajKljuc, mostAutentikacija, klijentIp, brojac: montazaZahtjevi, tajna: JWT_SECRET });
 
+// Most na serveru: trajni red zadataka (XRechnung), izvještaj o serveru s upozorenjima u zvoncu i automatska "Mapa projekta" (most-veza.js).
+const mostVeza = require("./most-veza").registrirajMost(app, { pool, autentikacija, ucitajPozicijuZaposlenika, izracunajDozvoljeneKljuceve, dozvolaZaKarticu, ucitajKljuc, mostAutentikacija });
+
 // Nesukladnosti i popravne radnje (ISO 9001): kartica Kontrola kvalitete → Nesukladnosti, PDF i slike na Z: preko mosta, podsjetnici kao zadaci (nesukladnosti.js).
 const nesukladnosti = require("./nesukladnosti").registrirajNesukladnosti(app, { pool, autentikacija, ucitajPozicijuZaposlenika, dozvolaZaKarticu, ucitajKljuc, mostAutentikacija });
 
@@ -2654,6 +2556,7 @@ app.listen(PORT, () => {
   utovar.pripremi();
   montaza.pripremi();
   nesukladnosti.pripremi();
+  mostVeza.pripremi();
   pripremiAktivnost();
   setInterval(pripremiAktivnost, 6 * 60 * 60 * 1000);
   provjeriAutoOdjavu();
