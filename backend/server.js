@@ -94,6 +94,7 @@ const DOZVOLJENI_KLJUCEVI = [
   "postavkePlaca", "praznici", "kvaliteteMaterijala", "ponudeLasera", "doplaciPlaca",
   "satiPoNalogu", "izdatnice", "cmr", "slobodniZadaci", "planProizvodnje", "nedovrsenaProizvodnja", "rezervacije", "maticnaKnjiga", "upitiTransporta", "narudzbeTransporta", "godisnjiOdmor", "xrechnungPostavke",
   "kadrovskiPodaci", "radnaMjesta", "uputnice", "pregledi", "zastitaPostavke", "prijedlozi", "statistikaIsporuka", "potrosniMaterijal", "potrosniPostavke",
+  "korekcijeSati",
 ];
 
 // Svaki modul (isti "moduli" popis kao u pozicijeZaposlenika) dijeli se na kartice — iste
@@ -197,15 +198,17 @@ const KARTICE_MODULA = {
   },
   // Evidencija sati (odvojeno od modula Zaposlenici od 24.10.2026.): evidencija rada i sati po nalozima.
   evidencijasati: {
-    evidencija: { citanje: ["evidencijaRada", "postavkePlaca", "praznici"], pisanje: ["evidencijaRada"] },
-    satinalozi: { citanje: ["evidencijaRada", "postavkePlaca", "radniNalozi", "zaposlenici", "satiPoNalogu"], pisanje: ["satiPoNalogu", "radniNalozi"] },
+    // korekcijeSati (skinuti sati radnika, korekcije-sati.js): čitaju ih evidencija, sati po nalozima i obračun da svugdje budu korigirani sati;
+    // piše ih samo PUT /api/korekcijeSati/patch uz posebnu dozvolu (karticeDozvole.evidencijasati.skidanjesati, po zadanom isključena).
+    evidencija: { citanje: ["evidencijaRada", "postavkePlaca", "praznici", "korekcijeSati"], pisanje: ["evidencijaRada"] },
+    satinalozi: { citanje: ["evidencijaRada", "postavkePlaca", "radniNalozi", "zaposlenici", "satiPoNalogu", "korekcijeSati"], pisanje: ["satiPoNalogu", "radniNalozi"] },
   },
   zaposlenici: {
     zaposlenici: { citanje: ["zaposlenici"], pisanje: ["zaposlenici"] },
     pozicije: { citanje: ["pozicijeZaposlenika"], pisanje: ["pozicijeZaposlenika"] },
     // godisnjiOdmor: stanje godišnjeg (tko je u minusu) i zamjena prekovremenih za dane godišnjeg — zamjena se upisuje u Obračunu plaća,
     // a sprema uz godišnji odmor (ne uz plaćne podatke), da je vide i uloge kojima je Obračun isključen.
-    obracun: { citanje: ["evidencijaRada", "postavkePlaca", "praznici", "zaposlenici", "doplaciPlaca", "postavkeTvrtke", "godisnjiOdmor"], pisanje: ["postavkePlaca", "praznici", "doplaciPlaca", "godisnjiOdmor"] },
+    obracun: { citanje: ["evidencijaRada", "postavkePlaca", "praznici", "zaposlenici", "doplaciPlaca", "postavkeTvrtke", "godisnjiOdmor", "korekcijeSati"], pisanje: ["postavkePlaca", "praznici", "doplaciPlaca", "godisnjiOdmor"] },
     // Godišnji odmor: pravo na dane (staž izvan Econa, složenost, preneseno, korekcija — upis u godisnjiOdmor) i iskorišteni
     // dani iz evidencije rada (godišnji i detašman - godišnji), uz praznike i pozicije za skupine radiona / režija.
     godisnji: { citanje: ["godisnjiOdmor", "evidencijaRada", "praznici", "zaposlenici", "pozicijeZaposlenika", "postavkeTvrtke"], pisanje: ["godisnjiOdmor"] },
@@ -244,7 +247,7 @@ const OBJEKT_KLJUCEVI = new Set(["cjenikRada", "postavkeTvrtke", "normativi", "p
 // Popisi koji se spremaju SAMO ciljano (PUT /api/<ključ>/patch): zastarjeli preglednik ne smije cijelim popisom prepisati uputnice (brojevi, snimke
 // izdanih uputnica) ni osobne podatke radnika. Ostalo (zastitaPostavke) se sprema kao cijeli objekt.
 // Potrošni materijal (artikli i odgovorna osoba): stanje mijenjaju samo rute /api/potrosni/* i kiosk, nikad cijeli popis iz preglednika (vidi potrosni-rute.js).
-const SAMO_CILJANO = new Set(["kadrovskiPodaci", "radnaMjesta", "uputnice", "pregledi", "prijedlozi", "potrosniMaterijal", "potrosniPostavke"]);
+const SAMO_CILJANO = new Set(["kadrovskiPodaci", "radnaMjesta", "uputnice", "pregledi", "prijedlozi", "potrosniMaterijal", "potrosniPostavke", "korekcijeSati"]);
 
 async function ucitajPozicijuZaposlenika(zaposlenikId) {
   const [zaposlenici, pozicije] = await Promise.all([ucitajKljuc("zaposlenici"), ucitajKljuc("pozicijeZaposlenika")]);
@@ -2402,6 +2405,9 @@ app.put("/api/kadrovskiPodaci/patch", autentikacija, (req, res) => patchPoIdHand
 app.put("/api/radnaMjesta/patch", autentikacija, (req, res) => patchPoIdHandler("radnaMjesta", /^(?!)$/, "radnih mjesta", prilagodiRadnaMjesta(req.zaposlenikId))(req, res));
 app.put("/api/uputnice/patch", autentikacija, (req, res) => patchPoIdHandler("uputnice", /^(?!)$/, "uputnica", prilagodiUputnice(req))(req, res));
 app.put("/api/pregledi/patch", autentikacija, (req, res) => patchPoIdHandler("pregledi", /^(?!)$/, "pregleda", prilagodiPregledi(req.zaposlenikId))(req, res));
+
+// ---------- Skidanje sati radniku (Sati po nalozima → Dnevni unos, posebna dozvola) — vidi korekcije-sati.js ----------
+require("./korekcije-sati").registrirajKorekcijeSati(app, { pool, autentikacija, ucitajPozicijuZaposlenika });
 
 // ---------- Prijedlozi korisnika ----------
 // Svaki prijavljeni zaposlenik smije poslati prijedlog (uvijek na svoje ime), dok je status "Novo" smije ga ispraviti ili povući; direktor i glavni
