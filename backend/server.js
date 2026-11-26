@@ -2535,6 +2535,8 @@ const montaza = require("./montaza").registrirajMontazu(app, { pool, autentikaci
 
 // Most na serveru: trajni red zadataka (XRechnung), izvještaj o serveru s upozorenjima u zvoncu i automatska "Mapa projekta" (most-veza.js).
 const mostVeza = require("./most-veza").registrirajMost(app, { pool, autentikacija, ucitajPozicijuZaposlenika, izracunajDozvoljeneKljuceve, dozvolaZaKarticu, ucitajKljuc, mostAutentikacija });
+// Mape projekata na Z: preko mosta: struktura mapa novih projekata, kartica Dokumenti, revizije nacrta i obavijesti za laser (dokumenti-projekta.js).
+const dokumentiProjekta = require("./dokumenti-projekta").registrirajDokumente(app, { pool, autentikacija, mostAutentikacija, ucitajKljuc, ucitajPozicijuZaposlenika, izracunajDozvoljeneKljuceve });
 
 // Nesukladnosti i popravne radnje (ISO 9001): kartica Kontrola kvalitete → Nesukladnosti, PDF i slike na Z: preko mosta, podsjetnici kao zadaci (nesukladnosti.js).
 const nesukladnosti = require("./nesukladnosti").registrirajNesukladnosti(app, { pool, autentikacija, ucitajPozicijuZaposlenika, dozvolaZaKarticu, ucitajKljuc, mostAutentikacija });
@@ -2562,7 +2564,7 @@ app.listen(PORT, () => {
   utovar.pripremi();
   montaza.pripremi();
   nesukladnosti.pripremi();
-  mostVeza.pripremi();
+  mostVeza.pripremi().then(() => dokumentiProjekta.pripremi());
   pripremiAktivnost();
   setInterval(pripremiAktivnost, 6 * 60 * 60 * 1000);
   provjeriAutoOdjavu();

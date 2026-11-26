@@ -17,6 +17,7 @@ const montazaSlike = [];
 const mostZadaci = [];
 const mostStanje = new Map(Object.entries(store.__mostStanje || {}));
 delete store.__mostStanje;
+const mostDogadaji = [];
 // Tablice nesukladnosti (nesukladnosti.js).
 const nsZapisi = [];
 const nsSlike = [];
@@ -44,6 +45,12 @@ async function query(sql, params = []) {
   if (/^\s*SELECT status, count\(\*\)::int AS n FROM most_zadaci/.test(s)) { const m = {}; mostZadaci.forEach((z) => { m[z.status] = (m[z.status] || 0) + 1; }); return odgovor(Object.entries(m).map(([status, n]) => ({ status, n }))); }
   if (/^\s*INSERT INTO most_stanje/.test(s)) { mostStanje.set(params[0], { vrijednost: JSON.parse(params[1]), azurirano: new Date().toISOString() }); return odgovor([{}]); }
   if (/^\s*SELECT kljuc, vrijednost, azurirano FROM most_stanje/.test(s)) return odgovor([...mostStanje.entries()].map(([kljuc, x]) => ({ kljuc, vrijednost: klon(x.vrijednost), azurirano: x.azurirano })));
+  if (/^\s*SELECT vrijednost FROM most_stanje WHERE kljuc = \$1/.test(s)) return odgovor(mostStanje.has(params[0]) ? [{ vrijednost: klon(mostStanje.get(params[0]).vrijednost) }] : []);
+  // Tablica most_dogadaji (dokumenti-projekta.js): promjene u mapama projekata.
+  if (/^\s*INSERT INTO most_dogadaji/.test(s)) { mostDogadaji.push({ id: params[0], projekt_id: params[1], vrsta: params[2], podaci: JSON.parse(params[3]), primatelji: JSON.parse(params[4]), vrijeme: new Date(Date.now() + mostDogadaji.length).toISOString(), potvrdio: null, potvrdeno: null, napomena: "" }); return odgovor([{}]); }
+  if (/^\s*SELECT [^]*FROM most_dogadaji WHERE projekt_id = \$1/.test(s)) return odgovor(mostDogadaji.filter((x) => x.projekt_id === params[0]).sort((a, b) => b.vrijeme.localeCompare(a.vrijeme)).slice(0, 100).map(klon));
+  if (/^\s*SELECT [^]*FROM most_dogadaji WHERE id = \$1/.test(s)) return odgovor(mostDogadaji.filter((x) => x.id === params[0]).map(klon));
+  if (/^\s*UPDATE most_dogadaji SET potvrdio = \$2/.test(s)) { const x = mostDogadaji.find((y) => y.id === params[0] && !y.potvrdeno); if (x) { x.potvrdio = params[1]; x.potvrdeno = new Date().toISOString(); x.napomena = params[2]; } return odgovor(x ? [{}] : []); }
   if (/^\s*INSERT INTO nesukladnosti_postavke/.test(s)) { nsPostavke.set(params[0], params[1]); return odgovor([{}]); }
   if (/FROM nesukladnosti_postavke WHERE kljuc = \$1/.test(s)) return odgovor(nsPostavke.has(params[0]) ? [{ vrijednost: nsPostavke.get(params[0]) }] : []);
   if (/^\s*INSERT INTO nesukladnosti_pdf/.test(s)) { nsPdf.set(params[0], params[1]); return odgovor([{}]); }

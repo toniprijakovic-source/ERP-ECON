@@ -327,17 +327,34 @@ function registrirajMost(app, d) {
       most: { ...stanjeMosta(), zadnjiKontakt: kontakt },
       izvjestaj: st.izvjestaj?.vrijednost || null, izvjestajPrimljen: st.izvjestaj?.azurirano || null, izvjestajSvjez: !!svjezi,
       upozorenja: izracunajUpozorenja({ kontakt, izvjestaj: svjezi, sada }),
-      postavke: { primateljId: st.postavke?.vrijednost?.primateljId || null },
+      postavke: { primateljId: st.postavke?.vrijednost?.primateljId || null, laserPrimateljId: st.postavke?.vrijednost?.laserPrimateljId || null },
       mape: st.mape?.vrijednost || null, mapeUpisane: Array.isArray(st.mapeUpisane?.vrijednost) ? st.mapeUpisane.vrijednost : [],
       zadaci24h: Object.fromEntries(zadaci.map((z) => [z.status, Number(z.n)])),
+      // Struktura mapa novih projekata (dokumenti-projekta.js): od kada vrijedi, koliko je napravljeno i greške koje čekaju ponovni pokušaj.
+      struktura: {
+        od: st.strukturaPocetak?.vrijednost?.vrijeme || null,
+        gotovo: Object.values(st.strukturaGotovo?.vrijednost || {}).sort((a, b) => String(b.vrijeme).localeCompare(String(a.vrijeme))).slice(0, 10),
+        brojGotovih: Object.keys(st.strukturaGotovo?.vrijednost || {}).length,
+        greske: Object.values(st.strukturaGreske?.vrijednost || {}).slice(0, 20),
+      },
     });
   }));
+  // Postavke: tko prima upozorenja servera (primateljId) i obavijesti o promjenama u mapama "Laser za limove/profile" (laserPrimateljId).
+  // Šalje se samo polje koje se mijenja; drugo ostaje kakvo je bilo.
   app.put("/api/server/postavke", autentikacija, obradi(async (req, res) => {
     if (!(await ovlast(req, res, true))) return;
-    const id = req.body?.primateljId ? tekst(req.body.primateljId, 80) : null;
-    if (id && !((await ucitajKljuc("zaposlenici")) || []).some((z) => z.id === id)) return res.status(400).json({ error: "Zaposlenik nije pronađen." });
-    await spremiStanje("postavke", { primateljId: id });
-    res.json({ ok: true, postavke: { primateljId: id } });
+    const b = req.body || {};
+    const zaposlenici = (await ucitajKljuc("zaposlenici")) || [];
+    const prije = (await ucitajStanje()).postavke?.vrijednost || {};
+    const postavke = { primateljId: prije.primateljId || null, laserPrimateljId: prije.laserPrimateljId || null };
+    for (const polje of ["primateljId", "laserPrimateljId"]) {
+      if (!(polje in b)) continue;
+      const id = b[polje] ? tekst(b[polje], 80) : null;
+      if (id && !zaposlenici.some((z) => z.id === id)) return res.status(400).json({ error: "Zaposlenik nije pronađen." });
+      postavke[polje] = id;
+    }
+    await spremiStanje("postavke", postavke);
+    res.json({ ok: true, postavke });
     provjeriUpozorenja();
   }));
 
