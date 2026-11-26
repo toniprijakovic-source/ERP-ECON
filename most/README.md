@@ -78,6 +78,21 @@ Svakih 10 minuta most uzme iz ERP-a projekte bez upisane "Mape projekta" (osim a
 (isto pravilo kao za XRechnung, `lib/mapa.js`) i javi je ERP-u (`lib/mape-projekata.js`). ERP je upiše samo ako je polje i dalje prazno;
 ručno upisana mapa se nikad ne mijenja. Na Z: se ništa ne stvara ni ne mijenja. U probnom načinu (`MOST_PROBNO=1`) ništa se ne upisuje.
 
+## Mape novih projekata i praćenje mapa (`lib/dokumenti.js`)
+**Struktura:** za projekt otvoren u ERP-u nakon uvođenja ove funkcije (postojeći projekti se ne diraju) most svake minute napravi mapu
+`<šifra>_<naziv>` u korijenu projekata tekuće godine (ili dopuni ručno otvorenu mapu) s podmapama `01 Narudžba`, `02 Nacrti` (Od kupca,
+Za odobrenje, Za proizvodnju + Stare revizije, Za montažu, Laser za limove, Laser za profile), `03 Nabava` … `09 Slike`. RN 180 (kupaonice)
+ima nacrte po dijelovima (Podovi, Stranice, Krovovi, Profili, Spojni profili, Šablone), bez `06 Montaža`. Usluge `RN 40-04-NN` dobivaju
+podmapu `NN-Kupac-opis` u zbirnoj mapi `RN 40-04_Usluge radione` (Narudžba, Laser za limove, Laser za profile, Fotografije - Utovar).
+U mapu ide i prečac `Otvori u ERP-u.url` (`ERP_APP_URL`, zadano https://erp-econ.vercel.app). Ništa se ne briše ni ne preimenuje.
+Fotografije utovara/montaže u novoj strukturi idu u `05 Isporuka` / `06 Montaža`; računi se traže i u `07 Fakture`.
+
+**Praćenje:** svakih 5 minuta most pregleda mape aktivnih projekata (samo nazive, veličine i vremena — sadržaj se ne čita) i ERP-u javi
+sažetak (kartica Dokumenti u projektu) i promjene: `Laser za limove/profile` (zadatak osobi odabranoj u Stanju servera), `Od kupca` i
+`Za proizvodnju` (nove revizije: zadatak voditelju projekta i voditelju proizvodnje, potvrda u projektu) te nove mape odobravanja s datumom
+(`Poslano 14.01.2025`, `Odgovor …`, `Freigabe …`). Datoteka se javlja tek kad se 2 minute ne mijenja; prvi pregled projekta samo zapamti stanje.
+Stanje je u `dokumenti-stanje.json` (može se obrisati — sljedeći pregled ponovno samo zapamti stanje, bez obavijesti).
+
 ## Ograničenja prve verzije
 Samo isporuke u EU bez PDV-a (kategorija K), valuta EUR, bez popusta na stavkama; domaće račune šalje Konplast.
 

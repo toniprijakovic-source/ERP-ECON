@@ -1,6 +1,7 @@
 // Fotografije koje radnici snimaju mobitelom (QR kod → ERP) most sprema u mapu projekta na Z:
 //   utovar:  <mapa projekta>\Fotografije - Utovar\<datum utovara>\utovar_<datum>_<otpremnica>_<nn>.jpg
 //   montaža: <mapa projekta>\Fotografije - Montaža\<oznaka pozicije>\<datum>_<oznaka>_<nn>.jpg
+//   (projekti s novom strukturom mapa: unutar "05 Isporuka" odnosno "06 Montaža", vidi RODITELJ_FOTOGRAFIJA)
 // Sigurnosna pravila: samo JPEG (provjera potpisa), samo naziv, datum i oznaka u dopuštenom obliku (nema putanja ni ..), pisanje samo unutar mape projekta,
 // mapa projekta se nikad ne stvara sama, postojeća datoteka se nikad ne prepisuje (ista slika = već spremljeno, drukčiji sadržaj = _v2). U probnom načinu ništa ne ide na Z:.
 import fs from "node:fs";
@@ -17,13 +18,21 @@ const DATUM_OBLIK = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const jeJpeg = (b) => Buffer.isBuffer(b) && b.length > 4 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
 const sigurnaSifra = (s) => String(s || "projekt").replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "projekt";
 
+// Projekti s novom strukturom mapa (lib/dokumenti.js) drže fotografije u svojoj fazi: utovar u "05 Isporuka", montažu u "06 Montaža".
+// Ako u korijenu projekta već postoji stara mapa fotografija (projekt prije nove strukture), slike idu i dalje tamo.
+export const RODITELJ_FOTOGRAFIJA = { utovar: "05 Isporuka", montaza: "06 Montaža" };
+const mapaFotografija = (mapaProjekta, glavnaMapa, roditelj) => {
+  if (!roditelj || fs.existsSync(path.join(mapaProjekta, glavnaMapa)) || !fs.existsSync(path.join(mapaProjekta, roditelj))) return path.join(mapaProjekta, glavnaMapa);
+  return path.join(mapaProjekta, roditelj, glavnaMapa);
+};
+
 // Zajednički dio: provjera, mapa projekta, pisanje bez prepisivanja. podmapa = naziv mape unutar glavne mape (datum ili oznaka).
-function spremi(slika, bajtovi, okolina, glavnaMapa, podmapa) {
+function spremi(slika, bajtovi, okolina, glavnaMapa, podmapa, roditelj = "") {
   if (!jeJpeg(bajtovi)) throw new Greska("Sadržaj nije JPEG slika.");
   if (!String(slika?.sifra || "").trim()) throw new Greska("Slika nema šifru projekta.");
   // Probno: ništa se ne piše na Z:, nego u proba-izlaz; mapu projekta ne treba tražiti.
   const mapaProjekta = okolina.probno ? path.join(okolina.probnoIzlaz, "foto", sigurnaSifra(slika.sifra)) : nadjiMapuProjekta(okolina.korijen, slika.sifra, slika.mapa);
-  const mapaOdredista = path.join(mapaProjekta, glavnaMapa, podmapa);
+  const mapaOdredista = path.join(mapaFotografija(mapaProjekta, glavnaMapa, roditelj), podmapa);
   const relativno = path.relative(mapaProjekta, mapaOdredista);
   if (relativno.startsWith("..") || path.isAbsolute(relativno)) throw new Greska("Odredišna mapa nije unutar mape projekta.");
   fs.mkdirSync(mapaOdredista, { recursive: true });
@@ -45,7 +54,7 @@ function spremi(slika, bajtovi, okolina, glavnaMapa, podmapa) {
 export function spremiUtovarSliku(slika, bajtovi, okolina) {
   if (!NAZIV_UTOVARA.test(String(slika?.naziv || ""))) throw new Greska(`Neispravan naziv datoteke: ${String(slika?.naziv).slice(0, 80)}`);
   if (!DATUM_OBLIK.test(String(slika?.datum || ""))) throw new Greska(`Neispravan datum utovara: ${String(slika?.datum).slice(0, 20)}`);
-  return spremi(slika, bajtovi, okolina, String(okolina.postavke?.mapaUtovara || MAPA_UTOVARA), slika.datum);
+  return spremi(slika, bajtovi, okolina, String(okolina.postavke?.mapaUtovara || MAPA_UTOVARA), slika.datum, RODITELJ_FOTOGRAFIJA.utovar);
 }
 
 // Montaža: slika = { sifra, mapa, pozicija, datum, naziv }; mapa slika ide u podmapu s oznakom pozicije (npr. J-3.OG).
@@ -55,7 +64,7 @@ export function spremiMontaznuSliku(slika, bajtovi, okolina) {
   if (!DATUM_OBLIK.test(String(slika?.datum || ""))) throw new Greska(`Neispravan datum: ${String(slika?.datum).slice(0, 20)}`);
   const naziv = String(slika?.naziv || "");
   if (!/^[^\\/:*?"<>|]{1,120}\.jpg$/.test(naziv) || !naziv.startsWith(`${slika.datum}_${poz}_`) || !/_\d{2,3}\.jpg$/.test(naziv)) throw new Greska(`Neispravan naziv datoteke: ${naziv.slice(0, 80)}`);
-  return spremi(slika, bajtovi, okolina, String(okolina.postavke?.mapaMontaze || MAPA_MONTAZE), poz);
+  return spremi(slika, bajtovi, okolina, String(okolina.postavke?.mapaMontaze || MAPA_MONTAZE), poz, RODITELJ_FOTOGRAFIJA.montaza);
 }
 
 // Jedan krug: preuzmi slike koje čekaju, spremi ih i javi ERP-u rezultat (spremljeno ili greška). Greška jedne slike ne zaustavlja ostale.

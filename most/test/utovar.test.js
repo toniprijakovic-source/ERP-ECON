@@ -43,8 +43,9 @@ try {
   e = baci(() => spremiUtovarSliku(slika({ sifra: "RN 99-77", naziv: "utovar_2026-11-24_X_01.jpg" }), JPEG("c"), okolina));
   provjeri(e instanceof Greska && /nema mape/.test(e.message), "nema mape projekta → greška, ništa se ne stvara");
   provjeri(!fs.existsSync(path.join(korijen, "RN 99-77")) && fs.readdirSync(korijen).length === 3, "mapa projekta se nikad ne stvara sama");
-  e = baci(() => spremiUtovarSliku(slika({ mapa: path.join(baza, "nema-je") }), JPEG("c"), okolina));
-  provjeri(e instanceof Greska && /ne postoji/.test(e.message), "mapa iz ERP-a koja ne postoji → greška");
+  // Upisana mapa koja ne postoji traži se po šifri (preimenovana mapa); greška je tek kad ni po šifri nema mape.
+  e = baci(() => spremiUtovarSliku(slika({ sifra: "RN 99-78", mapa: path.join(baza, "nema-je") }), JPEG("c"), okolina));
+  provjeri(e instanceof Greska && /ne postoji/.test(e.message), "mapa iz ERP-a koja ne postoji (ni po šifri) → greška");
 
   // sigurnosna pravila
   provjeri(baci(() => spremiUtovarSliku(slika({ naziv: "../../x.jpg" }), JPEG("c"), okolina)) instanceof Greska, "naziv s putanjom se odbija");

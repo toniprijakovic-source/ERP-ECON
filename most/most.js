@@ -14,6 +14,7 @@ import { obradiNesukladnosti } from "./lib/nesukladnosti.js";
 import { procitajMapiranja, osigurajPogone, opisPogona } from "./lib/pogoni.js";
 import { prikupiStanje } from "./lib/stanje.js";
 import { uskladiMapeProjekata } from "./lib/mape-projekata.js";
+import { uskladiStrukturu, pratiDokumente } from "./lib/dokumenti.js";
 
 const mapaMosta = path.dirname(fileURLToPath(import.meta.url));
 try { process.loadEnvFile(path.join(mapaMosta, ".env")); } catch { /* .env nije obavezan ako su varijable već postavljene */ }
@@ -43,6 +44,9 @@ okolina.korijenNesukladnosti = process.env.KORIJEN_NESUKLADNOSTI || okolina.post
 // Mapa sigurnosnih kopija (ista kao BACKUP_MAPA programa za kopije) — most iz nje samo čita stanje kopija za ERP (Stanje servera).
 const mapaKopija = process.env.MAPA_KOPIJA || okolina.postavke.mapaKopija || "";
 const pokrenut = new Date().toISOString();
+// Adresa aplikacije za prečac "Otvori u ERP-u.url" u novim mapama projekata (lib/dokumenti.js).
+const erpUrl = (process.env.ERP_APP_URL || okolina.postavke.erpAppUrl || "https://erp-econ.vercel.app").replace(/\/$/, "");
+const datotekaStanjaDokumenata = path.join(mapaMosta, "dokumenti-stanje.json");
 
 // Ispis ide na konzolu i u most-zapisnik.log (UTF-8; pri 1 MB se stari zapisnik premjesti u .old).
 const datotekaZapisnika = path.join(mapaMosta, "most-zapisnik.log");
@@ -105,9 +109,10 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(sig
 log(`ECON most pokrenut. ERP: ${API} | Korijen: ${okolina.korijen.join(" ; ")} | Java: ${okolina.java}${mapaKopija ? ` | Kopije: ${mapaKopija}` : ""}${okolina.probno ? " | PROBNI NAČIN" : ""}${mapiranja.length ? ` | Pogoni: ${mapiranja.map((m) => `${m.slovo}=${m.cilj}`).join(" ; ")}` : ""}`);
 let greskaPrijavljena = false;
 let greskaUtovaraPrijavljena = false;
-// Izvještaj o serveru svake minute i traženje mapa projekata svakih 10 minuta (greška se u zapisnik upisuje jednom, do oporavka).
-let zadnjeStanje = 0, zadnjeMape = 0;
-let greskaStanja = false, greskaMapa = false;
+// Izvještaj o serveru svake minute, traženje mapa projekata svakih 10 minuta, struktura mapa novih projekata svake minute i pregled
+// mapa aktivnih projekata svakih 5 minuta (greška se u zapisnik upisuje jednom, do oporavka).
+let zadnjeStanje = 0, zadnjeMape = 0, zadnjaStruktura = 0, zadnjiDokumenti = 0;
+let greskaStanja = false, greskaMapa = false, greskaStrukture = false, greskaDokumenata = false;
 for (;;) {
   provjeriPogone();
   try {
@@ -147,6 +152,28 @@ for (;;) {
     } catch (e) {
       if (!greskaMapa && !greskaPrijavljena) log("Mape projekata: nije uspjelo:", e.message);
       greskaMapa = true;
+    }
+  }
+  if (Date.now() - zadnjaStruktura >= 60_000) {
+    zadnjaStruktura = Date.now();
+    try {
+      await uskladiStrukturu(api, okolina, log, erpUrl);
+      greskaStrukture = false;
+    } catch (e) {
+      if (!greskaStrukture && !greskaPrijavljena) log("Struktura mapa novih projekata: nije uspjelo:", e.message);
+      greskaStrukture = true;
+    }
+  }
+  if (Date.now() - zadnjiDokumenti >= 5 * 60_000) {
+    zadnjiDokumenti = Date.now();
+    try {
+      const pocetak = Date.now();
+      const r = await pratiDokumente(api, okolina, log, { datotekaStanja: datotekaStanjaDokumenata });
+      if (Date.now() - pocetak > 30_000) log(`Pregled mapa projekata trajao je ${Math.round((Date.now() - pocetak) / 1000)} s (${r.projekti || 0} projekata).`);
+      greskaDokumenata = false;
+    } catch (e) {
+      if (!greskaDokumenata && !greskaPrijavljena) log("Pregled mapa projekata: nije uspjelo:", e.message);
+      greskaDokumenata = true;
     }
   }
   await new Promise((r) => setTimeout(r, 5000));
