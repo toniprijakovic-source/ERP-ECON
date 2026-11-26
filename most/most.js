@@ -12,6 +12,8 @@ import { korijeniProjekata } from "./lib/mapa.js";
 import { obradiUtovar, obradiMontazu } from "./lib/utovar.js";
 import { obradiNesukladnosti } from "./lib/nesukladnosti.js";
 import { procitajMapiranja, osigurajPogone, opisPogona } from "./lib/pogoni.js";
+import { prikupiStanje } from "./lib/stanje.js";
+import { uskladiMapeProjekata } from "./lib/mape-projekata.js";
 
 const mapaMosta = path.dirname(fileURLToPath(import.meta.url));
 try { process.loadEnvFile(path.join(mapaMosta, ".env")); } catch { /* .env nije obavezan ako su varijable već postavljene */ }
@@ -38,6 +40,9 @@ const okolina = {
 };
 // Mapa nesukladnosti (ISO zapisi): KORIJEN_NESUKLADNOSTI iz .env ili postavke.json → mapaNesukladnosti (mora postojati; most stvara samo podmape godine i nesukladnosti).
 okolina.korijenNesukladnosti = process.env.KORIJEN_NESUKLADNOSTI || okolina.postavke.mapaNesukladnosti || "";
+// Mapa sigurnosnih kopija (ista kao BACKUP_MAPA programa za kopije) — most iz nje samo čita stanje kopija za ERP (Stanje servera).
+const mapaKopija = process.env.MAPA_KOPIJA || okolina.postavke.mapaKopija || "";
+const pokrenut = new Date().toISOString();
 
 // Ispis ide na konzolu i u most-zapisnik.log (UTF-8; pri 1 MB se stari zapisnik premjesti u .old).
 const datotekaZapisnika = path.join(mapaMosta, "most-zapisnik.log");
@@ -91,15 +96,18 @@ const provjeriPogone = () => {
   zadnjaProvjeraPogona = Date.now();
   for (const r of osigurajPogone(mapiranja)) {
     const opis = opisPogona(r);
-    if (stanjePogona.get(r.slovo) !== opis) log(opis);
-    stanjePogona.set(r.slovo, opis);
+    if (stanjePogona.get(r.slovo)?.opis !== opis) log(opis);
+    stanjePogona.set(r.slovo, { opis, ok: r.stanje !== "greska" });
   }
 };
 
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(signal, () => { log(`Primljen signal ${signal} — most staje.`); process.exit(0); });
-log(`ECON most pokrenut. ERP: ${API} | Korijen: ${okolina.korijen.join(" ; ")} | Java: ${okolina.java}${okolina.probno ? " | PROBNI NAČIN" : ""}${mapiranja.length ? ` | Pogoni: ${mapiranja.map((m) => `${m.slovo}=${m.cilj}`).join(" ; ")}` : ""}`);
+log(`ECON most pokrenut. ERP: ${API} | Korijen: ${okolina.korijen.join(" ; ")} | Java: ${okolina.java}${mapaKopija ? ` | Kopije: ${mapaKopija}` : ""}${okolina.probno ? " | PROBNI NAČIN" : ""}${mapiranja.length ? ` | Pogoni: ${mapiranja.map((m) => `${m.slovo}=${m.cilj}`).join(" ; ")}` : ""}`);
 let greskaPrijavljena = false;
 let greskaUtovaraPrijavljena = false;
+// Izvještaj o serveru svake minute i traženje mapa projekata svakih 10 minuta (greška se u zapisnik upisuje jednom, do oporavka).
+let zadnjeStanje = 0, zadnjeMape = 0;
+let greskaStanja = false, greskaMapa = false;
 for (;;) {
   provjeriPogone();
   try {
@@ -119,6 +127,27 @@ for (;;) {
   } catch (e) {
     if (!greskaUtovaraPrijavljena && !greskaPrijavljena) log("Fotografije (utovar/montaža): veza s ERP-om nije uspjela:", e.message);
     greskaUtovaraPrijavljena = true;
+  }
+  if (Date.now() - zadnjeStanje >= 60_000) {
+    zadnjeStanje = Date.now();
+    try {
+      const pogoni = [...stanjePogona.entries()].map(([slovo, x]) => ({ slovo, ok: x.ok, opis: x.opis }));
+      await api("POST", "/api/most/stanje", prikupiStanje({ korijeni: okolina.korijen, mapaKopija, pogoni, pokrenut, probno: okolina.probno }));
+      greskaStanja = false;
+    } catch (e) {
+      if (!greskaStanja && !greskaPrijavljena) log("Izvještaj o serveru: slanje ERP-u nije uspjelo:", e.message);
+      greskaStanja = true;
+    }
+  }
+  if (Date.now() - zadnjeMape >= 10 * 60_000) {
+    zadnjeMape = Date.now();
+    try {
+      await uskladiMapeProjekata(api, okolina, log);
+      greskaMapa = false;
+    } catch (e) {
+      if (!greskaMapa && !greskaPrijavljena) log("Mape projekata: nije uspjelo:", e.message);
+      greskaMapa = true;
+    }
   }
   await new Promise((r) => setTimeout(r, 5000));
 }

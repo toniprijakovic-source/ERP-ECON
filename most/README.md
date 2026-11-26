@@ -66,6 +66,18 @@ Prije preseljenja pokrenuti `node provjera-prava.js` POD RAČUNOM MOSTA (instali
 čita korijene, u jednoj projektnoj mapi i u mapi nesukladnosti stvori pa obriše privremenu mapu, postojeću tuđu datoteku samo otvori za
 pisanje (ništa ne upisuje), pokrene Javu i provjeri vezu s ERP-om (`/api/vrijeme`, bez preuzimanja zadataka). Izvještaj: `provjera-prava.txt`.
 
+## Stanje servera (ERP → Direktorski pregled → Stanje servera)
+Most svake minute pošalje ERP-u izvještaj (`lib/stanje.js`): spojeni pogoni, korijeni projekata, slobodan prostor, sat servera i stanje
+sigurnosnih kopija iz mape `MAPA_KOPIJA` (.env, ista mapa kao `BACKUP_MAPA` programa za kopije): `zadnja-kopija.json`, zadnja greška iz
+`zapisnik.log` i `probna-obnova.json` (mjesečna probna obnova, backend/probna-obnova.js). Most te datoteke samo čita. ERP iz izvještaja i
+zadnjeg javljanja mosta javlja upozorenja kao zadatak u zvoncu odabrane osobe (most šuti > 15 min, kopija starija od 2 h, probna obnova
+neuspjela ili starija od 35 dana, pogon nije spojen, malo prostora).
+
+## Mapa projekta (automatski)
+Svakih 10 minuta most uzme iz ERP-a projekte bez upisane "Mape projekta" (osim arhiviranih), potraži mapu po šifri u korijenima projekata
+(isto pravilo kao za XRechnung, `lib/mapa.js`) i javi je ERP-u (`lib/mape-projekata.js`). ERP je upiše samo ako je polje i dalje prazno;
+ručno upisana mapa se nikad ne mijenja. Na Z: se ništa ne stvara ni ne mijenja. U probnom načinu (`MOST_PROBNO=1`) ništa se ne upisuje.
+
 ## Ograničenja prve verzije
 Samo isporuke u EU bez PDV-a (kategorija K), valuta EUR, bez popusta na stavkama; domaće račune šalje Konplast.
 
