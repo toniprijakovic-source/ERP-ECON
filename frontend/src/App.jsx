@@ -3709,6 +3709,8 @@ function StanjeServeraTab({ db, showToast, mozeMijenjati }) {
         </div>
       </div>
 
+      <ArhivaMapaKartica arhiva={st.arhiva} sada={sada} mozeMijenjati={mozeMijenjati} showToast={showToast} ucitaj={ucitaj} />
+
       <div className="card" style={{ padding: 14 }}>
         {naslov("Tko prima upozorenja")}
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -3730,6 +3732,128 @@ function StanjeServeraTab({ db, showToast, mozeMijenjati }) {
         </div>
         <div style={sitno}>Kad se u mapi projekta na serveru u "Laser za limove" ili "Laser za profile" doda, promijeni ili obriše datoteka, svaka odabrana osoba dobije jedan zadatak u zvoncu po projektu s popisom promjena. Izmjene nacrta (Od kupca, Za proizvodnju) idu voditelju projekta i voditelju proizvodnje.</div>
       </div>
+    </div>
+  );
+}
+
+// Arhiva mapa projekata (most/lib/arhiva.js, backend/dokumenti-projekta.js): projekt koji je u ERP-u Arhiviran ili Otkazan most premješta
+// u "Arhiva" svoje godine na serveru (usluge radione u Arhivu zbirne mape usluga), a projekt vraćen u aktivne natrag. Mape bez projekta
+// u ERP-u s nastavkom _ZAVRŠEN premještaju se za odabrane godine. Dok arhiva nije uključena, most samo javlja popis — pregleda se ovdje.
+const dijeloviPutanje = (p) => String(p || "").split(/[\\/]/).filter(Boolean);
+const imeMape = (p) => dijeloviPutanje(p).pop() || "";
+const roditeljMape = (p) => { const d = dijeloviPutanje(p); return d[d.length - 2] || ""; };
+const nMapa = (n) => `${n} ${mnozinaHr(n, "mapa", "mape", "mapa")}`;
+const nMapuAk = (n) => `${n} ${mnozinaHr(n, "mapu", "mape", "mapa")}`; // "premjestiti 161 mapu"
+function ArhivaMapaKartica({ arhiva, sada, mozeMijenjati, showToast, ucitaj }) {
+  const [odabrane, setOdabrane] = useState(null); // prije uključivanja: godine za mape bez projekta u ERP-u (zadano: sve s popisa)
+  const [otvoreno, setOtvoreno] = useState({});
+  const [sprema, setSprema] = useState(false);
+  const a = arhiva || {};
+  const post = a.postavke || {};
+  const ukljuceno = !!post.ukljuceno;
+  const plan = Array.isArray(a.plan) ? a.plan : [];
+  const ceka = Array.isArray(a.ceka) ? a.ceka : [];
+  const cekaOd = new Set(ceka.map((c) => c.od));
+  const godinePlana = [...new Set(plan.filter((s) => s.vrsta === "bez-erp" && s.godina).map((s) => s.godina))];
+  const godine = ukljuceno ? (post.bezErpGodine || []) : (odabrane || godinePlana);
+  const sveGodine = [...new Set([...godinePlana, ...(ukljuceno ? post.bezErpGodine || [] : [])])].sort((x, y) => y - x);
+  const sitno = { fontSize: 11.5, color: "var(--ink-faint)", marginTop: 6 };
+  const podnaslov = (t) => <div style={{ fontSize: 12, fontWeight: 600, margin: "10px 0 4px" }}>{t}</div>;
+
+  const spremi = async (tijelo, poruka) => {
+    setSprema(true);
+    try {
+      const res = await fetch(`${API_URL}/api/server/arhiva`, { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` }, body: JSON.stringify(tijelo) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { showToast(data.error || "Spremanje nije uspjelo."); return; }
+      showToast(poruka);
+      await ucitaj();
+    } catch { showToast("Nema veze s poslužiteljem."); } finally { setSprema(false); }
+  };
+  const promijeniGodinu = (g) => {
+    const nove = godine.includes(g) ? godine.filter((x) => x !== g) : [...godine, g];
+    if (ukljuceno) spremi({ bezErpGodine: nove }, nove.includes(g) ? `Mape s nastavkom ZAVRŠEN iz ${g}. premještaju se u idućih 5 minuta.` : `Mape s nastavkom ZAVRŠEN iz ${g}. više se ne premještaju.`);
+    else setOdabrane(nove);
+  };
+  const zaPremjestiti = plan.filter((s) => s.vrsta !== "bez-erp" || godine.includes(s.godina)).length;
+  const ukljuci = () => {
+    if (!window.confirm(`Uključiti arhivu mapa na serveru?\n\nMost će u idućih 5 minuta premjestiti ${nMapuAk(zaPremjestiti)} prema ovom popisu, a ubuduće svaki projekt koji u ERP-u arhivirate ili otkažete (i vratiti onaj koji vratite u aktivne).\n\nIme mape ostaje isto; ništa se ne kopira ni briše.`)) return;
+    spremi({ ukljuceno: true, bezErpGodine: godine }, "Uključeno — most premješta mape u idućih 5 minuta.");
+  };
+  const iskljuci = () => {
+    if (!window.confirm("Isključiti premještanje mapa? Mape ostaju gdje jesu; most samo javlja što bi premjestio.")) return;
+    spremi({ ukljuceno: false }, "Isključeno — mape se više ne premještaju.");
+  };
+
+  const redak = (s, i) => (
+    <div key={`${s.od || s.mapa}-${i}`} title={s.do ? `${s.od} → ${s.do}` : s.mapa || ""} style={{ fontSize: 12.5, padding: "3px 0", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "baseline" }}>
+      {s.sifra && <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{s.sifra}</span>}
+      <span className="f-mono" style={{ fontSize: 11.5, wordBreak: "break-all", flex: 1, minWidth: 180 }}>{imeMape(s.od || s.mapa)}</span>
+      <span style={{ color: "var(--ink-faint)", fontSize: 11.5 }}>{s.vrijeme ? `${s.vrsta === "vrati" ? "vraćeno iz Arhive" : "u Arhivu"} · ${vrijemeStanja(s.vrijeme)}` : roditeljMape(s.od || s.mapa)}{s.status ? ` · ${s.status}` : ""}</span>
+      {(s.greska || s.razlog) && <div style={{ flexBasis: "100%", fontSize: 11.5, overflowWrap: "anywhere", color: s.greska ? "var(--rust)" : "var(--ink-soft)" }}>{s.greska || s.razlog}</div>}
+    </div>
+  );
+  const popis = (kljuc, stavke, n = 6) => {
+    const sve = otvoreno[kljuc];
+    return (
+      <>
+        {(sve ? stavke : stavke.slice(0, n)).map(redak)}
+        {stavke.length > n && <Btn size="sm" variant="ghost" onClick={() => setOtvoreno({ ...otvoreno, [kljuc]: !sve })}>{sve ? "Prikaži manje" : `Prikaži sve (${stavke.length})`}</Btn>}
+      </>
+    );
+  };
+  const skupine = [
+    { kljuc: "arhiva", naslov: "Arhivirani i otkazani projekti iz ERP-a → Arhiva", stavke: plan.filter((s) => s.vrsta === "arhiva" && !cekaOd.has(s.od)) },
+    { kljuc: "vrati", naslov: "Vraćaju se iz Arhive (projekt je u ERP-u opet aktivan)", stavke: plan.filter((s) => s.vrsta === "vrati" && !cekaOd.has(s.od)) },
+  ].filter((s) => s.stavke.length);
+  const bezErp = (g) => plan.filter((s) => s.vrsta === "bez-erp" && s.godina === g && !cekaOd.has(s.od));
+  const kvacicaGodine = (g) => (
+    <label key={g} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, marginRight: 14, cursor: mozeMijenjati && !sprema ? "pointer" : "default" }}>
+      <input type="checkbox" checked={godine.includes(g)} disabled={!mozeMijenjati || sprema} onChange={() => promijeniGodinu(g)} />
+      {g}. {bezErp(g).length > 0 && <span style={{ color: "var(--ink-faint)" }}>({ukljuceno && godine.includes(g) ? "premješta se" : nMapa(bezErp(g).length)})</span>}
+    </label>
+  );
+
+  return (
+    <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+      <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600, marginBottom: 8 }}>Arhiva mapa projekata</h3>
+      <div style={{ fontSize: 12.5, marginBottom: 6 }}>
+        Projekt koji u ERP-u arhivirate ili otkažete most premješta u mapu <strong>Arhiva</strong> na serveru, u mapi projekata njegove godine (npr. Econ_2026_Projekti\Arhiva; usluge radione u RN 40-04_Usluge radione\Arhiva). Projekt koji vratite u aktivne (ili u Završen) vraća se na staro mjesto. Ime mape ostaje isto; ništa se ne kopira ni briše. "Mapa projekta" u ERP-u se sama ispravi.
+      </div>
+      <div style={{ fontSize: 12.5 }}>
+        {ukljuceno ? <><Badge status="Aktivan" label="Uključeno" /> od {vrijemeStanja(post.ukljucenoOd)} · premješteno ukupno: <strong>{a.brojPremjestenih || 0}</strong></> : <><Badge status="Planiran" label="Isključeno" /> most samo javlja što bi premjestio</>}
+        {a.javljeno && <span style={{ color: "var(--ink-faint)" }}> · zadnje javljanje mosta {prijeKoliko(a.javljeno, sada)}</span>}
+      </div>
+      {!a.javljeno ? (
+        <div style={sitno}>Most još nije javio popis mapa. Kad se most na serveru ažurira i ponovno pokrene, popis se pojavi u 5 minuta.</div>
+      ) : (
+        <>
+          {!ukljuceno && <div style={{ fontSize: 12.5, marginTop: 10, padding: "8px 10px", background: "var(--surface-alt)", borderRadius: 6 }}>Pregledajte popis ispod. Kad kliknete <strong>Uključi i premjesti</strong>, most premjesti {nMapuAk(zaPremjestiti)} i od tada radi sam.</div>}
+          {ceka.length > 0 && <>{podnaslov(`Čeka (${ceka.length}) — most pokušava ponovno svakih 5 minuta`)}{popis("ceka", ceka)}</>}
+          {skupine.map((s) => <div key={s.kljuc}>{podnaslov(`${s.naslov} (${s.stavke.length})`)}{popis(s.kljuc, s.stavke)}</div>)}
+          {sveGodine.length > 0 && (
+            <div>
+              {podnaslov("Mape bez projekta u ERP-u s nastavkom ZAVRŠEN u nazivu → Arhiva, za godine:")}
+              <div style={{ display: "flex", flexWrap: "wrap", rowGap: 4 }}>{sveGodine.map(kvacicaGodine)}</div>
+              {sveGodine.filter((g) => bezErp(g).length && !(ukljuceno && godine.includes(g))).map((g) => <div key={g}><div style={{ ...sitno, marginTop: 8 }}>{g}.</div>{popis(`bez-${g}`, bezErp(g))}</div>)}
+            </div>
+          )}
+          {!plan.length && !ceka.length && <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 8 }}>Sve mape su na pravom mjestu.</div>}
+          {(a.preskoceno || []).length > 0 && (
+            <div>
+              {podnaslov(`Ne premješta se (${a.preskoceno.length}) — razlog uz svaku`)}
+              {popis("preskoceno", a.preskoceno, 4)}
+            </div>
+          )}
+          {ukljuceno && (a.povijest || []).length > 0 && <div>{podnaslov("Zadnja premještanja")}{popis("povijest", a.povijest, 5)}</div>}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12, alignItems: "center" }}>
+            {!ukljuceno && <Btn size="sm" variant="primary" icon={CheckCircle2} disabled={!mozeMijenjati || sprema} onClick={ukljuci}>Uključi i premjesti ({nMapa(zaPremjestiti)})</Btn>}
+            {ukljuceno && <Btn size="sm" variant="ghost" disabled={!mozeMijenjati || sprema} onClick={iskljuci}>Isključi premještanje</Btn>}
+            {!mozeMijenjati && <span style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Nemate ovlaštenje za izmjenu.</span>}
+          </div>
+          <div style={sitno}>Ako je neka datoteka u mapi otvorena (ili most nema prava na mapu te godine), Windows ne da premjestiti mapu: ona ostaje pod "Čeka" i most pokušava ponovno. Prečaci na radnoj površini i veze s punom putanjom (npr. Excel, AutoCAD xref) na premještenu mapu prestaju raditi.</div>
+        </>
+      )}
     </div>
   );
 }
