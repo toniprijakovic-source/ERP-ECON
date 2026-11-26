@@ -8,7 +8,7 @@ const os = require("os");
 const PORT = Number(process.env.TEST_PORT_DOK || 3102);
 const TOKEN = "test-token-mosta-0123456789-abcdef";
 const bcrypt = require("bcryptjs");
-const { opisDogadaja, primateljiDogadaja, uskladiZadatkeDokumenata, ocistiDogadaj } = require("../dokumenti-projekta");
+const { opisDogadaja, primateljiDogadaja, uskladiZadatkeDokumenata, ocistiDogadaj, ocistiArhivu, projektiZaArhivu } = require("../dokumenti-projekta");
 const hash = bcrypt.hashSync("Test-lozinka-1!", 4);
 const zap = (id, prezime, pozicijaId, extra = {}) => ({ id, ime: "Test", prezime, status: "Aktivan", pozicijaId, lozinkaHash: hash, prijavaUAplikaciju: true, datumZaposlenja: "2020-03-15", ...extra });
 const seed = {
@@ -25,6 +25,7 @@ const seed = {
     { id: "p-novi", sifra: "RN 170-901", naziv: "Novi projekt", status: "Odobren", mapa: "", voditeljId: "v1", kupacId: "k1" },
     { id: "p-usluga", sifra: "RN 40-04-53", naziv: "Usluga rezanja", status: "Odobren", mapa: "", kupacId: "k1" },
     { id: "p-arh", sifra: "RN 170-902", naziv: "Arhivirani novi", status: "Arhiviran", mapa: "" },
+    { id: "p-otk", sifra: "RN 170-903", naziv: "Otkazani novi", status: "Otkazan", mapa: " Z:\\P\\RN 170-903_Otkazani " },
   ],
   slobodniZadaci: [],
   // Početni popis postojećih projekata (kao da je funkcija uvedena kad je postojao samo stari projekt).
@@ -66,6 +67,10 @@ const M = { "X-Most-Token": TOKEN };
   provjeri("otvoreni zadatak za isto područje se ažurira, ne gomila", u2.zadaci.length === 1 && u2.zadaci[0].naziv === "drugi" && u2.zadaci[0].dokumentiDogadajId === "e2-xxxxxxxxxxxx" && u2.zadaci[0].dodjelaVidjena === false);
   const stari = [{ ...u2.zadaci[0], izvrseno: true, datumIzvrsenja: "2026-09-01T00:00:00.000Z" }];
   provjeri("zatvoreni sustavski zadaci stariji od 30 dana se brišu", uskladiZadatkeDokumenata(stari, [], "2026-11-27T08:00:00.000Z").zadaci.length === 0);
+
+  const ca = ocistiArhivu({ ukljuceno: 1, plan: [{ vrsta: "arhiva", projektId: "p", od: "Z:\\A", do: "Z:\\Arhiva\\A", godina: "2026", erp: [{ projektId: "p" }] }, { vrsta: "nesto", od: "Z:\\a", do: "Z:\\b" }, { vrsta: "vrati", od: "relativno", do: "Z:\\b" }], ispravljeneMape: [{ projektId: "p", stara: "Z:\\A", nova: "Z:\\Arhiva\\A" }, { projektId: "q", stara: "", nova: "Z:\\x" }, { projektId: "r", stara: "Z:\\x", nova: "relativno" }] });
+  provjeri("arhiva: samo dopuštene vrste i apsolutne putanje, bez unutarnjih polja", ca.ukljuceno === true && ca.plan.length === 1 && ca.plan[0].godina === 2026 && !("erp" in ca.plan[0]) && ca.ispravljeneMape.length === 1 && ca.ispravljeneMape[0].mapa === "Z:\\Arhiva\\A", ca);
+  provjeri("arhiva: Arhiviran i Otkazan idu u arhivu, ostali ne; bez šifre se ne šalje", projektiZaArhivu([{ id: "a", sifra: "RN 1", status: "Arhiviran" }, { id: "b", sifra: "RN 2", status: "Otkazan" }, { id: "c", sifra: "RN 3", status: "Završen" }, { id: "d", sifra: " ", status: "Arhiviran" }]).map((x) => `${x.id}:${x.arhiva}`).join() === "a:true,b:true,c:false");
 
   await new Promise((r) => setTimeout(r, 1500));
   const prijava = async (id, ip) => ({ Authorization: `Bearer ${(await h("POST", "/api/auth/login", { zaposlenikId: id, lozinka: "Test-lozinka-1!" }, { "CF-Connecting-IP": ip })).j?.token}` });
@@ -147,6 +152,38 @@ const M = { "X-Most-Token": TOKEN };
   provjeri("potvrda zapisana s napomenom i osobom", potvrdjena?.potvrdio === "vp1" && /duljina poz\. 12/.test(potvrdjena?.napomena) && potvrdjena?.mozePotvrditi === false, potvrdjena);
   r = await h("GET", "/api/dokumenti/projekt/p-stari", undefined, D);
   provjeri("stari projekt: nije novi, bez sažetka dok ga most ne javi", r.s === 200 && r.j?.struktura?.novi === false && r.j?.sazetak === null, r.j);
+
+  console.log("\n— Arhiva mapa projekata");
+  r = await h("GET", "/api/most/projekti-za-arhivu");
+  provjeri("bez tokena mosta → 401", r.s === 401, `HTTP ${r.s}`);
+  r = await h("GET", "/api/most/projekti-za-arhivu", undefined, M);
+  provjeri("na početku isključeno; svi projekti sa šifrom, u arhivu Arhiviran i Otkazan", r.s === 200 && r.j?.ukljuceno === false && r.j?.bezErpGodine?.length === 0 && r.j?.projekti?.length === 5 && r.j.projekti.filter((x) => x.arhiva).map((x) => x.id).sort().join() === "p-arh,p-otk" && r.j.projekti.find((x) => x.id === "p-otk")?.mapa === "Z:\\P\\RN 170-903_Otkazani", r.j);
+  r = await h("POST", "/api/most/arhiva", { ukljuceno: false, plan: [{ vrsta: "arhiva", projektId: "p-otk", sifra: "RN 170-903", status: "Otkazan", od: "Z:\\P\\RN 170-903_Otkazani", do: "Z:\\P\\Arhiva\\RN 170-903_Otkazani", godina: 2026 }, { vrsta: "bez-erp", od: "Z:\\P25\\RN 1_Stari_ZAVRŠEN", do: "Z:\\P25\\Arhiva\\RN 1_Stari_ZAVRŠEN", godina: 2025 }], preskoceno: [{ mapa: "Z:\\P\\RN 60 B&O\\RN 60-12", razlog: "ugniježđena" }], premjesteno: [], ceka: [] }, M);
+  provjeri("most javlja plan dok je isključeno → 200", r.s === 200, `HTTP ${r.s}`);
+  r = await h("GET", "/api/server/stanje", undefined, D);
+  provjeri("Stanje servera: plan za potvrdu i preskočeno", r.j?.arhiva?.postavke?.ukljuceno === false && r.j?.arhiva?.plan?.length === 2 && r.j?.arhiva?.preskoceno?.length === 1 && r.j?.arhiva?.brojPremjestenih === 0, r.j?.arhiva);
+  r = await h("PUT", "/api/server/arhiva", { ukljuceno: true }, V);
+  provjeri("bez Direktorskog pregleda → 403", r.s === 403, `HTTP ${r.s}`);
+  r = await h("PUT", "/api/server/arhiva", { bezErpGodine: [2026, "x"] }, D);
+  provjeri("neispravne godine → 400", r.s === 400, `HTTP ${r.s}`);
+  r = await h("PUT", "/api/server/arhiva", { ukljuceno: "da" }, D);
+  provjeri("neispravno uključivanje → 400", r.s === 400, `HTTP ${r.s}`);
+  r = await h("PUT", "/api/server/arhiva", { ukljuceno: true, bezErpGodine: [2025, 2026, 2026] }, D);
+  provjeri("uključeno uz godine (bez ponavljanja, novija prva) i datum uključivanja", r.s === 200 && r.j?.postavke?.ukljuceno === true && r.j.postavke.bezErpGodine.join() === "2026,2025" && !!r.j.postavke.ukljucenoOd && r.j.postavke.promijenio?.id === "d1", r.j);
+  const ukljucenoOd = r.j?.postavke?.ukljucenoOd;
+  r = await h("GET", "/api/most/projekti-za-arhivu", undefined, M);
+  provjeri("most vidi uključeno i godine", r.j?.ukljuceno === true && r.j?.bezErpGodine?.join() === "2026,2025", r.j);
+  r = await h("PUT", "/api/server/arhiva", { bezErpGodine: [2026] }, D);
+  provjeri("promjena godina ne dira uključenost ni datum", r.j?.postavke?.ukljuceno === true && r.j.postavke.ukljucenoOd === ukljucenoOd && r.j.postavke.bezErpGodine.join() === "2026", r.j);
+  r = await h("POST", "/api/most/arhiva", { ukljuceno: true, plan: [], premjesteno: [{ vrsta: "arhiva", projektId: "p-otk", sifra: "RN 170-903", status: "Otkazan", od: "Z:\\P\\RN 170-903_Otkazani", do: "Z:\\P\\Arhiva\\RN 170-903_Otkazani", godina: 2026, vrijeme: "2026-11-27T09:00:00.000Z" }], ceka: [{ vrsta: "bez-erp", od: "Z:\\P\\RN 2_X_ZAVRŠEN", do: "Z:\\P\\Arhiva\\RN 2_X_ZAVRŠEN", godina: 2026, greska: "Windows ne da premjestiti mapu (EPERM)" }], preskoceno: [], ispravljeneMape: [{ projektId: "p-otk", stara: "Z:\\P\\RN 170-903_Otkazani", nova: "Z:\\P\\Arhiva\\RN 170-903_Otkazani" }, { projektId: "p-stari", stara: "Z:\\krivo", nova: "Z:\\P\\Arhiva\\x" }] }, M);
+  provjeri("premještanje javljeno; putanja se ispravlja samo gdje je u projektu stara", r.s === 200 && r.j?.ispravljeno?.length === 1 && r.j.ispravljeno[0].projektId === "p-otk", r.j);
+  const projA = (await h("GET", "/api/data/projekti", undefined, D)).j || [];
+  provjeri("  \"Mapa projekta\" pokazuje u Arhivu, drugi projekt nedirnut", projA.find((x) => x.id === "p-otk")?.mapa === "Z:\\P\\Arhiva\\RN 170-903_Otkazani" && projA.find((x) => x.id === "p-stari")?.mapa === "Z:\\P\\RN 170-900_Preimenovan", projA.map((x) => [x.id, x.mapa]));
+  r = await h("GET", "/api/server/stanje", undefined, D);
+  provjeri("Stanje servera: povijest premještanja i mape koje čekaju", r.j?.arhiva?.povijest?.[0]?.sifra === "RN 170-903" && r.j.arhiva.brojPremjestenih === 1 && r.j.arhiva.ceka.length === 1 && r.j.arhiva.plan.length === 0 && r.j.arhiva.postavke.ukljuceno === true, r.j?.arhiva);
+  r = await h("PUT", "/api/server/arhiva", { ukljuceno: false }, D);
+  const r2 = await h("GET", "/api/most/projekti-za-arhivu", undefined, M);
+  provjeri("isključivanje zaustavlja premještanje (most samo javlja plan)", r.j?.postavke?.ukljuceno === false && r2.j?.ukljuceno === false, [r.j, r2.j?.ukljuceno]);
 
   console.log(`\nUkupno: ${ok} prošlo, ${lose} palo`);
   if (lose) console.log(dnevnik.join("").slice(-3000));

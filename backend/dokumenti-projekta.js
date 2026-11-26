@@ -97,11 +97,39 @@ function uskladiZadatkeDokumenata(zadaci, novi, sada) {
   return { zadaci: popis, promijenjeno };
 }
 
-// Novi projekti kojima treba napraviti strukturu mapa (nisu bili na početnom popisu, nisu gotovi, nisu arhivirani, imaju šifru).
+// Statusi kojima mapa projekta na serveru ide u Arhivu (most/lib/arhiva.js).
+const ARHIVSKI_STATUSI = ["Arhiviran", "Otkazan"];
+
+// Novi projekti kojima treba napraviti strukturu mapa (nisu bili na početnom popisu, nisu gotovi, nisu arhivirani ni otkazani, imaju šifru).
 function projektiZaStrukturu(projekti, pocetak, gotovo) {
   const bili = new Set(pocetak?.postojeci || []);
-  return (projekti || []).filter((p) => p && p.id && !bili.has(p.id) && !(gotovo || {})[p.id] && p.status !== "Arhiviran" && String(p.sifra || "").trim());
+  return (projekti || []).filter((p) => p && p.id && !bili.has(p.id) && !(gotovo || {})[p.id] && !ARHIVSKI_STATUSI.includes(p.status) && String(p.sifra || "").trim());
 }
+
+// ARHIVA MAPA: most svakih 5 minuta dobije sve projekte sa šifrom i postavke arhive (Direktorski pregled → Stanje servera), napravi plan,
+// premjesti mape ako je arhiva uključena i javi stanje. Dok nije uključena, most samo javlja plan (popis za potvrdu).
+function projektiZaArhivu(projekti) {
+  return (projekti || []).filter((p) => p && p.id && String(p.sifra || "").trim())
+    .map((p) => ({ id: p.id, sifra: tekst(String(p.sifra).trim(), 60), mapa: tekst(String(p.mapa || "").trim(), 400), status: tekst(p.status, 30), arhiva: ARHIVSKI_STATUSI.includes(p.status) }));
+}
+const VRSTE_ARHIVE = ["arhiva", "vrati", "bez-erp"];
+const godinaArhive = (v) => (Number.isInteger(Number(v)) && Number(v) >= 2000 && Number(v) <= 2100 ? Number(v) : null);
+// Javljanje mosta o arhivi — samo dopuštena polja, duljine i broj stavki.
+function ocistiArhivu(b) {
+  const stavka = (s) => (s && VRSTE_ARHIVE.includes(s.vrsta) && PUTANJA.test(tekst(s.od, 400)) && PUTANJA.test(tekst(s.do, 400))
+    ? { vrsta: s.vrsta, projektId: s.projektId ? tekst(s.projektId, 80) : null, sifra: tekst(s.sifra, 120), status: tekst(s.status, 60), od: tekst(s.od, 400), do: tekst(s.do, 400), godina: godinaArhive(s.godina) }
+    : null);
+  const popis = (v, max, dodaj) => (Array.isArray(v) ? v.slice(0, max) : []).map((s) => { const o = stavka(s); return o ? dodaj(o, s) : null; }).filter(Boolean);
+  return {
+    ukljuceno: !!b?.ukljuceno,
+    plan: popis(b?.plan, 500, (o) => o),
+    premjesteno: popis(b?.premjesteno, 300, (o, s) => ({ ...o, vrijeme: iso(Date.parse(s.vrijeme) ? s.vrijeme : Date.now()) })),
+    ceka: popis(b?.ceka, 300, (o, s) => ({ ...o, greska: tekst(s.greska, 400) })),
+    preskoceno: (Array.isArray(b?.preskoceno) ? b.preskoceno.slice(0, 300) : []).map((x) => ({ projektId: x?.projektId ? tekst(x.projektId, 80) : null, sifra: tekst(x?.sifra, 120), status: tekst(x?.status, 60), mapa: tekst(x?.mapa, 400), razlog: tekst(x?.razlog, 400) })).filter((x) => x.razlog),
+    ispravljeneMape: (Array.isArray(b?.ispravljeneMape) ? b.ispravljeneMape.slice(0, 300) : []).map((x) => ({ projektId: tekst(x?.projektId, 80), stara: tekst(x?.stara, 400).trim(), mapa: tekst(x?.nova, 400).trim() })).filter((x) => x.projektId && x.stara && PUTANJA.test(x.mapa)),
+  };
+}
+const CUVAJ_POVIJEST_ARHIVE = 300;
 
 // ---------------- Rute ----------------
 function registrirajDokumente(app, d) {
@@ -204,10 +232,26 @@ function registrirajDokumente(app, d) {
     res.json({ ok: true, upisano });
   }));
 
-  // ---- Most: praćenje mapa ----
+  // ---- Most: arhiva mapa ----
+  app.get("/api/most/projekti-za-arhivu", mostAutentikacija, obradi(async (req, res) => {
+    const [projekti, postavke] = await Promise.all([ucitajKljuc("projekti"), ucitajStanje("arhivaPostavke")]);
+    res.json({ ukljuceno: !!postavke?.ukljuceno, bezErpGodine: Array.isArray(postavke?.bezErpGodine) ? postavke.bezErpGodine : [], projekti: projektiZaArhivu(projekti) });
+  }));
+  app.post("/api/most/arhiva", mostAutentikacija, obradi(async (req, res) => {
+    const b = ocistiArhivu(req.body || {});
+    const [projekti, staro] = await Promise.all([ucitajKljuc("projekti"), ucitajStanje("arhiva")]);
+    const poId = new Map((projekti || []).map((p) => [p.id, p]));
+    const povijest = [...b.premjesteno.slice().reverse(), ...(Array.isArray(staro?.povijest) ? staro.povijest : [])].slice(0, CUVAJ_POVIJEST_ARHIVE);
+    await spremiStanje("arhiva", { vrijeme: new Date().toISOString(), ukljuceno: b.ukljuceno, plan: b.plan, ceka: b.ceka, preskoceno: b.preskoceno, povijest, zadnjiKrug: b.premjesteno.length });
+    // Nova putanja u "Mapa projekta" samo ako je u projektu i dalje stara (upisiMape).
+    const ispravljeno = await upisiMape(b.ispravljeneMape.filter((x) => poId.has(x.projektId)));
+    res.json({ ok: true, ispravljeno });
+  }));
+
+  // ---- Most: praćenje mapa (arhivirani i otkazani projekti se ne prate) ----
   app.get("/api/most/projekti-za-pracenje", mostAutentikacija, obradi(async (req, res) => {
     const projekti = (await ucitajKljuc("projekti")) || [];
-    res.json({ projekti: projekti.filter((p) => p && p.id && String(p.sifra || "").trim() && p.status !== "Arhiviran").map((p) => ({ id: p.id, sifra: tekst(String(p.sifra).trim(), 60), mapa: tekst(p.mapa, 400) })) });
+    res.json({ projekti: projekti.filter((p) => p && p.id && String(p.sifra || "").trim() && !ARHIVSKI_STATUSI.includes(p.status)).map((p) => ({ id: p.id, sifra: tekst(String(p.sifra).trim(), 60), mapa: tekst(p.mapa, 400) })) });
   }));
   app.post("/api/most/dokumenti", mostAutentikacija, obradi(async (req, res) => {
     const b = req.body || {};
@@ -224,7 +268,7 @@ function registrirajDokumente(app, d) {
         : { mapa: tekst(x.mapa, 400), ukupno: Number(x.ukupno) || 0, zadnja: iso(x.zadnja), prekinuto: !!x.prekinuto, vrijeme: sada,
           podmape: (Array.isArray(x.podmape) ? x.podmape.slice(0, 80) : []).map((m) => ({ naziv: tekst(m?.naziv, 200), datoteka: Number(m?.datoteka) || 0, zadnja: iso(m?.zadnja) })) };
     }
-    await spremiStanje("dokumenti", { ...(stari && typeof stari === "object" ? Object.fromEntries(Object.entries(stari).filter(([id]) => poId.get(id)?.status !== "Arhiviran" && poId.has(id))) : {}), ...sazeci });
+    await spremiStanje("dokumenti", { ...(stari && typeof stari === "object" ? Object.fromEntries(Object.entries(stari).filter(([id]) => poId.has(id) && !ARHIVSKI_STATUSI.includes(poId.get(id)?.status))) : {}), ...sazeci });
 
     // Događaji → tablica + zadaci u zvoncu.
     const zaZvonce = [];
@@ -322,4 +366,4 @@ function registrirajDokumente(app, d) {
   return { pripremi };
 }
 
-module.exports = { registrirajDokumente, ocistiDogadaj, opisDogadaja, primateljiDogadaja, uskladiZadatkeDokumenata, projektiZaStrukturu };
+module.exports = { registrirajDokumente, ocistiDogadaj, opisDogadaja, primateljiDogadaja, uskladiZadatkeDokumenata, projektiZaStrukturu, projektiZaArhivu, ocistiArhivu, ARHIVSKI_STATUSI };

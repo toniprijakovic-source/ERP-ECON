@@ -337,7 +337,39 @@ function registrirajMost(app, d) {
         brojGotovih: Object.keys(st.strukturaGotovo?.vrijednost || {}).length,
         greske: Object.values(st.strukturaGreske?.vrijednost || {}).slice(0, 20),
       },
+      // Arhiva mapa projekata (most/lib/arhiva.js, dokumenti-projekta.js): postavke, plan koji čeka potvrdu ili godinu, mape koje čekaju
+      // (otvorena datoteka), preskočene s razlogom i zadnja premještanja.
+      arhiva: {
+        postavke: { ukljuceno: !!st.arhivaPostavke?.vrijednost?.ukljuceno, bezErpGodine: Array.isArray(st.arhivaPostavke?.vrijednost?.bezErpGodine) ? st.arhivaPostavke.vrijednost.bezErpGodine : [], ukljucenoOd: st.arhivaPostavke?.vrijednost?.ukljucenoOd || null, promijenio: st.arhivaPostavke?.vrijednost?.promijenio || null },
+        javljeno: st.arhiva?.vrijednost?.vrijeme || null,
+        plan: Array.isArray(st.arhiva?.vrijednost?.plan) ? st.arhiva.vrijednost.plan : [],
+        ceka: Array.isArray(st.arhiva?.vrijednost?.ceka) ? st.arhiva.vrijednost.ceka : [],
+        preskoceno: Array.isArray(st.arhiva?.vrijednost?.preskoceno) ? st.arhiva.vrijednost.preskoceno : [],
+        povijest: Array.isArray(st.arhiva?.vrijednost?.povijest) ? st.arhiva.vrijednost.povijest.slice(0, 50) : [],
+        brojPremjestenih: Array.isArray(st.arhiva?.vrijednost?.povijest) ? st.arhiva.vrijednost.povijest.length : 0,
+      },
     });
+  }));
+  // Arhiva mapa: uključivanje (prvi popis se potvrđuje u aplikaciji) i godine za koje se mape bez projekta u ERP-u s nastavkom
+  // "_ZAVRŠEN" sele u Arhivu. Projekti iz ERP-a (Arhiviran/Otkazan) sele se za sve godine čim je arhiva uključena.
+  app.put("/api/server/arhiva", autentikacija, obradi(async (req, res) => {
+    if (!(await ovlast(req, res, true))) return;
+    const b = req.body || {};
+    const prije = (await ucitajStanje()).arhivaPostavke?.vrijednost || {};
+    const postavke = { ukljuceno: !!prije.ukljuceno, bezErpGodine: Array.isArray(prije.bezErpGodine) ? prije.bezErpGodine : [], ukljucenoOd: prije.ukljucenoOd || null };
+    if ("ukljuceno" in b) {
+      if (typeof b.ukljuceno !== "boolean") return res.status(400).json({ error: "Neispravna vrijednost." });
+      if (b.ukljuceno && !postavke.ukljuceno) postavke.ukljucenoOd = new Date().toISOString();
+      postavke.ukljuceno = b.ukljuceno;
+    }
+    if ("bezErpGodine" in b) {
+      const g = Array.isArray(b.bezErpGodine) ? b.bezErpGodine : null;
+      if (!g || g.length > 10 || g.some((x) => !Number.isInteger(x) || x < 2000 || x > 2100)) return res.status(400).json({ error: "Neispravan popis godina." });
+      postavke.bezErpGodine = [...new Set(g)].sort((a, c) => c - a);
+    }
+    postavke.promijenio = { id: req.zaposlenikId || null, vrijeme: new Date().toISOString() };
+    await spremiStanje("arhivaPostavke", postavke);
+    res.json({ ok: true, postavke });
   }));
   // Postavke: tko prima upozorenja servera (primateljId) i obavijesti o promjenama u mapama "Laser za limove/profile" (laserPrimatelji,
   // najviše dvije osobe). Šalje se samo polje koje se mijenja; drugo ostaje kakvo je bilo.
