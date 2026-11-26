@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export const VERZIJA_MOSTA = "2026-11-27";
+export const VERZIJA_MOSTA = "2026-11-28";
 
 const citajJson = (p) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return null; } };
 const gb = (bajtova) => Math.round((bajtova / 1e9) * 10) / 10;

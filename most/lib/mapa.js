@@ -39,22 +39,34 @@ export function nadjiMapuProjekta(korijen, sifra, zadanaMapa) {
   }
   return trazi(korijen, sifra);
 }
+// Arhiva: arhivirani i otkazani projekti su u podmapi "Arhiva" korijena svoje godine, a usluge radione u "Arhiva" zbirne mape usluga
+// (premješta ih most, vidi lib/arhiva.js). Traži se najprije izvan arhive, pa u arhivi.
+export const NAZIV_ARHIVE = "Arhiva";
+const podmape = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()) : []);
+export const brojUsluge = (ime) => { const m = String(ime).match(/^0*(\d+)\s*[-_ ]/); return m ? Number(m[1]) : null; };
 function trazi(korijen, sifra) {
   const korijeni = Array.isArray(korijen) ? korijen : [korijen];
   const dostupni = korijeni.filter((k) => fs.existsSync(k));
   if (!dostupni.length) throw new Greska(`Korijenska mapa projekata nije dostupna: ${korijeni.join(" ; ")} (je li Z: spojen?)`);
   const re = new RegExp(`^${izbjegni(sifra)}(?:[_ ]|$)`, "i");
   const usluga = String(sifra).trim().match(SIFRA_USLUGE);
+  const jedna = (dir, mape, gdje) => {
+    if (mape.length > 1) throw new Greska(`Za šifru "${sifra}" ${gdje}postoji više mapa (${mape.map((d) => d.name).join("; ")}). U ERP-u upiši "Mapa projekta" na projektu.`);
+    return mape.length === 1 ? path.join(dir, mape[0].name) : null;
+  };
   for (const k of dostupni) {
-    const mape = fs.readdirSync(k, { withFileTypes: true }).filter((d) => d.isDirectory());
-    const pogodci = mape.filter((d) => re.test(d.name));
-    if (pogodci.length > 1) throw new Greska(`Za šifru "${sifra}" postoji više mapa (${pogodci.map((d) => d.name).join("; ")}). U ERP-u upiši "Mapa projekta" na projektu.`);
-    if (pogodci.length === 1) return path.join(k, pogodci[0].name);
+    const mape = podmape(k);
+    const uKorijenu = jedna(k, mape.filter((d) => re.test(d.name)), "");
+    if (uKorijenu) return uKorijenu;
+    const arhiva = path.join(k, NAZIV_ARHIVE);
+    const uArhivi = jedna(arhiva, podmape(arhiva).filter((d) => re.test(d.name)), `u mapi ${NAZIV_ARHIVE} `);
+    if (uArhivi) return uArhivi;
     if (usluga) {
       for (const z of mape.filter((d) => ZBIRNA_USLUGE.test(d.name))) {
-        const poslovi = fs.readdirSync(path.join(k, z.name), { withFileTypes: true }).filter((d) => d.isDirectory() && Number((d.name.match(/^0*(\d+)\s*[-_ ]/) || [])[1]) === Number(usluga[1]));
-        if (poslovi.length > 1) throw new Greska(`Za šifru "${sifra}" u mapi ${z.name} postoji više podmapa (${poslovi.map((d) => d.name).join("; ")}). U ERP-u upiši "Mapa projekta" na projektu.`);
-        if (poslovi.length === 1) return path.join(k, z.name, poslovi[0].name);
+        for (const dir of [path.join(k, z.name), path.join(k, z.name, NAZIV_ARHIVE)]) {
+          const posao = jedna(dir, podmape(dir).filter((d) => d.name !== NAZIV_ARHIVE && brojUsluge(d.name) === Number(usluga[1])), `u mapi ${path.relative(k, dir)} `);
+          if (posao) return posao;
+        }
       }
     }
   }

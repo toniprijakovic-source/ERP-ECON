@@ -15,6 +15,7 @@ import { procitajMapiranja, osigurajPogone, opisPogona } from "./lib/pogoni.js";
 import { prikupiStanje } from "./lib/stanje.js";
 import { uskladiMapeProjekata } from "./lib/mape-projekata.js";
 import { uskladiStrukturu, pratiDokumente } from "./lib/dokumenti.js";
+import { uskladiArhivu } from "./lib/arhiva.js";
 
 const mapaMosta = path.dirname(fileURLToPath(import.meta.url));
 try { process.loadEnvFile(path.join(mapaMosta, ".env")); } catch { /* .env nije obavezan ako su varijable već postavljene */ }
@@ -110,9 +111,9 @@ log(`ECON most pokrenut. ERP: ${API} | Korijen: ${okolina.korijen.join(" ; ")} |
 let greskaPrijavljena = false;
 let greskaUtovaraPrijavljena = false;
 // Izvještaj o serveru svake minute, traženje mapa projekata svakih 10 minuta, struktura mapa novih projekata svake minute i pregled
-// mapa aktivnih projekata svakih 5 minuta (greška se u zapisnik upisuje jednom, do oporavka).
+// mapa aktivnih projekata svakih 5 minuta, uz premještanje mapa arhiviranih projekata u Arhivu (greška se u zapisnik upisuje jednom, do oporavka).
 let zadnjeStanje = 0, zadnjeMape = 0, zadnjaStruktura = 0, zadnjiDokumenti = 0;
-let greskaStanja = false, greskaMapa = false, greskaStrukture = false, greskaDokumenata = false;
+let greskaStanja = false, greskaMapa = false, greskaStrukture = false, greskaDokumenata = false, greskaArhive = false;
 for (;;) {
   provjeriPogone();
   try {
@@ -166,6 +167,14 @@ for (;;) {
   }
   if (Date.now() - zadnjiDokumenti >= 5 * 60_000) {
     zadnjiDokumenti = Date.now();
+    // Arhiva prije pregleda mapa, da pregled već vidi mape na novom mjestu.
+    try {
+      await uskladiArhivu(api, okolina, log);
+      greskaArhive = false;
+    } catch (e) {
+      if (!greskaArhive && !greskaPrijavljena) log("Arhiva mapa projekata: nije uspjelo:", e.message);
+      greskaArhive = true;
+    }
     try {
       const pocetak = Date.now();
       const r = await pratiDokumente(api, okolina, log, { datotekaStanja: datotekaStanjaDokumenata });

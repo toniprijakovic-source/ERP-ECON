@@ -93,6 +93,15 @@ sažetak (kartica Dokumenti u projektu) i promjene: `Laser za limove/profile` (z
 (`Poslano 14.01.2025`, `Odgovor …`, `Freigabe …`). Datoteka se javlja tek kad se 2 minute ne mijenja; prvi pregled projekta samo zapamti stanje.
 Stanje je u `dokumenti-stanje.json` (može se obrisati — sljedeći pregled ponovno samo zapamti stanje, bez obavijesti).
 
+## Arhiva mapa projekata (`lib/arhiva.js`)
+Svakih 5 minuta (prije pregleda mapa): projekt koji je u ERP-u **Arhiviran** ili **Otkazan** seli se u `Arhiva` korijena svoje godine
+(`Econ_2026_Projekti\Arhiva`; usluge radione u `RN 40-04_Usluge radione\Arhiva`), projekt vraćen u aktivne (ili u Završen) natrag. Mape bez
+projekta u ERP-u s nastavkom `_ZAVRŠEN` / `_ZAVRŠENO` sele se za godine odabrane u ERP-u. Samo preimenovanje na istom disku (ništa se ne kopira ni
+briše, ime ostaje); ne dira ugniježđene mape, mape čije ime ne počinje šifrom, mapu u kojoj je mapa aktivnog projekta ni mapu kojoj na
+odredištu već postoji isto ime (sve se javlja s razlogom). "Mapa projekta" u ERP-u se sama ispravi. Dok arhiva nije uključena u ERP-u
+(Direktorski pregled → Stanje servera → Arhiva mapa projekata), most samo javlja popis. Otvorena datoteka u mapi (EPERM/EBUSY) → mapa čeka
+i most pokušava ponovno. Servisni račun treba pravo **Modify** na korijenu godine (inače mapa čeka s porukom o pravima).
+
 ## Ograničenja prve verzije
 Samo isporuke u EU bez PDV-a (kategorija K), valuta EUR, bez popusta na stavkama; domaće račune šalje Konplast.
 
