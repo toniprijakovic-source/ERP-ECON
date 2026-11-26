@@ -526,6 +526,41 @@ const obrociDana = (zaposlenik, postavke, { jeRadniDan, sati, danUTjednu, dodata
 // Prilagodba obroka pri prebijanju manjka (vidi obracunMjeseca) vrijedi od ovog mjeseca; ranije je već isplaćeno po starom pravilu.
 const OBROCI_PREBIJANJE_OD = "2026-10";
 
+// SKIDANJE SATI RADNIKU (Sati po nalozima → Dnevni unos, posebna dozvola): voditelj proizvodnje skine radniku dio sati tog dana (npr. zabušavanje) uz razlog.
+// Vrijeme s kioska ostaje kakvo jest; korekcija je zaseban zapis u db.korekcijeSati ({ zaposlenikId, datum, sati, razlog, obrisano?, povijest }) koji sprema
+// samo poslužitelj (PUT /api/korekcijeSati/patch, backend/korekcije-sati.js). Svugdje (mreža Evidencije rada, zbrojevi, PDF evidencije, obračun i PDF
+// obračuna, usklađenost sati) vide se korigirani sati, bez napomene; tko je, koliko i zašto skinuo vide samo osobe s dozvolom (smijeSkidatiSate).
+// U obračunu (vidi obracunMjeseca): skida se s tog dana, prvo s prekovremenih pa s redovnih; prekovremeni s drugih dana skinuti sat NE nadoknađuju
+// (manjak za prebijanje računa se po stvarnoj prisutnosti); topli obrok, putni i dodatak na staž ostaju po stvarnoj prisutnosti.
+const korekcijeSatiCache = new WeakMap();
+const korekcijeSatiMapa = (db) => {
+  const niz = Array.isArray(db?.korekcijeSati) ? db.korekcijeSati : null;
+  if (!niz) return new Map();
+  let m = korekcijeSatiCache.get(niz);
+  if (!m) {
+    m = new Map();
+    niz.forEach((k) => { if (k && !k.obrisano && Number(k.sati) > 0) m.set(`${k.zaposlenikId}|${k.datum}`, k); });
+    korekcijeSatiCache.set(niz, m);
+  }
+  return m;
+};
+const korekcijaSatiDana = (db, zaposlenikId, datum) => korekcijeSatiMapa(db).get(`${zaposlenikId}|${datum}`) || null;
+const skinutoSatiDana = (db, zaposlenikId, datum) => Number(korekcijaSatiDana(db, zaposlenikId, datum)?.sati) || 0;
+// Jednostavni popisi dana { datum, odradjeniSati } (kooperanti, vanjski suradnik, Montaža DE): skinuti sati oduzimaju se od zapisa tog datuma, od zadnjeg prema prvom.
+const umanjiDaneZaSkinuto = (dani, db, zaposlenikId) => {
+  const m = korekcijeSatiMapa(db);
+  if (!m.size) return dani;
+  const ostatak = new Map();
+  return [...dani].reverse().map((d) => {
+    const k = `${zaposlenikId}|${d.datum}`;
+    if (!m.has(k)) return d;
+    const ost = ostatak.has(k) ? ostatak.get(k) : Number(m.get(k).sati) || 0;
+    const uzmi = Math.min(ost, d.odradjeniSati);
+    ostatak.set(k, ost - uzmi);
+    return uzmi > 0 ? { ...d, odradjeniSati: d.odradjeniSati - uzmi } : d;
+  }).reverse();
+};
+
 // Obračun jednog dana evidencije. dan: 0=ned, 6=sub
 const obracunDana = (zapis, zaposlenik, postavke, praznici, satnica = 0, maxSati = null) => {
   const datum = zapis.vrijemeDolaska.slice(0, 10);
@@ -686,6 +721,38 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
   // ISTOG mjeseca — prvo onima radnim danom, pa subotnjima. Izračun je ovdje (prije zbroja) jer prebijanje mijenja i obroke vidi ispod.
   const norma = Number(postavke?.normaSatiDan) || 8;
   const faktorPrek = Number(postavke?.prekovremeniFaktor) || 1.5;
+
+  // SKIDANJE SATI (vidi korekcijeSatiMapa): sati skinuti radniku tog dana oduzimaju se od plaćenih sati tog datuma — prvo od prekovremenih, pa od redovnih,
+  // od zadnjeg zapisa dana prema prvom. odradjeniSati (stvarna prisutnost) ostaje nepromijenjen: po njemu se računaju manjak za prebijanje (pa ga
+  // prekovremeni s drugih dana ne nadoknađuju), topli obrok, putni i dodatak na staž. d.skinuto = koliko je stvarno skinuto s tog zapisa (za prikaz sati).
+  let skinutoUkupno = 0, skinutoRedovni = 0;
+  const skinutoMapa = korekcijeSatiMapa(db);
+  if (skinutoMapa.size) {
+    const poDatumuZaSkidanje = new Map();
+    dani.forEach((d) => { if ((d.vrsta === "rad" || d.jeMontazaHR) && d.odradjeniSati > 0 && skinutoMapa.has(`${zaposlenik.id}|${d.datum}`)) poDatumuZaSkidanje.set(d.datum, [...(poDatumuZaSkidanje.get(d.datum) || []), d]); });
+    poDatumuZaSkidanje.forEach((lista, datum) => {
+      let ostalo = Number(skinutoMapa.get(`${zaposlenik.id}|${datum}`).sati) || 0;
+      const odZadnjeg = [...lista].reverse();
+      ["prekovremeni", "redovni"].forEach((polje) => odZadnjeg.forEach((d) => {
+        const uzmi = Math.min(ostalo, d[polje]);
+        if (uzmi <= 0) return;
+        d[polje] -= uzmi;
+        d.skinuto = (d.skinuto || 0) + uzmi;
+        ostalo -= uzmi;
+        skinutoUkupno += uzmi;
+        if (polje === "redovni") skinutoRedovni += uzmi;
+      }));
+      lista.forEach((d) => {
+        if (!d.skinuto) return;
+        d.iznosRedovni = d.redovni * satnica;
+        d.iznosPrekovremeni = jePraktikant ? 0 : d.prekovremeni * satnica * faktorPrek;
+        d.dodatakSmjeneRedovni = d.redovni * satnica * (d.dodatakSmjene - 1);
+        d.dodatakSmjenePrek = d.prekovremeni * satnica * (d.dodatakSmjene - 1);
+        d.ukupnoDan = d.iznosRedovni + d.iznosPrekovremeni + d.iznosNerad + d.putni + d.topliObrok + d.dodatakSmjeneRedovni + d.dodatakSmjenePrek + d.gablecStimulacija;
+      });
+    });
+  }
+
   const satiPoDatumu = new Map();
   dani.forEach((d) => { if (d.vrsta === "rad" && !d.praznik && d.danUTjednu >= 1 && d.danUTjednu <= 5 && d.odradjeniSati > 0) satiPoDatumu.set(d.datum, (satiPoDatumu.get(d.datum) || 0) + d.odradjeniSati); });
   const manjakSati = zaposlenik.radnoVrijeme === "pola" ? 0 : [...satiPoDatumu.values()].reduce((s, h) => s + Math.max(0, norma - h), 0);
@@ -884,7 +951,8 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     fiksnaPlacaPuna = osnova.osnovica * (polaFiksnaPolovica ? 0.5 : 1);
     // Manjak sati u mjesecu koji nema čime namiriti (radni dan s manje sati od norme) razmjerno umanjuje fiksnu plaću,
     // a na obračunskom listu ostaje prikazan puni fond (vidi manjakZaPrikaz).
-    manjakUredSati = manjakPreostalo;
+    // Sati skinuti s redovnih (vidi SKIDANJE SATI) fiksnu plaću ureda umanjuju na isti način (skinuti prekovremeni već nisu plaćeni).
+    manjakUredSati = manjakPreostalo + skinutoRedovni;
     faktorFiksne = mjesecniFond > 0 ? Math.max(0, 1 - (neplaceniDaniUred * normaDana + manjakUredSati) / mjesecniFond) : 1;
     fiksnaPlaca = fiksnaPlacaPuna * faktorFiksne;
   }
@@ -945,7 +1013,7 @@ const obracunMjeseca = (zaposlenik, mjesec, db) => {
     prekovremeni: prekovremeniPrikaz, iznosPrekovremeni: iznosPrekovremeniPrikaz,
     prikazPrekovremenihSati: doplatak.prikazPrekovremenihSati ?? "", visakPrekovremenihSati, visakPrekovremenihIznos,
     putni, topliObrok, daniObroka, prebacenoPutni, prebacenoObrok, prebacenoSubota,
-    manjakSati, prebijenoSati, manjakPreostalo, obrokPrilagodbe, redovniPrikaz: zbroj.redovni + manjakZaPrikaz, dodatakSmjene,
+    manjakSati, prebijenoSati, manjakPreostalo, obrokPrilagodbe, redovniPrikaz: zbroj.redovni + manjakZaPrikaz, dodatakSmjene, skinutoSati: skinutoUkupno,
     jeUred, polaRadnoVrijeme: zaposlenik.radnoVrijeme === "pola", polaFiksnaPolovica, iznosRedovni, iznosNerad, fiksnaPlacaPuna, fiksnaPlaca, faktorFiksne, neplaceniDaniUred, manjakUredSati, satnicaIzIznosa,
     ukupno, brojDana: dani.length, dani, dnevnicaTeren, terenskiHR, stimulacija, stimulacijaRucno, kredit, ustegPrehrane, odbici, ostaliOdbici, dodaciUkupno, isplata,
   };
@@ -973,7 +1041,7 @@ const obracunMjesecaMontazaDE = (zaposlenik, mjesec, db) => {
   const postavke = db.postavkePlaca;
   const doplatak = (db.doplaciPlaca || []).find((d) => d.zaposlenikId === zaposlenik.id && d.mjesec === mjesec) || {};
   const zapisi = (db.evidencijaRada || []).filter((e) => e.zaposlenikId === zaposlenik.id && e.vrijemeDolaska.slice(0, 7) === mjesec && (e.vrsta || "rad") === "rad" && e.vrijemeOdlaska);
-  const dani = zapisi.map((z) => ({ datum: z.vrijemeDolaska.slice(0, 10), odradjeniSati: obracunskiSati(z.vrijemeDolaska, z.vrijemeOdlaska, odrediSmjenu(z.vrijemeDolaska, postavke), postavke) }));
+  const dani = umanjiDaneZaSkinuto(zapisi.map((z) => ({ datum: z.vrijemeDolaska.slice(0, 10), odradjeniSati: obracunskiSati(z.vrijemeDolaska, z.vrijemeOdlaska, odrediSmjenu(z.vrijemeDolaska, postavke), postavke) })), db, zaposlenik.id);
   const sati = dani.reduce((s, d) => s + d.odradjeniSati, 0);
   const uHR = doplatak.lokacijaDE === "HR";
   const neto = Number(doplatak.netoDE) || 0;
@@ -1038,10 +1106,10 @@ const popisBodovaPodaci = (db, mjesec, vrsta) => {
 const obracunMjesecaKooperant = (zaposlenik, mjesec, db) => {
   const postavke = db.postavkePlaca;
   const zapisi = (db.evidencijaRada || []).filter((e) => e.zaposlenikId === zaposlenik.id && e.vrijemeDolaska.slice(0, 7) === mjesec && (e.vrsta || "rad") === "rad" && e.vrijemeOdlaska);
-  const dani = zapisi.map((z) => {
+  const dani = umanjiDaneZaSkinuto(zapisi.map((z) => {
     const smjena = odrediSmjenu(z.vrijemeDolaska, postavke);
     return { datum: z.vrijemeDolaska.slice(0, 10), odradjeniSati: obracunskiSati(z.vrijemeDolaska, z.vrijemeOdlaska, smjena, postavke) };
-  });
+  }), db, zaposlenik.id);
   const sati = dani.reduce((s, d) => s + d.odradjeniSati, 0);
   const satnica = Number(zaposlenik.satnicaKooperant) || 0;
   return { zaposlenik, satnica, sati, ukupno: sati * satnica, brojDana: dani.length, dani };
@@ -1053,10 +1121,10 @@ const obracunMjesecaKooperant = (zaposlenik, mjesec, db) => {
 const obracunMjesecaVanjskiSuradnik = (zaposlenik, mjesec, db) => {
   const postavke = db.postavkePlaca;
   const zapisi = (db.evidencijaRada || []).filter((e) => e.zaposlenikId === zaposlenik.id && e.vrijemeDolaska.slice(0, 7) === mjesec && (e.vrsta || "rad") === "rad" && e.vrijemeOdlaska);
-  const dani = zapisi.map((z) => {
+  const dani = umanjiDaneZaSkinuto(zapisi.map((z) => {
     const smjena = odrediSmjenu(z.vrijemeDolaska, postavke);
     return { datum: z.vrijemeDolaska.slice(0, 10), odradjeniSati: obracunskiSati(z.vrijemeDolaska, z.vrijemeOdlaska, smjena, postavke) };
-  });
+  }), db, zaposlenik.id);
   const sati = dani.reduce((s, d) => s + d.odradjeniSati, 0);
   const iznos = Number(zaposlenik.fiksniMjesecniIznos) || 0;
   const naknadaPrijevoz = Number(zaposlenik.naknadaPrijevoz) || 0;
@@ -1953,9 +2021,16 @@ const KARTICE_MODULA = {
   otpremnice: { kartice: [{ key: "otpremnice", naziv: "Otpremnice" }, { key: "cmr", naziv: "CMR" }, { key: "statistika", naziv: "Statistika isporuka" }] },
   fakturiranje: { kartice: [{ key: "fakture", naziv: "Fakture" }, { key: "podloge", naziv: "Podloge za fakturu" }, { key: "fakturirano", naziv: "Fakturirano po mjesecima" }, { key: "xrechnung", naziv: "XRechnung" }, { key: "nedovrsena", naziv: "Nedovršena proizvodnja" }, { key: "analiza", naziv: "Analiza projekata" }, { key: "produktivnost", naziv: "Produktivnost (kg/h)" }, { key: "projekcija", naziv: "Projekcija" }] },
   partneri: { kartice: [{ key: "kupci", naziv: "Kupci" }, { key: "dobavljaci", naziv: "Dobavljači" }] },
-  evidencijasati: { kartice: [{ key: "evidencija", naziv: "Evidencija rada" }, { key: "satinalozi", naziv: "Sati po nalozima" }] },
-  // funkcije = gumbi na kartici Zaposlenici s vlastitom kvačicom u Pozicije (karticeDozvole.zaposlenici.<key>.pristup, isto kao kartice, ali nisu tabovi).
-  // uvjet = pravo koje funkcija ionako traži; kvačica ga samo sužava (po zadanom je uključena). Provjera na poslužitelju: smijeFunkciju u server.js.
+  // Skidanje sati radniku: POSEBNA dozvola, po zadanom ISKLJUČENA (zadano: false) — vidi smijeSkidatiSate i backend/korekcije-sati.js.
+  evidencijasati: {
+    kartice: [{ key: "evidencija", naziv: "Evidencija rada" }, { key: "satinalozi", naziv: "Sati po nalozima" }],
+    funkcije: [
+      { key: "skidanjesati", naziv: "Skidanje sati radniku (Dnevni unos, s razlogom)", zadano: false, uvjet: { kartica: "satinalozi", polje: "izmjene", opis: "izmjene kartice Sati po nalozima" } },
+    ],
+  },
+  // funkcije = gumbi na kartici modula s vlastitom kvačicom u Pozicije (karticeDozvole.<modul>.<key>.pristup, isto kao kartice, ali nisu tabovi).
+  // uvjet = pravo koje funkcija ionako traži; kvačica ga samo sužava (po zadanom je uključena, osim kad funkcija ima zadano: false).
+  // Provjera na poslužitelju: smijeFunkciju u server.js (Zaposlenici), smijeSkidatiSate u korekcije-sati.js.
   zaposlenici: {
     kartice: [{ key: "zaposlenici", naziv: "Zaposlenici" }, { key: "pozicije", naziv: "Pozicije" }, { key: "obracun", naziv: "Obračun plaća" }, { key: "godisnji", naziv: "Godišnji odmor" }],
     funkcije: [
@@ -1974,6 +2049,16 @@ const dozvolaZaKarticu = (pozicija, modulKey, karticaKey) => {
   const eksplicitno = pozicija?.karticeDozvole?.[modulKey]?.[karticaKey];
   // grupe: popis grupa zaposlenika čiji se podaci vide u kartici (Evidencija rada: radiona, praktikant, ostalo, kooperant); null = sve
   return { pristup: eksplicitno?.pristup !== false, izmjene: eksplicitno?.izmjene !== false, grupe: Array.isArray(eksplicitno?.grupe) ? eksplicitno.grupe : null };
+};
+
+// Kvačica funkcije u Pozicijama: obične funkcije su uključene dok ih admin ne isključi; funkcija sa zadano: false mora se izričito uključiti.
+const funkcijaUkljucena = (pozicija, modulKey, f) => (f.zadano === false ? pozicija?.karticeDozvole?.[modulKey]?.[f.key]?.pristup === true : dozvolaZaKarticu(pozicija, modulKey, f.key).pristup);
+// Skidanje sati radniku (Sati po nalozima → Dnevni unos): modul Evidencija sati, pristup i izmjene kartice Sati po nalozima i izričito uključena kvačica.
+// Ista provjera kao smijeSkidatiSate u backend/korekcije-sati.js. Samo te osobe vide i oznaku i razlog skidanja u Evidenciji rada.
+const smijeSkidatiSate = (pozicija) => {
+  if (!(pozicija?.moduli || []).includes("evidencijasati")) return false;
+  const k = dozvolaZaKarticu(pozicija, "evidencijasati", "satinalozi");
+  return k.pristup && k.izmjene && funkcijaUkljucena(pozicija, "evidencijasati", { key: "skidanjesati", zadano: false });
 };
 
 // Popis kartica modula na koje pozicija ima pristup (za skrivanje tabova u stranicama).
@@ -3062,7 +3147,7 @@ export default function App() {
           {(aktivnaStranica === "otpremnice" || aktivnaStranica === "fakturiranje") && <FakturiranjePage key={aktivnaStranica} modul={aktivnaStranica} db={db} update={update} patchProjekt={patchProjekt} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} />}
           {aktivnaStranica === "partneri" && <PartneriPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} />}
           {aktivnaStranica === "zaposlenici" && <ZaposleniciPage db={db} update={update} showToast={showToast} refetchKljuc={refetchKljuc} mojaPozicija={mojaPozicija} mojId={prijavljenId} />}
-          {aktivnaStranica === "evidencijasati" && <EvidencijaSatiPage db={db} update={update} showToast={showToast} patchEvidencija={patchEvidencija} mojaPozicija={mojaPozicija} pocetak={evidencijaSatiPocetak} ocistiPocetak={() => setEvidencijaSatiPocetak(null)} />}
+          {aktivnaStranica === "evidencijasati" && <EvidencijaSatiPage db={db} update={update} showToast={showToast} patchEvidencija={patchEvidencija} spremiCiljano={spremiCiljano} mojaPozicija={mojaPozicija} pocetak={evidencijaSatiPocetak} ocistiPocetak={() => setEvidencijaSatiPocetak(null)} />}
           {aktivnaStranica === "zastita" && <ZastitaNaRaduPage db={db} update={update} spremi={spremiCiljano} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} />}
         </div>
 
@@ -3643,7 +3728,7 @@ function Dashboard({ db, update, showToast, setPage, otvoriProjekt, mojId, mojaP
     const danas = todayISO();
     const grupe = [["radiona", "Radiona"], ["kooperant", "Kooperanti"]].map(([grupa, naziv]) => ({ grupa, naziv, ...uskladenostSati(db, dodajDane(danas, -15), dodajDane(danas, -2), grupa) })).filter((g) => g.brojDana > 0);
     return grupe.length ? { grupe, brojRadnika: grupe.reduce((a, g) => a + g.brojRadnika, 0), brojDana: grupe.reduce((a, g) => a + g.brojDana, 0), redovi: grupe.flatMap((g) => g.redovi.filter((r) => r.dani.length > 0).map((r) => ({ ...r, grupa: g.grupa, grupaNaziv: g.naziv }))).sort((a, b) => b.dani.length - a.dani.length) } : null;
-  }, [vidiUskladenost, db.zaposlenici, db.evidencijaRada, db.satiPoNalogu, db.postavkePlaca, db.pozicijeZaposlenika]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [vidiUskladenost, db.zaposlenici, db.evidencijaRada, db.satiPoNalogu, db.postavkePlaca, db.pozicijeZaposlenika, db.korekcijeSati]); // eslint-disable-line react-hooks/exhaustive-deps
   const vidiTransporte = (mojaPozicija?.moduli || []).includes("transporti");
   const transportiUToku = vidiTransporte ? (db.narudzbeTransporta || []).filter((n) => statusNarudzbeTransporta(n, db.cmr) !== "Prevezeno").sort((a, b) => (a.utovarDatum || "9999").localeCompare(b.utovarDatum || "9999")) : [];
   const spremiNapomenuSlobodnog = (id, tekst) => update("slobodniZadaci", slobodniZadaci.map((z) => (z.id === id ? { ...z, napomena: tekst || null, napomenaAutorId: tekst ? mojId : null, napomenaDatum: tekst ? todayISO() : null } : z)));
@@ -19087,20 +19172,26 @@ const hhmmISO = (iso) => (iso ? new Date(iso).toTimeString().slice(0, 5) : "—"
 
 // Sažetak jednog dana jednog zaposlenika (iz svih njegovih zapisa za taj datum) — koristi se i za
 // ćeliju u mreži i za ispis u PDF, da oba uvijek prikazuju isto.
-const sazetakDanaEvidencije = (zapisi, postavkePlaca) => {
+// skinuto = sati skinuti radniku tog dana (vidi korekcijeSatiMapa): "sati" su korigirani, a "satiPrisutnosti" i "skinuto" (stvarno oduzeto) služe za oznaku
+// koju vide samo osobe s dozvolom za skidanje sati. Vrijeme dolaska i odlaska prikazuje se stvarno.
+const sazetakDanaEvidencije = (zapisi, postavkePlaca, skinuto = 0) => {
   if (!zapisi.length) return null;
   const posebna = zapisi.find((z) => z.vrsta !== "rad");
   if (posebna) {
     // Montaža HR može imati upisane sate (dolazak–odlazak na samom zapisu); stariji zapisi bez sati imaju sati = 0
-    const sati = posebna.vrsta === "montazaHR" ? obracunskiSati(posebna.vrijemeDolaska, posebna.vrijemeOdlaska, odrediSmjenu(posebna.vrijemeDolaska, postavkePlaca), postavkePlaca) : 0;
-    return sati > 0 ? { posebna: posebna.vrsta, sati, prvi: posebna.vrijemeDolaska, zadnji: posebna.vrijemeOdlaska } : { posebna: posebna.vrsta };
+    const satiPrisutnosti = posebna.vrsta === "montazaHR" ? obracunskiSati(posebna.vrijemeDolaska, posebna.vrijemeOdlaska, odrediSmjenu(posebna.vrijemeDolaska, postavkePlaca), postavkePlaca) : 0;
+    const skinutoStvarno = Math.min(skinuto, satiPrisutnosti);
+    return satiPrisutnosti > 0 ? { posebna: posebna.vrsta, sati: satiPrisutnosti - skinutoStvarno, satiPrisutnosti, skinuto: skinutoStvarno, prvi: posebna.vrijemeDolaska, zadnji: posebna.vrijemeOdlaska } : { posebna: posebna.vrsta };
   }
   const radni = zapisi.filter((z) => z.vrsta === "rad").sort((a, b) => a.vrijemeDolaska.localeCompare(b.vrijemeDolaska));
-  const sati = radni.reduce((s, z) => s + obracunskiSati(z.vrijemeDolaska, z.vrijemeOdlaska, odrediSmjenu(z.vrijemeDolaska, postavkePlaca), postavkePlaca), 0);
+  const satiPrisutnosti = radni.reduce((s, z) => s + obracunskiSati(z.vrijemeDolaska, z.vrijemeOdlaska, odrediSmjenu(z.vrijemeDolaska, postavkePlaca), postavkePlaca), 0);
+  const skinutoStvarno = Math.min(skinuto, satiPrisutnosti);
   return {
     prvi: radni[0].vrijemeDolaska,
     zadnji: radni[radni.length - 1].vrijemeOdlaska,
-    sati,
+    sati: satiPrisutnosti - skinutoStvarno,
+    satiPrisutnosti,
+    skinuto: skinutoStvarno,
     popodne: radni.some((z) => odrediSmjenu(z.vrijemeDolaska, postavkePlaca)?.dodatakPostotak > 0),
     autoOdjava: radni.some((z) => z.autoOdjava && !z.potvrdenoRacunovodstvo),
     brojSegmenata: radni.length,
@@ -19157,7 +19248,7 @@ const evidencijaPrintHtml = ({ mjesec, grupe, dani, zapisiMapa, sazetci, db }) =
   const t = db.postavkeTvrtke || {};
   const celija = (z, d) => {
     const razred = d.praznik ? "evp-pr" : d.vikend ? "evp-vk" : "";
-    const sd = sazetakDanaEvidencije(zapisiMapa.get(`${z.id}|${d.datum}`) || [], db.postavkePlaca);
+    const sd = sazetakDanaEvidencije(zapisiMapa.get(`${z.id}|${d.datum}`) || [], db.postavkePlaca, skinutoSatiDana(db, z.id, d.datum));
     if (!sd) return `<td class="${razred}">${d.praznik ? "P" : ""}</td>`;
     if (sd.posebna) {
       const o = OZNAKA_VRSTE_DANA[sd.posebna];
@@ -19312,7 +19403,7 @@ function KioskStatusPanel({ db, showToast, mozeUredi }) {
   );
 }
 
-function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true, dozvoljeneGrupe = null }) {
+function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true, dozvoljeneGrupe = null, mozeVidjetiSkidanje = false }) {
   // Pozicija može biti ograničena na neke grupe (radiona, praktikant, ostalo = tehnički ured, kooperant): ostale se uopće ne prikazuju.
   const smijeGrupu = (g) => !dozvoljeneGrupe || dozvoljeneGrupe.includes(g);
   const [mjesec, setMjesec] = useState(todayISO().slice(0, 7));
@@ -19457,22 +19548,27 @@ function EvidencijaTab({ db, patchEvidencija, showToast, mozeMijenjati = true, d
       </td>;
     }
 
-    const sd = sazetakDanaEvidencije(zapisi, db.postavkePlaca);
+    const korekcija = korekcijaSatiDana(db, zaposlenik.id, dan.datum);
+    const sd = sazetakDanaEvidencije(zapisi, db.postavkePlaca, Number(korekcija?.sati) || 0);
+    // Skinuti sati: svima se prikazuju korigirani sati; oznaku i razlog vide samo osobe s dozvolom za skidanje sati.
+    const vidiSkidanje = mozeVidjetiSkidanje && sd.skinuto > 0;
+    const opisSkidanja = vidiSkidanje ? `\nSkinuto ${sd.skinuto.toFixed(1)} h (prijava ${sd.satiPrisutnosti.toFixed(1)} h): ${korekcija.razlog} — ${zaposlenikIme(korekcija.promijenioId || korekcija.unioId)}, ${fmtDate((korekcija.promijenjeno || korekcija.unioVrijeme || "").slice(0, 10))}` : "";
+    const oznakaSkidanja = vidiSkidanje && <sup style={{ fontSize: 8, color: "var(--rust)", marginLeft: 1 }}>−{sd.skinuto.toFixed(1)}</sup>;
     const oznaka = sd.posebna && OZNAKA_VRSTE_DANA[sd.posebna];
     if (oznaka) {
-      return <td style={{ ...stil, background: oznaka.bg }} onClick={() => otvoriCeliju(zaposlenik.id, dan.datum)} title={sd.sati > 0 ? `${oznaka.naziv}: ${hhmmISO(sd.prvi)}–${hhmmISO(sd.zadnji)}, ${sd.sati.toFixed(1)} h` : oznaka.naziv}>
+      return <td style={{ ...stil, background: oznaka.bg }} onClick={() => otvoriCeliju(zaposlenik.id, dan.datum)} title={(sd.sati > 0 || sd.skinuto > 0 ? `${oznaka.naziv}: ${hhmmISO(sd.prvi)}–${hhmmISO(sd.zadnji)}, ${sd.sati.toFixed(1)} h` : oznaka.naziv) + opisSkidanja}>
         <span className="f-mono" style={{ fontSize: 11, fontWeight: 700, color: oznaka.boja }}>{oznaka.kratica}</span>
-        {sd.sati > 0 && <div className="f-mono" style={{ fontSize: 10.5, fontWeight: 700, color: oznaka.boja, lineHeight: 1.3 }}>{sd.sati.toFixed(1)}</div>}
+        {(sd.sati > 0 || sd.skinuto > 0) && <div className="f-mono" style={{ fontSize: 10.5, fontWeight: 700, color: oznaka.boja, lineHeight: 1.3 }}>{sd.sati.toFixed(1)}{oznakaSkidanja}</div>}
       </td>;
     }
 
     // Popodnevna smjena je zeleno označena; automatska odjava (crveno) ima prednost jer traži provjeru.
     const pozadina = sd.autoOdjava ? "#FBEAE6" : sd.popodne ? "#D6F0DD" : bgBase;
     return (
-      <td style={{ ...stil, background: pozadina }} onClick={() => otvoriCeliju(zaposlenik.id, dan.datum)} title={sd.autoOdjava ? "Automatska odjava — provjeri" : sd.popodne ? "Popodnevna smjena" : sd.brojSegmenata > 1 ? `${sd.brojSegmenata} segmenta — klikni za izmjenu` : "Klikni za izmjenu"}>
+      <td style={{ ...stil, background: pozadina }} onClick={() => otvoriCeliju(zaposlenik.id, dan.datum)} title={(sd.autoOdjava ? "Automatska odjava — provjeri" : sd.popodne ? "Popodnevna smjena" : sd.brojSegmenata > 1 ? `${sd.brojSegmenata} segmenta — klikni za izmjenu` : "Klikni za izmjenu") + opisSkidanja}>
         <div className="f-mono" style={{ fontSize: 9, color: "var(--ink-faint)", lineHeight: 1.25 }}>{hhmmISO(sd.prvi)}</div>
         <div className="f-mono" style={{ fontSize: 9, color: sd.autoOdjava ? "var(--rust)" : "var(--ink-faint)", lineHeight: 1.25 }}>{hhmmISO(sd.zadnji)}</div>
-        <div className="f-mono" style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.3, color: sd.popodne && !sd.autoOdjava ? "#1B6E36" : "var(--ink)" }}>{sd.sati.toFixed(1)}{sd.brojSegmenata > 1 && <sup style={{ fontSize: 8 }}>+{sd.brojSegmenata - 1}</sup>}</div>
+        <div className="f-mono" style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.3, color: sd.popodne && !sd.autoOdjava ? "#1B6E36" : "var(--ink)" }}>{sd.sati.toFixed(1)}{sd.brojSegmenata > 1 && <sup style={{ fontSize: 8 }}>+{sd.brojSegmenata - 1}</sup>}{oznakaSkidanja}</div>
       </td>
     );
   };
@@ -20223,7 +20319,7 @@ function ObracunPlacaTab({ db, update, showToast, mozeMijenjati = true, mojId })
                   <td className="f-mono">{fmtDate(d.datum)}{d.danUTjednu === 6 && <span style={{ color: "var(--steel)", fontSize: 10 }}> SUB</span>}{d.praznik && <span style={{ color: "var(--rust)", fontSize: 10 }}> PRAZ</span>}</td>
                   <td style={{ fontSize: 11.5 }}>{VRSTE_DANA.find((v) => v.key === d.vrsta)?.label}</td>
                   <td style={{ fontSize: 11.5 }}>{d.vrsta === "rad" ? <>{d.smjena?.naziv}{d.dodatakSmjene > 1 && <span style={{ color: "var(--steel)", fontWeight: 600 }}> +{Math.round((d.dodatakSmjene - 1) * 100)}%</span>}</> : "—"}</td>
-                  <td className="f-mono">{d.odradjeniSati.toFixed(1)}</td>
+                  <td className="f-mono">{(d.odradjeniSati - (d.skinuto || 0)).toFixed(1)}</td>
                   <td className="f-mono">{d.redovni.toFixed(1)}{d.redovni > 0 && d.dodatakSmjene > 1 && <span style={{ fontSize: 9.5, color: "var(--steel)" }} title="Dodatak za smjenu ide u stimulaciju"> +{Math.round((d.dodatakSmjene - 1) * 100)}%</span>}</td>
                   <td className="f-mono" style={{ color: d.prekovremeni > 0 ? "var(--steel)" : "inherit" }}>{d.prekovremeni.toFixed(1)}{d.prekovremeni > 0 && <span style={{ fontSize: 9.5 }}> ×{d.faktorPrekSaSmjenom.toFixed(1)}</span>}</td>
                   <td className="f-mono">{d.putni > 0 ? fmtCurDec(d.putni) : "—"}</td>
@@ -20729,6 +20825,12 @@ const uskladenostSati = (db, od, do_, grupa = "radiona") => {
     }
     dodaj(ev, e.zaposlenikId, d, e.vrijemeOdlaska ? obracunskiSati(e.vrijemeDolaska, e.vrijemeOdlaska, odrediSmjenu(e.vrijemeDolaska, db.postavkePlaca), db.postavkePlaca) : 0);
   });
+  // Skinuti sati (vidi korekcijeSatiMapa) nisu za raspodjelu: evidencija dana umanjuje se za njih, kao u dnevnom unosu.
+  korekcijeSatiMapa(db).forEach((k) => {
+    const dani = ev.get(k.zaposlenikId);
+    if (!dani || !dani.has(k.datum)) return;
+    dani.set(k.datum, Math.max(0, dani.get(k.datum) - (Number(k.sati) || 0)));
+  });
   let projekti = 0, stalni = 0, bezRadnika = 0;
   (db.satiPoNalogu || []).forEach((s) => {
     if (s.datum < od || s.datum > do_) return;
@@ -20754,7 +20856,7 @@ const uskladenostSati = (db, od, do_, grupa = "radiona") => {
   return { redovi, sazetak: { evidencija, projekti, stalni, bezRadnika, nerazdijeljeno, djelomicniSati, djelomicniDana, posto: evidencija > 0 ? ((projekti + stalni + bezRadnika) / evidencija) * 100 : 0 }, brojDana: redovi.reduce((a, r) => a + r.dani.length, 0), brojRadnika: redovi.filter((r) => r.dani.length > 0).length };
 };
 
-function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetniPrikaz = null, pocetnaGrupa = null }) {
+function SatiPoNalozimaTab({ db, update, showToast, spremiCiljano, mozeMijenjati = true, mozeSkidati = false, pocetniPrikaz = null, pocetnaGrupa = null }) {
   const [prikaz, setPrikaz] = useState(pocetniPrikaz || "dnevno"); // "dnevno" (unos) | "mjesecno" (pregled po nalozima/operacijama) | "radnik" | "uskladenost"
   const [uskladenostMjesec, setUskladenostMjesec] = useState(todayISO().slice(0, 7));
   const [uskladenostGrupa, setUskladenostGrupa] = useState(pocetnaGrupa || "radiona"); // "radiona" | "kooperant"
@@ -20769,6 +20871,8 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
   const [datum, setDatum] = useState(todayISO());
   const [uredjivanje, setUredjivanje] = useState(null); // id zaposlenika trenutno otvorenog za unos
   const [redoviUnos, setRedoviUnos] = useState([]);
+  const [skidanje, setSkidanje] = useState({ sati: "", razlog: "" }); // skidanje sati u otvorenom unosu (samo s dozvolom, vidi smijeSkidatiSate)
+  const [spremanje, setSpremanje] = useState(false);
   const [delZa, setDelZa] = useState(null); // zaposlenik čiji se unos za taj dan briše
 
   const [mjesecPregled, setMjesecPregled] = useState(todayISO().slice(0, 7));
@@ -20818,17 +20922,21 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
       const zapisi = db.evidencijaRada.filter((e) => e.zaposlenikId === z.id && e.vrijemeDolaska.slice(0, 10) === datum && zapisSaSatima(e));
       if (zapisi.length === 0) return null;
       const satiPrijave = zapisi.reduce((s, e) => s + obracunskiSati(e.vrijemeDolaska, e.vrijemeOdlaska, odrediSmjenu(e.vrijemeDolaska, db.postavkePlaca), db.postavkePlaca), 0);
+      // Skinuti sati (vidi korekcijeSatiMapa) ne idu ni na jedan nalog: na naloge se raspoređuje prijava umanjena za skinuto.
+      const korekcija = korekcijaSatiDana(db, z.id, datum);
+      const skinuto = Math.min(Number(korekcija?.sati) || 0, satiPrijave);
       const uneseno = db.satiPoNalogu.filter((s) => s.zaposlenikId === z.id && s.datum === datum);
-      return { zaposlenik: z, satiPrijave, uneseno, satiUneseno: uneseno.reduce((s, r) => s + (Number(r.sati) || 0), 0) };
+      return { zaposlenik: z, satiPrijave, korekcija, skinuto, satiZaRaspodjelu: satiPrijave - skinuto, uneseno, satiUneseno: uneseno.reduce((s, r) => s + (Number(r.sati) || 0), 0) };
     })
     .filter(Boolean)
     .sort((a, b) => (a.zaposlenik.prezime + a.zaposlenik.ime).localeCompare(b.zaposlenik.prezime + b.zaposlenik.ime, "hr")),
-    [db.zaposlenici, db.evidencijaRada, db.satiPoNalogu, db.postavkePlaca, datum]);
+    [db.zaposlenici, db.evidencijaRada, db.satiPoNalogu, db.postavkePlaca, db.korekcijeSati, datum]);
 
   const otvoriUnos = (r) => {
     if (!mozeMijenjati) return;
     setUredjivanje(r.zaposlenik.id);
     setRedoviUnos(r.uneseno.length ? r.uneseno.map((u) => ({ radniNalogId: u.radniNalogId, sati: u.sati, projektId: u.projektId || "" })) : [{ radniNalogId: "", sati: "", projektId: "" }]);
+    setSkidanje({ sati: r.korekcija ? String(r.korekcija.sati) : "", razlog: r.korekcija?.razlog || "" });
   };
   const dodajRedak = () => setRedoviUnos([...redoviUnos, { radniNalogId: "", sati: "", projektId: "" }]);
   const azurirajRedak = (i, patch) => setRedoviUnos(redoviUnos.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
@@ -20836,7 +20944,14 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
 
   const zbrojUnosa = redoviUnos.reduce((s, r) => s + (Number(r.sati) || 0), 0);
   const trenutniRadnik = radnici.find((r) => r.zaposlenik.id === uredjivanje);
-  const poklapaSe = trenutniRadnik && Math.abs(zbrojUnosa - trenutniRadnik.satiPrijave) < 0.01;
+  // Skidanje sati (samo s dozvolom): po pola sata, najviše koliko je radnik bio prijavljen, uz obavezan razlog. Bez dozvole vrijedi već spremljeno skidanje.
+  const skidanjeBroj = Number(String(skidanje.sati).replace(",", ".")) || 0;
+  const skidanjeGreska = !mozeSkidati || !trenutniRadnik ? "" :
+    skidanjeBroj < 0 || Math.abs(skidanjeBroj * 2 - Math.round(skidanjeBroj * 2)) > 1e-9 ? "Sati se skidaju po pola sata (0,5 h)." :
+    skidanjeBroj > trenutniRadnik.satiPrijave + 0.001 ? `Najviše ${trenutniRadnik.satiPrijave.toFixed(1)} h (koliko je radnik bio prijavljen).` :
+    skidanjeBroj > 0 && !skidanje.razlog.trim() ? "Upišite razlog skidanja sati." : "";
+  const ciljSati = !trenutniRadnik ? 0 : mozeSkidati ? Math.max(0, trenutniRadnik.satiPrijave - skidanjeBroj) : trenutniRadnik.satiZaRaspodjelu;
+  const poklapaSe = trenutniRadnik && !skidanjeGreska && Math.abs(zbrojUnosa - ciljSati) < 0.01;
 
   // Naloge se ne filtrira — samo poredaju tako da oni koji odgovaraju kompetencijama radnika i
   // nisu završeni idu prvi. Ovo je samo pomoć pri odabiru, ne ograničenje.
@@ -20849,10 +20964,23 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
     });
   };
 
-  const spremi = () => {
-    if (!poklapaSe) return;
+  const spremi = async () => {
+    if (!poklapaSe || spremanje) return;
     const validni = redoviUnos.filter((r) => r.radniNalogId && Number(r.sati) > 0);
-    if (validni.length === 0) { showToast("Dodaj barem jedan redak s nalogom i satima."); return; }
+    // Kad su skinuti svi sati dana, na naloge nema što rasporediti (postojeći unos za taj dan se briše).
+    if (validni.length === 0 && ciljSati > 0.001) { showToast("Dodaj barem jedan redak s nalogom i satima."); return; }
+    // Skidanje sati se sprema prvo (poslužitelj provjerava dozvolu i razlog); ako ne uspije, ni sati po nalozima se ne mijenjaju.
+    if (mozeSkidati) {
+      const stari = trenutniRadnik.korekcija;
+      const razlog = skidanje.razlog.trim();
+      const promjena = skidanjeBroj !== (Number(stari?.sati) || 0) || (skidanjeBroj > 0 && razlog !== (stari?.razlog || ""));
+      if (promjena) {
+        setSpremanje(true);
+        const r = await spremiCiljano("korekcijeSati", [{ zaposlenikId: uredjivanje, datum, sati: skidanjeBroj, razlog: skidanjeBroj > 0 ? razlog : "" }]);
+        setSpremanje(false);
+        if (!r.ok) { showToast(r.greska); return; }
+      }
+    }
 
     const dotaknutiStari = new Set(db.satiPoNalogu.filter((s) => s.zaposlenikId === uredjivanje && s.datum === datum).map((s) => s.radniNalogId));
     const bezStarih = db.satiPoNalogu.filter((s) => !(s.zaposlenikId === uredjivanje && s.datum === datum));
@@ -20993,11 +21121,13 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
           <thead><tr><th>Zaposlenik</th><th style={{ width: 90 }}>Prijava</th><th style={{ width: 90 }}>Uneseno</th><th style={{ width: 110 }}>Status</th><th style={{ width: 130 }}></th></tr></thead>
           <tbody>
             {radnici.map((r) => {
-              const zavrseno = r.uneseno.length > 0 && Math.abs(r.satiUneseno - r.satiPrijave) < 0.01;
+              const zavrseno = (r.uneseno.length > 0 || r.satiZaRaspodjelu < 0.001) && Math.abs(r.satiUneseno - r.satiZaRaspodjelu) < 0.01;
               return (
                 <tr key={r.zaposlenik.id}>
                   <td>{r.zaposlenik.prezime} {r.zaposlenik.ime}</td>
-                  <td className="f-mono">{r.satiPrijave.toFixed(1)} h</td>
+                  <td className="f-mono" title={mozeSkidati && r.skinuto > 0 ? `Prijava ${r.satiPrijave.toFixed(1)} h, skinuto ${r.skinuto.toFixed(1)} h: ${r.korekcija.razlog}` : undefined}>
+                    {r.satiZaRaspodjelu.toFixed(1)} h{mozeSkidati && r.skinuto > 0 && <span style={{ fontSize: 10.5, color: "var(--rust)", marginLeft: 4 }}>(−{r.skinuto.toFixed(1)})</span>}
+                  </td>
                   <td className="f-mono" style={{ color: r.uneseno.length > 0 && !zavrseno ? "var(--rust)" : "inherit" }}>{r.satiUneseno.toFixed(1)} h</td>
                   <td>{zavrseno ? <span style={{ color: "var(--green)", fontSize: 12 }}>✓ Uneseno</span> : r.uneseno.length > 0 ? <span style={{ color: "var(--rust)", fontSize: 12 }}>Ne poklapa se</span> : <span style={{ color: "var(--ink-faint)", fontSize: 12 }}>—</span>}</td>
                   <td style={{ display: "flex", gap: 6 }}>
@@ -21330,7 +21460,7 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
 
       {uredjivanje && trenutniRadnik && (
         <Modal wide title={`Sati po nalozima — ${zaposlenikIme(uredjivanje)} — ${fmtDate(datum)}`} onClose={() => setUredjivanje(null)}
-          footer={<><Btn onClick={() => setUredjivanje(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi} disabled={!poklapaSe}>Spremi</Btn></>}>
+          footer={<><Btn onClick={() => setUredjivanje(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={spremi} disabled={!poklapaSe || spremanje}>{spremanje ? "Spremam…" : "Spremi"}</Btn></>}>
           <table className="erp-table" style={{ marginBottom: 10 }}>
             <thead><tr><th>Radni nalog</th><th style={{ width: 100 }}>Sati</th><th style={{ width: 40 }}></th></tr></thead>
             <tbody>
@@ -21363,12 +21493,35 @@ function SatiPoNalozimaTab({ db, update, showToast, mozeMijenjati = true, pocetn
           </table>
           <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajRedak}>Dodaj redak</Btn>
 
-          <div className="card" style={{ padding: 12, marginTop: 14, background: poklapaSe ? "#EAF6EF" : "#FBEAE6", border: `1px solid ${poklapaSe ? "#B9E3C9" : "#F0C2B5"}` }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-              <span>Uneseno: <strong className="f-mono">{zbrojUnosa.toFixed(1)} h</strong></span>
-              <span>Prijava (evidencija): <strong className="f-mono">{trenutniRadnik.satiPrijave.toFixed(1)} h</strong></span>
+          {mozeSkidati && (
+            <div className="card" style={{ padding: 12, marginTop: 14, background: "var(--surface-alt)" }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Skidanje sati</div>
+              <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginBottom: 8 }}>
+                Skinuti sati ne idu ni na jedan nalog i ne plaćaju se. U evidenciji i obračunu vide se samo korigirani sati; vrijeme prijave i odjave s kioska ostaje kakvo jest. Razlog vide samo osobe s ovom dozvolom.
+              </div>
+              <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
+                <label style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+                  Skini (h)
+                  <input className="input f-mono" type="number" min="0" step="0.5" max={trenutniRadnik.satiPrijave} style={{ width: 90, display: "block", marginTop: 3 }} value={skidanje.sati} placeholder="0" onChange={(e) => setSkidanje({ ...skidanje, sati: e.target.value })} />
+                </label>
+                <label style={{ fontSize: 12, color: "var(--ink-soft)", flex: "1 1 260px" }}>
+                  Razlog{skidanjeBroj > 0 && <span style={{ color: "var(--rust)" }}> *</span>}
+                  <input className="input" maxLength={300} style={{ display: "block", width: "100%", marginTop: 3 }} value={skidanje.razlog} placeholder="npr. zabušavanje kod brušenja" onChange={(e) => setSkidanje({ ...skidanje, razlog: e.target.value })} />
+                </label>
+              </div>
+              {skidanjeGreska && <div style={{ fontSize: 12, color: "var(--rust)", marginTop: 6 }}>{skidanjeGreska}</div>}
+              {trenutniRadnik.korekcija && <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 6 }}>Upisao {zaposlenikIme(trenutniRadnik.korekcija.promijenioId || trenutniRadnik.korekcija.unioId)}, {fmtDate((trenutniRadnik.korekcija.promijenjeno || trenutniRadnik.korekcija.unioVrijeme || "").slice(0, 10))} · za poništavanje upišite 0</div>}
             </div>
-            {!poklapaSe && <div style={{ fontSize: 12, color: "var(--rust)", marginTop: 6 }}>Razlika {Math.abs(zbrojUnosa - trenutniRadnik.satiPrijave).toFixed(1)} h — mora se točno poklopiti prije spremanja.</div>}
+          )}
+
+          <div className="card" style={{ padding: 12, marginTop: 14, background: poklapaSe ? "#EAF6EF" : "#FBEAE6", border: `1px solid ${poklapaSe ? "#B9E3C9" : "#F0C2B5"}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, flexWrap: "wrap", gap: 8 }}>
+              <span>Uneseno: <strong className="f-mono">{zbrojUnosa.toFixed(1)} h</strong></span>
+              {mozeSkidati && skidanjeBroj > 0
+                ? <span>Za raspodjelu: <strong className="f-mono">{ciljSati.toFixed(1)} h</strong> <span style={{ color: "var(--ink-faint)" }}>(prijava {trenutniRadnik.satiPrijave.toFixed(1)} h − skinuto {skidanjeBroj.toFixed(1)} h)</span></span>
+                : <span>Prijava (evidencija): <strong className="f-mono">{ciljSati.toFixed(1)} h</strong></span>}
+            </div>
+            {!poklapaSe && !skidanjeGreska && <div style={{ fontSize: 12, color: "var(--rust)", marginTop: 6 }}>Razlika {Math.abs(zbrojUnosa - ciljSati).toFixed(1)} h — mora se točno poklopiti prije spremanja.</div>}
           </div>
         </Modal>
       )}
@@ -21756,7 +21909,8 @@ function AktivnostTab({ db }) {
   );
 }
 
-function EvidencijaSatiPage({ db, update, showToast, patchEvidencija, mojaPozicija, pocetak, ocistiPocetak }) {
+function EvidencijaSatiPage({ db, update, showToast, patchEvidencija, spremiCiljano, mojaPozicija, pocetak, ocistiPocetak }) {
+  const mozeSkidati = smijeSkidatiSate(mojaPozicija);
   const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "evidencijasati");
   // pocetak = { tab, prikaz, grupa }: otvaranje izravno na karticu (npr. upozorenje o usklađenosti sati s nadzorne ploče)
   const [tab, setTab] = useState(() => (pocetak?.tab && dozvKartice.some((k) => k.key === pocetak.tab) ? pocetak.tab : (dozvKartice[0]?.key || "evidencija")));
@@ -21769,8 +21923,8 @@ function EvidencijaSatiPage({ db, update, showToast, patchEvidencija, mojaPozici
         {dozvKartice.some((k) => k.key === "evidencija") && <div className={`nav-tab ${tab === "evidencija" ? "active" : ""}`} onClick={() => setTab("evidencija")}>Evidencija rada</div>}
         {dozvKartice.some((k) => k.key === "satinalozi") && <div className={`nav-tab ${tab === "satinalozi" ? "active" : ""}`} onClick={() => setTab("satinalozi")}>Sati po nalozima</div>}
       </div>
-      {tab === "evidencija" && <EvidencijaTab db={db} update={update} patchEvidencija={patchEvidencija} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "evidencijasati", "evidencija").izmjene} dozvoljeneGrupe={dozvolaZaKarticu(mojaPozicija, "evidencijasati", "evidencija").grupe} />}
-      {tab === "satinalozi" && <SatiPoNalozimaTab pocetniPrikaz={pocetak?.prikaz || null} pocetnaGrupa={pocetak?.grupa || null} db={db} update={update} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "evidencijasati", "satinalozi").izmjene} />}
+      {tab === "evidencija" && <EvidencijaTab db={db} update={update} patchEvidencija={patchEvidencija} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "evidencijasati", "evidencija").izmjene} dozvoljeneGrupe={dozvolaZaKarticu(mojaPozicija, "evidencijasati", "evidencija").grupe} mozeVidjetiSkidanje={mozeSkidati} />}
+      {tab === "satinalozi" && <SatiPoNalozimaTab pocetniPrikaz={pocetak?.prikaz || null} pocetnaGrupa={pocetak?.grupa || null} db={db} update={update} showToast={showToast} spremiCiljano={spremiCiljano} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "evidencijasati", "satinalozi").izmjene} mozeSkidati={mozeSkidati} />}
     </div>
   );
 }
@@ -22108,7 +22262,7 @@ function ZaposleniciPage({ db, update, showToast, refetchKljuc, mojaPozicija, mo
                               const imaOsnovu = dozvolaZaKarticu(pozForm, m.key, f.uvjet.kartica)[f.uvjet.polje];
                               return (
                                 <label key={f.key} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, cursor: "pointer", marginBottom: 4 }}>
-                                  <input type="checkbox" checked={dozvolaZaKarticu(pozForm, m.key, f.key).pristup} onChange={(e) => postaviKarticu(m.key, f.key, "pristup", e.target.checked)} />
+                                  <input type="checkbox" checked={funkcijaUkljucena(pozForm, m.key, f)} onChange={(e) => postaviKarticu(m.key, f.key, "pristup", e.target.checked)} />
                                   <span style={{ color: "var(--ink-soft)" }}>{f.naziv}</span>
                                   <span style={{ fontSize: 11, color: imaOsnovu ? "var(--ink-faint)" : "var(--rust)" }}>— traži {f.uvjet.opis}{imaOsnovu ? "" : " (ova pozicija ga nema)"}</span>
                                 </label>
