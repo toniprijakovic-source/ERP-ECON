@@ -1243,6 +1243,17 @@ const GlobalStyle = () => (
     .mob-kartica-polja dd{ margin:0; min-width:0; overflow-wrap:anywhere; }
     .mob-kartica-akcije{ display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; padding-top:10px; border-top:1px solid var(--line); align-items:center; }
     .mob-kartica-akcije:empty{ display:none; }
+    /* Tabovi u detalju projekta: na računalu svi u jednom redu, na mobitelu po tri u redu (vidi media upit ispod). */
+    .proj-tabovi{ display:grid; grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); gap:6px; margin:6px 0 16px; }
+    .proj-tab{ border:1px solid var(--line-strong); background:var(--surface); border-radius:3px; padding:8px 6px; font-size:12.5px; font-weight:600; color:var(--ink-soft); cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; line-height:1.2; text-align:center; font-family:inherit; }
+    .proj-tab:hover{ border-color:var(--steel); color:var(--ink); }
+    .proj-tab .broj{ font-family:var(--font-mono); font-size:11px; font-weight:500; color:var(--ink-faint); }
+    .proj-tab.aktivan{ background:var(--steel); border-color:var(--steel); color:#fff; }
+    .proj-tab.aktivan .broj{ color:rgba(255,255,255,0.85); }
+    @media screen and (max-width:760px){
+      .proj-tabovi{ grid-auto-flow:row; grid-template-columns:repeat(3, minmax(0,1fr)); }
+      .proj-tab{ min-height:46px; }
+    }
     @media screen and (max-width:760px){
       .samo-mobitel{ display:inline-flex !important; }
       .samo-racunalo{ display:none !important; }
@@ -1890,7 +1901,7 @@ function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete
               {!readOnly && (
                 <td>
                   <div style={{ display: "flex", gap: 4 }}>
-                    <button className="btn btn-icon btn-ghost" onClick={() => onEdit(row)}><Pencil size={14} /></button>
+                    {onEdit && <button className="btn btn-icon btn-ghost" onClick={() => onEdit(row)}><Pencil size={14} /></button>}
                     <button className="btn btn-icon btn-ghost" onClick={() => onDelete(row)}><Trash2 size={14} color="var(--rust)" /></button>
                   </div>
                 </td>
@@ -1926,7 +1937,7 @@ function EntityPage({ title, icon: Icon, subtitle, data, onAdd, onEdit, onDelete
               )}
               <div className="mob-kartica-akcije">
                 {ostali.filter((c) => !c.label).map((c) => <React.Fragment key={c.key}>{vrijednost(c, row)}</React.Fragment>)}
-                {!readOnly && <button className="btn btn-icon btn-ghost" aria-label="Uredi" onClick={() => onEdit(row)}><Pencil size={15} /></button>}
+                {!readOnly && onEdit && <button className="btn btn-icon btn-ghost" aria-label="Uredi" onClick={() => onEdit(row)}><Pencil size={15} /></button>}
                 {!readOnly && <button className="btn btn-icon btn-ghost" aria-label="Obriši" onClick={() => onDelete(row)}><Trash2 size={15} color="var(--rust)" /></button>}
               </div>
             </div>
@@ -12233,7 +12244,120 @@ function PlanSatiUnos({ nalog, onSpremi }) {
   );
 }
 
-function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt: patchProjektAsync, patchUpiti, showToast, setPage, onClose, mojId, otvoriKvalitetu }) {
+/* ---------- Polja projekta (obrazac "Novi projekt" i tabovi "Osnovni podaci" / "Faze izrade" u detalju projekta) ---------- */
+// Polja koja se uređuju u obrascu; u detalju projekta spremaju se samo ona, preko najnovije verzije projekta (zadaci, isporuke i sl.
+// koje se u međuvremenu mijenjaju u drugim tabovima ne prepisuju se starom kopijom).
+const POLJA_OBRASCA_PROJEKTA = ["sifra", "naziv", "kupacId", "voditeljId", "kontaktOsoba", "kontaktEmail", "kontaktTelefon", "mjestoIsporuke", "status", "vrijednost", "zavrsnaObrada", "rokPocetka", "rokZavrsetka", "opis", "mapa", "faze", "dodaci"];
+const obrazacIzProjekta = (p) => ({
+  ...Object.fromEntries(POLJA_OBRASCA_PROJEKTA.map((k) => [k, p?.[k] ?? ""])),
+  faze: { ...praznaFazaSati(), ...(p?.faze || {}) },
+  dodaci: Array.isArray(p?.dodaci) ? p.dodaci : [],
+});
+// Dodatne narudžbe (dodaci) projekta: sati dodatka mijenjaju i UKUPNE sate projekta (faze) za istu razliku, pa osnovna ostaje nepromijenjena.
+const dodaciObrasca = (setForma, radniNalozi, showToast) => ({
+  dodaj: () => setForma((pf) => ({ ...pf, dodaci: [...(pf.dodaci || []), { id: uid("dod"), naziv: `Dodatak ${(pf.dodaci || []).length + 1}`, rok: "", napomena: "", faze: praznaFazaSati() }] })),
+  uredi: (id, izmjene) => setForma((pf) => ({ ...pf, dodaci: (pf.dodaci || []).map((d) => (d.id === id ? { ...d, ...izmjene } : d)) })),
+  promijeniSate: (id, faza, v) => setForma((pf) => {
+    const d = (pf.dodaci || []).find((x) => x.id === id);
+    const staro = Number(d?.faze?.[faza]) || 0, novo = Math.max(0, Number(v) || 0);
+    return { ...pf, faze: { ...(pf.faze || praznaFazaSati()), [faza]: Math.max(0, (Number(pf.faze?.[faza]) || 0) + novo - staro) }, dodaci: pf.dodaci.map((x) => (x.id === id ? { ...x, faze: { ...praznaFazaSati(), ...(x.faze || {}), [faza]: novo } } : x)) };
+  }),
+  ukloni: (id) => {
+    if ((radniNalozi || []).some((r) => r.dodatakId === id)) { showToast("Dodatak već ima radne naloge — prvo ih obriši ili prebaci na osnovnu narudžbu."); return; }
+    setForma((pf) => {
+      const d = (pf.dodaci || []).find((x) => x.id === id);
+      const faze = { ...(pf.faze || praznaFazaSati()) };
+      FAZE.forEach((f) => { faze[f] = Math.max(0, (Number(faze[f]) || 0) - (Number(d?.faze?.[f]) || 0)); });
+      return { ...pf, faze, dodaci: pf.dodaci.filter((x) => x.id !== id) };
+    });
+  },
+});
+// Osnovni podaci: sve iz obrasca osim faza izrade. termini = termini isporuke projekta (tada je rok završetka zadnji termin).
+function ProjektPoljaOsnovno({ forma, setForma, db, termini = [], disabled = false }) {
+  const postavi = (patch) => setForma((f) => ({ ...f, ...patch }));
+  return (
+    <>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+        <Field label="Šifra projekta"><input className="input" disabled={disabled} value={forma.sifra} onChange={(e) => postavi({ sifra: e.target.value })} /></Field>
+        <Field label="Kupac"><select className="select" disabled={disabled} value={forma.kupacId} onChange={(e) => postavi({ kupacId: e.target.value })}>{db.kupci.map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}</select></Field>
+      </div>
+      <Field label="Naziv projekta"><input className="input" disabled={disabled} value={forma.naziv} onChange={(e) => postavi({ naziv: e.target.value })} /></Field>
+      <Field label="Voditelj projekta">
+        <select className="select" disabled={disabled} value={forma.voditeljId || ""} onChange={(e) => postavi({ voditeljId: e.target.value })}>
+          <option value="">— Nije dodijeljen —</option>
+          {izborZaposlenika(db).filter((z) => z.status === "Aktivan" || z.id === forma.voditeljId).sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+        </select>
+      </Field>
+      <div className="label" style={{ marginTop: 6 }}>Kontakt i isporuka</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+        <Field label="Kontakt osoba"><input className="input" disabled={disabled} value={forma.kontaktOsoba || ""} onChange={(e) => postavi({ kontaktOsoba: e.target.value })} /></Field>
+        <Field label="E-mail"><input className="input" type="email" disabled={disabled} value={forma.kontaktEmail || ""} onChange={(e) => postavi({ kontaktEmail: e.target.value })} /></Field>
+        <Field label="Telefon"><input className="input" disabled={disabled} value={forma.kontaktTelefon || ""} onChange={(e) => postavi({ kontaktTelefon: e.target.value })} /></Field>
+      </div>
+      <Field label="Mjesto isporuke"><input className="input" disabled={disabled} placeholder="npr. ulica i broj, poštanski broj, grad, država" value={forma.mjestoIsporuke || ""} onChange={(e) => postavi({ mjestoIsporuke: e.target.value })} /></Field>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+        <Field label="Status"><select className="select" disabled={disabled} value={forma.status} onChange={(e) => postavi({ status: e.target.value })}>{STATUSI_PROJEKTA.map((s) => <option key={s}>{s}</option>)}</select></Field>
+        <Field label="Vrijednost (€)"><input className="input f-mono" type="number" disabled={disabled} value={forma.vrijednost} onChange={(e) => postavi({ vrijednost: e.target.value })} /></Field>
+        <Field label="Završna obrada (plan proizvodnje)">
+          <select className="select" disabled={disabled} value={forma.zavrsnaObrada || zavrsnaObradaProjekta(forma, db.radniNalozi)} onChange={(e) => postavi({ zavrsnaObrada: e.target.value })}>
+            {ZAVRSNE_OBRADE.map((z) => <option key={z.key} value={z.key}>{z.naziv}</option>)}
+          </select>
+        </Field>
+        <Field label="Rok početka"><input className="input" type="date" disabled={disabled} value={forma.rokPocetka || ""} onChange={(e) => postavi({ rokPocetka: e.target.value })} /></Field>
+        <Field label="Rok završetka (isporuka kupcu)"><input className="input" type="date" value={forma.rokZavrsetka || ""} disabled={disabled || termini.length > 0} onChange={(e) => postavi({ rokZavrsetka: e.target.value })} />{termini.length > 0 && <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 3 }}>Automatski = zadnji termin isporuke (termini se uređuju u detaljima projekta).</div>}</Field>
+      </div>
+      <Field label="Opis"><textarea className="textarea" rows={3} disabled={disabled} value={forma.opis || ""} onChange={(e) => postavi({ opis: e.target.value })} /></Field>
+      <Field label="Mapa projekta na serveru">
+        <input className="input f-mono" disabled={disabled} placeholder={`prazno = automatski: mapa u Econ_${GODINA_MAPA}_Projekti koja počinje šifrom projekta`} value={forma.mapa || ""} onChange={(e) => postavi({ mapa: e.target.value })} />
+        <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 4 }}>Prikazuje se uz zadatke projekta i u popisu projekata s gumbima "Otvori mapu" i "Kopiraj". Da "Otvori mapu" radi jednim klikom, na svakom računalu jednom pokreni <a href={URL_POMOCNIKA} download style={{ color: "var(--steel)", fontWeight: 600 }}>pomoćnika</a> (otvara samo mape pod Z:\ECON_{GODINA_MAPA} i prethodnih godina te ateste materijala).</div>
+      </Field>
+    </>
+  );
+}
+// Faze izrade: planirani sati po fazi za osnovnu narudžbu i dodatne narudžbe (dodatke).
+function ProjektPoljaFaze({ forma, setForma, db, showToast, disabled = false }) {
+  const dod = dodaciObrasca(setForma, db.radniNalozi, showToast);
+  const dodaci = forma.dodaci || [];
+  const zaokruzi = (x) => Math.round(x * 10) / 10;
+  return (
+    <>
+      <div className="label" style={{ marginTop: 6 }}>{dodaci.length ? "Osnovna narudžba — faze izrade (planirani sati)" : "Faze izrade (planirani sati)"}</div>
+      <div style={{ fontSize: 11, color: "var(--ink-faint)", marginBottom: 8 }}>Sati po fazi koriste se kao predložak kad se za ovaj projekt kasnije kreira radni nalog — nisu obavezni za faze koje se ne planiraju.</div>
+      <div className="card" style={{ padding: 14, background: "var(--surface-alt)", display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 10 }}>
+        {FAZE.map((f) => (
+          <Field key={f} label={fazaOznaka(f)}>
+            <input className="input f-mono" type="number" min="0" step="0.5" disabled={disabled} value={satiDijelaFaze(forma, f, "")} onChange={(e) => setForma((pf) => ({ ...pf, faze: { ...(pf.faze || praznaFazaSati()), [f]: (Number(e.target.value) || 0) + (pf.dodaci || []).reduce((z, d) => z + (Number(d.faze?.[f]) || 0), 0) } }))} />
+          </Field>
+        ))}
+      </div>
+      {dodaci.map((d) => (
+        <div key={d.id} className="card" style={{ padding: 14, marginTop: 12, borderColor: "var(--line-strong)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10, alignItems: "end", marginBottom: 8 }}>
+            <Field label="Dodatna narudžba (naziv)"><input className="input" disabled={disabled} value={d.naziv} onChange={(e) => dod.uredi(d.id, { naziv: e.target.value })} /></Field>
+            <Field label="Rok završetka dodatka"><input className="input" type="date" disabled={disabled} value={d.rok || ""} onChange={(e) => dod.uredi(d.id, { rok: e.target.value })} /></Field>
+            {!disabled && <div><Btn size="sm" variant="ghost" onClick={() => dod.ukloni(d.id)} title="Ukloni dodatak">Ukloni</Btn></div>}
+          </div>
+          <Field label="Napomena (npr. broj narudžbe kupca)"><input className="input" disabled={disabled} value={d.napomena || ""} onChange={(e) => dod.uredi(d.id, { napomena: e.target.value })} /></Field>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 10, marginTop: 8 }}>
+            {FAZE.map((f) => (
+              <Field key={f} label={fazaOznaka(f)}>
+                <input className="input f-mono" type="number" min="0" step="0.5" disabled={disabled} value={d.faze?.[f] ?? 0} onChange={(e) => dod.promijeniSate(d.id, f, e.target.value)} />
+              </Field>
+            ))}
+          </div>
+          <div style={{ fontSize: 12, marginTop: 8, color: "var(--ink-soft)" }}>Ukupno dodatak: <strong className="f-mono">{zaokruzi(FAZE.reduce((z, f) => z + (Number(d.faze?.[f]) || 0), 0))} h</strong></div>
+        </div>
+      ))}
+      {!disabled && <div style={{ marginTop: 10 }}><Btn size="sm" variant="ghost" onClick={dod.dodaj}>+ Dodatna narudžba (dodatak)</Btn></div>}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, padding: "8px 14px", background: "var(--surface-alt)", border: "1px solid var(--line-strong)", borderRadius: 3, flexWrap: "wrap", gap: 6 }}>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>Ukupno planirano{dodaci.length > 0 && <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}> (osnovna {zaokruzi(FAZE.reduce((z, f) => z + satiDijelaFaze(forma, f, ""), 0))} h + dodaci {zaokruzi(FAZE.reduce((z, f) => z + dodaci.reduce((a, d) => a + (Number(d.faze?.[f]) || 0), 0), 0))} h)</span>}</span>
+        <span className="f-mono" style={{ fontSize: 16, fontWeight: 700 }}>{zaokruzi(FAZE.reduce((zbroj, f) => zbroj + (Number(forma.faze?.[f]) || 0), 0))} h</span>
+      </div>
+    </>
+  );
+}
+
+function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt: patchProjektAsync, patchUpiti, showToast, setPage, onClose, mojId, otvoriKvalitetu, spremiProjekt, mozeUredjivati = true }) {
   const kupac = db.kupci.find((k) => k.id === projekt.kupacId);
   const voditelj = db.zaposlenici.find((z) => z.id === projekt.voditeljId);
   const vanjskiSvi = [...(projekt.vanjskiTroskovi || []), ...dodatniTroskoviProjekta(db, projekt.id)];
@@ -12254,7 +12378,7 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
       })
       : [{ id: "" }, ...(projekt.dodaci || [])].flatMap((dio) => FAZE.map((faza) => ({ faza, dio, preostalo: preostaloSatiFaze(projekt, faza, db.radniNalozi, null, dio.id) })));
     if (satiNormativa && !OPERACIJE.some((o) => satiNormativa[o.key] > 0)) { showToast("Normativ za ovaj projekt ne daje sate — provjeri stavke (pod, komplet) i učinak kg/h u Normativu."); return; }
-    if (!satiNormativa && !FAZE.some((f) => satiDijelaFaze(projekt, f, "") > 0 || (projekt.dodaci || []).some((d) => satiDijelaFaze(projekt, f, d.id) > 0))) { showToast("Projekt nema upisanih planiranih sati po fazama — upiši ih u „Uredi projekt“."); return; }
+    if (!satiNormativa && !FAZE.some((f) => satiDijelaFaze(projekt, f, "") > 0 || (projekt.dodaci || []).some((d) => satiDijelaFaze(projekt, f, d.id) > 0))) { showToast("Projekt nema upisanih planiranih sati po fazama — upiši ih u tabu „Faze izrade“."); return; }
     const noviNalozi = dijelovi
       .filter(({ preostalo }) => preostalo > 0)
       .map(({ faza, dio, preostalo }) => ({
@@ -12413,35 +12537,73 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
     showToast && showToast("Zadatak dodan.");
   };
 
+  // ---------- Tabovi i obrazac osnovnih podataka / faza izrade ----------
+  // forma = ono što korisnik uređuje; sinkronizirano = vrijednosti projekta iz kojih je obrazac nastao. Kad se projekt promijeni izvana
+  // (spremanje, drugi tab, drugo računalo), neizmijenjen obrazac se osvježi, a započete izmjene ostaju.
+  const izProjekta = obrazacIzProjekta(projekt);
+  const kljucProjekta = JSON.stringify(izProjekta);
+  const [forma, setForma] = useState(izProjekta);
+  const [sinkronizirano, setSinkronizirano] = useState(izProjekta);
+  useEffect(() => {
+    if (JSON.stringify(forma) === JSON.stringify(sinkronizirano)) setForma(izProjekta);
+    setSinkronizirano(izProjekta);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kljucProjekta]);
+  const razlikaPolja = (polja) => polja.some((k) => JSON.stringify(forma[k]) !== JSON.stringify(sinkronizirano[k]));
+  const promijenjeneFaze = razlikaPolja(["faze", "dodaci"]);
+  const promijenjenoOsnovno = razlikaPolja(POLJA_OBRASCA_PROJEKTA.filter((k) => k !== "faze" && k !== "dodaci"));
+  const imaIzmjena = promijenjeneFaze || promijenjenoOsnovno;
+  const spremiObrazac = () => {
+    if (!spremiProjekt || !mozeUredjivati) return;
+    if (spremiProjekt({ ...projekt, ...forma })) setSinkronizirano(forma);
+  };
+  const zatvori = () => { if (!imaIzmjena || window.confirm("Imate nespremljene izmjene osnovnih podataka ili faza izrade. Zatvoriti bez spremanja?")) onClose(); };
+  const ukupnoPlanFaze = Math.round(FAZE.reduce((z, f) => z + (Number(projekt.faze?.[f]) || 0), 0) * 10) / 10;
+  // Faze: plan s projekta, sati na nalozima i utrošeno po fazi (nalozi faza koje nisu u FAZE, npr. operacije kupaonica, posebno).
+  const fazePregled = (() => {
+    const m = new Map();
+    FAZE.forEach((f) => { const plan = Number(projekt.faze?.[f]) || 0; if (plan > 0) m.set(f, { kljuc: f, naziv: fazaOznaka(f), plan, nalozi: 0, utroseno: 0 }); });
+    nalozi.forEach((n) => {
+      const e = m.get(n.faza) || { kljuc: n.faza, naziv: FAZE.includes(n.faza) ? fazaOznaka(n.faza) : fazaNaloga(n), plan: null, nalozi: 0, utroseno: 0 };
+      e.nalozi += Number(n.planiranoSati) || 0;
+      e.utroseno += Number(n.utrosenoSati) || 0;
+      m.set(n.faza, e);
+    });
+    return [...m.values()];
+  })();
+  // Izdano na projekt (izdatnice) — samo kad pozicija smije čitati izdatnice (inače je popis prazan i odjeljak se ne prikazuje).
+  const vidiIzdatnice = (db.izdatnice || []).length > 0;
+  const izdatniceProjekta = (db.izdatnice || []).filter((i) => i.projektId === projekt.id).sort((a, b) => String(b.datum).localeCompare(String(a.datum)));
+  const ponudaIzvor = projekt.izvorPonudaId ? db.ponude.find((p) => p.id === projekt.izvorPonudaId) : null;
+  const tabovi = [
+    { key: "osnovno", naziv: "Osnovni podaci", broj: promijenjenoOsnovno ? "● nije spremljeno" : "" },
+    { key: "faze", naziv: "Faze izrade", broj: promijenjeneFaze ? "● nije spremljeno" : ukupnoPlanFaze > 0 ? `${ukupnoPlanFaze.toLocaleString("hr-HR")} h` : "" },
+    { key: "dokumenti", naziv: "Dokumenti", broj: narudzbeProjekta.length + brojOtpremnica > 0 ? String(narudzbeProjekta.length + brojOtpremnica) : "" },
+    { key: "zadaci", naziv: "Zadaci", broj: zadaci.length ? `${zadaciDone}/${zadaci.length}` : "" },
+    { key: "materijal", naziv: "Materijal", broj: materijalStavke.length ? String(materijalStavke.length) : "" },
+    { key: "nalozi", naziv: "Radni nalozi", broj: nalozi.length ? String(nalozi.length) : "" },
+    ...(koristiNormativ ? [{ key: "kupaonice", naziv: "Kupaonice", broj: proizvodniBrojevi.length ? `${proizvodniBrojevi.length} PB` : "" }] : []),
+  ];
+  // Zadnji otvoreni tab pamti se u pregledniku (sljedeći projekt otvara se na istom tabu).
+  const [tabStanje, setTabStanje] = useState(() => { try { return localStorage.getItem("erp_projekt_tab") || "osnovno"; } catch { return "osnovno"; } });
+  const tab = tabovi.some((t) => t.key === tabStanje) ? tabStanje : "osnovno";
+  const odaberiTab = (k) => { setTabStanje(k); try { localStorage.setItem("erp_projekt_tab", k); } catch { /* pamćenje taba nije važno */ } };
+  const trakaSpremanja = mozeUredjivati && spremiProjekt && (
+    <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
+      {imaIzmjena && <span style={{ fontSize: 12, color: "var(--rust)", marginRight: "auto" }}>Izmjene nisu spremljene{promijenjenoOsnovno && promijenjeneFaze ? " (osnovni podaci i faze izrade)" : ""}.</span>}
+      <Btn disabled={!imaIzmjena} onClick={() => setForma(sinkronizirano)}>Odustani</Btn>
+      <Btn variant="primary" icon={Save} disabled={!imaIzmjena} onClick={spremiObrazac}>Spremi</Btn>
+    </div>
+  );
+
   return (
     <>
-    <Modal wide maxSirina={1640} title={`Detalji projekta — ${projekt.sifra}`} onClose={onClose} footer={<>{otvoriKvalitetu && <Btn variant="ghost" icon={ShieldCheck} onClick={() => { onClose(); otvoriKvalitetu(projekt.id); }}>Kvaliteta — ugrađeni materijal</Btn>}<Btn onClick={onClose}>Zatvori</Btn></>}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
-        <div>
+    <Modal wide maxSirina={1640} title={`Detalji projekta — ${projekt.sifra}`} onClose={zatvori} footer={<Btn onClick={zatvori}>Zatvori</Btn>}>
+      {/* Kratko zaglavlje (uvijek vidljivo); svi podaci projekta su u tabu Osnovni podaci. */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
+        <div style={{ minWidth: 0, flex: "1 1 260px" }}>
           <div style={{ fontSize: 17, fontWeight: 600 }} className="f-display">{projekt.naziv}</div>
-          <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>{kupac?.naziv || "—"} · Rok: {fmtDate(projekt.rokPocetka)} – {fmtDate(projekt.rokZavrsetka)}</div>
-          {(projekt.promjeneRoka || []).length > 0 && (() => {
-            const z = projekt.promjeneRoka[projekt.promjeneRoka.length - 1];
-            const svi = projekt.promjeneRoka.map((x) => `${fmtDate(x.datum)}: ${x.stariRok ? fmtDate(x.stariRok) : "—"} → ${fmtDate(x.noviRok)}${x.razlog ? ` (${x.razlog}${x.napomena ? `, ${x.napomena}` : ""})` : ""}`).join("\n");
-            return <div title={svi} style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2, cursor: "help" }}>Rok je pomican {projekt.promjeneRoka.length}× — zadnje {fmtDate(z.datum)}: {z.stariRok ? fmtDate(z.stariRok) : "—"} → {fmtDate(z.noviRok)}{z.razlog ? ` · ${z.razlog}` : ""}</div>;
-          })()}
-          {projekt.mapa ? <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2, wordBreak: "break-all" }}>Mapa projekta: <span className="f-mono" style={{ fontSize: 11.5 }}>{projekt.mapa}</span><MapaGumbi putanja={projekt.mapa} /></div>
-            : <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>Mapa projekta: <a href={urlMapeProjekta(projekt)} style={{ ...STIL_LINK_GUMBA, textDecoration: "none" }}>Otvori mapu</a> <span style={{ fontSize: 11, color: "var(--ink-faint)" }}>(Econ_{GODINA_MAPA}_Projekti\{projekt.sifra}_…)</span></div>}
-          <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2, display: "flex", alignItems: "center", gap: 8 }}>
-            Voditelj projekta: <strong style={{ color: "var(--ink)" }}>{voditelj ? `${voditelj.prezime} ${voditelj.ime}` : "nije dodijeljen"}</strong>
-            {voditelj && <Btn variant="ghost" size="sm" onClick={() => { const ok = posaljiObavijestVoditelju(projekt, voditelj); showToast && showToast(ok ? "Otvoren e-mail za slanje obavijesti." : "Voditelj nema unesen e-mail."); }}>Pošalji obavijest</Btn>}
-          </div>
-          {(projekt.kontaktOsoba || projekt.kontaktEmail || projekt.kontaktTelefon) && (
-            <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>
-              Kontakt: <strong style={{ color: "var(--ink)" }}>{projekt.kontaktOsoba || "—"}</strong>
-              {projekt.kontaktEmail && <> · <a href={`mailto:${projekt.kontaktEmail}`}>{projekt.kontaktEmail}</a></>}
-              {projekt.kontaktTelefon && <> · {projekt.kontaktTelefon}</>}
-            </div>
-          )}
-          {projekt.mjestoIsporuke && <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>Mjesto isporuke: <strong style={{ color: "var(--ink)" }}>{projekt.mjestoIsporuke}</strong></div>}
-          {projekt.izvorPonudaId && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2 }}>Kreirano iz ponude {db.ponude.find((p) => p.id === projekt.izvorPonudaId)?.broj || projekt.izvorPonudaId}</div>}
-          {(projekt.pridruzenePonude || []).length > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2 }}>Pridružene ponude (dodatak): {projekt.pridruzenePonude.map((x) => `${x.broj} (+${fmtCur(x.vrijednost)})`).join(", ")}</div>}
-          {projekt.kopiranoIzProjektaId && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2 }}>Kopirano iz projekta {db.projekti.find((p) => p.id === projekt.kopiranoIzProjektaId)?.sifra || "(obrisan projekt)"}</div>}
+          <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginTop: 2 }}>{kupac?.naziv || "—"}{voditelj ? ` · voditelj ${voditelj.prezime} ${voditelj.ime}` : ""} · rok {fmtDate(projekt.rokPocetka)} – {fmtDate(projekt.rokZavrsetka)}</div>
         </div>
         <div style={{ textAlign: "right" }}>
           <Badge status={projekt.status} />
@@ -12474,15 +12636,87 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
             <input type="checkbox" checked={koristiNormativ} onChange={(e) => patchProjekt({ koristiNormativ: e.target.checked })} />
             <strong className="f-display" style={{ fontSize: 14 }}>Tipski projekt po normativu</strong>
           </label>
-          {koristiNormativ && (
-            <div style={{ display: "flex", gap: 8 }}>
-              <Btn variant="ghost" size="sm" icon={Download} onClick={() => (narudzbeProjekta.length > 1 ? setUvozOdabir(true) : setUvozOtvoren(narudzbeProjekta[0] || false))} disabled={narudzbeProjekta.length === 0}>Uvezi iz narudžbe</Btn>
-              <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setNormativOtvoren(true)}>Uredi normativ</Btn>
-            </div>
-          )}
         </div>
 
         {!koristiNormativ && <p style={{ fontSize: 12, color: "var(--ink-faint)" }}>Uključi ako se projekt obračunava po ugovorenoj cijeni €/kg (npr. tipske kupaonice) — tada se vrijednost i sati računaju iz mase, a ne unose ručno po poziciji. Pod i komplet unose se odvojeno, kao zasebne stavke narudžbenice.</p>}
+        {koristiNormativ && <p style={{ fontSize: 12, color: "var(--ink-soft)" }}>Normativ, stavke (pod, stranice), proizvodni brojevi i raspored isporuka su u tabu <button type="button" onClick={() => odaberiTab("kupaonice")} style={{ ...STIL_LINK_GUMBA }}>Kupaonice</button>.</p>}
+      </div>
+
+      {/* ===== Tabovi: na računalu svi u jednom redu, na mobitelu po tri u redu (CSS .proj-tabovi) ===== */}
+      <div className="proj-tabovi" role="tablist" aria-label="Dijelovi projekta">
+        {tabovi.map((t) => (
+          <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} className={`proj-tab ${tab === t.key ? "aktivan" : ""}`} onClick={() => odaberiTab(t.key)}>
+            <span>{t.naziv}</span>
+            {t.broj && <span className="broj">{t.broj}</span>}
+          </button>
+        ))}
+      </div>
+
+      {tab === "osnovno" && (
+        <div style={{ marginBottom: 16 }}>
+          <ProjektPoljaOsnovno forma={forma} setForma={setForma} db={db} termini={projekt.termini || []} disabled={!mozeUredjivati} />
+          <div className="card" style={{ padding: "10px 14px", marginTop: 12, background: "var(--surface-alt)", fontSize: 12.5, display: "grid", gap: 4 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              Voditelj projekta: <strong>{voditelj ? `${voditelj.prezime} ${voditelj.ime}` : "nije dodijeljen"}</strong>
+              {voditelj && <Btn variant="ghost" size="sm" onClick={() => { const ok = posaljiObavijestVoditelju(projekt, voditelj); showToast && showToast(ok ? "Otvoren e-mail za slanje obavijesti." : "Voditelj nema unesen e-mail."); }}>Pošalji obavijest</Btn>}
+            </div>
+            {projekt.mapa ? <div style={{ wordBreak: "break-all" }}>Mapa projekta: <span className="f-mono" style={{ fontSize: 11.5 }}>{projekt.mapa}</span><MapaGumbi putanja={projekt.mapa} /></div>
+              : <div>Mapa projekta: <a href={urlMapeProjekta(projekt)} style={{ ...STIL_LINK_GUMBA, textDecoration: "none" }}>Otvori mapu</a> <span style={{ fontSize: 11, color: "var(--ink-faint)" }}>(Econ_{GODINA_MAPA}_Projekti\{projekt.sifra}_…)</span></div>}
+            {(projekt.promjeneRoka || []).length > 0 && (
+              <div>
+                <div>Rok je pomican {projekt.promjeneRoka.length}×:</div>
+                {projekt.promjeneRoka.slice().reverse().map((x, i) => <div key={x.id || i} style={{ fontSize: 11.5, color: "var(--ink-soft)", marginLeft: 10 }}>{fmtDate(x.datum)}: {x.stariRok ? fmtDate(x.stariRok) : "—"} → {fmtDate(x.noviRok)}{x.razlog ? ` · ${x.razlog}${x.napomena ? `, ${x.napomena}` : ""}` : ""}</div>)}
+              </div>
+            )}
+            {ponudaIzvor && <div style={{ color: "var(--ink-soft)" }}>Kreirano iz ponude {ponudaIzvor.broj}</div>}
+            {(projekt.pridruzenePonude || []).length > 0 && <div style={{ color: "var(--ink-soft)" }}>Pridružene ponude (dodatak): {projekt.pridruzenePonude.map((x) => `${x.broj} (+${fmtCur(x.vrijednost)})`).join(", ")}</div>}
+            {projekt.kopiranoIzProjektaId && <div style={{ color: "var(--ink-soft)" }}>Kopirano iz projekta {db.projekti.find((p) => p.id === projekt.kopiranoIzProjektaId)?.sifra || "(obrisan projekt)"}</div>}
+          </div>
+          {trakaSpremanja}
+        </div>
+      )}
+
+      {tab === "faze" && (
+        <div style={{ marginBottom: 16 }}>
+          {fazePregled.length > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              <div className="label" style={{ marginBottom: 6 }}>Plan i utrošeno po fazi</div>
+              <div style={{ overflowX: "auto" }}>
+                <table className="erp-table">
+                  <thead><tr><th>Faza</th><th style={{ textAlign: "right" }}>Plan projekta</th><th style={{ textAlign: "right" }}>Na nalozima</th><th style={{ textAlign: "right" }}>Utrošeno</th><th style={{ textAlign: "right" }}>Ostalo</th></tr></thead>
+                  <tbody>
+                    {fazePregled.map((f) => {
+                      const osnova = f.plan != null ? f.plan : f.nalozi;
+                      const ostalo = Math.round((osnova - f.utroseno) * 10) / 10;
+                      return (
+                        <tr key={f.kljuc}>
+                          <td>{f.naziv}</td>
+                          <td className="f-mono" style={{ textAlign: "right" }}>{f.plan != null ? `${f.plan} h` : "—"}</td>
+                          <td className="f-mono" style={{ textAlign: "right" }}>{Math.round(f.nalozi * 10) / 10} h</td>
+                          <td className="f-mono" style={{ textAlign: "right" }}>{Math.round(f.utroseno * 10) / 10} h</td>
+                          <td className="f-mono" style={{ textAlign: "right", fontWeight: ostalo < 0 ? 700 : 400, color: ostalo < 0 ? "var(--rust)" : "inherit" }}>{ostalo < 0 ? `prekoračeno ${-ostalo} h` : `${ostalo} h`}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          <ProjektPoljaFaze forma={forma} setForma={setForma} db={db} showToast={showToast || (() => {})} disabled={!mozeUredjivati} />
+          {trakaSpremanja}
+        </div>
+      )}
+
+      {tab === "kupaonice" && koristiNormativ && (
+      <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+          <strong className="f-display" style={{ fontSize: 14 }}>Normativ i stavke kupaonica</strong>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Btn variant="ghost" size="sm" icon={Download} onClick={() => (narudzbeProjekta.length > 1 ? setUvozOdabir(true) : setUvozOtvoren(narudzbeProjekta[0] || false))} disabled={narudzbeProjekta.length === 0}>Uvezi iz narudžbe</Btn>
+            <Btn variant="ghost" size="sm" icon={Settings} onClick={() => setNormativOtvoren(true)}>Uredi normativ</Btn>
+          </div>
+        </div>
 
         {koristiNormativ && (
           <>
@@ -12541,9 +12775,10 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
           </>
         )}
       </div>
+      )}
 
-      {/* ===== Proizvodni brojevi (pod + stranica, jedan datum isporuke) ===== */}
-      {koristiNormativ && (
+      {/* ===== Proizvodni brojevi (pod + stranica, jedan datum isporuke) — tab Kupaonice ===== */}
+      {tab === "kupaonice" && koristiNormativ && (
         <div className="card" style={{ padding: 14, marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
             <strong className="f-display" style={{ fontSize: 14 }}>Proizvodni brojevi ({proizvodniBrojevi.length})</strong>
@@ -12612,8 +12847,8 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
         </div>
       )}
 
-      {/* ===== Raspored isporuka (po stavkama poda/kompleta, djeljivo na više datuma) ===== */}
-      {koristiNormativ && (
+      {/* ===== Raspored isporuka (po stavkama poda/kompleta, djeljivo na više datuma) — tab Kupaonice ===== */}
+      {tab === "kupaonice" && koristiNormativ && (
         <div className="card" style={{ padding: 14, marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
             <strong className="f-display" style={{ fontSize: 14 }}>Raspored isporuka ({rucneIsporuke.length})</strong>
@@ -12658,7 +12893,10 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
         </div>
       )}
 
+      {tab === "dokumenti" && (
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16, alignItems: "flex-start" }}>
+        <div className="label" style={{ marginBottom: 0 }}>Narudžbe kupca i potvrde narudžbe</div>
+        {narudzbeProjekta.length === 0 && <span style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Projekt još nema narudžbu kupca.</span>}
         {narudzbeProjekta.map((n) => (
           <div key={n.id} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <Btn variant="ghost" icon={Pencil} onClick={() => setNarudzbaModal({ narudzba: n })}>Narudžba {n.broj || "(bez broja)"}</Btn>
@@ -12668,13 +12906,23 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <Btn variant="ghost" icon={Plus} onClick={() => setNarudzbaModal({ narudzba: null })}>{narudzbeProjekta.length > 0 ? "Nova narudžba" : "Narudžba"}</Btn>
         </div>
+        <div className="label" style={{ marginBottom: 0, marginTop: 8 }}>Isporuka i troškovi</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Btn variant="ghost" icon={Truck} onClick={() => setOtpremniceModal(true)}>Otpremnice{brojOtpremnica > 0 ? ` (${brojOtpremnica})` : ""}</Btn>
         <Btn variant="ghost" icon={Receipt} onClick={() => setVanjskiModal(true)}>Vanjski troškovi{vanjskiSvi.length > 0 ? ` (${fmtCur(vanjskiSvi.reduce((s, v) => s + (Number(v.iznos) || 0), 0))})` : ""}</Btn>
         </div>
+        {(ponudaIzvor || (projekt.pridruzenePonude || []).length > 0) && (
+          <>
+            <div className="label" style={{ marginBottom: 0, marginTop: 8 }}>Ponude</div>
+            {ponudaIzvor && <div style={{ fontSize: 12.5 }}>Projekt je nastao iz ponude <strong className="f-mono">{ponudaIzvor.broj}</strong>{ponudaIzvor.naziv ? ` — ${ponudaIzvor.naziv}` : ""}{ponudaIzvor.status ? <span style={{ color: "var(--ink-soft)" }}> ({ponudaIzvor.status})</span> : null}</div>}
+            {(projekt.pridruzenePonude || []).length > 0 && <div style={{ fontSize: 12.5 }}>Pridružene ponude (dodatak): {projekt.pridruzenePonude.map((x) => `${x.broj} (+${fmtCur(x.vrijednost)})`).join(", ")}</div>}
+          </>
+        )}
       </div>
+      )}
       {vanjskiModal && <VanjskiTroskoviModal projekt={projekt} dobavljaci={db.dobavljaci || []} patchProjekt={patchProjekt} dodatni={dodatniTroskoviProjekta(db, projekt.id)} onClose={() => setVanjskiModal(false)} />}
 
+      {tab === "zadaci" && (
       <div style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <div className="label" style={{ marginBottom: 0 }}>Zadaci projekta</div>
@@ -12722,7 +12970,10 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
           <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajZadatak}>Dodaj</Btn>
         </div>
       </div>
+      )}
 
+      {tab === "materijal" && (
+      <>
       {pozicije.length > 0 && (
         <div style={{ marginBottom: 16 }}>
           <div className="label" style={{ marginBottom: 6 }}>Pozicije (iz kalkulacije ponude)</div>
@@ -12770,6 +13021,43 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
         </div>
       )}
 
+      {/* Izdano na projekt: izdatnice (bez cijena); vidi se samo pozicijama koje smiju čitati izdatnice. */}
+      {vidiIzdatnice && (
+        <div style={{ marginBottom: 16 }}>
+          <div className="label" style={{ marginBottom: 6 }}>Izdano na projekt ({izdatniceProjekta.length} {mnozinaHr(izdatniceProjekta.length, "izdatnica", "izdatnice", "izdatnica")})</div>
+          {izdatniceProjekta.length === 0 ? <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Na projekt još nije izdan materijal.</div> : (
+            <div style={{ overflowX: "auto" }}>
+              <table className="erp-table">
+                <thead><tr><th>Izdatnica</th><th>Datum</th><th>Materijal</th><th style={{ textAlign: "right" }}>Stavki</th></tr></thead>
+                <tbody>
+                  {izdatniceProjekta.slice(0, 30).map((iz) => {
+                    const stavke = iz.stavke || [];
+                    const nazivi = [...new Set(stavke.map((s) => db.materijali.find((m) => m.id === s.materijalId)?.naziv).filter(Boolean))];
+                    return (
+                      <tr key={iz.id}>
+                        <td className="f-mono">{iz.broj}</td>
+                        <td className="f-mono">{fmtDate(iz.datum)}</td>
+                        <td style={{ fontSize: 12 }}>{nazivi.slice(0, 3).join(", ")}{nazivi.length > 3 ? ` … (+${nazivi.length - 3})` : ""}</td>
+                        <td className="f-mono" style={{ textAlign: "right" }}>{stavke.length}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {izdatniceProjekta.length > 30 && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 4 }}>Prikazano 30 najnovijih od {izdatniceProjekta.length}.</div>}
+            </div>
+          )}
+        </div>
+      )}
+      {otvoriKvalitetu && (
+        <div style={{ marginBottom: 16 }}>
+          <Btn variant="ghost" icon={ShieldCheck} onClick={() => { if (!imaIzmjena || window.confirm("Imate nespremljene izmjene osnovnih podataka ili faza izrade. Otvoriti kvalitetu bez spremanja?")) { onClose(); otvoriKvalitetu(projekt.id); } }}>Kvaliteta — ugrađeni materijal (šarže, atesti)</Btn>
+        </div>
+      )}
+      </>
+      )}
+
+      {tab === "nalozi" && (
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <div className="label">Radni nalozi</div>
@@ -12798,6 +13086,7 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
           </table>
         )}
       </div>
+      )}
     </Modal>
 
     {narudzbaModal && <NarudzbaModal narudzba={narudzbaModal.narudzba} projekt={projekt} db={db} update={update} showToast={showToast} onClose={() => setNarudzbaModal(null)} />}
@@ -14033,28 +14322,13 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
     vrijednost: (r) => r.kupacId,
   });
 
-  const dodajDodatak = () => setProjForm((pf) => ({ ...pf, dodaci: [...(pf.dodaci || []), { id: uid("dod"), naziv: `Dodatak ${(pf.dodaci || []).length + 1}`, rok: "", napomena: "", faze: praznaFazaSati() }] }));
-  const urediDodatak = (id, izmjene) => setProjForm((pf) => ({ ...pf, dodaci: (pf.dodaci || []).map((d) => (d.id === id ? { ...d, ...izmjene } : d)) }));
-  // Promjena sati dodatka mijenja i UKUPNE sate projekta (projForm.faze) za istu razliku, pa osnovna ostaje nepromijenjena.
-  const promijeniSateDodatka = (id, faza, v) => setProjForm((pf) => {
-    const d = (pf.dodaci || []).find((x) => x.id === id);
-    const staro = Number(d?.faze?.[faza]) || 0, novo = Math.max(0, Number(v) || 0);
-    return { ...pf, faze: { ...(pf.faze || praznaFazaSati()), [faza]: Math.max(0, (Number(pf.faze?.[faza]) || 0) + novo - staro) }, dodaci: pf.dodaci.map((x) => (x.id === id ? { ...x, faze: { ...praznaFazaSati(), ...(x.faze || {}), [faza]: novo } } : x)) };
-  });
-  const ukloniDodatak = (id) => {
-    if (db.radniNalozi.some((r) => r.dodatakId === id)) { showToast("Dodatak već ima radne naloge — prvo ih obriši ili prebaci na osnovnu narudžbu."); return; }
-    setProjForm((pf) => {
-      const d = (pf.dodaci || []).find((x) => x.id === id);
-      const faze = { ...(pf.faze || praznaFazaSati()) };
-      FAZE.forEach((f) => { faze[f] = Math.max(0, (Number(faze[f]) || 0) - (Number(d?.faze?.[f]) || 0)); });
-      return { ...pf, faze, dodaci: pf.dodaci.filter((x) => x.id !== id) };
-    });
-  };
-  const saveProj = () => {
-    if (!projForm.sifra.trim() || !projForm.naziv.trim()) return;
+  // Spremanje projekta iz obrasca "Novi projekt" i iz detalja projekta (tabovi Osnovni podaci / Faze izrade). Vraća true kad je spremljeno.
+  const saveProj = () => { if (spremiPodatkeProjekta(projForm)) setModal(null); };
+  const spremiPodatkeProjekta = (projForm) => {
+    if (!String(projForm.sifra || "").trim() || !String(projForm.naziv || "").trim()) { showToast("Upišite šifru i naziv projekta."); return false; }
     // Šifra je i prefiks oznaka radnih naloga ("<šifra>/1", "/2"…) — dva projekta s istom šifrom
     // dijelila bi i oznake naloga.
-    if (db.projekti.some((p) => p.id !== projForm.id && p.sifra.trim().toLowerCase() === projForm.sifra.trim().toLowerCase())) { showToast(`Šifra ${projForm.sifra.trim()} je već iskorištena na drugom projektu.`); return; }
+    if (db.projekti.some((p) => p.id !== projForm.id && p.sifra.trim().toLowerCase() === projForm.sifra.trim().toLowerCase())) { showToast(`Šifra ${projForm.sifra.trim()} je već iskorištena na drugom projektu.`); return false; }
     const payload = { ...projForm, vrijednost: Number(projForm.vrijednost) };
     const stariProjekt = projForm.id ? db.projekti.find((p) => p.id === projForm.id) : null;
     const voditeljPromijenjen = payload.voditeljId && payload.voditeljId !== stariProjekt?.voditeljId;
@@ -14090,7 +14364,6 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
         return n;
       }));
     }
-    setModal(null);
     if (voditeljPromijenjen) {
       const zaposlenik = db.zaposlenici.find((z) => z.id === payload.voditeljId);
       const poslano = posaljiObavijestVoditelju(payload, zaposlenik);
@@ -14098,6 +14371,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
     } else {
       showToast("Projekt spremljen.");
     }
+    return true;
   };
 
   // Promjena statusa (zajednička za tablicu, karticu "Rokovi i statusi" i "Vrati u aktivne"): pravila prijelaza su u
@@ -14409,7 +14683,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
           title="" data={projektiSortirani}
           onReorder={mozeProjekti ? rasporediProjekte : undefined}
           onAdd={() => { setProjForm(emptyProj()); setModal("proj"); }}
-          onEdit={(row) => { setProjForm({ ...emptyProj(), ...row, zadaci: row.zadaci || noviZadaciIzStandarda(), voditeljId: row.voditeljId || "", faze: { ...praznaFazaSati(), ...(row.faze || {}) } }); setModal("proj"); }}
+          // Nema olovke: osnovni podaci i faze izrade uređuju se u Detaljima projekta (tabovi Osnovni podaci / Faze izrade).
           onDelete={(r) => setDel({ type: "proj", row: r })}
           addLabel="Novi projekt" searchKeys={["sifra", "naziv"]} readOnly={!mozeProjekti} filter={filterPoKupcu(projektiSortirani)}
           columns={[
@@ -14509,72 +14783,8 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
 
       {modal === "proj" && (
         <Modal title={projForm.id ? "Uredi projekt" : "Novi projekt"} onClose={() => setModal(null)} footer={<><Btn onClick={() => setModal(null)}>Odustani</Btn><Btn variant="primary" icon={Save} onClick={saveProj}>Spremi</Btn></>}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label="Šifra projekta"><input className="input" value={projForm.sifra} onChange={(e) => setProjForm({ ...projForm, sifra: e.target.value })} /></Field>
-            <Field label="Kupac"><select className="select" value={projForm.kupacId} onChange={(e) => setProjForm({ ...projForm, kupacId: e.target.value })}>{db.kupci.map((k) => <option key={k.id} value={k.id}>{k.naziv}</option>)}</select></Field>
-          </div>
-          <Field label="Naziv projekta"><input className="input" value={projForm.naziv} onChange={(e) => setProjForm({ ...projForm, naziv: e.target.value })} /></Field>
-          <Field label="Voditelj projekta">
-            <select className="select" value={projForm.voditeljId || ""} onChange={(e) => setProjForm({ ...projForm, voditeljId: e.target.value })}>
-              <option value="">— Nije dodijeljen —</option>
-              {izborZaposlenika(db).filter((z) => z.status === "Aktivan").sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
-            </select>
-          </Field>
-          <div className="label" style={{ marginTop: 6 }}>Kontakt i isporuka</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-            <Field label="Kontakt osoba"><input className="input" value={projForm.kontaktOsoba || ""} onChange={(e) => setProjForm({ ...projForm, kontaktOsoba: e.target.value })} /></Field>
-            <Field label="E-mail"><input className="input" type="email" value={projForm.kontaktEmail || ""} onChange={(e) => setProjForm({ ...projForm, kontaktEmail: e.target.value })} /></Field>
-            <Field label="Telefon"><input className="input" value={projForm.kontaktTelefon || ""} onChange={(e) => setProjForm({ ...projForm, kontaktTelefon: e.target.value })} /></Field>
-          </div>
-          <Field label="Mjesto isporuke"><input className="input" placeholder="npr. ulica i broj, poštanski broj, grad, država" value={projForm.mjestoIsporuke || ""} onChange={(e) => setProjForm({ ...projForm, mjestoIsporuke: e.target.value })} /></Field>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-            <Field label="Status"><select className="select" value={projForm.status} onChange={(e) => setProjForm({ ...projForm, status: e.target.value })}>{STATUSI_PROJEKTA.map((s) => <option key={s}>{s}</option>)}</select></Field>
-            <Field label="Vrijednost (€)"><input className="input f-mono" type="number" value={projForm.vrijednost} onChange={(e) => setProjForm({ ...projForm, vrijednost: e.target.value })} /></Field>
-            <Field label="Završna obrada (plan proizvodnje)">
-              <select className="select" value={projForm.zavrsnaObrada || zavrsnaObradaProjekta(projForm, db.radniNalozi)} onChange={(e) => setProjForm({ ...projForm, zavrsnaObrada: e.target.value })}>
-                {ZAVRSNE_OBRADE.map((z) => <option key={z.key} value={z.key}>{z.naziv}</option>)}
-              </select>
-            </Field>
-            <Field label="Rok početka"><input className="input" type="date" value={projForm.rokPocetka} onChange={(e) => setProjForm({ ...projForm, rokPocetka: e.target.value })} /></Field>
-            <Field label="Rok završetka (isporuka kupcu)"><input className="input" type="date" value={projForm.rokZavrsetka} disabled={(projForm.termini || []).length > 0} onChange={(e) => setProjForm({ ...projForm, rokZavrsetka: e.target.value })} />{(projForm.termini || []).length > 0 && <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 3 }}>Automatski = zadnji termin isporuke (termini se uređuju u detaljima projekta).</div>}</Field>
-          </div>
-          <Field label="Opis"><textarea className="textarea" rows={3} value={projForm.opis} onChange={(e) => setProjForm({ ...projForm, opis: e.target.value })} /></Field>
-          <Field label="Mapa projekta na serveru">
-            <input className="input f-mono" placeholder={`prazno = automatski: mapa u Econ_${GODINA_MAPA}_Projekti koja počinje šifrom projekta`} value={projForm.mapa || ""} onChange={(e) => setProjForm({ ...projForm, mapa: e.target.value })} />
-            <div style={{ fontSize: 10.5, color: "var(--ink-faint)", marginTop: 4 }}>Prikazuje se uz zadatke projekta i u popisu projekata s gumbima "Otvori mapu" i "Kopiraj". Da "Otvori mapu" radi jednim klikom, na svakom računalu jednom pokreni <a href={URL_POMOCNIKA} download style={{ color: "var(--steel)", fontWeight: 600 }}>pomoćnika</a> (otvara samo mape pod Z:\ECON_{GODINA_MAPA} i prethodnih godina te ateste materijala).</div>
-          </Field>
-          <div className="label" style={{ marginTop: 6 }}>{(projForm.dodaci || []).length ? "Osnovna narudžba — faze izrade (planirani sati)" : "Faze izrade (planirani sati)"}</div>
-          <div style={{ fontSize: 11, color: "var(--ink-faint)", marginBottom: 8 }}>Sati po fazi koriste se kao predložak kad se za ovaj projekt kasnije kreira radni nalog — nisu obavezni za faze koje se ne planiraju.</div>
-          <div className="card" style={{ padding: 14, background: "var(--surface-alt)", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
-            {FAZE.map((f) => (
-              <Field key={f} label={fazaOznaka(f)}>
-                <input className="input f-mono" type="number" min="0" step="0.5" value={satiDijelaFaze(projForm, f, "")} onChange={(e) => setProjForm({ ...projForm, faze: { ...(projForm.faze || praznaFazaSati()), [f]: (Number(e.target.value) || 0) + (projForm.dodaci || []).reduce((z, d) => z + (Number(d.faze?.[f]) || 0), 0) } })} />
-              </Field>
-            ))}
-          </div>
-          {(projForm.dodaci || []).map((d) => (
-            <div key={d.id} className="card" style={{ padding: 14, marginTop: 12, borderColor: "var(--line-strong)" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end", marginBottom: 8 }}>
-                <Field label="Dodatna narudžba (naziv)"><input className="input" value={d.naziv} onChange={(e) => urediDodatak(d.id, { naziv: e.target.value })} /></Field>
-                <Field label="Rok završetka dodatka"><input className="input" type="date" value={d.rok || ""} onChange={(e) => urediDodatak(d.id, { rok: e.target.value })} /></Field>
-                <Btn size="sm" variant="ghost" onClick={() => ukloniDodatak(d.id)} title="Ukloni dodatak">Ukloni</Btn>
-              </div>
-              <Field label="Napomena (npr. broj narudžbe kupca)"><input className="input" value={d.napomena || ""} onChange={(e) => urediDodatak(d.id, { napomena: e.target.value })} /></Field>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginTop: 8 }}>
-                {FAZE.map((f) => (
-                  <Field key={f} label={fazaOznaka(f)}>
-                    <input className="input f-mono" type="number" min="0" step="0.5" value={d.faze?.[f] ?? 0} onChange={(e) => promijeniSateDodatka(d.id, f, e.target.value)} />
-                  </Field>
-                ))}
-              </div>
-              <div style={{ fontSize: 12, marginTop: 8, color: "var(--ink-soft)" }}>Ukupno dodatak: <strong className="f-mono">{Math.round(FAZE.reduce((z, f) => z + (Number(d.faze?.[f]) || 0), 0) * 10) / 10} h</strong></div>
-            </div>
-          ))}
-          <div style={{ marginTop: 10 }}><Btn size="sm" variant="ghost" onClick={dodajDodatak}>+ Dodatna narudžba (dodatak)</Btn></div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, padding: "8px 14px", background: "var(--surface-alt)", border: "1px solid var(--line-strong)", borderRadius: 3 }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>Ukupno planirano{(projForm.dodaci || []).length > 0 && <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}> (osnovna {Math.round(FAZE.reduce((z, f) => z + satiDijelaFaze(projForm, f, ""), 0) * 10) / 10} h + dodaci {Math.round(FAZE.reduce((z, f) => z + (projForm.dodaci || []).reduce((a, d) => a + (Number(d.faze?.[f]) || 0), 0), 0) * 10) / 10} h)</span>}</span>
-            <span className="f-mono" style={{ fontSize: 16, fontWeight: 700 }}>{Math.round(FAZE.reduce((zbroj, f) => zbroj + (Number(projForm.faze?.[f]) || 0), 0) * 10) / 10} h</span>
-          </div>
+          <ProjektPoljaOsnovno forma={projForm} setForma={setProjForm} db={db} termini={projForm.termini || []} />
+          <ProjektPoljaFaze forma={projForm} setForma={setProjForm} db={db} showToast={showToast} />
         </Modal>
       )}
 
@@ -14700,7 +14910,7 @@ function ProjektiPage({ modul = "projekti", db, update, spremiNormativ, patchPro
 
       {cjenikOpen && <CjenikRadaModal cjenikRada={db.cjenikRada} onSave={saveCjenik} onClose={() => setCjenikOpen(false)} />}
       {zadaciOpen && <StandardniZadaciModal standardniZadaci={db.standardniZadaci} update={update} showToast={showToast} onClose={() => setZadaciOpen(false)} />}
-      {detalj && <ProjektDetaljModal projekt={db.projekti.find((p) => p.id === detalj.id) || detalj} db={db} update={update} spremiNormativ={spremiNormativ} patchProjekt={patchProjekt} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} onClose={() => setDetalj(null)} mojId={mojId} otvoriKvalitetu={otvoriKvalitetu} />}
+      {detalj && <ProjektDetaljModal projekt={db.projekti.find((p) => p.id === detalj.id) || detalj} db={db} update={update} spremiNormativ={spremiNormativ} patchProjekt={patchProjekt} patchUpiti={patchUpiti} showToast={showToast} setPage={setPage} onClose={() => setDetalj(null)} mojId={mojId} otvoriKvalitetu={otvoriKvalitetu} spremiProjekt={spremiPodatkeProjekta} mozeUredjivati={mozeProjekti} />}
 
       {pretvorba && (
         <Modal title="Pretvori ponudu u projekt" onClose={() => setPretvorba(null)}
