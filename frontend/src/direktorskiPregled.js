@@ -4,6 +4,7 @@
 // materijala još nije pouzdan): za svaki projekt pokazuje vrijednost, rok, napredak naloga, sate naspram plana, materijal,
 // isporuku i obračun (podloge za fakturu), a semafor se vodi iznimkama opisanim u PRAGOVI.
 import { STATUSI_S_ROKOM, danaIzmedu, analizaRokova } from "./rokoviProjekata.js";
+import { otpremniceZaObracun } from "./podlogeZaFakturu.js";
 
 // Pragovi semafora i iznimaka — jedno mjesto, da se ista pravila vide u prikazu, PDF-u i testovima.
 export const PRAGOVI = {
@@ -155,13 +156,14 @@ export function direktorskiPregled({ projekti = [], radniNalozi = [], otpremnice
     });
   });
 
-  // Otpremnice kupcu bez podloge za fakturu (stariji od praga): isporučeno, a još nije pripremljeno za naplatu.
-  const uPodlogama = new Set((podlogeZaFakturu || []).flatMap((p) => p.otpremniceIds || []));
+  // Otpremnice kupcu bez podloge za fakturu (stariji od praga): isporučeno, a još nije pripremljeno za naplatu. Broji se i otpremnica
+  // koja je samo djelomično u podlozi (dio stavki odznačen), a ne broji ona ručno označena kao fakturirana izvan aplikacije.
+  const zaObracun = new Set(otpremniceZaObracun(otpremnice, podlogeZaFakturu).map((o) => o.id));
   const projektPoId = new Map(projekti.map((p) => [p.id, p]));
   const granicaPodloge = dodajDane(danas, -PRAGOVI.danaBezPodloge);
   const bezPodloge = new Map();
   (otpremnice || []).forEach((o) => {
-    if (o.vrsta === "kooperant" || uPodlogama.has(o.id) || !o.datum || o.datum > granicaPodloge) return;
+    if (!zaObracun.has(o.id) || !o.datum || o.datum > granicaPodloge) return;
     const p = projektPoId.get(o.projektId);
     if (!p || ["Otkazan", "Ponuda"].includes(p.status)) return;
     const t = bezPodloge.get(p.id) || { projekt: p, broj: 0, najstarija: o.datum };
