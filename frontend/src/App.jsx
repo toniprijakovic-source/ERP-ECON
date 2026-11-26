@@ -1942,7 +1942,7 @@ const MODULI_APLIKACIJE = [
 // (koji ključevi se smiju čitati/mijenjati) živi na backendu — vidi KARTICE_MODULA u server.js.
 const KARTICE_MODULA = {
   dashboard: { kartice: [{ key: "pregled", naziv: "Pregled" }] },
-  direktor: { kartice: [{ key: "pregled", naziv: "Pregled" }] },
+  direktor: { kartice: [{ key: "pregled", naziv: "Pregled" }, { key: "server", naziv: "Stanje servera" }] },
   skladiste: { kartice: [{ key: "zalihe", naziv: "Zalihe" }, { key: "katalog", naziv: "Katalog profila i limova" }, { key: "kvaliteta", naziv: "Kvaliteta materijala" }, { key: "izdatnice", naziv: "Izdatnice" }, { key: "potrosnja", naziv: "Potrošnja po radniku" }] },
   transporti: { kartice: [{ key: "upiti", naziv: "Upiti za transport" }, { key: "narudzbe", naziv: "Narudžbe za transport" }] },
   kontrola: { kartice: [{ key: "maticna", naziv: "Matična knjiga" }, { key: "ugradeni", naziv: "Ugrađeni materijal" }, { key: "nesukladnosti", naziv: "Nesukladnosti" }] },
@@ -3052,7 +3052,7 @@ export default function App() {
         <div className="erp-sadrzaj" style={{ padding: 24, flex: 1, overflowY: "auto", minWidth: 0 }}>
           <PracenjeAktivnosti modul={aktivnaStranica} />
           {aktivnaStranica === "dashboard" && <Dashboard db={db} update={update} showToast={showToast} setPage={setPage} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) setOtvoriProjektId(id); setPage("projekti"); }} mojId={zaposlenik?.id} mojaPozicija={mojaPozicija} patchZadatakIzvrseno={patchZadatakIzvrseno} patchZadatakNapomena={patchZadatakNapomena} potvrdiObavijesti={potvrdiObavijesti} otvoriTransporte={() => { setTransportiTab("narudzbe"); setPage("transporti"); }} otvoriUskladenost={(grupa) => { setEvidencijaSatiPocetak({ tab: "satinalozi", prikaz: "uskladenost", grupa: grupa || "radiona" }); setPage("evidencijasati"); }} />}
-          {aktivnaStranica === "direktor" && <DirektorskiPregledPage db={db} mojId={zaposlenik?.id} showToast={showToast} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) { setOtvoriProjektId(id); setPage("projekti"); } else showToast("Nemate pristup modulu Projekti."); }} />}
+          {aktivnaStranica === "direktor" && <DirektorskiPregledPage db={db} mojId={zaposlenik?.id} showToast={showToast} mojaPozicija={mojaPozicija} otvoriProjekt={(id) => { if (dopusteniKljucevi.includes("projekti")) { setOtvoriProjektId(id); setPage("projekti"); } else showToast("Nemate pristup modulu Projekti."); }} />}
           {aktivnaStranica === "skladiste" && <SkladistePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} dodajMaticne={dodajMaticne} refetchKljuc={refetchKljuc} mojId={zaposlenik?.id} />}
           {aktivnaStranica === "kontrola" && <KontrolaKvalitetePage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} projektId={kkProjektId} ocistiProjekt={() => setKkProjektId(null)} />}
           {aktivnaStranica === "transporti" && <TransportiPage db={db} update={update} showToast={showToast} mojaPozicija={mojaPozicija} mojId={zaposlenik?.id} pocetniTab={transportiTab} ocistiTab={() => setTransportiTab(null)} />}
@@ -3250,7 +3250,10 @@ const SEMAFOR_BADGE = { crveno: ["danger", "Crveno"], zuto: ["warning", "Žuto"]
 const IZNIMKA_BOJA = { crveno: "var(--rust)", zuto: "var(--accent)", info: "var(--steel)" };
 const BROJ_VELIKIH_PROJEKATA = 10;
 
-function DirektorskiPregledPage({ db, otvoriProjekt, mojId, showToast }) {
+function DirektorskiPregledPage({ db, otvoriProjekt, mojId, showToast, mojaPozicija }) {
+  const dozvKartice = dozvoljeneKarticeModula(mojaPozicija, "direktor");
+  const [tab, setTab] = useState(dozvKartice[0]?.key || "pregled");
+  useEffect(() => { if (dozvKartice.length && !dozvKartice.some((k) => k.key === tab)) setTab(dozvKartice[0].key); }, [dozvKartice, tab]);
   const [prikaziSve, setPrikaziSve] = useState(false);
   const [filtar, setFiltar] = useState("sve"); // sve | crveno | zuto
   const [otvorenaIznimka, setOtvorenaIznimka] = useState(null);
@@ -3292,8 +3295,17 @@ function DirektorskiPregledPage({ db, otvoriProjekt, mojId, showToast }) {
   const jeProjekt = (id) => db.projekti.some((p) => p.id === id);
   return (
     <div>
-      <PageHeader title="Direktorski pregled" subtitle={`Najveći aktivni projekti i iznimke koje traže pažnju — stanje na dan ${fmtDate(danas)}`} icon={Gauge}
-        action={<Btn icon={FileText} onClick={izradiPdf} disabled={izrada}>{izrada ? "Izrada…" : "Ispis / PDF"}</Btn>} />
+      <PageHeader title="Direktorski pregled" icon={Gauge}
+        subtitle={tab === "server" ? "Server ECON-R550: most, sigurnosne kopije, probna obnova i mape projekata" : `Najveći aktivni projekti i iznimke koje traže pažnju — stanje na dan ${fmtDate(danas)}`}
+        action={tab === "pregled" ? <Btn icon={FileText} onClick={izradiPdf} disabled={izrada}>{izrada ? "Izrada…" : "Ispis / PDF"}</Btn> : undefined} />
+      {dozvKartice.length === 0 && <EmptyState text="Nemate pristup ni jednoj kartici ovog modula." />}
+      {dozvKartice.length > 1 && (
+        <div style={{ display: "flex", gap: 20, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
+          {dozvKartice.map((k) => <div key={k.key} className={`nav-tab ${tab === k.key ? "active" : ""}`} onClick={() => setTab(k.key)}>{k.naziv}</div>)}
+        </div>
+      )}
+      {tab === "server" && dozvKartice.some((k) => k.key === "server") && <StanjeServeraTab db={db} showToast={showToast} mozeMijenjati={dozvolaZaKarticu(mojaPozicija, "direktor", "server").izmjene} />}
+      {tab === "pregled" && dozvKartice.some((k) => k.key === "pregled") && (<>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12, marginBottom: 18 }}>
         {kpiKartica("Aktivni projekti", kpi.aktivni.broj, fmtCur(kpi.aktivni.vrijednost))}
@@ -3383,6 +3395,199 @@ function DirektorskiPregledPage({ db, otvoriProjekt, mojId, showToast }) {
           );
         })}
         {iznimke.length > 12 && <Btn size="sm" variant="ghost" style={{ marginTop: 6 }} onClick={() => setPrikaziSveIznimke(!prikaziSveIznimke)}>{prikaziSveIznimke ? "Prikaži manje" : `Prikaži sve (${iznimke.length})`}</Btn>}
+      </div>
+      </>)}
+    </div>
+  );
+}
+
+/* ============================== STANJE SERVERA ============================== */
+// Direktorski pregled → Stanje servera: most na serveru ECON-R550, sigurnosne kopije, mjesečna probna obnova, slobodan prostor, red zadataka mosta,
+// automatski upisane mape projekata i tko prima upozorenja. Podaci: GET /api/server/stanje (backend/most-veza.js), osvježava se svakih 30 s.
+// Upozorenja (backend/stanje-servera.js) postaju zadatak u zvoncu odabrane osobe i sama se zatvaraju kad problem nestane.
+const prijeKoliko = (iso, sada) => {
+  const t = Date.parse(iso || "");
+  if (!Number.isFinite(t)) return "—";
+  const min = Math.max(0, Math.round((Date.parse(sada) - t) / 60000));
+  if (min < 1) return "upravo";
+  if (min < 60) return `prije ${min} min`;
+  if (min < 48 * 60) return `prije ${Math.round(min / 60)} h`;
+  return `prije ${Math.round(min / 1440)} dana`;
+};
+const opisPomakaSata = (s) => { const a = Math.abs(s); const min = Math.floor(a / 60); return `${min ? `${min} min ` : ""}${a % 60} s ${s > 0 ? "naprijed" : "zaostaje"}`; };
+const vrijemeStanja = (iso) => (iso && Number.isFinite(Date.parse(iso)) ? new Date(iso).toLocaleString("hr-HR", { day: "numeric", month: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
+const OPIS_UPOZORENJA_SERVERA = "most se ne javlja dulje od 15 minuta, zadnja kopija je starija od 2 sata, probna obnova nije uspjela ili je starija od 35 dana, pogon Z: na serveru nije spojen ili na disku ostaje manje od 10 GB (5 %)";
+
+function StanjeServeraTab({ db, showToast, mozeMijenjati }) {
+  const [st, setSt] = useState(null);
+  const [greska, setGreska] = useState("");
+  const [sprema, setSprema] = useState(false);
+  const [sveBezMape, setSveBezMape] = useState(false);
+  const zaglavlje = () => ({ "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("erp_token")}` });
+  const ucitaj = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/server/stanje`, { headers: zaglavlje() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setGreska(data.error || "Greška pri učitavanju stanja servera."); return; }
+      setSt(data);
+      setGreska("");
+    } catch { setGreska("Nema veze s poslužiteljem."); }
+  };
+  useEffect(() => { ucitaj(); const t = setInterval(ucitaj, 30000); return () => clearInterval(t); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const spremiPrimatelja = async (primateljId) => {
+    setSprema(true);
+    try {
+      const res = await fetch(`${API_URL}/api/server/postavke`, { method: "PUT", headers: zaglavlje(), body: JSON.stringify({ primateljId: primateljId || null }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { showToast(data.error || "Spremanje nije uspjelo."); return; }
+      showToast(primateljId ? "Spremljeno — upozorenja dolaze kao zadatak u zvonce." : "Spremljeno — upozorenja se samo prikazuju ovdje.");
+      await ucitaj();
+    } catch { showToast("Nema veze s poslužiteljem."); } finally { setSprema(false); }
+  };
+
+  if (!st) return greska ? <div className="card" style={{ padding: 16, color: "var(--rust)" }}>{greska}</div> : <EmptyState text="Učitavanje stanja servera…" />;
+  const sada = st.sada;
+  const iz = st.izvjestaj;
+  const kop = iz?.kopije;
+  const obnova = kop?.obnova;
+  const zaposlenici = [...(db.zaposlenici || [])].filter((z) => z.status !== "Neaktivan" || z.id === st.postavke?.primateljId).sort((a, b) => `${a.prezime} ${a.ime}`.localeCompare(`${b.prezime} ${b.ime}`, "hr"));
+  const bezMape = st.mape?.nepronadjene || [];
+  const naslov = (t) => <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600, marginBottom: 8 }}>{t}</h3>;
+  const red = (oznaka, vrijednost) => (
+    <div key={oznaka} style={{ display: "flex", gap: 10, fontSize: 12.5, padding: "3px 0" }}>
+      <span style={{ color: "var(--ink-faint)", minWidth: 130 }}>{oznaka}</span>
+      <span style={{ flex: 1, minWidth: 0, wordBreak: "break-word" }}>{vrijednost}</span>
+    </div>
+  );
+  const sitno = { fontSize: 11.5, color: "var(--ink-faint)", marginTop: 6 };
+  const ukupnoRedaka = (t) => Object.values(t || {}).reduce((s, n) => s + (Number(n) || 0), 0);
+
+  return (
+    <div>
+      {greska && <div className="card" style={{ padding: 10, marginBottom: 12, color: "var(--rust)", fontSize: 12.5 }}>{greska} Prikazano je zadnje učitano stanje.</div>}
+      {st.upozorenja.length ? (
+        <div className="card" style={{ padding: 14, marginBottom: 16, borderLeft: "4px solid var(--rust)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <AlertTriangle size={16} color="var(--rust)" />
+            <h3 className="f-display" style={{ fontSize: 14.5, fontWeight: 600 }}>{st.upozorenja.length === 1 ? "Jedno upozorenje" : `${st.upozorenja.length} upozorenja`}</h3>
+          </div>
+          {st.upozorenja.map((u) => <div key={u.kljuc} style={{ fontSize: 13, padding: "4px 0" }}>{u.tekst}</div>)}
+          <div style={sitno}>{st.postavke?.primateljId ? `Upozorenje je i zadatak u zvoncu: ${imeZaposlenikaNs(db, st.postavke.primateljId)}. Zadatak se sam zatvara kad se problem riješi.` : "Nitko nije određen da prima upozorenja u zvonce — odaberite osobu dolje."}</div>
+        </div>
+      ) : (
+        <div className="card" style={{ padding: 14, marginBottom: 16, borderLeft: "4px solid var(--green)", display: "flex", alignItems: "center", gap: 8 }}>
+          <CheckCircle2 size={16} color="var(--green)" />
+          <span style={{ fontSize: 13 }}>{st.izvjestajSvjez && st.most.povezan ? "Server radi: most je povezan i nema upozorenja." : st.izvjestajSvjez ? `Nema upozorenja. Most se zadnji put javio ${prijeKoliko(st.most.zadnjiKontakt, sada)}.` : "Nema upozorenja, ali most još nije poslao izvještaj o serveru (vidi Most dolje)."}</span>
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 14, marginBottom: 14 }}>
+        <div className="card" style={{ padding: 14 }}>
+          {naslov("Most na serveru")}
+          {red("Stanje", st.most.povezan ? <Badge status="Aktivan" label="Povezan" /> : <Badge status="Kasni" label="Nije povezan" />)}
+          {red("Zadnji kontakt", st.most.zadnjiKontakt ? `${prijeKoliko(st.most.zadnjiKontakt, sada)} (${vrijemeStanja(st.most.zadnjiKontakt)})` : "most se još nije javio")}
+          {iz ? (
+            <>
+              {red("Računalo", iz.racunalo || "—")}
+              {red("Most pokrenut", `${vrijemeStanja(iz.pokrenut)}${iz.verzija ? ` · verzija ${iz.verzija}` : ""}${iz.probno ? " · PROBNI NAČIN (ništa se ne piše na Z:)" : ""}`)}
+              {iz.pomakSataS != null && red("Sat servera", Math.abs(iz.pomakSataS) < 60 ? "točan" : <span style={Math.abs(iz.pomakSataS) >= 120 ? { color: "var(--rust)" } : undefined}>{opisPomakaSata(iz.pomakSataS)}{Math.abs(iz.pomakSataS) >= 120 ? " — vremena kopija i datoteka na serveru su pomaknuta; administrator treba podesiti usklađivanje sata servera s internetom (NTP)" : ""}</span>)}
+              {(iz.pogoni || []).map((p) => red(`Pogon ${p.slovo}`, p.ok ? <span>{p.opis || "spojen"}</span> : <span style={{ color: "var(--rust)" }}>{p.opis || "nije spojen"}</span>))}
+              {(iz.korijeni || []).filter((k) => k.postoji).slice(0, 1).map((k) => red("Projekti", <span className="f-mono" style={{ fontSize: 11.5 }}>{k.putanja}</span>))}
+              {!st.izvjestajSvjez && <div style={{ ...sitno, color: "var(--rust)" }}>Izvještaj je star (primljen {vrijemeStanja(st.izvjestajPrimljen)}) — podaci ispod možda ne vrijede.</div>}
+            </>
+          ) : <div style={sitno}>Most još nije poslao izvještaj o serveru. Stari most to ne zna — treba ga ažurirati na serveru.</div>}
+        </div>
+
+        <div className="card" style={{ padding: 14 }}>
+          {naslov("Sigurnosne kopije")}
+          {!kop || !kop.podeseno ? <div style={sitno}>Praćenje kopija nije podešeno u mostu (MAPA_KOPIJA u postavkama mosta).</div>
+            : kop.dostupna === false ? <div style={{ fontSize: 12.5, color: "var(--rust)" }}>Mapa kopija nije dostupna mostu: <span className="f-mono">{kop.mapa}</span></div>
+            : (
+              <>
+                {red("Zadnja kopija", kop.zadnja ? `${prijeKoliko(kop.zadnja.vrijeme, sada)} (${vrijemeStanja(kop.zadnja.vrijeme)})` : <span style={{ color: "var(--rust)" }}>nema zapisa o uspjeloj kopiji</span>)}
+                {kop.zadnja && red("Sadržaj", `${kop.zadnja.kljuceva ?? "?"} ključeva + ${Object.keys(kop.zadnja.tablice || {}).length} tablica (${ukupnoRedaka(kop.zadnja.tablice)} redaka) · ${kop.zadnja.velicinaKB ?? "?"} KB šifrirano`)}
+                {kop.zadnja?.naziv && red("Datoteka", <span className="f-mono" style={{ fontSize: 11.5 }}>{kop.zadnja.naziv}</span>)}
+                {red("Mapa", <span className="f-mono" style={{ fontSize: 11.5 }}>{kop.mapa}</span>)}
+                {kop.greska && (!kop.zadnja || Date.parse(kop.greska.vrijeme) > Date.parse(kop.zadnja.vrijeme)) && red("Zadnja greška", <span style={{ color: "var(--rust)" }}>{vrijemeStanja(kop.greska.vrijeme)}: {kop.greska.poruka}</span>)}
+                {(kop.zadnja?.poruke || []).map((p, i) => <div key={i} style={{ ...sitno, color: "var(--rust)" }}>{p}</div>)}
+                <div style={sitno}>Kopija se radi svaki sat (satne 30 dana, dnevne godinu dana, mjesečne trajno), šifrirano.</div>
+              </>
+            )}
+          {(iz?.diskovi || []).map((d) => red(`Disk ${d.oznaka}`, <span style={d.slobodnoGB < 10 || d.slobodnoGB / d.ukupnoGB < 0.05 ? { color: "var(--rust)" } : undefined}>slobodno {d.slobodnoGB.toLocaleString("hr-HR")} GB od {d.ukupnoGB.toLocaleString("hr-HR")} GB</span>))}
+        </div>
+
+        <div className="card" style={{ padding: 14 }}>
+          {naslov("Probna obnova kopije")}
+          {!kop?.podeseno ? <div style={sitno}>Prati se zajedno s kopijama (MAPA_KOPIJA u postavkama mosta).</div>
+            : !obnova ? <div style={{ fontSize: 12.5 }}>Još nije napravljena. Radi se sama, jednom mjesečno, uz satnu kopiju.</div>
+            : (
+              <>
+                {red("Rezultat", obnova.ok ? <Badge status="Valjano" label="Uspjela" /> : <Badge status="Greška" label="Nije uspjela" />)}
+                {red("Kada", `${vrijemeStanja(obnova.vrijeme)} (${prijeKoliko(obnova.vrijeme, sada)})`)}
+                {obnova.kopija && red("Kopija", <span className="f-mono" style={{ fontSize: 11.5 }}>{obnova.kopija}</span>)}
+                {obnova.ok && red("Vraćeno", `${obnova.kljuceva ?? "?"} ključeva + ${ukupnoRedaka(obnova.tablice)} redaka tablica · ${Math.round((obnova.trajanjeMs || 0) / 100) / 10} s`)}
+                {!obnova.ok && red("Greška", <span style={{ color: "var(--rust)" }}>{obnova.greska}</span>)}
+                {(obnova.poruke || []).map((p, i) => <div key={i} style={sitno}>{p}</div>)}
+              </>
+            )}
+          <div style={sitno}>Jednom mjesečno najnovija mjesečna kopija vraća se u privremene tablice u bazi i uspoređuje sa sadržajem kopije. Prave tablice se pritom ne diraju. Tako se provjerava da se kopija stvarno može vratiti, a ne samo otvoriti.</div>
+        </div>
+
+        <div className="card" style={{ padding: 14 }}>
+          {naslov("Zadaci mosta (zadnja 24 h)")}
+          {Object.keys(st.zadaci24h || {}).length === 0 ? <div style={{ fontSize: 12.5 }}>Nije bilo zadataka (XRechnung, kumulativ, popis).</div> : (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {Object.entries(st.zadaci24h).map(([status, n]) => <Badge key={status} status={status} label={`${status}: ${n}`} />)}
+            </div>
+          )}
+          <div style={sitno}>Zadaci se čuvaju u bazi pa ne nestaju kad se ERP objavi ili ponovno pokrene. Zadatak koji most ne preuzme u 24 sata prestaje vrijediti.</div>
+        </div>
+      </div>
+
+      <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+        {naslov("Mape projekata")}
+        <div style={{ fontSize: 12.5, marginBottom: 8 }}>
+          Most svakih 10 minuta traži mapu projekata kojima "Mapa projekta" nije upisana: u Z: traži mapu čije ime počinje šifrom projekta, npr. "RN 170-330_…". Upisuje je samo kad je polje prazno, pa ručno upisana mapa ostaje kakva jest.
+          {st.mape?.vrijeme && <span style={{ color: "var(--ink-faint)" }}> Zadnja provjera: {prijeKoliko(st.mape.vrijeme, sada)}.</span>}
+        </div>
+        {st.mapeUpisane.length > 0 && (
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Upisano automatski</div>
+            {st.mapeUpisane.slice(0, 10).map((m, i) => (
+              <div key={`${m.projektId}-${i}`} style={{ fontSize: 12.5, padding: "3px 0", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "baseline" }}>
+                <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{m.sifra}</span>
+                <span className="f-mono" style={{ fontSize: 11.5, wordBreak: "break-all", flex: 1, minWidth: 200 }}>{m.mapa}</span>
+                <MapaGumbi putanja={m.mapa} />
+                <span style={{ color: "var(--ink-faint)", fontSize: 11.5, whiteSpace: "nowrap" }}>{vrijemeStanja(m.vrijeme)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {bezMape.length > 0 ? (
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Projekti za koje most nije našao mapu ({bezMape.length})</div>
+            {(sveBezMape ? bezMape : bezMape.slice(0, 8)).map((m) => (
+              <div key={m.projektId} style={{ fontSize: 12.5, padding: "3px 0", display: "flex", gap: 8 }}>
+                <span style={{ fontWeight: 600, whiteSpace: "nowrap", minWidth: 90 }}>{m.sifra}</span>
+                <span style={{ color: "var(--ink-soft)", flex: 1 }}>{m.razlog}</span>
+              </div>
+            ))}
+            {bezMape.length > 8 && <Btn size="sm" variant="ghost" onClick={() => setSveBezMape(!sveBezMape)}>{sveBezMape ? "Prikaži manje" : `Prikaži sve (${bezMape.length})`}</Btn>}
+            <div style={sitno}>Ako mapa postoji pod drugim imenom, upišite je ručno na projektu ("Mapa projekta na serveru"). Ako postoje dvije mape iste šifre, jednu preimenujte ili upišite pravu ručno.</div>
+          </div>
+        ) : st.mape ? <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>Svi aktivni projekti imaju upisanu mapu.</div> : <div style={sitno}>Most još nije javio rezultat traženja mapa.</div>}
+      </div>
+
+      <div className="card" style={{ padding: 14 }}>
+        {naslov("Tko prima upozorenja")}
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <select className="select" style={{ maxWidth: 320 }} value={st.postavke?.primateljId || ""} disabled={!mozeMijenjati || sprema} onChange={(e) => spremiPrimatelja(e.target.value)}>
+            <option value="">— nitko (upozorenja samo ovdje) —</option>
+            {zaposlenici.map((z) => <option key={z.id} value={z.id}>{z.prezime} {z.ime}</option>)}
+          </select>
+          {!mozeMijenjati && <span style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>Nemate ovlaštenje za izmjenu.</span>}
+        </div>
+        <div style={sitno}>Odabrana osoba dobiva zadatak u zvoncu (od "ERP") kad {OPIS_UPOZORENJA_SERVERA}. Zadatak se sam zatvori kad se problem riješi. Ako ga osoba zatvori ranije, a problem ostane, novi zadatak dolazi nakon 24 sata.</div>
       </div>
     </div>
   );
