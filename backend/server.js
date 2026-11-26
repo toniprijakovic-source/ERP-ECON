@@ -120,8 +120,9 @@ const KARTICE_MODULA = {
     izdatnice: { citanje: ["izdatnice", "materijali", "projekti", "zaposlenici", "rezervacije", "maticnaKnjiga"], pisanje: ["izdatnice", "materijali", "rezervacije"] },
   },
   nabava: {
-    narudzbenice: { citanje: ["narudzbenice", "dobavljaci", "katalogProfila", "materijali", "projekti", "kvaliteteMaterijala", "rezervacije", "postavkeTvrtke", "maticnaKnjiga", "potrosniMaterijal"], pisanje: ["narudzbenice", "materijali", "rezervacije", "maticnaKnjiga"] },
-    upiti: { citanje: ["upitiNabave", "dobavljaci", "materijali", "kvaliteteMaterijala", "katalogProfila"], pisanje: ["upitiNabave", "narudzbenice", "materijali"] },
+    // Zaprimanje namjenskog materijala (stavka s projektom) odmah radi izdatnicu na projekt, po cijeni s narudžbenice (iz upita).
+    narudzbenice: { citanje: ["narudzbenice", "dobavljaci", "katalogProfila", "materijali", "projekti", "kvaliteteMaterijala", "rezervacije", "postavkeTvrtke", "maticnaKnjiga", "potrosniMaterijal", "izdatnice", "upitiNabave"], pisanje: ["narudzbenice", "materijali", "rezervacije", "maticnaKnjiga", "izdatnice"] },
+    upiti: { citanje: ["upitiNabave", "dobavljaci", "materijali", "kvaliteteMaterijala", "katalogProfila", "projekti", "narudzbenice"], pisanje: ["upitiNabave", "narudzbenice", "materijali"] },
     postavke: { citanje: ["postavkeTvrtke"], pisanje: ["postavkeTvrtke"] },
   },
   proizvodnja: {
@@ -131,7 +132,8 @@ const KARTICE_MODULA = {
     // završna obrada, faze, "spremno za otpremu" kupaonica) i postavke plana. Normativ i odsutnosti
     // ne čita izravno nego preko /api/plan/podaci (bez cijena i bez vrste odsutnosti).
     gantogram: { citanje: ["radniNalozi", "radniCentri", "kapacitetiDana", "projekti", "zaposlenici", "planProizvodnje", "praznici", "satiPoNalogu"], pisanje: ["radniNalozi", "radniCentri", "kapacitetiDana", "planProizvodnje", "satiPoNalogu", "projekti"] },
-    rezanje: { citanje: ["programiRezanja", "katalogProfila", "materijali", "radniNalozi", "zaposlenici", "evidencijaRada"], pisanje: ["programiRezanja", "kapacitetiDana", "materijali"] },
+    // Stvarno utrošeni materijal programa s radnim nalogom projekta ide na projekt izdatnicom (najprije iz već izdanog namjenskog materijala).
+    rezanje: { citanje: ["programiRezanja", "katalogProfila", "materijali", "radniNalozi", "zaposlenici", "evidencijaRada", "izdatnice", "maticnaKnjiga", "projekti"], pisanje: ["programiRezanja", "kapacitetiDana", "materijali", "izdatnice"] },
     isporuke: { citanje: ["projekti"], pisanje: ["projekti"] },
   },
   // Projekti i Ponude su od 2026-10 zasebni moduli (prije jedan "Projekti i ponude"), kao i
@@ -164,8 +166,8 @@ const KARTICE_MODULA = {
     // XRechnung: postavke po projektu (e-adresa kupca za račune, referenca kupca) u xrechnungPostavke. Zadaci za lokalni "most"
     // idu posebnim rutama /api/xrechnung/* (dozvola = čitanje/pisanje xrechnungPostavke), a most se prijavljuje tajnom MOST_TOKEN.
     xrechnung: { citanje: ["projekti", "kupci", "xrechnungPostavke"], pisanje: ["xrechnungPostavke"] },
-    nedovrsena: { citanje: ["nedovrsenaProizvodnja", "projekti", "radniNalozi", "satiPoNalogu", "izdatnice", "materijali", "otpremnice", "narudzbe", "kupci", "dobavljaci", "narudzbeTransporta"], pisanje: ["nedovrsenaProizvodnja"] },
-    analiza: { citanje: ["projekti", "radniNalozi", "ponude", "izdatnice", "materijali", "kupci", "cjenikRada", "katalogProfila", "kvaliteteMaterijala"], pisanje: [] },
+    nedovrsena: { citanje: ["nedovrsenaProizvodnja", "projekti", "radniNalozi", "satiPoNalogu", "izdatnice", "materijali", "otpremnice", "narudzbe", "kupci", "dobavljaci", "narudzbeTransporta", "narudzbenice"], pisanje: ["nedovrsenaProizvodnja"] },
+    analiza: { citanje: ["projekti", "radniNalozi", "ponude", "izdatnice", "materijali", "kupci", "cjenikRada", "katalogProfila", "kvaliteteMaterijala", "narudzbenice"], pisanje: [] },
     // Produktivnost (kg/h): po projektima masa ÷ sati upisani na naloge, po mjesecima isporučena masa ÷ sati
     // radione s kioska. Piše samo ručno upisanu masu projekta (projekt.masaKonstrukcijeKg).
     produktivnost: { citanje: ["projekti", "radniNalozi", "satiPoNalogu", "narudzbe", "otpremnice", "normativi", "katalogProfila", "kvaliteteMaterijala", "kupci", "evidencijaRada", "postavkePlaca"], pisanje: ["projekti"] },
@@ -1692,6 +1694,25 @@ app.put("/api/upitiTransporta/patch", autentikacija, patchPoIdHandler("upitiTran
 app.put("/api/narudzbenice/patch", autentikacija, patchPoIdHandler("narudzbenice", /^(NAR-\d{4}-)(\d+)()$/, "narudžbenica", (upsert) => upsert, 3));
 app.put("/api/narudzbeTransporta/patch", autentikacija, patchPoIdHandler("narudzbeTransporta", /^(TN-\d{4}-)(\d+)()$/, "narudžbi za transport", (upsert) => upsert, 3));
 app.put("/api/rezervacije/patch", autentikacija, patchPoIdHandler("rezervacije", /^(?!)$/, "rezervacija"));
+// Izdatnice (IZD-2026-021): izmjena po id-u na trenutnom zaključanom popisu, a broj koji je u međuvremenu zauzet dobiva sljedeći slobodan.
+// Cijeli popis iz zastarjelog preglednika inače je brisao izdatnice koje su nastale nakon što je stranica učitana (npr. automatske izdatnice
+// pri zaprimanju namjenskog materijala ili one koje je netko drugi upravo izdao).
+const BROJ_IZDATNICE = /^(IZD-\d{4}-)(\d+)()$/;
+app.put("/api/izdatnice/patch", autentikacija, patchPoIdHandler("izdatnice", BROJ_IZDATNICE, "izdatnica", (upsert) => upsert, 3));
+// Stari preglednik (cijeli popis): poslani zapisi + oni s poslužitelja kojih u poslanom nema; nova izdatnica sa zauzetim brojem dobiva sljedeći slobodan.
+function spojiStarePopiseIzdatnica(poslano, naPosluzitelju) {
+  const poslaniIds = new Set(poslano.map((x) => x?.id));
+  const postojeciIds = new Set(naPosluzitelju.map((x) => x.id));
+  const rezultat = [...poslano.filter((x) => x && postojeciIds.has(x.id)), ...naPosluzitelju.filter((x) => !poslaniIds.has(x.id))];
+  for (const nova of poslano.filter((x) => x && !postojeciIds.has(x.id))) {
+    const m = BROJ_IZDATNICE.exec(nova.broj || "");
+    if (m && rezultat.some((o) => o.broj === nova.broj)) {
+      const brojevi = rezultat.map((o) => BROJ_IZDATNICE.exec(o.broj || "")).filter((x) => x && x[1] === m[1]).map((x) => parseInt(x[2], 10));
+      rezultat.push({ ...nova, broj: `${m[1]}${String(Math.max(...brojevi) + 1).padStart(3, "0")}` });
+    } else rezultat.push(nova);
+  }
+  return rezultat;
+}
 // Programi rezanja (Plan rezanja → lasera): izmjena po id-u na trenutnom zaključanom popisu. Cijeli popis iz zastarjelog preglednika (netko je dodao
 // program dok je kartica bila otvorena odavno) vraćao je programe na staro stanje: 10.11.2026. program 180-74-90x90 vraćen je na "Pauzirano", pa se
 // oko 2 h 15 min rezanja nije zabilježilo. Redoslijed popisa je red čekanja, pa preglednik uz izmjene šalje i redoslijed (id-eve) — samo kad ga je
@@ -1948,6 +1969,32 @@ app.put("/api/data/:key", autentikacija, async (req, res, next) => {
     } catch (e) {
       await client.query("ROLLBACK").catch(() => {});
       console.error("Greška kod spremanja ponuda:", e);
+      return res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
+    } finally {
+      client.release();
+    }
+    return res.json({ ok: true });
+  }
+  // Izdatnice iz preglednika sa starom verzijom aplikacije (cijeli popis): izdatnice koje su na poslužitelju, a nema ih u poslanom popisu,
+  // ostaju (npr. automatske izdatnice pri zaprimanju namjenskog materijala); nova izdatnica s brojem koji je u međuvremenu zauzet dobiva
+  // sljedeći slobodan. Nova verzija sprema samo izmjene preko /api/izdatnice/patch.
+  if (req.params.key === "izdatnice") {
+    if (!Array.isArray(req.body)) return res.status(400).json({ error: "Neispravan popis izdatnica." });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const r = await client.query("SELECT value FROM app_data WHERE key = 'izdatnice' FOR UPDATE");
+      const naPosluzitelju = r.rows[0]?.value || [];
+      const rezultat = spojiStarePopiseIzdatnica(req.body, naPosluzitelju);
+      await client.query(
+        `INSERT INTO app_data (key, value, updated_at) VALUES ('izdatnice', $1, now())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        [JSON.stringify(rezultat)]
+      );
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      console.error("Greška kod spremanja izdatnica:", e);
       return res.status(500).json({ error: "Greška na poslužitelju — pokušaj ponovno." });
     } finally {
       client.release();
