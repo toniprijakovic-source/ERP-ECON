@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   ODREDISTE_SKLADISTE, odredisteStavke, postaviOdrediste, projektiIzTeksta, prepoznajProjekt, odredisteIzUpita, stavkeBezOdredista,
   jedinicnaCijena, izdatniceZaprimanja, troskoviRucnihStavki, namjenskoRaspolozivo, planProgramaMaterijala, finalizacijaPrograma, zapisKorekcije,
+  narucenoStavke, primljenoStavke, preostaloStavke, imaZaprimanja, udioNaProjektu, raspodjelaIsporuke, statusNakonZaprimanja, uzmiIzLotova,
 } from "./namjenskiMaterijal.js";
 
 const projekti = [
@@ -116,4 +117,44 @@ test("programi rezanja: namjenski materijal projekta troši se prvi, ostatak sa 
 test("zapis ručnog smanjenja stanja", () => {
   assert.deepEqual(zapisKorekcije({ staro: 37, novo: 2, razlog: "projekt", projektId: "p2", zaposlenikId: "z1", datum: "2026-11-26" }), { datum: "2026-11-26", staro: 37, novo: 2, razlika: -35, razlog: "projekt", projektId: "p2", zaposlenikId: "z1" });
   assert.deepEqual(zapisKorekcije({ staro: 5, novo: 4, razlog: "inventura", napomena: "brojanje", datum: "2026-11-26" }), { datum: "2026-11-26", staro: 5, novo: 4, razlika: -1, razlog: "inventura", napomena: "brojanje", zaposlenikId: null });
+});
+
+test("zaprimanje: naručeno / primljeno / preostalo po stavci (komadi ili količina)", () => {
+  const komadna = { nacinUnosa: "duzina", komada: "84", kolicina: 2705.976 };
+  assert.equal(narucenoStavke(komadna), 84);
+  assert.equal(narucenoStavke({ kolicina: "40" }), 40);
+  // stara zaprimljena narudžbenica bez polja primljeno = sve primljeno; ručno postavljeno "Djelomično primljeno" bez zapisa = ništa
+  assert.equal(primljenoStavke(komadna, "Primljeno"), 84);
+  assert.equal(primljenoStavke(komadna, "Djelomično primljeno"), 0);
+  assert.equal(preostaloStavke({ ...komadna, primljeno: 50 }, "Djelomično primljeno"), 34);
+  assert.equal(preostaloStavke({ ...komadna, primljeno: 108 }, "Primljeno"), 0);
+  assert.equal(imaZaprimanja({ status: "Djelomično primljeno", stavke: [{ primljeno: 0 }, { primljeno: 5 }] }), true);
+  assert.equal(imaZaprimanja({ status: "Djelomično primljeno", stavke: [{ kolicina: 5 }] }), false);
+  assert.equal(imaZaprimanja({ status: "Primljeno", stavke: [] }), true);
+});
+
+test("zaprimanje: raspodjela isporuke — manjak, višak na projekt ili skladište, stavka za skladište", () => {
+  assert.deepEqual(raspodjelaIsporuke({ isporuceno: 30, preostalo: 84, zaProjekt: true }), { naProjekt: 30, naSkladiste: 0 });
+  assert.equal(raspodjelaIsporuke({ isporuceno: 108, preostalo: 84, zaProjekt: true }), null); // višak — treba pitati
+  assert.deepEqual(raspodjelaIsporuke({ isporuceno: 108, preostalo: 84, zaProjekt: true, visak: "projekt" }), { naProjekt: 108, naSkladiste: 0 });
+  assert.deepEqual(raspodjelaIsporuke({ isporuceno: 108, preostalo: 84, zaProjekt: true, visak: "skladiste" }), { naProjekt: 84, naSkladiste: 24 });
+  assert.deepEqual(raspodjelaIsporuke({ isporuceno: 108, preostalo: 84, zaProjekt: false }), { naProjekt: 0, naSkladiste: 108 });
+  assert.deepEqual(raspodjelaIsporuke({ isporuceno: 0, preostalo: 84, zaProjekt: true }), { naProjekt: 0, naSkladiste: 0 });
+});
+
+test("zaprimanje: status nakon zaprimanja i matični brojevi za projekt", () => {
+  assert.equal(statusNakonZaprimanja([{ kolicina: 40, primljeno: 40 }, { nacinUnosa: "duzina", komada: 84, primljeno: 108 }]), "Primljeno");
+  assert.equal(statusNakonZaprimanja([{ kolicina: 40, primljeno: 40 }, { nacinUnosa: "duzina", komada: 84, primljeno: 60 }]), "Djelomično primljeno");
+  assert.deepEqual(uzmiIzLotova([{ id: "a", kolicina: 50 }, { id: "b", kolicina: 58 }], 84), [{ id: "a", kolicina: 50 }, { id: "b", kolicina: 34 }]);
+  assert.deepEqual(uzmiIzLotova([{ id: "a", kolicina: 50 }], 0), []);
+});
+
+test("ručne stavke: trošak projekta razmjerno zaprimljenom na projekt", () => {
+  const narudzbenice = [
+    { id: "n1", broj: "NAR-1", status: "Djelomično primljeno", zaprimljeno: "2026-11-27", stavke: [{ rucniNaziv: "Vijak M8", kolicina: 100, cijenaPoJed: 0.2, projektId: "p1", primljeno: 50, naProjektu: 50 }] },
+    { id: "n2", broj: "NAR-2", status: "Primljeno", zaprimljeno: "2026-11-27", stavke: [{ rucniNaziv: "Matica", kolicina: 100, cijenaPoJed: 0.1, projektId: "p1", primljeno: 120, naProjektu: 100 }] },
+    { id: "n3", broj: "NAR-3", status: "Djelomično primljeno", stavke: [{ rucniNaziv: "Usluga", kolicina: 1, cijenaPoJed: 500, projektId: "p1" }] },
+  ];
+  assert.deepEqual(troskoviRucnihStavki(narudzbenice, "p1", () => []).map((t) => t.iznos), [10, 10]);
+  assert.equal(udioNaProjektu({ kolicina: 10 }, "Primljeno"), 1);
 });

@@ -87,17 +87,64 @@ export function izdatniceZaprimanja({ narudzbenica, stavke, datum, brojevi, uid 
   }));
 }
 
+// --- Zaprimanje: stvarno isporučena količina (od 27.11.2026) ---
+// Pri "Primi robu" upisuje se stvarno isporučeno po stavci. Količine stavke su u jedinici stavke: komadi za komadnu stavku (dužina/lim/komadi),
+// inače količina stavke. Na stavci se vodi zbirno: primljeno (jedinica stavke), naProjektu (jedinica stavke, dio koji je otišao na projekt)
+// i naSkladiste (jedinica MATERIJALA — koliko je dodano na slobodno stanje; po tome brisanje narudžbenice vraća stanje).
+// Manjak: narudžbenica ostaje "Djelomično primljeno" dok ostatak ne stigne. Višak na stavci za projekt: korisnik bira projekt ili skladište.
+const KOMADNI_UNOS = ["duzina", "lim", "komadi"];
+export const jeKomadnaStavka = (s) => KOMADNI_UNOS.includes(s?.nacinUnosa) && Number(s?.komada) > 0;
+export const narucenoStavke = (s) => zaokruzi(jeKomadnaStavka(s) ? Number(s.komada) : Number(s?.kolicina) || 0);
+// Stara zaprimljena narudžbenica (status Primljeno, bez polja primljeno) = primljeno sve naručeno.
+export const primljenoStavke = (s, status) => (s?.primljeno != null ? zaokruzi(s.primljeno) : status === "Primljeno" ? narucenoStavke(s) : 0);
+export const preostaloStavke = (s, status) => Math.max(0, zaokruzi(narucenoStavke(s) - primljenoStavke(s, status)));
+// Je li s narudžbenice išta zaprimljeno (stanje, matični brojevi, izdatnice) — za brisanje narudžbenice.
+export const imaZaprimanja = (n) => n?.status === "Primljeno" || (n?.stavke || []).some((s) => Number(s.primljeno) > EPS);
+// Udio naručenog iznosa stavke koji je trošak projekta: zaprimljeno na projekt / naručeno (višak na projekt > 1).
+export function udioNaProjektu(s, status) {
+  const nar = narucenoStavke(s);
+  if (s?.naProjektu != null) return nar > EPS ? Number(s.naProjektu) / nar : 0;
+  if (s?.primljeno != null) return nar > EPS ? Number(s.primljeno) / nar : 0;
+  return status === "Primljeno" ? 1 : 0;
+}
+// Raspodjela isporučene količine stavke { naProjekt, naSkladiste } (jedinica stavke). Stavka za skladište: sve na skladište.
+// Stavka za projekt: do preostale naručene količine na projekt; višak prema izboru visak ("projekt" | "skladiste"). null = višak bez izbora.
+export function raspodjelaIsporuke({ isporuceno, preostalo, zaProjekt, visak }) {
+  const d = Math.max(0, zaokruzi(isporuceno));
+  if (!zaProjekt) return { naProjekt: 0, naSkladiste: d };
+  const v = zaokruzi(d - Math.max(0, Number(preostalo) || 0));
+  if (v <= EPS || visak === "projekt") return { naProjekt: d, naSkladiste: 0 };
+  if (visak === "skladiste") return { naProjekt: zaokruzi(d - v), naSkladiste: v };
+  return null;
+}
+// Status nakon zaprimanja: sve stavke primljene barem koliko je naručeno → Primljeno; inače ostatak čeka (Djelomično primljeno).
+export const statusNakonZaprimanja = (stavke) => ((stavke || []).every((s) => primljenoStavke(s, "") >= narucenoStavke(s) - EPS) ? "Primljeno" : "Djelomično primljeno");
+// Prvih `kolicina` iz matičnih brojeva redom ([{ id, kolicina }]) — dio isporuke koji ide na projekt; ostatak lotova ostaje na stanju.
+export function uzmiIzLotova(lotovi, kolicina) {
+  let ostalo = zaokruzi(kolicina);
+  const out = [];
+  (lotovi || []).forEach((l) => {
+    if (ostalo <= EPS) return;
+    const k = zaokruzi(Math.min(Number(l.kolicina) || 0, ostalo));
+    if (k <= EPS) return;
+    out.push({ ...l, kolicina: k });
+    ostalo = zaokruzi(ostalo - k);
+  });
+  return out;
+}
+
 // Ručne stavke narudžbenice s projektom (vijci, usluge, drvo… — ne idu na skladište) kao trošak projekta od dana zaprimanja.
-// cijeneStavki(n) vraća naručene iznose po stavkama (naruceneCijeneNarudzbenice u aplikaciji).
+// cijeneStavki(n) vraća naručene iznose po stavkama (naruceneCijeneNarudzbenice u aplikaciji). Djelomično primljeno: trošak razmjerno
+// zaprimljenom na projekt (udioNaProjektu).
 export function troskoviRucnihStavki(narudzbenice, projektId, cijeneStavki) {
   const out = [];
-  (narudzbenice || []).filter((n) => n.status === "Primljeno").forEach((n) => {
+  (narudzbenice || []).filter((n) => n.status === "Primljeno" || n.status === "Djelomično primljeno").forEach((n) => {
     const stavke = n.stavke || [];
     if (!stavke.some((s) => s.projektId === projektId && !s.materijalId && !s.katalogId)) return;
     const nc = cijeneStavki(n) || [];
     stavke.forEach((s, i) => {
       if (s.projektId !== projektId || s.materijalId || s.katalogId) return;
-      const iznos = nc[i]?.iznos != null ? Number(nc[i].iznos) : (Number(s.cijenaPoJed) || 0) * (Number(s.kolicina) || 0);
+      const iznos = (nc[i]?.iznos != null ? Number(nc[i].iznos) : (Number(s.cijenaPoJed) || 0) * (Number(s.kolicina) || 0)) * udioNaProjektu(s, n.status);
       if (!(iznos > 0)) return;
       out.push({ id: `nar-${n.id}-${i}`, datum: n.zaprimljeno || n.datum, dobavljacId: n.dobavljacId || null, opis: `${s.rucniNaziv || "Stavka"} (${n.broj})`, iznos: Math.round(iznos * 100) / 100, izNarudzbenice: true });
     });

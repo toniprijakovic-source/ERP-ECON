@@ -21,7 +21,7 @@ import { STATUSI_PROJEKTA, projektDovrsen, projektAktivan, projektPrimaDokumente
 import { RAZLOZI_POMAKA_ROKA, analizaRokova, kasneProjekti, zapisPromjeneRoka, dodajPromjenuRoka } from "./rokoviProjekata";
 import { direktorskiPregled, PRAGOVI as PRAGOVI_PREGLEDA, OPIS_SEMAFORA as OPIS_SEMAFORA_PREGLEDA } from "./direktorskiPregled";
 import { stavkeIzRezervacija, pregledZaIzdavanje, ukloniRezervacije, rasporediSPrvim } from "./izdavanjeRezervirano";
-import { ODREDISTE_SKLADISTE, odredisteStavke, postaviOdrediste, prepoznajProjekt, odredisteIzUpita, stavkeBezOdredista, jedinicnaCijena, izdatniceZaprimanja, troskoviRucnihStavki, namjenskoRaspolozivo, planProgramaMaterijala, finalizacijaPrograma, RAZLOZI_SMANJENJA, zapisKorekcije } from "./namjenskiMaterijal";
+import { ODREDISTE_SKLADISTE, odredisteStavke, postaviOdrediste, prepoznajProjekt, odredisteIzUpita, stavkeBezOdredista, jedinicnaCijena, izdatniceZaprimanja, troskoviRucnihStavki, namjenskoRaspolozivo, planProgramaMaterijala, finalizacijaPrograma, RAZLOZI_SMANJENJA, zapisKorekcije, jeKomadnaStavka, narucenoStavke, primljenoStavke, preostaloStavke, imaZaprimanja, raspodjelaIsporuke, statusNakonZaprimanja, uzmiIzLotova } from "./namjenskiMaterijal";
 import { matricaPotrosnje, zaNarucivanje, parsirajUvoz, MJESECI_KRATKO } from "./potrosniMaterijal";
 import { stanjeKioska, kioskoviBezSignala, NAZIV_VRSTE_KIOSKA } from "./kioskPracenje";
 import { sazmiSliku, adresaUtovara, tokenIzUpita, grupirajPoDatumu, stanjeSlike, NAZIV_STANJA as NAZIV_STANJA_SLIKE } from "./utovarFotografije";
@@ -5797,6 +5797,62 @@ const dimenzijeMaticnog = (z, db) => {
   return lotovi.length === kand.length ? dim[lotovi.findIndex((x) => x.id === z.id)] || "" : "";
 };
 
+// Kartica materijala: matični brojevi koji su još na stanju; potrošeni (0) se ne prikazuju. Količina = primljeno − izdano po izdatnicama
+// (kao kod izdavanja), ali najviše koliko te dužine/formata stvarno ima na stanju: dio je potrošen bez izdatnice (laser, ručna ispravka),
+// pa se stariji matični brojevi smatraju potrošenima prvi (FIFO). Stanje koje nijedan matični broj ne pokriva = "bez matičnog broja".
+function MaticniNaStanju({ materijal, db }) {
+  const potrosnja = useMemo(() => potrosnjaPoMaticnim(db.izdatnice), [db.izdatnice]);
+  const svi = (db.maticnaKnjiga || []).filter((z) => z.materijalId === materijal.id);
+  if (!svi.length) return null;
+  const mat = (db.materijali || []).find((m) => m.id === materijal.id) || materijal; // spremljeno stanje, ne neuspremljeni obrazac
+  const f = formatiMaterijala(mat, db);
+  const jeLim = !!f?.jeLim;
+  const redoviStanja = f ? redoviIzDimenzija(mat.dimenzije, mat.kolicina, jeLim) : null;
+  const opisReda = (r) => `${jeLim ? `${r.duzinaMM}×${r.sirinaMM}` : r.duzinaMM} mm`;
+  const stanje = new Map(); // ključ dimenzije → { opis, kolicina }
+  if (redoviStanja) redoviStanja.forEach((r) => { const k = kljucDimenzije(r.duzinaMM, r.sirinaMM); stanje.set(k, { opis: opisReda(r), kolicina: zaokruziKolicinu((stanje.get(k)?.kolicina || 0) + (Number(r.komada) || 0)) }); });
+  else stanje.set("sve", { opis: mat.dimenzije || "", kolicina: Math.max(0, Number(mat.kolicina) || 0) });
+  const kljucLota = (z) => {
+    if (!redoviStanja) return "sve";
+    const k = kljucDimenzijeTekst(dimenzijeMaticnog(z, db), jeLim);
+    return k || (stanje.size === 1 ? [...stanje.keys()][0] : ""); // zapis bez dimenzije pripada jedinoj dimenziji materijala
+  };
+  const redovi = [];
+  [...svi].sort((a, b) => (Number(b.broj) || 0) - (Number(a.broj) || 0)).forEach((z) => { // najnoviji ostaju na stanju
+    const k = kljucLota(z);
+    const s = stanje.get(k);
+    if (!s) return;
+    const kol = zaokruziKolicinu(Math.min(preostaloMaticnog(z, potrosnja), s.kolicina));
+    if (kol <= 0.0005) return;
+    s.kolicina = zaokruziKolicinu(s.kolicina - kol);
+    redovi.push({ z, preostalo: kol });
+  });
+  redovi.sort((a, b) => (Number(a.z.broj) || 0) - (Number(b.z.broj) || 0));
+  [...stanje.values()].filter((s) => s.kolicina > 0.0005).forEach((s) => redovi.push({ z: { id: `bez-${s.opis}`, broj: "bez mat. broja", dimenzije: s.opis, sarza: "" }, preostalo: s.kolicina }));
+  const jm = (z) => z.jm || mat.jm || "kom";
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <label className="label">Matični brojevi na stanju</label>
+      {redovi.length === 0 ? <div style={{ fontSize: 12.5, color: "var(--ink-faint)" }}>Nijedan matični broj ovog materijala nije na stanju.</div> : (
+        <table className="erp-table">
+          <thead><tr><th>Matični broj</th><th>{jeLim ? "Dimenzija" : "Dužina"}</th><th>Šarža</th><th style={{ textAlign: "right" }}>Količina</th></tr></thead>
+          <tbody>
+            {redovi.map(({ z, preostalo }) => (
+              <tr key={z.id}>
+                <td className="f-mono" style={String(z.id).startsWith("bez-") ? { color: "var(--ink-faint)" } : undefined}>{z.broj}</td>
+                <td className="f-mono">{dimenzijeMaticnog(z, db) || "—"}</td>
+                <td className="f-mono">{z.sarza || "—"}</td>
+                <td className="f-mono" style={{ textAlign: "right" }}>{preostalo} {jm(z)}</td>
+              </tr>
+            ))}
+            {redovi.length > 1 && <tr><td colSpan={3} style={{ fontWeight: 700 }}>Ukupno</td><td className="f-mono" style={{ textAlign: "right", fontWeight: 700 }}>{zaokruziKolicinu(redovi.reduce((a, r) => a + r.preostalo, 0))} {jm(redovi[0].z)}</td></tr>}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 // Zaprimanje narudžbenice: broj otpremnice dobavljača, po stavci dimenzije iz narudžbenice, šarža i broj naljepnica.
 function ZaprimanjeModal({ narudzbenica, db, onPotvrdi, onClose }) {
   const nazivStavke = (s) => {
@@ -5804,29 +5860,34 @@ function ZaprimanjeModal({ narudzbenica, db, onPotvrdi, onClose }) {
     const k = (db.katalogProfila || []).find((x) => x.id === s.katalogId);
     return m ? m.naziv : k ? katalogOznakaPuna(k) : (s.rucniNaziv || "—");
   };
-  const komadna = (s) => ["duzina", "lim", "komadi"].includes(s.nacinUnosa) && Number(s.komada) > 0;
-  const brojKomada = (s) => (komadna(s) ? Math.max(1, Math.round(Number(s.komada) || 1)) : 1);
-  // Ukupna količina stavke u jedinici prikaza (komadi ili jedinica materijala) — dijelovi po šaržama se upisuju u njoj.
-  const ukupnoStavke = (s) => (komadna(s) ? Number(s.komada) : Number(s.kolicina) || 0);
+  const komadna = (s) => jeKomadnaStavka(s);
   const jedinicaStavke = (s) => (komadna(s) ? "kom" : db.materijali.find((x) => x.id === s.materijalId)?.jm || s.jm || "");
+  const brojUnosa = (v) => Number(String(v ?? "").replace(",", "."));
+  // Stvarno isporučena količina po stavci (jedinica stavke: komadi ili jedinica materijala), unaprijed preostala naručena količina.
+  // Manje = narudžbenica ostaje "Djelomično primljeno" za ostatak; više = za stavku s projektom bira se kamo ide višak.
+  const preostalo = (s) => preostaloStavke(s, narudzbenica.status);
+  const vecPrimljeno = (s) => primljenoStavke(s, narudzbenica.status);
+  const nastavak = narudzbenica.stavke.some((s) => vecPrimljeno(s) > 0.0005); // već je bilo djelomično zaprimanje
+  const [isporuceno, setIsporuceno] = useState(() => narudzbenica.stavke.map((s) => String(preostalo(s))));
+  const [visak, setVisak] = useState(() => narudzbenica.stavke.map(() => ""));
+  const isporucenoStavke = (i) => { const v = brojUnosa(isporuceno[i]); return Number.isFinite(v) && v > 0 ? zaokruziKolicinu(v) : 0; };
+  // Ukupna količina stavke u ovoj isporuci — dijelovi po šaržama se upisuju u njoj.
+  const ukupnoStavke = (i) => isporucenoStavke(i);
   // Po stavci popis dijelova { kolicina, sarza, naljepnice, rucno }: jedan dio = cijela stavka (dosadašnje ponašanje).
-  const [dijelovi, setDijelovi] = useState(() => Object.fromEntries(narudzbenica.stavke.map((s, i) => [i, [{ kolicina: "", sarza: s.sarza || "", naljepnice: brojKomada(s), rucno: false }]])));
+  const [dijelovi, setDijelovi] = useState(() => Object.fromEntries(narudzbenica.stavke.map((s, i) => [i, [{ kolicina: "", sarza: nastavak ? "" : s.sarza || "", naljepnice: komadna(s) ? Math.max(0, Math.min(200, Math.round(preostalo(s)))) : 1, rucno: false }]])));
   const [greska, setGreska] = useState("");
   const [ispis, setIspis] = useState(true);
-  const [otpremnica, setOtpremnica] = useState(narudzbenica.otpremnicaDobavljaca || "");
+  const [otpremnica, setOtpremnica] = useState(nastavak ? "" : narudzbenica.otpremnicaDobavljaca || "");
   // Odredište po stavci (može se ispraviti pri zaprimanju): projekt = materijal odmah ide na projekt izdatnicom; skladište = slobodno stanje.
   const [odredista, setOdredista] = useState(() => narudzbenica.stavke.map((s) => odredisteStavke(s)));
+  const zaProjekt = (i) => !!odredista[i] && odredista[i] !== ODREDISTE_SKLADISTE;
   const projektiIzbor = (db.projekti || []).filter((p) => projektPrimaDokumente(p) || odredista.includes(p.id)).sort((a, b) => String(b.sifra).localeCompare(String(a.sifra), "hr", { numeric: true }));
-  const kolicinaStavke = (s) => `${zaokruziKolicinu(ukupnoStavke(s))} ${jedinicaStavke(s)}`.trim();
-  const brojUnosa = (v) => Number(String(v ?? "").replace(",", "."));
+  const kol = (v, s) => `${zaokruziKolicinu(v)} ${jedinicaStavke(s)}`.trim();
   const postaviDio = (i, k, patch) => setDijelovi((d) => ({ ...d, [i]: d[i].map((x, j) => (j === k ? { ...x, ...patch } : x)) }));
   const podijeli = (i) => setDijelovi((d) => ({ ...d, [i]: [...d[i], { kolicina: "", sarza: "", naljepnice: 1, rucno: false }] }));
   const ukloniDio = (i, k) => setDijelovi((d) => ({ ...d, [i]: d[i].filter((_, j) => j !== k) }));
   // Preostala količina za dio bez upisane količine (najviše jedan takav dio po stavci).
-  const ostatak = (i) => {
-    const s = narudzbenica.stavke[i];
-    return zaokruziKolicinu(ukupnoStavke(s) - dijelovi[i].reduce((a, x) => a + (brojUnosa(x.kolicina) > 0 ? brojUnosa(x.kolicina) : 0), 0));
-  };
+  const ostatak = (i) => zaokruziKolicinu(ukupnoStavke(i) - dijelovi[i].reduce((a, x) => a + (brojUnosa(x.kolicina) > 0 ? brojUnosa(x.kolicina) : 0), 0));
   // Komadna stavka: naljepnica po komadu dijela (dio bez količine = ostatak), dok broj korisnik sam ne promijeni.
   const naljepniceDijela = (i, x) => {
     const s = narudzbenica.stavke[i];
@@ -5837,40 +5898,67 @@ function ZaprimanjeModal({ narudzbenica, db, onPotvrdi, onClose }) {
   const potvrdi = () => {
     const bez = odredista.map((o, i) => (o ? -1 : i)).filter((i) => i >= 0);
     if (bez.length) { setGreska(`Za ${bez.map((i) => nazivStavke(narudzbenica.stavke[i])).join(", ")} odaberi projekt ili „Skladište“.`); return; }
+    const neispravno = narudzbenica.stavke.findIndex((_, i) => { const t = String(isporuceno[i] ?? "").trim(); const v = brojUnosa(t); return t === "" || !Number.isFinite(v) || v < 0; });
+    if (neispravno >= 0) { setGreska(`${nazivStavke(narudzbenica.stavke[neispravno])}: upiši stvarno isporučenu količinu (0 ako ta stavka nije stigla).`); return; }
+    if (narudzbenica.stavke.every((_, i) => isporucenoStavke(i) <= 0)) { setGreska("Upiši isporučenu količinu barem za jednu stavku."); return; }
+    const bezVisak = narudzbenica.stavke.map((s, i) => i).filter((i) => raspodjelaIsporuke({ isporuceno: isporucenoStavke(i), preostalo: preostalo(narudzbenica.stavke[i]), zaProjekt: zaProjekt(i), visak: visak[i] }) === null);
+    if (bezVisak.length) { setGreska(`Za ${bezVisak.map((i) => nazivStavke(narudzbenica.stavke[i])).join(", ")} odaberi ide li višak na projekt ili na skladište.`); return; }
     const izlaz = {};
     for (let i = 0; i < narudzbenica.stavke.length; i++) {
       const s = narudzbenica.stavke[i];
       const dd = dijelovi[i];
-      const ukupno = ukupnoStavke(s);
-      if (dd.length === 1) { izlaz[i] = [{ sarza: dd[0].sarza, udio: 1, naljepnice: dd[0].rucno || !komadna(s) ? dd[0].naljepnice : brojKomada(s) }]; continue; }
+      const ukupno = ukupnoStavke(i);
+      if (!(ukupno > 0)) { izlaz[i] = []; continue; }
+      if (dd.length === 1) { izlaz[i] = [{ sarza: dd[0].sarza, udio: 1, naljepnice: naljepniceDijela(i, dd[0]) }]; continue; }
       const prazni = dd.filter((x) => String(x.kolicina).trim() === "");
       if (dd.some((x) => String(x.kolicina).trim() !== "" && !(brojUnosa(x.kolicina) > 0))) { setGreska(`${nazivStavke(s)}: količina dijela mora biti broj veći od 0.`); return; }
       if (prazni.length > 1) { setGreska(`${nazivStavke(s)}: upiši količinu za sve dijelove osim jednog (on dobiva ostatak).`); return; }
       const zbroj = dd.reduce((a, x) => a + (brojUnosa(x.kolicina) > 0 ? brojUnosa(x.kolicina) : 0), 0);
-      if (prazni.length === 0 ? Math.abs(zbroj - ukupno) > 0.0005 : zbroj >= ukupno - 0.0005) { setGreska(`${nazivStavke(s)}: zbroj dijelova (${zaokruziKolicinu(zbroj)}) mora biti ${prazni.length ? "manji od" : "jednak"} zaprimljenoj količini ${kolicinaStavke(s)}.`); return; }
+      if (prazni.length === 0 ? Math.abs(zbroj - ukupno) > 0.0005 : zbroj >= ukupno - 0.0005) { setGreska(`${nazivStavke(s)}: zbroj dijelova (${zaokruziKolicinu(zbroj)}) mora biti ${prazni.length ? "manji od" : "jednak"} isporučenoj količini ${kol(ukupno, s)}.`); return; }
       // udio svakog dijela u stavci; dio bez količine (ostatak) ide zadnji
       const poredani = [...dd.filter((x) => String(x.kolicina).trim() !== ""), ...prazni];
       izlaz[i] = poredani.map((x) => ({ sarza: x.sarza, naljepnice: naljepniceDijela(i, x), udio: String(x.kolicina).trim() === "" ? null : brojUnosa(x.kolicina) / (ukupno || 1) }));
     }
-    onPotvrdi({ dijelovi: izlaz, ispis, otpremnica: otpremnica.trim(), odredista: odredista.map((o) => postaviOdrediste({}, o)) });
+    onPotvrdi({ dijelovi: izlaz, ispis, otpremnica: otpremnica.trim(), odredista: odredista.map((o) => postaviOdrediste({}, o)), isporuceno: narudzbenica.stavke.map((_, i) => isporucenoStavke(i)), visak });
   };
   return (
-    <Modal wide title={`Zaprimanje — ${narudzbenica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={PackageCheck} onClick={potvrdi}>Zaprimi robu</Btn></>}>
+    <Modal xwide title={`Zaprimanje — ${narudzbenica.broj}`} onClose={onClose} footer={<><Btn onClick={onClose}>Odustani</Btn><Btn variant="primary" icon={PackageCheck} onClick={potvrdi}>Zaprimi robu</Btn></>}>
       <div style={{ maxWidth: 320 }}>
         <Field label="Broj otpremnice dobavljača">
           <input className="input f-mono" autoFocus aria-label="Broj otpremnice dobavljača" placeholder="npr. 2026-004517" value={otpremnica} onChange={(e) => setOtpremnica(e.target.value)} />
         </Field>
       </div>
       <table className="erp-table">
-        <thead><tr><th>Materijal</th><th>Dimenzije</th><th style={{ width: 190 }}>Ide na</th><th style={{ width: 330 }}>Šarža (količina po šarži)</th><th style={{ width: 90 }}>Naljepnica</th></tr></thead>
+        <thead><tr><th>Materijal</th><th>Dimenzije</th><th style={{ width: 190 }}>Stvarno isporučeno</th><th style={{ width: 190 }}>Ide na</th><th style={{ width: 300 }}>Šarža (količina po šarži)</th><th style={{ width: 80 }}>Naljepnica</th></tr></thead>
         <tbody>
           {narudzbenica.stavke.map((s, i) => {
             const dd = dijelovi[i];
             const vise = dd.length > 1;
+            const ost = preostalo(s);
+            const prije = vecPrimljeno(s);
+            const isp = isporucenoStavke(i);
+            const visakKol = zaokruziKolicinu(isp - ost);
+            const manjakKol = zaokruziKolicinu(ost - isp);
+            const skladisna = !!(s.materijalId || s.katalogId);
             return (
               <tr key={i}>
                 <td>{nazivStavke(s)}{s.kvaliteta ? <span style={{ color: "var(--ink-soft)" }}> · {s.kvaliteta}</span> : null}</td>
-                <td style={{ whiteSpace: "nowrap" }}><span className="f-mono">{dimenzijeStavkeNarudzbenice(narudzbenica, s, i, db) || "—"}</span><div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{kolicinaStavke(s)}</div></td>
+                <td style={{ whiteSpace: "nowrap" }}><span className="f-mono">{dimenzijeStavkeNarudzbenice(narudzbenica, s, i, db) || "—"}</span><div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>naručeno {kol(narucenoStavke(s), s)}</div>{prije > 0.0005 && <div style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>već primljeno {kol(prije, s)}</div>}</td>
+                <td>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input className="input f-mono" style={{ width: 90, textAlign: "right", ...(visakKol > 0.0005 || manjakKol > 0.0005 ? { borderColor: "var(--amber, #C98A1B)" } : {}) }} inputMode="decimal" aria-label={`Stvarno isporučeno stavke ${i + 1}`} value={isporuceno[i]} onChange={(e) => { const v = e.target.value; setIsporuceno((a) => a.map((x, j) => (j === i ? v : x))); }} />
+                    <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>{jedinicaStavke(s)}</span>
+                  </div>
+                  {visakKol > 0.0005 && zaProjekt(i) && (
+                    <select className="select" aria-label={`Višak stavke ${i + 1}`} value={visak[i]} onChange={(e) => { const v = e.target.value; setVisak((a) => a.map((x, j) => (j === i ? v : x))); }} style={{ marginTop: 4, fontSize: 12.5, ...(visak[i] ? {} : { borderColor: "var(--rust)" }) }}>
+                      <option value="">Višak {kol(visakKol, s)} — kamo?</option>
+                      <option value="projekt">Višak na projekt</option>
+                      <option value="skladiste">{skladisna ? "Višak na skladište" : "Višak bez projekta"}</option>
+                    </select>
+                  )}
+                  {visakKol > 0.0005 && !zaProjekt(i) && <div style={{ fontSize: 10.5, color: "var(--ink-soft)", marginTop: 2 }}>višak {kol(visakKol, s)} {skladisna ? "ide na skladište" : ""}</div>}
+                  {manjakKol > 0.0005 && <div style={{ fontSize: 10.5, color: "var(--rust)", marginTop: 2 }}>manjak {kol(manjakKol, s)} — ostatak ostaje otvoren na narudžbenici</div>}
+                </td>
                 <td>
                   <select className="select" aria-label={`Odredište stavke ${i + 1}`} value={odredista[i]} onChange={(e) => setOdredista((o) => o.map((x, j) => (j === i ? e.target.value : x)))} style={odredista[i] ? { fontSize: 12.5 } : { fontSize: 12.5, borderColor: "var(--rust)" }}>
                     <option value="">— odaberi —</option>
@@ -5905,7 +5993,7 @@ function ZaprimanjeModal({ narudzbenica, db, onPotvrdi, onClose }) {
       <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, fontSize: 13, cursor: "pointer" }}>
         <input type="checkbox" checked={ispis} onChange={(e) => setIspis(e.target.checked)} /> Nakon zaprimanja ispiši naljepnice (70 × 48 mm)
       </label>
-      <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>Stavke s odabranim projektom (namjenski materijal) odmah se izdaju na taj projekt — nastaje izdatnica po cijeni s narudžbenice i ne ulaze u slobodno stanje skladišta; višak skladištar vraća povratom izdatnice. Stavke za skladište ulaze u slobodno stanje. Svaka zaprimljena stavka dobiva matični broj u Kontroli kvalitete (Matična knjiga), s brojem otpremnice dobavljača — stavka podijeljena na više šarži dobiva po jedan matični broj za svaku šaržu; atest se tamo upisuje kad stigne. Šarža i matični broj ispisuju se na naljepnici.</p>
+      <p style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>U „Stvarno isporučeno“ upiši koliko je stvarno stiglo. Ako je stiglo manje, narudžbenica ostaje „Djelomično primljeno“ i ostatak se zaprima istim gumbom kad stigne. Ako je stiglo više, za stavku s projektom odaberi ide li višak na projekt ili na skladište. Stavke s odabranim projektom (namjenski materijal) odmah se izdaju na taj projekt — nastaje izdatnica po cijeni s narudžbenice i ne ulaze u slobodno stanje skladišta. Stavke za skladište ulaze u slobodno stanje. Svaka zaprimljena stavka dobiva matični broj u Kontroli kvalitete (Matična knjiga), s brojem otpremnice dobavljača — stavka podijeljena na više šarži dobiva po jedan matični broj za svaku šaržu; atest se tamo upisuje kad stigne. Šarža i matični broj ispisuju se na naljepnici.</p>
     </Modal>
   );
 }
@@ -6605,10 +6693,29 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne, refe
           // Brisanje izdatnice mora vratiti na skladište sve što je još "vani" (izdano minus već
           // zaprimljeni povrat) — inače bi brisanje pogrešno kreirane izdatnice trajno umanjilo
           // stanje bez traga zašto.
+          // Materijal koji se vodi po dužinama/formatima dobiva natrag i svoju dužinu (npr. "12000 mm × 30; 6000 mm × 108"), inače bi
+          // vraćeni komadi u popisu zaliha izgledali kao komadi prve dužine materijala.
           const noviMaterijali = db.materijali.map((m) => {
-            // bezSkidanjaStanja: dio koji ova izdatnica nije skinula sa stanja (skinuo ga je program rezanja ili ručna ispravka) — ne vraća se.
-            const josVani = delIzdatnica.stavke.filter((s) => s.materijalId === m.id).reduce((s, st) => s + Math.max(0, (Number(st.kolicinaIzdano) || 0) - (Number(st.kolicinaVraceno) || 0) - (Number(st.bezSkidanjaStanja) || 0)), 0);
-            return josVani > 0 ? { ...m, kolicina: m.kolicina + josVani } : m;
+            let novi = m;
+            delIzdatnica.stavke.filter((s) => s.materijalId === m.id).forEach((st) => {
+              // bezSkidanjaStanja: dio koji ova izdatnica nije skinula sa stanja (skinuo ga je program rezanja ili ručna ispravka) — ne vraća se.
+              const josVani = zaokruziKolicinu(Math.max(0, (Number(st.kolicinaIzdano) || 0) - (Number(st.kolicinaVraceno) || 0) - (Number(st.bezSkidanjaStanja) || 0)));
+              if (!(josVani > 0)) return;
+              let dimenzije = novi.dimenzije;
+              const f = formatiMaterijala(novi, db, st.dimenzije);
+              if (f) {
+                const cijeliRedovi = Array.isArray(st.izdanoRedovi) && st.izdanoRedovi.length > 0 && Math.abs(st.izdanoRedovi.reduce((a, r) => a + (Number(r.komada) || 0), 0) - josVani) < 0.0005;
+                if (cijeliRedovi) {
+                  let prije = novi.kolicina;
+                  st.izdanoRedovi.forEach((r) => {
+                    dimenzije = dodajFormatUDimenzije(dimenzije, prije, f.jeLim, `${r.sirinaMM ? `${r.duzinaMM}×${r.sirinaMM}` : r.duzinaMM} mm`, Number(r.komada) || 0);
+                    prije += Number(r.komada) || 0;
+                  });
+                } else if (st.dimenzije) dimenzije = dodajFormatUDimenzije(dimenzije, novi.kolicina, f.jeLim, st.dimenzije, josVani);
+              }
+              novi = { ...novi, kolicina: zaokruziKolicinu(novi.kolicina + josVani), dimenzije };
+            });
+            return novi;
           });
           update("materijali", noviMaterijali);
           update("izdatnice", db.izdatnice.filter((i) => i.id !== delIzdatnica.id));
@@ -6685,17 +6792,13 @@ function SkladistePage({ db, update, showToast, mojaPozicija, dodajMaticne, refe
                 </div>
               ))}
               {!jeKomadUnos && <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajRedUnos}>Dodaj još jednu {jeLimUnos ? "dimenziju" : "dužinu"}</Btn>}
-              {modal?.mode === "edit" && form.id && (db.maticnaKnjiga || []).some((z) => z.materijalId === form.id) && (
-                <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginTop: 8 }}>
-                  <strong>Matični brojevi ovog materijala:</strong> {[...(db.maticnaKnjiga || [])].filter((z) => z.materijalId === form.id).sort((a, b) => (Number(a.broj) || 0) - (Number(b.broj) || 0)).map((z) => `${z.broj} (${z.kolicinaPrimljeno} ${z.jm || "kom"}${z.dimenzije ? ` · ${z.dimenzije}` : ""}${z.sarza ? ` · šarža ${z.sarza}` : ""})`).join("; ")}
-                </div>
-              )}
               {modal?.mode === "edit" && form.id && Math.abs((Number(form.kolicina) || 0) - ukupnoKomadaUnos) > 0.0005 && (
                 <div style={{ fontSize: 12, color: "var(--rust)", marginTop: 6, fontWeight: 600 }}>Pažnja: trenutno stanje na skladištu je {form.kolicina} kom, a zbroj redaka je {ukupnoKomadaUnos} kom — spremanjem stanje postaje {ukupnoKomadaUnos} kom.</div>
               )}
               {viseRedaka && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 6 }}>Ukupno {ukupnoKomadaUnos} kom, različitih {jeLimUnos ? "dimenzija" : "dužina"}: {katalogUnos.redovi.length}. Sve se vodi pod istom šifrom; dimenzije se zapisuju kao popis.</div>}
             </div>
           )}
+          {modal?.mode === "edit" && form.id && <MaticniNaStanju materijal={form} db={db} />}
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <Field label="Šifra (8 znamenki: vrsta · broj artikla · kvaliteta)">{katalogEntry
@@ -8188,15 +8291,40 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
     const zaNaljepnice = []; // { maticniId, kopija }
     const maticni = []; // novi zapisi matične knjige — po jedan za svaku zaprimljenu stavku
     const zaIzdati = []; // namjenski materijal: { projektId, materijal, kolicina, cijena, dimenzije, lotovi: [{ id, kolicina }] }
+    const zapisIsporuke = []; // povijest isporuka na narudžbenici: { i, isporuceno, naProjekt, naSkladiste } u jedinici stavke
     const nc = naruceneCijeneNarudzbenice(row, db);
     const noveStavke = row.stavke.map((s0, idx) => {
       const od = opcije.odredista?.[idx] || { projektId: s0.projektId || null, zaSkladiste: !!s0.zaSkladiste };
       const s = { ...s0, projektId: od.projektId || null, zaSkladiste: !!od.zaSkladiste };
       const namjenski = !!s.projektId;
-      // Dijelovi stavke po šaržama (udio = dio zaprimljene količine): svaki dobiva svoj matični broj i naljepnice.
-      const dijelovi = (opcije.dijelovi?.[idx] || [{ sarza: opcije.sarze?.[idx] ?? s.sarza ?? "", udio: 1, naljepnice: opcije.naljepnice?.[idx] ?? 0 }])
+      // Stvarno isporučeno (jedinica stavke: komadi ili količina stavke); bez upisa = preostala naručena količina. Manjak ostaje otvoren
+      // (Djelomično primljeno), višak na stavci za projekt ide na projekt ili na skladište prema izboru pri zaprimanju.
+      const naruceno = narucenoStavke(s0);
+      const prijePrimljeno = primljenoStavke(s0, row.status);
+      const preostaloNar = preostaloStavke(s0, row.status);
+      const isporuceno = Math.max(0, zaokruziKolicinu(opcije.isporuceno?.[idx] ?? preostaloNar));
+      const raspodjela = raspodjelaIsporuke({ isporuceno, preostalo: preostaloNar, zaProjekt: namjenski, visak: opcije.visak?.[idx] }) || { naProjekt: isporuceno, naSkladiste: 0 };
+      const udioIsporuke = naruceno > 0.0005 ? isporuceno / naruceno : 0; // dio naručene količine stavke koji je stigao ovom isporukom
+      const udioNaProjekt = isporuceno > 0.0005 ? raspodjela.naProjekt / isporuceno : 0;
+      // Zbirno na stavci: primljeno i naProjektu (jedinica stavke), naSkladiste (jedinica materijala, za vraćanje stanja pri brisanju narudžbenice).
+      const zbirno = (dodanoNaStanje) => ({
+        primljeno: zaokruziKolicinu(prijePrimljeno + isporuceno),
+        naProjektu: zaokruziKolicinu((Number(s0.naProjektu) || 0) + raspodjela.naProjekt),
+        naSkladiste: zaokruziKolicinu((Number(s0.naSkladiste) || 0) + dodanoNaStanje),
+      });
+      if (!(isporuceno > 0.0005)) return { ...s, ...zbirno(0) };
+      zapisIsporuke.push({ i: idx, isporuceno, naProjekt: raspodjela.naProjekt, naSkladiste: raspodjela.naSkladiste });
+      // Dijelovi stavke po šaržama (udio = dio isporučene količine): svaki dobiva svoj matični broj i naljepnice.
+      const dijelovi = (opcije.dijelovi?.[idx]?.length ? opcije.dijelovi[idx] : [{ sarza: opcije.sarze?.[idx] ?? s.sarza ?? "", udio: 1, naljepnice: opcije.naljepnice?.[idx] ?? 0 }])
         .map((d) => ({ ...d, sarza: String(d.sarza ?? "").trim() }));
-      const sarza = [...new Set(dijelovi.map((d) => d.sarza).filter(Boolean))].join(", ");
+      // Šarže svih isporuka stavke (djelomično zaprimanje dopisuje nove).
+      const sarza = [...new Set([...(prijePrimljeno > 0.0005 ? String(s0.sarza || "").split(",") : []), ...dijelovi.map((d) => d.sarza)].map((x) => String(x).trim()).filter(Boolean))].join(", ");
+      // Puna naručena količina u jedinici materijala → isporučeno, od toga dio na projekt i dio na slobodno stanje.
+      const raspodijeli = (punaKolicina) => {
+        const primljeno = zaokruziKolicinu(punaKolicina * udioIsporuke);
+        const naProjekt = zaokruziKolicinu(primljeno * udioNaProjekt);
+        return { primljeno, naProjekt, naStanjeKol: zaokruziKolicinu(primljeno - naProjekt) };
+      };
       const komadnaStavka = ["duzina", "lim", "komadi"].includes(s.nacinUnosa);
       // Format s narudžbenice (dužina / format lima) dopisuje se na materijal koji se vodi u komadima, da popis dužina
       // na skladištu (i izbor dužine kod izdavanja) odgovara onome što je stvarno zaprimljeno. Namjenski materijal ne ulazi u stanje.
@@ -8205,10 +8333,12 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
         const f = dimStavke ? formatiMaterijala(m, db, dimStavke) : null;
         return f ? dodajFormatUDimenzije(m.dimenzije, m.kolicina, f.jeLim, dimStavke, kom) : m.dimenzije;
       };
+      // Na slobodno stanje ide samo dio za skladište (namjenski dio ide izdatnicom na projekt i ne ulazi u stanje).
       const naStanje = (materijalId, kolicina, patch = {}) => {
-        materijali = materijali.map((m) => (m.id === materijalId ? (namjenski ? { ...m, ...patch } : { ...m, ...patch, kolicina: m.kolicina + kolicina, dimenzije: formatNaMaterijal({ ...m, ...patch }, kolicina) }) : m));
+        materijali = materijali.map((m) => (m.id === materijalId ? (kolicina > 0.0005 ? { ...m, ...patch, kolicina: zaokruziKolicinu(m.kolicina + kolicina), dimenzije: formatNaMaterijal({ ...m, ...patch }, kolicina) } : { ...m, ...patch }) : m));
       };
-      const evidentiraj = (materijalId, kolicina, cijenaNarudzbe) => {
+      // kolicina = isporučeno (jedinica materijala), punaKolicina = naručeno (za jediničnu cijenu), naProjekt = dio koji se izdaje na projekt.
+      const evidentiraj = (materijalId, { primljeno: kolicina, naProjekt }, cijenaNarudzbe, punaKolicina) => {
         const matZ = materijali.find((m) => m.id === materijalId);
         if (!matZ || !(kolicina > 0)) return;
         const lotovi = [];
@@ -8217,28 +8347,30 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
           const kolDijela = k === dijelovi.length - 1 ? zaokruziKolicinu(kolicina - rasporedeno) : zaokruziKolicinu(kolicina * (Number(d.udio) || 0));
           rasporedeno += kolDijela;
           if (!(kolDijela > 0)) return;
-          const zapis = { ...noviZapisMaticneKnjige({ mat: matZ, kolicina: kolDijela, sarza: d.sarza, kvaliteta: s.kvaliteta, narudzbenica: row, knjiga: [...(db.maticnaKnjiga || []), ...maticni], otpremnica: opcije.otpremnica, dimenzije: dimenzijeStavkeNarudzbenice(row, s, idx, db) }), ...(namjenski ? { projektId: s.projektId } : {}) };
+          const zapis = { ...noviZapisMaticneKnjige({ mat: matZ, kolicina: kolDijela, sarza: d.sarza, kvaliteta: s.kvaliteta, narudzbenica: row, knjiga: [...(db.maticnaKnjiga || []), ...maticni], otpremnica: opcije.otpremnica, dimenzije: dimenzijeStavkeNarudzbenice(row, s, idx, db) }), ...(naProjekt > 0.0005 ? { projektId: s.projektId } : {}) };
           maticni.push(zapis);
           lotovi.push({ id: zapis.id, kolicina: kolDijela });
           const kopija = Math.max(0, Math.min(200, Math.round(Number(d.naljepnice ?? 0) || 0)));
           if (kopija > 0) zaNaljepnice.push({ maticniId: zapis.id, kopija });
         });
-        if (namjenski) {
-          const cijena = jedinicnaCijena({ narucenoIznos: nc[idx]?.iznos, kolicina, cijenaRetka: cijenaNarudzbe, cijenaSkladista: matZ.cijena });
-          zaIzdati.push({ projektId: s.projektId, materijal: matZ, kolicina: zaokruziKolicinu(kolicina), cijena, dimenzije: dimenzijeStavkeNarudzbenice(row, s, idx, db) || "", lotovi });
+        if (namjenski && naProjekt > 0.0005) {
+          // jedinična cijena = naručeni iznos / NARUČENA količina — višak i manjak ne mijenjaju cijenu po komadu/kg
+          const cijena = jedinicnaCijena({ narucenoIznos: nc[idx]?.iznos, kolicina: punaKolicina, cijenaRetka: cijenaNarudzbe, cijenaSkladista: matZ.cijena });
+          zaIzdati.push({ projektId: s.projektId, materijal: matZ, kolicina: zaokruziKolicinu(naProjekt), cijena, dimenzije: dimenzijeStavkeNarudzbenice(row, s, idx, db) || "", lotovi: uzmiIzLotova(lotovi, naProjekt) });
         }
       };
       if (s.materijalId) {
         const mat = materijali.find((m) => m.id === s.materijalId);
-        let kolicina = efektivnaKolicinaMaterijala(s, mat);
-        if (mat?.jm === "kom" && komadnaStavka) kolicina = Number(s.komada) || 0; // stanje materijala je u komadima
-        naStanje(s.materijalId, kolicina);
-        evidentiraj(s.materijalId, kolicina, null);
-        return { ...s, sarza };
+        let punaKolicina = efektivnaKolicinaMaterijala(s, mat);
+        if (mat?.jm === "kom" && komadnaStavka) punaKolicina = Number(s.komada) || 0; // stanje materijala je u komadima
+        const r = raspodijeli(punaKolicina);
+        naStanje(s.materijalId, r.naStanjeKol);
+        evidentiraj(s.materijalId, r, null, punaKolicina);
+        return { ...s, sarza, ...zbirno(r.naStanjeKol) };
       }
-      if (!s.katalogId) return { ...s, sarza };
+      if (!s.katalogId) return { ...s, sarza, ...zbirno(0) };
       const entry = db.katalogProfila.find((k) => k.id === s.katalogId);
-      if (!entry) return { ...s, sarza };
+      if (!entry) return { ...s, sarza, ...zbirno(0) };
       const virtualniMat = { kgPoM: entry.jedinica === "kg/m" ? Number(entry.vrijednost) : 0, kgPoM2: entry.jedinica === "kg/m2" ? Number(entry.vrijednost) : 0, kgPoKom: entry.jedinica === "kg/kom" ? Number(entry.vrijednost) : 0 };
       const kolicinaPrimljeno = efektivnaKolicinaMaterijala(s, virtualniMat);
       const komada = Number(s.komada) || 0;
@@ -8248,10 +8380,11 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
       const postojeci = materijali.find((m) => m.sifra === sifra);
       if (postojeci) {
         const uKomadimaP = postojeci.jm === "kom" && komadnaStavka;
-        const dodaj = uKomadimaP ? komada : kolicinaPrimljeno;
-        naStanje(postojeci.id, dodaj, { katalogId: postojeci.katalogId || entry.id });
-        evidentiraj(postojeci.id, dodaj, uKomadimaP && komada > 0 ? Math.round(cijenaKg * (kolicinaPrimljeno / komada) * 100) / 100 : cijenaKg);
-        return { ...s, materijalId: postojeci.id, katalogId: "", sarza };
+        const puna = uKomadimaP ? komada : kolicinaPrimljeno;
+        const r = raspodijeli(puna);
+        naStanje(postojeci.id, r.naStanjeKol, { katalogId: postojeci.katalogId || entry.id });
+        evidentiraj(postojeci.id, r, uKomadimaP && komada > 0 ? Math.round(cijenaKg * (kolicinaPrimljeno / komada) * 100) / 100 : cijenaKg, puna);
+        return { ...s, materijalId: postojeci.id, katalogId: "", sarza, ...zbirno(r.naStanjeKol) };
       }
       const noviId = uid("mat");
       // Komadne stavke (dužina/lim/komadi) vode se u komadima: stanje = komada, cijena po komadu = €/kg × kg po komadu.
@@ -8259,23 +8392,28 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
       const mm = (v) => Math.round((Number(v) || 0) * 1000);
       const dimenzijeTekst = s.nacinUnosa === "duzina" ? `${mm(s.duzinaM)} mm` : s.nacinUnosa === "lim" ? `${mm(s.duzinaM)}×${mm(s.sirinaM)} mm` : dimStavke.replace(/\s*×\s*/g, "×");
       const cijenaNovog = uKomadima ? Math.round(cijenaKg * (kolicinaPrimljeno / komada) * 100) / 100 : cijenaKg;
+      const puna = uKomadima ? komada : kolicinaPrimljeno;
+      const r = raspodijeli(puna);
       materijali = [...materijali, {
         id: noviId, sifra, katalogId: entry.id, naziv: katalogOznakaPuna(entry), tip: entry.tip,
         dimenzije: dimenzijeTekst, jm: uKomadima ? "kom" : "kg",
         cijena: cijenaNovog,
-        kolicina: namjenski ? 0 : (uKomadima ? komada : kolicinaPrimljeno), minZaliha: 0, lokacija: "", kvaliteta: s.kvaliteta || "",
+        kolicina: r.naStanjeKol, minZaliha: 0, lokacija: "", kvaliteta: s.kvaliteta || "",
         kgPoM: entry.jedinica === "kg/m" ? Number(entry.vrijednost) : 0,
         kgPoM2: entry.jedinica === "kg/m2" ? Number(entry.vrijednost) : 0,
         kgPoKom: entry.jedinica === "kg/kom" ? Number(entry.vrijednost) : 0,
       }];
-      evidentiraj(noviId, uKomadima ? komada : kolicinaPrimljeno, cijenaNovog);
-      return { ...s, materijalId: noviId, katalogId: "", sarza };
+      evidentiraj(noviId, r, cijenaNovog, puna);
+      return { ...s, materijalId: noviId, katalogId: "", sarza, ...zbirno(r.naStanjeKol) };
     });
+    // Manjak: narudžbenica ostaje "Djelomično primljeno" (gumb Primi robu ostaje za ostatak); sve stiglo (ili više) → Primljeno.
+    const noviStatus = statusNakonZaprimanja(noveStavke);
     update("materijali", materijali);
-    update("narudzbenice", db.narudzbenice.map((n) => (n.id === row.id ? { ...n, stavke: noveStavke, status: "Primljeno", zaprimljeno: todayISO(), ...(opcije.otpremnica ? { otpremnicaDobavljaca: opcije.otpremnica } : {}) } : n)));
+    update("narudzbenice", db.narudzbenice.map((n) => (n.id === row.id ? { ...n, stavke: noveStavke, status: noviStatus, zaprimljeno: todayISO(), ...(opcije.otpremnica ? { otpremnicaDobavljaca: opcije.otpremnica } : {}), zaprimanja: [...(n.zaprimanja || []), { datum: todayISO(), otpremnica: opcije.otpremnica || "", stavke: zapisIsporuke }] } : n)));
     const spremljeni = maticni.length ? dodajMaticne(maticni) : Promise.resolve([]);
     const naProjekte = [...new Set(zaIzdati.map((x) => x.projektId))].map((id) => db.projekti.find((p) => p.id === id)?.sifra).filter(Boolean);
-    showToast(naProjekte.length ? `Roba zaprimljena — namjenski materijal ide na ${naProjekte.join(", ")}.` : "Roba zaprimljena, stanje skladišta ažurirano.");
+    const djelomicno = noviStatus !== "Primljeno" ? " Narudžbenica ostaje djelomično primljena — ostatak se zaprima kad stigne." : "";
+    showToast((naProjekte.length ? `Roba zaprimljena — namjenski materijal ide na ${naProjekte.join(", ")}.` : "Roba zaprimljena, stanje skladišta ažurirano.") + djelomicno);
     spremljeni.then((zapisi) => {
       if (zapisi.length > 0) showToast(`Roba zaprimljena. Matični brojevi: ${zapisi.map((z) => z.broj).join(", ")}.`);
       // Izdatnice namjenskog materijala tek kad su matični brojevi spremljeni (broj dodjeljuje poslužitelj).
@@ -8398,8 +8536,9 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
             <Field label="Rok isporuke"><input className="input" type="date" value={form.rokIsporuke} onChange={(e) => setForm({ ...form, rokIsporuke: e.target.value })} /></Field>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            {/* "Primljeno" nastaje samo gumbom "Primi robu" (matični brojevi, stanje, izdatnica namjenskog materijala) — ne bira se ručno. */}
-            <Field label="Status"><select className="select" value={form.status} disabled={form.status === "Primljeno"} onChange={(e) => setForm({ ...form, status: e.target.value })}>{["Nacrt", "Poslano", "Djelomično primljeno", ...(form.status === "Primljeno" ? ["Primljeno"] : [])].map((s) => <option key={s}>{s}</option>)}</select></Field>
+            {/* "Primljeno" nastaje samo gumbom "Primi robu" (matični brojevi, stanje, izdatnica namjenskog materijala) — ne bira se ručno;
+                nakon djelomičnog zaprimanja status vodi "Primi robu" (ostatak), pa se ni tada ne mijenja ručno. */}
+            <Field label="Status"><select className="select" value={form.status} disabled={form.status === "Primljeno" || imaZaprimanja(form)} onChange={(e) => setForm({ ...form, status: e.target.value })}>{["Nacrt", "Poslano", "Djelomično primljeno", ...(form.status === "Primljeno" ? ["Primljeno"] : [])].map((s) => <option key={s}>{s}</option>)}</select></Field>
             <Field label="Izradio (ispisuje se na narudžbi)">
               <select className="select" value={form.izradioId || ""} onChange={(e) => setForm({ ...form, izradioId: e.target.value })}>
                 <option value="">—</option>
@@ -8445,19 +8584,23 @@ function NabavaPage({ db, update, patchUpiti, showToast, mojaPozicija, mojId, do
 
               // Ako je roba već zaprimljena, poništi povećanje zaliha prije brisanja narudžbenice. Namjenski materijal (stavka s projektom)
               // nije ni ulazio u stanje — umjesto toga brišu se njegove automatske izdatnice pri zaprimanju (ako s njih ništa nije vraćeno).
-              const materijali = del.status === "Primljeno"
+              // Od 27.11.2026 stavka pamti koliko je stvarno dodano na slobodno stanje (naSkladiste — višak/manjak, djelomično zaprimanje);
+              // starije zaprimljene stavke bez tog polja: naručena količina stavke za skladište.
+              const zaprimljena = imaZaprimanja(del);
+              const dodanoNaStanje = (s, m) => (s.naSkladiste != null ? Number(s.naSkladiste) || 0 : (!s.projektId && del.status === "Primljeno" ? efektivnaKolicinaMaterijala(s, m) : 0));
+              const materijali = zaprimljena
                 ? db.materijali.map((m) => {
-                    const stavka = del.stavke.find((s) => s.materijalId === m.id && !s.projektId);
-                    return stavka ? { ...m, kolicina: m.kolicina - efektivnaKolicinaMaterijala(stavka, m) } : m;
+                    const vrati = del.stavke.filter((s) => s.materijalId === m.id).reduce((a, s) => a + dodanoNaStanje(s, m), 0);
+                    return vrati > 0.0005 ? { ...m, kolicina: zaokruziKolicinu(m.kolicina - vrati) } : m;
                   })
                 : db.materijali;
-              if (materijali !== db.materijali) update("materijali", materijali);
+              if (materijali.some((m, i) => m !== db.materijali[i])) update("materijali", materijali);
               let izdatniceNakon = db.izdatnice || [];
-              if (del.status === "Primljeno") {
+              if (zaprimljena) {
                 const automatske = izdatniceNakon.filter((i) => i.izvor === "zaprimanje" && i.narudzbenicaId === del.id && (i.stavke || []).every((st) => !(Number(st.kolicinaVraceno) > 0)));
                 if (automatske.length) { izdatniceNakon = izdatniceNakon.filter((i) => !automatske.includes(i)); update("izdatnice", izdatniceNakon); }
               }
-              if (del.status === "Primljeno") {
+              if (zaprimljena) {
                 // Matični brojevi te isporuke brišu se samo ako s njih nije ništa izdano; inače ostaju kao trag ugrađenog materijala.
                 const potr = potrosnjaPoMaticnim(izdatniceNakon);
                 const knjiga = db.maticnaKnjiga || [];
@@ -17767,10 +17910,12 @@ function izracunProjekcije(db, { od, doMjeseca, danas, trosakSata, materijalPost
     if (poMj[m]) poMj[m].prihodOstvareno += v;
   });
   const cijenaMat = new Map((db.materijali || []).map((m) => [m.id, Number(m.cijena) || 0]));
-  (db.narudzbenice || []).filter((n) => n.status === "Primljeno" && n.zaprimljeno).forEach((n) => {
+  (db.narudzbenice || []).filter((n) => (n.status === "Primljeno" || n.status === "Djelomično primljeno") && n.zaprimljeno).forEach((n) => {
     const m = n.zaprimljeno.slice(0, 7);
     if (!poMj[m]) return;
-    poMj[m].materijalOstvareno += (n.stavke || []).reduce((a, s) => a + efektivnaKolicinaMaterijala(s, (db.materijali || []).find((x) => x.id === s.materijalId)) * (s.cijenaPoJed != null ? Number(s.cijenaPoJed) || 0 : cijenaMat.get(s.materijalId) || 0), 0);
+    // stvarno zaprimljeno (višak/manjak, djelomično zaprimanje) razmjerno naručenoj količini stavke
+    const udioPrimljenog = (s) => { const nar = narucenoStavke(s); return nar > 0.0005 ? primljenoStavke(s, n.status) / nar : (n.status === "Primljeno" ? 1 : 0); };
+    poMj[m].materijalOstvareno += (n.stavke || []).reduce((a, s) => a + efektivnaKolicinaMaterijala(s, (db.materijali || []).find((x) => x.id === s.materijalId)) * udioPrimljenog(s) * (s.cijenaPoJed != null ? Number(s.cijenaPoJed) || 0 : cijenaMat.get(s.materijalId) || 0), 0);
   });
   const radiona = satiRadionePoMjesecu(db);
   // prošli dani: prisutnost radione s kioska; od sutra: kapacitet (ljudi × radni dani × sati dnevno)
