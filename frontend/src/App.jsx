@@ -3283,6 +3283,11 @@ function MapaZadatka({ z }) {
     </>
   );
 }
+// Napomena upisana već pri dodavanju zadatka (ista polja kao kad se doda kasnije preko "+ Napomena").
+const napomenaNovogZadatka = (tekst, autorId) => {
+  const napomena = String(tekst || "").trim().slice(0, 2000);
+  return napomena ? { napomena, napomenaAutorId: autorId, napomenaDatum: todayISO() } : {};
+};
 function NapomenaZadatka({ zadatak, imeZaposlenika, mozeUredjivati, onSpremi, uvlaka = 0 }) {
   const [uredjujem, setUredjujem] = useState(false);
   const [tekst, setTekst] = useState("");
@@ -3862,7 +3867,7 @@ function Dashboard({ db, update, showToast, setPage, otvoriProjekt, mojId, mojaP
   const [zadaciZa, setZadaciZa] = useState("moji"); // "moji" | "svi" | id zaposlenika
   const [skupinaZadataka, setSkupinaZadataka] = useState("aktualni"); // "aktualni" | "zavrseni"
   const [dodajZadatakOtvoreno, setDodajZadatakOtvoreno] = useState(false);
-  const [noviSlobodni, setNoviSlobodni] = useState({ naziv: "", datum: "", kome: "" });
+  const [noviSlobodni, setNoviSlobodni] = useState({ naziv: "", datum: "", kome: "", napomena: "" });
   const aktivniProjekti = db.projekti.filter((p) => ["U izradi", "Montaža"].includes(p.status));
   const radniNaloziUTijeku = db.radniNalozi.filter((r) => r.status === "U tijeku");
   const efektivniProjekti = db.projekti.map((p) => projektSEfektivnimRokom(p, db.narudzbe, db.otpremnice, todayISO(), { bezPodatakaOIsporuci: !(db.narudzbe || []).length }));
@@ -3896,8 +3901,8 @@ function Dashboard({ db, update, showToast, setPage, otvoriProjekt, mojId, mojaP
     const naziv = noviSlobodni.naziv.trim();
     if (!naziv) return;
     const kome = noviSlobodni.kome || mojId;
-    update("slobodniZadaci", [...slobodniZadaci, { id: uid("sz"), naziv, dodijeljenoId: kome, planiraniDatum: noviSlobodni.datum || null, izvrseno: false, izvrsioId: null, datumIzvrsenja: null, kreiraoId: mojId, zadaoId: mojId, zadanoDatum: sadaISO(), dodjelaVidjena: kome === mojId }]);
-    setNoviSlobodni({ naziv: "", datum: "", kome: "" });
+    update("slobodniZadaci", [...slobodniZadaci, { id: uid("sz"), naziv, dodijeljenoId: kome, planiraniDatum: noviSlobodni.datum || null, izvrseno: false, izvrsioId: null, datumIzvrsenja: null, kreiraoId: mojId, zadaoId: mojId, zadanoDatum: sadaISO(), dodjelaVidjena: kome === mojId, ...napomenaNovogZadatka(noviSlobodni.napomena, mojId) }]);
+    setNoviSlobodni({ naziv: "", datum: "", kome: "", napomena: "" });
   };
   const mozeMijenjatiProjekte = (mojaPozicija?.moduli || []).includes("projekti") && dozvolaZaKarticu(mojaPozicija, "projekti", "projekti").izmjene;
   // Transporti koji još nisu obavljeni (narudžba za transport bez isporučenog CMR-a), po datumu utovara.
@@ -3995,6 +4000,7 @@ function Dashboard({ db, update, showToast, setPage, otvoriProjekt, mojId, mojaP
               </select>
               <input type="date" className="input" style={{ width: 150 }} value={noviSlobodni.datum} onChange={(e) => setNoviSlobodni({ ...noviSlobodni, datum: e.target.value })} title="Rok izvršenja (nije obavezan)" />
               <Btn variant="primary" size="sm" icon={Plus} onClick={dodajSlobodniZadatak}>Dodaj</Btn>
+              <textarea className="textarea" rows={2} aria-label="Napomena uz novi zadatak" placeholder="Napomena (nije obavezna)…" value={noviSlobodni.napomena} onChange={(e) => setNoviSlobodni({ ...noviSlobodni, napomena: e.target.value })} style={{ flex: "1 1 100%", fontSize: 12.5 }} />
             </div>
           )}
           {upitnikZadatak?.upitnik && <UpitnikModal zadatak={upitnikZadatak} mozeOdgovarati={upitnikZadatak.dodijeljenoId === mojId && !upitnikZadatak.izvrseno} onSpremi={(odgovori, zavrsi) => spremiUpitnik(upitnikZadatak.id, odgovori, zavrsi)} onClose={() => setUpitnikId(null)} />}
@@ -12550,6 +12556,7 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
   const [noviZadatak, setNoviZadatak] = useState("");
   const [noviZadatakDatum, setNoviZadatakDatum] = useState("");
   const [noviZadatakKome, setNoviZadatakKome] = useState("");
+  const [noviZadatakNapomena, setNoviZadatakNapomena] = useState("");
   const [narudzbaModal, setNarudzbaModal] = useState(null); // null | { narudzba: objekt | null (nova) }
   const [potvrdaModal, setPotvrdaModal] = useState(null); // null | narudžba za koju se otvara potvrda
   const [uvozOdabir, setUvozOdabir] = useState(false);
@@ -12654,10 +12661,11 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
   const imeZaposlenikaZadatka = (id) => { const zz = db.zaposlenici.find((x) => x.id === id); return zz ? `${zz.prezime} ${zz.ime}` : "—"; };
   const dodajZadatak = () => {
     if (!noviZadatak.trim()) return;
-    azurirajZadatke([...zadaci, { id: uid("zad"), naziv: noviZadatak.trim(), izvrseno: false, izvrsioId: null, datumIzvrsenja: null, planiraniDatum: noviZadatakDatum || null, dodijeljenoId: noviZadatakKome || null, ...(noviZadatakKome ? { zadaoId: mojId, zadanoDatum: sadaISO(), dodjelaVidjena: noviZadatakKome === mojId } : {}) }]);
+    azurirajZadatke([...zadaci, { id: uid("zad"), naziv: noviZadatak.trim(), izvrseno: false, izvrsioId: null, datumIzvrsenja: null, planiraniDatum: noviZadatakDatum || null, dodijeljenoId: noviZadatakKome || null, ...(noviZadatakKome ? { zadaoId: mojId, zadanoDatum: sadaISO(), dodjelaVidjena: noviZadatakKome === mojId } : {}), ...napomenaNovogZadatka(noviZadatakNapomena, mojId) }]);
     setNoviZadatak("");
     setNoviZadatakDatum("");
     setNoviZadatakKome("");
+    setNoviZadatakNapomena("");
     showToast && showToast("Zadatak dodan.");
   };
 
@@ -13084,14 +13092,15 @@ function ProjektDetaljModal({ projekt, db, update, spremiNormativ, patchProjekt:
             );
           })}
         </div>
-        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-          <input className="input" placeholder="Dodaj novi zadatak za ovaj projekt…" value={noviZadatak} onChange={(e) => setNoviZadatak(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") dodajZadatak(); }} />
+        <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+          <input className="input" style={{ flex: "1 1 200px" }} placeholder="Dodaj novi zadatak za ovaj projekt…" value={noviZadatak} onChange={(e) => setNoviZadatak(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") dodajZadatak(); }} />
           <select className="select" style={{ width: 170 }} value={noviZadatakKome} onChange={(e) => setNoviZadatakKome(e.target.value)}>
             <option value="">Dodijeli…</option>
             {izborZaposlenika(db).sort((a, b) => (a.prezime + a.ime).localeCompare(b.prezime + b.ime, "hr")).map((zz) => <option key={zz.id} value={zz.id}>{zz.prezime} {zz.ime}</option>)}
           </select>
           <input type="date" className="input" style={{ width: 150 }} value={noviZadatakDatum} onChange={(e) => setNoviZadatakDatum(e.target.value)} title="Planirani datum izvršenja" />
           <Btn variant="ghost" size="sm" icon={Plus} onClick={dodajZadatak}>Dodaj</Btn>
+          <textarea className="textarea" rows={2} aria-label="Napomena uz novi zadatak projekta" placeholder="Napomena (nije obavezna)…" value={noviZadatakNapomena} onChange={(e) => setNoviZadatakNapomena(e.target.value)} style={{ flex: "1 1 100%", fontSize: 12.5 }} />
         </div>
       </div>
       )}
