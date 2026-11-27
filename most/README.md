@@ -101,6 +101,8 @@ briše, ime ostaje); ne dira ugniježđene mape, mape čije ime ne počinje šif
 odredištu već postoji isto ime (sve se javlja s razlogom). "Mapa projekta" u ERP-u se sama ispravi. Dok arhiva nije uključena u ERP-u
 (Direktorski pregled → Stanje servera → Arhiva mapa projekata), most samo javlja popis. Otvorena datoteka u mapi (EPERM/EBUSY) → mapa čeka
 i most pokušava ponovno. Servisni račun treba pravo **Modify** na korijenu godine (inače mapa čeka s porukom o pravima).
+**Zatvorene godine** (prije `PRVA_GODINA_ARHIVE` = 2026, tj. 2024 i 2025) se ne diraju: ništa u arhivu, ništa iz arhive, ni mape bez ERP-a,
+ni kad je godina odabrana u ERP-u. Arhivirani projekt čija je mapa u zatvorenoj godini javlja se pod "Ne premješta se".
 
 ## Ograničenja prve verzije
 Samo isporuke u EU bez PDV-a (kategorija K), valuta EUR, bez popusta na stavkama; domaće račune šalje Konplast.

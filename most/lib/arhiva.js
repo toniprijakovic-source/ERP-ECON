@@ -8,7 +8,8 @@
 //   - seli se samo mapa izravno u korijenu godine ili u zbirnoj mapi usluga; ugniježđene mape (npr. RN 60 B&O\…) se ne diraju;
 //   - ime mape projekta mora počinjati šifrom tog projekta (ručno upisana "Mapa projekta" s drugim imenom se ne seli);
 //   - ako na odredištu postoji mapa istog imena, ili istu mapu koriste projekti različitog statusa, ništa se ne radi (javlja se);
-//   - dok premještanje nije uključeno u ERP-u, most samo javlja popis onoga što bi premjestio (prvi popis za potvrdu).
+//   - dok premještanje nije uključeno u ERP-u, most samo javlja popis onoga što bi premjestio (prvi popis za potvrdu);
+//   - zatvorene godine (prije PRVA_GODINA_ARHIVE, tj. 2024 i 2025) se ne diraju: ni u arhivu, ni iz arhive, ni mape bez ERP-a.
 // Otvorena datoteka u mapi (Windows tada ne da premjestiti) → most pokušava ponovno u sljedećem krugu (svakih 5 minuta).
 import fs from "node:fs";
 import path from "node:path";
@@ -17,6 +18,9 @@ import { nadjiMapuProjekta, NAZIV_ARHIVE, SIFRA_USLUGE, ZBIRNA_USLUGE, brojUslug
 
 // "_ZAVRŠEN", "_ZAVRŠENO", "_ ZAVRŠEN", "-ZAVRŠEN" (i bez kvačice) na kraju naziva.
 export const NASTAVAK_ZAVRSEN = /[_\s-]\s*zavr[sš]en[oa]?\s*$/i;
+// Godine prije ove su zatvorene (odluka vlasnika): most u njihovim mapama projekata ništa ne premješta.
+export const PRVA_GODINA_ARHIVE = 2026;
+const zatvorena = (godina) => godina != null && Number(godina) < PRVA_GODINA_ARHIVE;
 const nfc = (s) => String(s ?? "").normalize("NFC");
 const kljuc = (p) => path.normalize(String(p)).replace(/[\\/]+$/, "").toLowerCase(); // Windows ne razlikuje velika i mala slova
 const izbjegni = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -93,6 +97,11 @@ export function planArhive(projekti, korijeni) {
     const pol = polozaj(mapa, dostupni);
     const uArhivi = pol.vrsta === "arhiva" || pol.vrsta === "zbirna-arhiva";
     const zeliArhivu = !!p.arhiva;
+    const godina = godinaKorijena(pol.korijen);
+    if (zatvorena(godina)) {
+      if (zeliArhivu !== uArhivi) preskoceno.push({ ...osnova, razlog: `Mapa je u zatvorenoj godini ${godina}: most u godinama prije ${PRVA_GODINA_ARHIVE} ništa ne premješta.` });
+      continue;
+    }
     if (vlasnici.some((v) => !!v.arhiva !== zeliArhivu)) {
       preskoceno.push({ ...osnova, razlog: `Istu mapu koriste projekti različitog statusa (${vlasnici.map((v) => `${v.sifra}: ${v.status}`).join("; ")}) — ne premješta se. Ispravite "Mapa projekta" u ERP-u.` });
       continue;
@@ -116,7 +125,7 @@ export function planArhive(projekti, korijeni) {
     }
     const zauzeto = zeliArhivu ? aktivniUnutra(mapa) : "";
     if (zauzeto) { preskoceno.push({ ...osnova, razlog: zauzeto }); continue; }
-    premjesti.push({ vrsta: zeliArhivu ? "arhiva" : "vrati", projektId: p.id, sifra: sifraV, status: statusV, od: mapa, do: cilj, godina: godinaKorijena(pol.korijen), erp: ispravciZa(mapa, cilj) });
+    premjesti.push({ vrsta: zeliArhivu ? "arhiva" : "vrati", projektId: p.id, sifra: sifraV, status: statusV, od: mapa, do: cilj, godina, erp: ispravciZa(mapa, cilj) });
   }
 
   // Mape bez projekta u ERP-u s nastavkom "_ZAVRŠEN" (u korijenu godine i u zbirnoj mapi usluga).
@@ -130,6 +139,7 @@ export function planArhive(projekti, korijeni) {
   const brojeviUsluga = new Set(sifre.map((s) => s.match(SIFRA_USLUGE)).filter(Boolean).map((u) => Number(u[1])));
   for (const k of dostupni) {
     const godina = godinaKorijena(k);
+    if (zatvorena(godina)) continue;
     for (const d of podmape(k)) {
       if (jeArhiva(d.name)) continue;
       if (ZBIRNA_USLUGE.test(d.name)) {
@@ -161,6 +171,7 @@ export function provediArhivu(plan, { bezErpGodine = [], rename = fs.renameSync,
   const premjesteno = [], ceka = [], ispravljeneMape = [];
   for (const s of plan) {
     if (s.vrsta === "bez-erp" && !godine.has(Number(s.godina))) continue;
+    if (zatvorena(s.godina)) continue; // druga brava uz plan: zatvorena godina se nikad ne dira
     try {
       if (!fs.existsSync(s.od)) throw new Greska("Mapa više nije na starom mjestu (premještena ili preimenovana u međuvremenu).");
       if (fs.existsSync(s.do)) throw new Greska("Na odredištu već postoji mapa istog imena — riješite ručno.");
